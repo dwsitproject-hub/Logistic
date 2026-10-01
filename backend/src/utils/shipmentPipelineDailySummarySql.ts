@@ -3,7 +3,7 @@
  */
 
 import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
-import { groupPlantExpr } from './groupPlantSql';
+import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from './groupPlantSql';
 import {
   sqlPipelineIncotermKey,
   sqlPipelineProductKey,
@@ -39,7 +39,7 @@ function buildShipmentDailyBaseCteSql(): string {
   const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
   const seaRowScopeCond = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
   const ataSelect = buildShipmentListAtaSelectSql();
-  const plantSite = groupPlantExpr('c.plant_code', 'c.company_name');
+  const plantSite = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
 
   const vlpCtes = `
       vlp_load_first AS (
@@ -416,7 +416,7 @@ export function buildShipmentVesselStageDailyInsertSql(
 export async function buildShipmentBacklogDailySummaryUpsertSql(
   targetTable: string = SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE,
 ): Promise<string> {
-  const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+  const plant = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
   return `
     INSERT INTO ${targetTable} (
       group_plant, contract_date, product, incoterm,

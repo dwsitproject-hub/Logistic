@@ -7,7 +7,7 @@
  * so a contract visible as Unplanned in the table is never wrongly rejected here.
  */
 
-import { groupPlantExpr } from './groupPlantSql';
+import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from './groupPlantSql';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
@@ -20,7 +20,7 @@ import { contractInAcceptedUnlinkedPrePlannedGroupExistsSql } from './prePlanned
 export async function buildManualPrePlannedEligibleContractsByIdsQuery(
   contractIds: string[],
 ): Promise<{ sql: string; params: unknown[] }> {
-  const plantExpr = groupPlantExpr('c.plant_code', 'c.company_name');
+  const plantExpr = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
   const incotermExpr = contractEffectiveIncotermExpr('c');
   const outstandingKgExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',

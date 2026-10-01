@@ -2,7 +2,7 @@
  * SQL builders for trucking pipeline daily summary refresh.
  */
 
-import { groupPlantExpr } from './groupPlantSql';
+import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from './groupPlantSql';
 import { sqlRegionSiteRawForContract } from './regionSiteSql';
 import {
   sqlPipelineIncotermKey,
@@ -60,7 +60,7 @@ export function buildTruckingExecutionDailySummaryInsertSql(
   targetTable: string = TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE,
 ): string {
   const expanded = buildTruckingExecutionSourceSql();
-  const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+  const plant = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
   return `
     INSERT INTO ${targetTable} (
       group_plant,
@@ -192,12 +192,13 @@ export function buildTruckingStageSnapshotInsertSql(
   opts?: { operationIds?: readonly string[] },
 ): string {
   const expanded = buildTruckingExecutionSourceSql(opts?.operationIds);
-  const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+  const plant = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
   /*
    * The toolbar's Region/Plant dimension, stored next to - not instead of - `group_plant`.
    *
-   * `group_plant` is the master_plants grouping; the filter's options are SAP Discharge
-   * Destination. Only 4 of the dropdown's 40 values exist in both, which is why filtering the
+   * `group_plant` was the master_plants grouping (since migration 212 it is the Discharge
+   * Destination too, via groupPlantExpr); the filter's options are SAP Discharge
+   * Destination. Only 4 of the dropdown's 40 values existed in both, which is why filtering the
    * snapshot by Region/Plant returned an empty page (migration 164).
    *
    * This is the *same expression the live filter evaluates*, inlined rather than re-derived, so

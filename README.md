@@ -2933,6 +2933,56 @@ The old SUPERSEDED groups do not come back. The rebuild creates new ones with ne
 ACCEPTED groups were never touched.
 
 
+### Group Plant is the Discharge Destination, not master_plants.group_plant
+
+The previous section restored `master_plants.group_plant` after migration 195. Migration 208 then
+deleted and reloaded Master Plant again (31 rows, no `group_plant`), and the same thing happened:
+on a copy of production migrated through 210, 17,452 of 19,053 contracts had their plant in those
+31 rows and **0** had a `group_plant`, so every contract was `Blank` and Pre-Planned had no pool.
+Restoring the column a third time would only wait for the next reload, so Group Plant no longer
+reads it.
+
+**Rule** (`groupPlantExpr` in `utils/groupPlantSql.ts`, taking the plant code and the contract's
+number and origin PO):
+
+1. the plant is a trading plant -> `Trading`;
+2. otherwise the contract's SAP Discharge Destination - the value the Region/Site filters use (B2B
+   child overlay, then the latest SAP row, then the alias map), upper-cased so `Bontang` and
+   `BONTANG` do not split a group;
+3. a destination of `TRADING TRANSIT HO` -> `Trading`;
+4. no destination at all -> `Blank`.
+
+A destination cannot say "trading": those 1,523 contracts are delivered to 40+ places, and SAP sends
+the Plant Code but not its type. A plant is trading when it is on **`trading_plant_codes`**
+(migration 212, 26 codes: every HO TRADING / HO TRADING INTERDIVISION plant of the Master Plant
+production had before the reloads) **or** its Master Plant `plant_type` starts with HO TRADING. The
+table sits outside `master_plants` precisely so a reload cannot lose it.
+
+**Measured on a copy of production migrated through 212:**
+
+```
+contracts                               19,053
+  placed on a destination               17,380
+  Trading                                1,628   (1,523 before + TRADING TRANSIT HO + 6 trading codes that were Blank)
+  Blank                                     45   (was 1,846)
+Pre-Planned pool                          120    (production before 195: 118)
+rebuild                      78 SUGGESTED groups (22 new, 4 superseded), 24 ACCEPTED untouched
+eligibility query              ~1.6 s          (~0.05 s with no group-plant work)
+one pass over every contract    ~3 s
+```
+
+What changes for users: the Group Plant label is now a place (`BONTANG`, `TANJUNG PURA`) instead of
+the old labels (`Bontang`, `TJ PURA`, `Bulking Lubuk Gaung`); the Region/Site filter on Pre-Planned
+groups now compares like with like; Plant/Site in the Shipment modals and the Missing Planning bell
+show the same value. Existing ACCEPTED groups keep the label they were created with. The pipeline
+summary tables are re-keyed by the next rebuild, and their readers only add across `group_plant`.
+`master_plants.group_plant` and the Master Plant upload's Group column are still there but nothing
+reads them for this.
+
+The Unloading Location dropdown on Trucking (`GroupPlantCombobox`) still lists `master_plants.group_plant`
+values and is therefore empty. It was already empty after 195.
+
+
 ### A FOB STO of Type T that names a vessel is a sea leg
 
 FOB STOs of Type T are trucking legs and are kept off the Shipments page. That rule hid real

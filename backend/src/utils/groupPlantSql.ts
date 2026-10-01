@@ -1,35 +1,67 @@
 /**
- * Shared SQL helpers for Group Plant resolution and filtering via master_plants.
+ * Group Plant = where the contract is delivered, from the SAP Discharge Destination.
+ *
+ * It used to be `master_plants.group_plant`. A reload of Master Plant (migrations 195 and 208)
+ * emptied that column, every contract resolved to 'Blank', and Pre-Planned - which excludes
+ * 'Blank' - lost its whole pool. The destination is the same value the Region/Site filters use
+ * (utils/regionSiteSql.ts: B2B child overlay, then the latest SAP row, then the alias map), so
+ * Group Plant and Region/Site are now one dimension instead of two that look alike.
+ *
+ * One value still comes from the plant: 'Trading'. Pre-Planned leaves it out of auto-grouping, and
+ * a trading plant's contracts go to 40+ different destinations, so the destination cannot say it.
+ * SAP sends the Plant Code only, so a plant is trading when it is on `trading_plant_codes`
+ * (migration 212, kept outside master_plants so a reload cannot lose it) or its Master Plant
+ * `plant_type` starts with HO TRADING. A destination of TRADING TRANSIT HO is Trading too.
+ *
+ * Result: the destination in upper case (BONTANG, TANJUNG PURA ...), 'Trading', or 'Blank' when
+ * SAP carries no destination at all.
  */
 
-/** Lateral join aliases — use when pnc/pna are joined on plant_code + company_name. */
-export const GROUP_PLANT_FROM_LATERAL_SQL = `COALESCE(
-  NULLIF(TRIM(pnc.group_plant), ''),
-  NULLIF(TRIM(pna.group_plant), ''),
-  'Blank'
-)`;
+import { sqlRegionSiteRawForContract } from './regionSiteSql';
 
-/** Resolve group plant from plant_code (+ optional company_name) using scalar subqueries. */
-export function groupPlantExpr(plantCodeRef: string, companyNameRef?: string): string {
-  const codeMatch = `TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(${plantCodeRef}, '')))`;
-  const companyMatch = companyNameRef
-    ? `AND NULLIF(TRIM(${companyNameRef}), '') IS NOT NULL
-          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(${companyNameRef}, '')))`
-    : '';
-  const pncSub = `(SELECT mp.group_plant
-    FROM master_plants mp
-    WHERE ${codeMatch}
-      AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-      ${companyMatch}
-    ORDER BY mp.updated_at DESC NULLS LAST
-    LIMIT 1)`;
-  const pnaSub = `(SELECT mp.group_plant
-    FROM master_plants mp
-    WHERE ${codeMatch}
-      AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-    ORDER BY mp.updated_at DESC NULLS LAST
-    LIMIT 1)`;
-  return `COALESCE(NULLIF(TRIM(${pncSub}), ''), NULLIF(TRIM(${pnaSub}), ''), 'Blank')`;
+/** The contract columns the destination is looked up by. */
+export interface GroupPlantContractRefs {
+  contractNumber: string;
+  originPo: string;
+}
+
+/** `FROM contracts c` - what nearly every caller has. */
+export const GROUP_PLANT_CONTRACT_C: GroupPlantContractRefs = {
+  contractNumber: 'c.contract_id',
+  originPo: 'c.po_number',
+};
+
+/** A destination SAP uses for head-office trading stock. It is Trading, not a place. */
+const TRADING_TRANSIT_DESTINATION = 'TRADING TRANSIT HO';
+
+/** `plantRef` must already be UPPER(TRIM(...)). */
+export function sqlIsTradingPlantExpr(plantRef: string): string {
+  return `(
+    EXISTS (SELECT 1 FROM trading_plant_codes tp WHERE tp.plant_code = ${plantRef})
+    OR EXISTS (
+      SELECT 1 FROM master_plants mp
+      WHERE UPPER(TRIM(mp.plant_code)) = ${plantRef}
+        AND UPPER(COALESCE(mp.plant_type, '')) LIKE 'HO TRADING%'
+    )
+  )`;
+}
+
+/**
+ * Group Plant for one contract row. A scalar subquery, so the destination and the plant code are
+ * each evaluated once per row however many times the caller repeats this expression.
+ */
+export function groupPlantExpr(plantCodeRef: string, contract: GroupPlantContractRefs): string {
+  const destination = sqlRegionSiteRawForContract(contract.contractNumber, contract.originPo);
+  return `(SELECT CASE
+      WHEN ${sqlIsTradingPlantExpr('x.plant')} THEN 'Trading'
+      WHEN x.dest IS NULL THEN 'Blank'
+      WHEN x.dest = '${TRADING_TRANSIT_DESTINATION}' THEN 'Trading'
+      ELSE x.dest
+    END
+    FROM (
+      SELECT UPPER(TRIM(COALESCE(${plantCodeRef}, ''))) AS plant,
+             NULLIF(UPPER(TRIM(${destination})), '') AS dest
+    ) x)`;
 }
 
 export type GroupPlantFilterResult = {

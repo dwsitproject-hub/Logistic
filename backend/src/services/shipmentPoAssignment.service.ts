@@ -11,7 +11,7 @@ import {
 } from '../utils/contractPoGlobalMetricsSql';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { resolveShipmentEditContext } from './shipmentEditContext.service';
-import { groupPlantExpr } from '../utils/groupPlantSql';
+import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from '../utils/groupPlantSql';
 import {
   contractExtNoSubquery,
   resolvedPlantCodeSql,
@@ -31,7 +31,7 @@ const PO_LINE_SELECT_FIELDS = `
     c.incoterm,
     c.transport_mode,
     ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
-    ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
+    ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), GROUP_PLANT_CONTRACT_C)} AS plant_site,
     ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
     ${PO_GLOBAL_OUTSTANDING_ACTUAL_EXPR} AS outstanding_quantity,
     ${PO_GLOBAL_OUTSTANDING_ACTUAL_EXPR} AS outstanding_quantity_actual,

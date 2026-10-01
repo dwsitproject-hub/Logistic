@@ -186,7 +186,7 @@ import {
 import { shipmentListPageQtySelectSql, sqlGroupedMaybeCopiedQty } from '../utils/shipmentListQtySql';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import { ttlMemo } from '../utils/ttlMemo';
-import { groupPlantExpr } from '../utils/groupPlantSql';
+import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from '../utils/groupPlantSql';
 import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
 import {
   sqlB2bEndingDischargeDestExpr,
@@ -339,7 +339,7 @@ const PURCHASE_ORDER_LINES_SQL = `
     c.incoterm,
     c.transport_mode,
     ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
-    ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
+    ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), GROUP_PLANT_CONTRACT_C)} AS plant_site,
     ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
     ${resolvedLoadingPortNameSql('c.contract_id')} AS port_of_loading,
     ${resolvedDischargePortNameSql('c.contract_id')} AS port_of_discharge,
@@ -5008,7 +5008,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.delivery_end_date,
         c.transport_mode,
         ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
-        ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
+        ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), GROUP_PLANT_CONTRACT_C)} AS plant_site,
         ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
         ${resolvedLoadingPortNameSql('c.contract_id')} AS port_of_loading,
         ${resolvedDischargePortNameSql('c.contract_id')} AS port_of_discharge,

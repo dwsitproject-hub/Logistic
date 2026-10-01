@@ -95,8 +95,11 @@ export function toPipelineDailySummaryScope(
  * A Region/Plant filter cannot be answered from this snapshot - it stores a different dimension.
  *
  * The toolbar's Region/Plant options are DISTINCT SAP **Discharge Destination**
- * (`REGION_SITE_FILTER_OPTIONS_SQL`), but `group_plant` here is written by
- * `groupPlantExpr('c.plant_code', 'c.company_name')` - the `master_plants` grouping. The README
+ * (`REGION_SITE_FILTER_OPTIONS_SQL`), but `group_plant` here was written by
+ * `groupPlantExpr('c.plant_code', 'c.company_name')` - the `master_plants` grouping. (Since
+ * migration 212 `groupPlantExpr` returns the Discharge Destination itself, so rows written by the
+ * next rebuild line up with the toolbar; rows written before it keep the old values, so the guard
+ * below stays until every table has been rebuilt. Nothing here changed behaviour.) The README
  * has warned since the alias work that these are two different dimensions shown side by side,
  * and scoping one with values from the other silently returns nothing.
  *

@@ -2,7 +2,7 @@
  * SQL for Pre-Planned grouping eligibility pool (spec §4.1).
  */
 
-import { groupPlantExpr } from './groupPlantSql';
+import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from './groupPlantSql';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
@@ -29,7 +29,7 @@ export async function buildPrePlannedEligibleContractsQuery(opts: {
   excludedPlants: string[];
   minOsMt: number;
 }): Promise<{ sql: string; params: unknown[] }> {
-  const plantExpr = groupPlantExpr('c.plant_code', 'c.company_name');
+  const plantExpr = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
   const incotermExpr = contractEffectiveIncotermExpr('c');
   const outstandingKgExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',

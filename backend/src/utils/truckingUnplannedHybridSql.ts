@@ -11,7 +11,7 @@ import {
 } from './truckingOutstandingQtySummarySql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
-import { groupPlantExpr } from './groupPlantSql';
+import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from './groupPlantSql';
 import {
   appendRegionSiteFilter,
   sqlContractHasResolvedRegionSiteExpr,
@@ -36,7 +36,7 @@ export const TRUCKING_UNPLANNED_B2B_END_JOIN = sqlB2bOriginEndingChildLateralJoi
 });
 
 /** Status cards + Unplanned hybrid: contract origin plant (same as pipeline daily snapshot). */
-const TRUCKING_UNPLANNED_GROUP_PLANT = groupPlantExpr('c.plant_code', 'c.company_name');
+const TRUCKING_UNPLANNED_GROUP_PLANT = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
 
 const CB_COL: Record<string, string> = {
   contract_number: 'c.contract_id',

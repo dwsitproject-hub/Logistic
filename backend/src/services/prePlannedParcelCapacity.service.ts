@@ -1,13 +1,13 @@
 import { query } from '../database/connection';
 import { getPrePlannedConfig } from '../config/prePlannedConfig';
 import logger from '../utils/logger';
-import { groupPlantExpr } from '../utils/groupPlantSql';
+import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from '../utils/groupPlantSql';
 
 const MIN_BL_MT = 100;
 
 export async function refreshPrePlannedParcelCapacity(): Promise<void> {
   const cfg = getPrePlannedConfig();
-  const plantExpr = groupPlantExpr('c.plant_code', 'c.company_name');
+  const plantExpr = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
   const result = await query(
     `
     WITH hist AS (

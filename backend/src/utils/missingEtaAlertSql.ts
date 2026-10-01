@@ -1,6 +1,6 @@
 import { query } from '../database/connection';
 import { SQL_CONTRACT_IMPORT_STATUS, sqlContractImportStatusIsOpenExpr } from './contractDeliveryStatus';
-import { groupPlantExpr } from './groupPlantSql';
+import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from './groupPlantSql';
 import { shippingPerfOperationalStoKeyExpr } from './shippingPerformanceStoSql';
 
 /** One badge/popover row — may be contract-level or per shipment STO / trucking operation. */
@@ -32,7 +32,7 @@ const TRUCKING_ETA_MISSING = `(t.eta_delivery_start_date IS NULL
   AND t.eta_trucking_start_date IS NULL
   AND t.eta_trucking_completion_date IS NULL)`;
 
-const GROUP_PLANT = groupPlantExpr('c.plant_code', 'c.company_name');
+const GROUP_PLANT = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
 const STO_KEY = shippingPerfOperationalStoKeyExpr('c', 's');
 
 /** Cargo readiness window (days ahead) for Missing Planning bell + daily email reminder. */
