@@ -24,7 +24,7 @@ export function MasterCodeBadge({
   return (
     <span
       title={text}
-      className={`klip-master-code inline-block whitespace-nowrap rounded-md border px-2 py-0.5 text-xs leading-4 ${fit ? '' : 'max-w-full truncate'} ${TONE[kind]}`}
+      className={`inline-block whitespace-nowrap rounded-md border px-2 py-0.5 text-xs leading-4 ${fit ? '' : 'max-w-full truncate'} ${TONE[kind]}`}
     >
       {text}
     </span>

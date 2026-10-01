@@ -111,6 +111,23 @@ export async function pushNamedMasterToDhm(
   }
 }
 
+async function siteDhmCodeForPlant(siteId: string | null, siteName: string): Promise<{ found: boolean; code: string | null }> {
+  const parent = await query(
+    `SELECT code_dhm
+     FROM master_sites
+     WHERE ($1::uuid IS NOT NULL AND id = $1::uuid)
+        OR (
+          $1::uuid IS NULL
+          AND $2::text <> ''
+          AND upper(trim(site_name)) = upper(trim($2::text))
+        )
+     LIMIT 1`,
+    [siteId, siteName.trim()],
+  );
+  if (!parent.rows[0]) return { found: false, code: null };
+  return { found: true, code: String(parent.rows[0].code_dhm || '').trim() || null };
+}
+
 export async function pushMasterPlantToDhm(
   localId: string,
   row: Record<string, unknown>,
@@ -122,9 +139,11 @@ export async function pushMasterPlantToDhm(
 
   try {
     let siteCode = String(row.site_dhm_code || '').trim();
-    if (!siteCode && row.site_id) {
-      const parent = await query(`SELECT code_dhm FROM master_sites WHERE id = $1::uuid`, [row.site_id]);
-      siteCode = String(parent.rows[0]?.code_dhm || '').trim();
+    if (!siteCode) {
+      const parent = await siteDhmCodeForPlant(String(row.site_id || '').trim() || null, String(row.site || ''));
+      if (!parent.found) return { dhmError: 'Plant needs a DHM site.' };
+      if (!parent.code) return { dhmError: 'Plant needs a DHM site. Sync Master Site first.' };
+      siteCode = parent.code;
     }
 
     const entity = await getDhmCatalogEntity('plant');
@@ -235,19 +254,64 @@ export async function pushMasterCompanyToDhm(
   }
 }
 
+async function companyDhmCodeForSite(siteId: string, companyName: string): Promise<string | null> {
+  const name = companyName.trim();
+  const linked = await query(
+    `SELECT company.code_dhm
+     FROM master_companies company
+     LEFT JOIN master_company_sites link
+       ON link.company_id = company.id AND link.site_id = $1::uuid
+     WHERE NULLIF(trim(company.code_dhm), '') IS NOT NULL
+       AND (
+         link.site_id IS NOT NULL
+         OR ($2::text <> '' AND upper(trim(company.company_name)) = upper(trim($2::text)))
+       )
+     ORDER BY
+       CASE
+         WHEN link.site_id IS NOT NULL AND $2::text <> '' AND upper(trim(company.company_name)) = upper(trim($2::text)) THEN 0
+         WHEN link.site_id IS NOT NULL THEN 1
+         ELSE 2
+       END,
+       company.company_name
+     LIMIT 1`,
+    [siteId, name],
+  );
+  return String(linked.rows[0]?.code_dhm || '').trim() || null;
+}
+
 export async function pushMasterSiteToDhm(
   localId: string,
   row: Record<string, unknown>,
   options?: { overwrite?: boolean },
 ): Promise<DhmPushAttachment> {
-  return pushNamedMasterToDhm(
-    'master_sites',
-    localId,
-    'site',
-    String(row.site_name || ''),
-    String(row.code_dhm || '').trim() || null,
-    { overwrite: options?.overwrite },
-  );
+  if (!isDhmEnabled()) return {};
+  const siteName = String(row.site_name || '').trim();
+  if (!siteName) return { dhmError: 'Name is required for DHM' };
+  try {
+    const companyCode = await companyDhmCodeForSite(localId, String(row.company_name || ''));
+    if (!companyCode) {
+      return { dhmError: 'Site needs a DHM company. Sync Master Company (Internal) first.' };
+    }
+    const slug = (await resolveDhmSlug('site')) || 'site';
+    const entity = await getDhmCatalogEntity(slug);
+    const companyKey = entity
+      ? dhmParentRefKey(entity, ['company_id', 'organization_id']) ||
+        matchDhmFieldKey(entity, [(key) => key === 'companyid' || key === 'organizationid'])
+      : 'company_id';
+    const extra: Record<string, string> = {};
+    if (companyKey) extra[companyKey] = companyCode;
+    return pushNamedMasterToDhm(
+      'master_sites',
+      localId,
+      'site',
+      siteName,
+      String(row.code_dhm || '').trim() || null,
+      { overwrite: options?.overwrite, extra },
+    );
+  } catch (error) {
+    logger.warn('DHM inbound unavailable; local site saved', { localId, error });
+    return { dhmError: 'DHM unavailable' };
+  }
 }
 
 export async function pushMasterPortToDhm(

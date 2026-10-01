@@ -83,12 +83,6 @@
     hyphens: none;
   }
 
-  .klip-master-code {
-    font-family: "Courier New", Courier, monospace;
-    font-weight: 300;
-    font-synthesis: none;
-  }
-
   .klip-compact-table.klip-compact-table {
     table-layout: fixed;
   }
