@@ -2933,6 +2933,23 @@ The old SUPERSEDED groups do not come back. The rebuild creates new ones with ne
 ACCEPTED groups were never touched.
 
 
+### Nine more Master Sites, for the places the Internal Company sheet names
+
+After the Site column of `docs/Master Data - CPO 28 Sep 2026.xlsx` was completed from each plant's name and City
+(208 of 226 plants now have one), 33 plants carry a Site that is not one of the 18 Master Sites: MERAUKE 11,
+BOVENDIGUL 5, SALO PALAI 4, SINTANG 3, PAYA PASIR 3, BAGENDANG 2, BAYAH 2, SINTETE 2, JAMBI 1. **Migration 214**
+adds the nine, with City and postal code by migration 200's rule (the City equal to the Site's own name, else the
+most common one). Four values are deliberately NULL or flagged, because the sheet is wrong or cannot decide: JAMBI's
+postal code (75325 is BONTANG's), SINTETE's postal code (two different values), BOVENDIGUL's City (PAPUA is a
+province, and the sheet also says MERAUKE), and MERAUKE, whose City would have come from three Jakarta head-office
+rows if they had not been ignored.
+
+A Site is pushed to DHM through its company, so 214 also adds the company links: 10 pairs (EU, PE, SB). The 11th,
+`ND -> MERAUKE`, is skipped: Master Company (Internal) holds only the 15 PT-named companies since migration 206, and
+ND (SAGS) is not one of them, so ND's 8 plants at MERAUKE have no company in KLIP. Additive and idempotent (27 Master
+Sites afterwards, 26 company links; a second run adds nothing).
+
+
 ### JPS held every STO that goes to a plant: SAP puts the plant's name in Vessel Discharge Port
 
 The JPS sweep logged `STO held back: discharge port has no DHM code on Master Port` on every run. Master
