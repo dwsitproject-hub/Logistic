@@ -60,9 +60,14 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
       ORDER BY company_name, plant_code
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
+    // The search clause above reads linked_site.site_name, so the count needs the same join. Without
+    // it every search with text was "missing FROM-clause entry for table linked_site" (HTTP 500),
+    // which is what the Edit Shipment modal hit looking a plant up by code. One row per plant on
+    // both sides, so the join cannot change the count.
     const countSql = `
       SELECT COUNT(*) AS count
       FROM master_plants
+      LEFT JOIN master_sites AS linked_site ON linked_site.id = master_plants.site_id
       ${where}
     `;
 
