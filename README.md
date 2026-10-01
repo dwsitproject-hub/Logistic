@@ -2864,6 +2864,28 @@ vessels), and only splitting the residue again, into "the STO is missing" versus
 but does not name this contract", exposed the clause above.
 
 
+### Master Plant Sync failed for 18 of 31 plants: the sites had been deleted
+
+The Sync button on Master Plant answered `Synced 13 of 31 to DHM. 18 failed. Plant needs a DHM site.`
+(after `plant` was added to the DHM slug list). The chain is Plant -> Site -> Company, and each
+level needs the DHM code of the one above it. Migration 207 cut Master Site to the 7 sites that sit
+next to a company name starting with PT, and its `DELETE` cascaded into `master_company_sites`.
+Migration 208 then reloaded Master Plant (31 rows) and linked a plant only when its site survived.
+The plants at those 7 sites are 13; the other 18 kept the Site text (LUBUK GAUNG, KARAWANG,
+TANJUNG PURA, BATAM, KUMAI, PALEMBANG, SELANGOR, SIDOARJO, BEKASI, PASIR GUDANG) but had no site row.
+
+The unique values of the Site column on `docs/Master Data - CPO 28 Sep 2026.xlsx`, sheet Internal
+Company, are 18; city and postal code match migration 200 with 0 differences. **Migration 211**
+puts back the sites 207 removed, restores the company <-> site links from the seed of migration 204,
+and links every plant that has a matching Site text. It adds only, and leaves an existing site as it
+is. Verified on a copy of production migrated through 211: sites 7 -> 18, plants linked 13 -> 31 of 31.
+164 of the 226 plants on the sheet have a blank Site; those are not guessed.
+
+The Delete button was removed from the Actions column of every master data table (Company, Site,
+Plant, Port, Product, Vessel, and the Ext Company / Incoterm / Truck Transporter pages). The API
+routes are unchanged.
+
+
 ### Pre-Planned went empty after the master reload: group_plant, and a member left active
 
 The production deploy of 2026-09-30 emptied the Pre-Planned suggestions on Shipments. The startup
