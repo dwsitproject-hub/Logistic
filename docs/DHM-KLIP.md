@@ -16,9 +16,10 @@ KLIP implements DHM patterns **A + C** for Master Vessel and the CPO masters bel
 | Master Incoterm | `incoterm` | `name` |
 | Master Company (Ext) | `shipper` (or `external_party` when that is the allowlisted slug) | `name` = Ext Company Name. `group` is sent only when the catalog has that field. |
 | Company (Int) | `company`, then `site` | Company `name` = company name. Site `name` = plant name (or plant code) and `company_id` = company code. `code_dhm` is the site code. `dhm_org_code` is the company code. |
+| Master Plant | `plant` | `name` = plant name (or plant code). The DHM code of the plant's Master Site is sent as the site reference, so a plant whose site has no DHM code is not pushed (`Plant needs a DHM site. Sync Master Site first.`). The SAP plant code and the plant type are sent only when the catalog lists a matching field. |
 | Master Port | `port_master` | `name` and `site_id` from a Company (Int) site that already has a DHM code. Without a site, the local row saves and DHM returns `Port needs a DHM site`. |
 
-Integrator must register application `klip` and allowlist `vessel`, `commodity`, `incoterm`, `shipper`, `company`, `site`, and `port_master`. The live catalog (OpenAPI 1.7) uses `company` and `company_id`, not `organization`. A slug that is not allowlisted comes back as a DHM error on save and is skipped by the cron.
+Integrator must register application `klip` and allowlist `vessel`, `commodity`, `incoterm`, `shipper`, `company`, `site`, `plant`, and `port_master`. The live catalog (OpenAPI 1.7) uses `company` and `company_id`, not `organization`. A slug that is not allowlisted comes back as a DHM error on save and is skipped by the cron. KLIP has its own list of slugs it will write to (`INBOUND_SLUGS` in `backend/src/dhm/inbound.ts`). A slug missing from it fails with `Unknown DHM slug` before any request is sent: the Master Plant Sync button did exactly that for all 31 plants on 2026-10-01 until `plant` was added. `inbound.test.ts` now fails when the push code sends a slug that is not in that list.
 
 SIT API (from the KLIP backend host): `DHM_BASE_URL=http://172.28.92.56:2001/api`  
 (`GET /health` on that base is `/api/health` → `{ "status": "ok", "service": "dhm-api" }`).  

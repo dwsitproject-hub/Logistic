@@ -55,11 +55,18 @@ function parseInboundBody(status: number, data: unknown): DhmInboundResult {
   return { ok: false, conflict: false, httpStatus: status, error };
 }
 
-const INBOUND_SLUGS = new Set([
+/**
+ * Slugs KLIP may write to. Every master pushed from pushMaster.ts / pushCatalog.ts must be listed
+ * here: a slug missing from this set is refused before any request leaves KLIP, with "Unknown DHM
+ * slug". The Master Plant Sync button pushed 'plant' while it was not listed, and all 31 rows
+ * failed that way (2026-10-01). inbound.test.ts fails when a pushed slug is not in this set.
+ */
+export const INBOUND_SLUGS = new Set([
   'vessel',
   'company',
   'organization',
   'site',
+  'plant',
   'port_master',
   'commodity',
   'incoterm',
