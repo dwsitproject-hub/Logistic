@@ -25,6 +25,13 @@ export const listMasterSites = async (req: AuthRequest, res: Response): Promise<
       where += ` AND (
         site_name ILIKE $${params.length}
         OR company_name ILIKE $${params.length}
+        OR EXISTS (
+          SELECT 1
+          FROM master_company_sites search_link
+          JOIN master_companies search_company ON search_company.id = search_link.company_id
+          WHERE search_link.site_id = master_sites.id
+            AND search_company.company_name ILIKE $${params.length}
+        )
         OR city ILIKE $${params.length}
         OR postal_code ILIKE $${params.length}
         OR code_klip ILIKE $${params.length}
@@ -33,7 +40,18 @@ export const listMasterSites = async (req: AuthRequest, res: Response): Promise<
     }
     const [listResult, countResult] = await Promise.all([
       query(
-        `SELECT id, code_klip, code_dhm, site_name, company_name, city, postal_code, dhm_id, created_at, updated_at
+        // company_name is the companies linked to the Site (master_company_sites), all of them, because a Site can
+        // belong to several. The stored text is only the fallback for a Site with no link: after the masters were
+        // replaced from the sheet it was filled on 7 Sites and empty on the rest, while the links were complete.
+        `SELECT id, code_klip, code_dhm, site_name,
+                COALESCE(
+                  NULLIF((SELECT string_agg(c.company_name, ', ' ORDER BY c.company_name)
+                            FROM master_company_sites l
+                            JOIN master_companies c ON c.id = l.company_id
+                           WHERE l.site_id = master_sites.id), ''),
+                  company_name
+                ) AS company_name,
+                city, postal_code, dhm_id, created_at, updated_at
          FROM master_sites ${where}
          ORDER BY site_name
          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
