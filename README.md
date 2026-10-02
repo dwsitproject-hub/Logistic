@@ -4341,6 +4341,15 @@ Webhooks exist in 5.x (`POST /webhooks`, events `status.changed` and `schedule.u
 within 15 seconds, URL must be HTTPS unless JPS allows HTTP on staging). KLIP has no receiver yet and polls instead (at most
 once per instruction every 5 minutes, which is what the document asks of a poller).
 
+**The discharge port of a shipment planned by hand (2026-10-02).** `BG. AS WARRIOR 2` (`OP-1004032508-13705970`) was held on
+every sweep with `discharge port has no DHM code on Master Port`, although the Edit Shipment modal showed *EUP EDIBLE OIL
+BONTANG* as its Discharge Port. For a shipment created by hand (`MNL-`) the modal keeps the discharge port as a
+`vessel_loading_ports` row (`is_discharge_port = true`, sequence 999) and leaves `shipments.port_of_discharge` NULL, and the
+JPS eligibility query read only that column. It now takes the name from `shipments.port_of_discharge` when filled, else from
+the discharge port row, and matches Master Port and the plant aliases on that name. The same STO was also held for
+`no DHM code on Master Vessel`: Master Vessel has to be synced to DHM (its Vessel Code (DHM) filled) before it can be sent,
+and JPS must hold the vessel's LOA.
+
 **Integrations > JPS and DHM > History.** Every call KLIP makes to JPS or to DHM is recorded, in `jps_api_calls`
 (migration 220) and `dhm_api_calls` (migration 221): kind, method and URL, what names the call (the STO key and
 `external_reference` for JPS; the slug and record code for DHM), the request params and body, the HTTP status, the

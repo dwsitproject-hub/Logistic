@@ -150,28 +150,44 @@ export async function findEligibleStos(
              (ARRAY_AGG(
                 CASE WHEN matched.port IS NOT NULL THEN matched.code_dhm ELSE via_alias.code_dhm END
                 ORDER BY
-                  CASE WHEN NULLIF(BTRIM(s.port_of_discharge), '') IS NULL THEN 1 ELSE 0 END,
+                  CASE WHEN NULLIF(BTRIM(dp.name), '') IS NULL THEN 1 ELSE 0 END,
                   s.updated_at DESC NULLS LAST))[1] AS port_hub_code
       FROM eligible e
       INNER JOIN shipments s ON TRUE
       INNER JOIN contracts c ON c.id = s.contract_id
       LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
+      -- The discharge port name. shipments.port_of_discharge is empty for a shipment planned by hand (MNL-): the Edit
+      -- Shipment modal keeps its discharge port as a vessel_loading_ports row with is_discharge_port = true, and the
+      -- shipment's own column stays NULL, so BG. AS WARRIOR 2 (EUP EDIBLE OIL BONTANG in the modal) was held as "no DHM
+      -- code on Master Port" on every sweep. The shipment's own column still wins when it is filled.
+      LEFT JOIN LATERAL (
+        SELECT COALESCE(
+          NULLIF(BTRIM(s.port_of_discharge), ''),
+          (SELECT NULLIF(BTRIM(v.port_name), '')
+             FROM vessel_loading_ports v
+            WHERE v.shipment_id = s.id
+              AND COALESCE(v.is_discharge_port, FALSE) IS TRUE
+              AND NULLIF(BTRIM(v.port_name), '') IS NOT NULL
+            ORDER BY v.port_sequence DESC
+            LIMIT 1)
+        ) AS name
+      ) dp ON TRUE
       LEFT JOIN LATERAL (
         SELECT mp.port, mp.code_dhm
         FROM master_loading_ports mp
-        WHERE NULLIF(BTRIM(s.port_of_discharge), '') IS NOT NULL
+        WHERE NULLIF(BTRIM(dp.name), '') IS NOT NULL
           AND (
             regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
-              = regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+              = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
             OR regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
-              = 'PORT ' || regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+              = 'PORT ' || regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
             OR 'PORT ' || regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
-              = regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+              = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
           )
         ORDER BY
           CASE
             WHEN regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
-              = regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+              = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
             THEN 0 ELSE 1
           END,
           length(mp.port)
@@ -190,9 +206,9 @@ export async function findEligibleStos(
           ON regexp_replace(upper(btrim(sp.port)), '\\s+', ' ', 'g')
              = 'PORT ' || regexp_replace(upper(btrim(st.site_name)), '\\s+', ' ', 'g')
         WHERE matched.port IS NULL
-          AND NULLIF(BTRIM(s.port_of_discharge), '') IS NOT NULL
+          AND NULLIF(BTRIM(dp.name), '') IS NOT NULL
           AND regexp_replace(upper(btrim(dpa.alias_name)), '\\s+', ' ', 'g')
-              = regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+              = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
         LIMIT 1
       ) via_alias ON TRUE
       WHERE ${STO_KEY_SQL} = e.sto_key
