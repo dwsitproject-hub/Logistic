@@ -57,3 +57,18 @@ describe('findEligibleStos: the discharge port name', () => {
     expect(port).toContain('dp.name');
   });
 });
+
+// BG. AS WARRIOR 2 was held for "no DHM code on Master Vessel" while the Shipments page listed it under VSL-0036: the JPS
+// lookup stopped at the code alias, the page also matches the vessel code and the normalized name.
+describe('findEligibleStos: which Master Vessel an STO takes its DataHub code from', () => {
+  beforeEach(() => vi.mocked(query).mockReset());
+
+  it('resolves the vessel the way the Shipments page does, by link, alias, code and normalized name', async () => {
+    const sql = await sqlOf();
+    const vessel = sql.slice(sql.indexOf('vessel AS ('), sql.indexOf('terms AS ('));
+    expect(vessel).toContain('LEFT JOIN master_vessels mv ON mv.id = COALESCE(');
+    expect(vessel).toContain('master_vessel_code_aliases');
+    expect(vessel).toContain('normalize_vessel_name');
+    expect(vessel).toContain('s.master_vessel_id');
+  });
+});

@@ -18,6 +18,7 @@
  * already arrived but whose status was never updated. Together: 1.
  */
 import { query } from '../database/connection';
+import { sqlResolveMasterVesselIdFromShipment } from '../utils/masterVesselCanonicalSql';
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
 import { jpsDocumentDownloadUrl } from './config';
 import type { JpsCargoSource, JpsShipmentSource } from './mapper';
@@ -226,9 +227,11 @@ export async function findEligibleStos(
       INNER JOIN shipments s ON TRUE
       INNER JOIN contracts c ON c.id = s.contract_id
       LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
-      LEFT JOIN master_vessel_code_aliases a
-        ON UPPER(TRIM(a.vessel_code)) = UPPER(TRIM(s.vessel_code))
-      LEFT JOIN master_vessels mv ON mv.id = COALESCE(s.master_vessel_id, a.master_vessel_id)
+      -- The same Master Vessel the Shipments page shows: the shipment's own link, a code alias, the vessel code, then the
+      -- normalized name (sqlResolveMasterVesselIdFromShipment). This used to stop at the alias, so a vessel whose KLIP
+      -- code is not registered as an alias (BG. AS WARRIOR 2, code MWARR2) looked like it had no Master Vessel, and
+      -- therefore no DataHub code, although the page listed it under VSL-0036.
+      LEFT JOIN master_vessels mv ON mv.id = ${sqlResolveMasterVesselIdFromShipment('s')}
       WHERE ${STO_KEY_SQL} = e.sto_key
       GROUP BY e.sto_key
     ),

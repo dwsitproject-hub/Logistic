@@ -4347,8 +4347,11 @@ BONTANG* as its Discharge Port. For a shipment created by hand (`MNL-`) the moda
 `vessel_loading_ports` row (`is_discharge_port = true`, sequence 999) and leaves `shipments.port_of_discharge` NULL, and the
 JPS eligibility query read only that column. It now takes the name from `shipments.port_of_discharge` when filled, else from
 the discharge port row, and matches Master Port and the plant aliases on that name. The same STO was also held for
-`no DHM code on Master Vessel`: Master Vessel has to be synced to DHM (its Vessel Code (DHM) filled) before it can be sent,
-and JPS must hold the vessel's LOA.
+`no DHM code on Master Vessel`, and that one was KLIP's too: Master Vessel listed the vessel under `VSL-0036`, but the JPS
+query found a vessel's Master Vessel only through the shipment's own link or a registered code alias, and `MWARR2` is neither.
+The Shipments page also matches the vessel code and the normalized name, so the JPS query now resolves the vessel with the same
+helper (`sqlResolveMasterVesselIdFromShipment`). A Master Vessel still has to be synced to DHM (its Vessel Code (DHM) filled)
+before it can be sent, and JPS must hold the vessel's LOA.
 
 **Integrations > JPS and DHM > History.** Every call KLIP makes to JPS or to DHM is recorded, in `jps_api_calls`
 (migration 220) and `dhm_api_calls` (migration 221): kind, method and URL, what names the call (the STO key and
