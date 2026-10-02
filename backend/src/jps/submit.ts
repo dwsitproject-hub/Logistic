@@ -175,10 +175,16 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
 
     if (res.retryable) {
       // No row: leave the STO eligible so the next sweep tries again.
+      // The message, request id and the reference JPS keys the instruction by are what JPS support needs to find
+      // this call. Without them a 500 INTERNAL_ERROR was a bare status line that nobody on the JPS side could trace.
       logger.warn('JPS submit will be retried', {
         stoKey: sto.sto_key,
+        externalReference: payload.external_reference,
+        cargoLines: payload.cargo.length,
         status: res.status,
         code: res.code,
+        message: res.message,
+        requestId: res.requestId,
       });
       continue;
     }
