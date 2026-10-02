@@ -4324,6 +4324,23 @@ came with the old key names: once the cargo line used `cargo_hub_code` the catal
 Master Port`, `no DHM code on Master Vessel for "<vessel>"`, `no DHM code on Master Product for "<product>"`. `vessel_name` is
 no longer sent as a fallback (the catalog calls it a cross-check that must match the master); the hub code names the vessel.
 
+**JPS Partner API 5.3 (read from `INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md`, 2026-10-02).** Two things in it changed what
+KLIP does:
+
+- **Document links accept `http://` as well as `https://`.** The earlier rule in `jpsDocumentDownloadUrl` (no link unless the
+  origin is https) was written for 5.2, which refused http with "must be a valid HTTPS URL" and rejected the whole instruction;
+  SIT is plain http. It now builds the link for either.
+- **The Jetty Status on the Shipments list was not refreshed when JPS changed it.** The poller writes the new status to
+  `jps_shipping_instructions`, which no user edit passes through, and the list keeps its pages and summary cards in memory
+  for an hour, so an instruction JPS had approved went on showing the old status. `runJpsSync` now clears the list cache
+  when an instruction was sent or recovered, or when a poll found a status change, and only then (the clear makes the next
+  load, and the warm-up behind it, do real work).
+
+Webhooks exist in 5.x (`POST /webhooks`, events `status.changed` and `schedule.updated`, `X-JPS-Signature` =
+`sha256=` HMAC of `<X-JPS-Timestamp>.<raw body>` with the endpoint's secret, at-least-once, dedupe on `X-JPS-Delivery-Id`, a 2xx
+within 15 seconds, URL must be HTTPS unless JPS allows HTTP on staging). KLIP has no receiver yet and polls instead (at most
+once per instruction every 5 minutes, which is what the document asks of a poller).
+
 **Integrations > JPS and DHM > History.** Every call KLIP makes to JPS or to DHM is recorded, in `jps_api_calls`
 (migration 220) and `dhm_api_calls` (migration 221): kind, method and URL, what names the call (the STO key and
 `external_reference` for JPS; the slug and record code for DHM), the request params and body, the HTTP status, the

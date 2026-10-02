@@ -11,17 +11,17 @@ export function isJpsEnabled(): boolean {
  *
  * The file itself stays on the Synology share. This is `APP_PUBLIC_ORIGIN` (same host that proxies
  * `/api` on SIT) plus the open `GET /api/documents/:id/download` route. Empty when no public origin
- * is configured or it is not https, so a submit is not held back just because the link cannot be built.
+ * is configured, so a submit is not held back just because the link cannot be built.
+ *
+ * http or https: JPS 5.3 accepts both. Until then it refused http with "must be a valid HTTPS URL" and rejected the WHOLE
+ * instruction, which is why this once left the link out unless the origin was https (SIT is plain http).
  */
 export function jpsDocumentDownloadUrl(documentId: string | null | undefined): string | undefined {
   const id = String(documentId ?? '').trim();
   const origin = String(integrationEnv('APP_PUBLIC_ORIGIN') || integrationEnv('FRONTEND_URL') || '')
     .trim()
     .replace(/\/+$/, '');
-  // JPS validates these three fields as HTTPS URLs and rejects the WHOLE instruction otherwise (SIT is served
-  // over plain http, and every STO with a document attached came back VALIDATION_ERROR). A link JPS cannot
-  // accept is no use to its operator either, so leave it out and let the instruction go without the document.
-  if (!id || !/^https:\/\//i.test(origin)) return undefined;
+  if (!id || !/^https?:\/\//i.test(origin)) return undefined;
   return `${origin}/api/documents/${encodeURIComponent(id)}/download`;
 }
 

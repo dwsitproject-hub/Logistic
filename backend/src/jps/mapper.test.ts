@@ -246,10 +246,19 @@ describe('jpsDocumentDownloadUrl', () => {
     expect(jpsDocumentDownloadUrl('  ')).toBeUndefined();
   });
 
-  // SIT's public origin is plain http. JPS answered every instruction carrying a document link with
-  // "must be a valid HTTPS URL" and refused the whole thing, so a non-https origin yields no link at all.
-  it('leaves the link out when the public origin is not https', () => {
+  // JPS 5.3 accepts http or https for the three document links (it refused http before, and SIT is plain http).
+  it('builds the link for an http origin too', () => {
     process.env.APP_PUBLIC_ORIGIN = 'http://test-klip.kpndomain.com';
+    expect(jpsDocumentDownloadUrl('11111111-1111-1111-1111-111111111111')).toBe(
+      'http://test-klip.kpndomain.com/api/documents/11111111-1111-1111-1111-111111111111/download',
+    );
+  });
+
+  it('leaves the link out when there is no usable origin', () => {
+    delete process.env.APP_PUBLIC_ORIGIN;
+    delete process.env.FRONTEND_URL;
+    expect(jpsDocumentDownloadUrl('11111111-1111-1111-1111-111111111111')).toBeUndefined();
+    process.env.APP_PUBLIC_ORIGIN = 'ftp://somewhere';
     expect(jpsDocumentDownloadUrl('11111111-1111-1111-1111-111111111111')).toBeUndefined();
   });
 });
