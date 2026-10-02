@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { jpsDocumentDownloadUrl, jpsPortIdOverride, jpsUseVesselName } from './config';
+import { jpsDocumentDownloadUrl } from './config';
 import {
   buildJpsExternalReference,
   buildJpsSubmitPayload,
@@ -8,14 +8,12 @@ import {
   type JpsShipmentSource,
 } from './mapper';
 
-const OPTIONS = {};
-
 function source(overrides: Partial<JpsShipmentSource> = {}): JpsShipmentSource {
   return {
     sto_key: '1006019026',
     revision: 1,
     vessel_name: 'BG. MARINI I',
-    vessel_hub_code: null,
+    vessel_hub_code: 'VSL-0001',
     port_hub_code: 'PRT-BONTANG',
     eta_discharge_arrival: '2026-09-18',
     eta_discharge_complete: '2026-09-20',
@@ -35,8 +33,7 @@ describe('cargo_hub_code is the DataHub code of the product', () => {
           { contract_no: 'C1', po_no: 'P1', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 1000, contract_quantity_kg: 1000 },
           { contract_no: 'C2', po_no: 'P2', product: 'SHELL PALM', product_hub_code: 'CMD-0037', sto_quantity_kg: 2000, contract_quantity_kg: 2000 },
         ],
-      }),
-      OPTIONS,
+      })
     );
     expect(problems).toEqual([]);
     expect(payload?.cargo.map((line) => line.cargo_hub_code)).toEqual(['CMD-0006', 'CMD-0037']);
@@ -45,7 +42,7 @@ describe('cargo_hub_code is the DataHub code of the product', () => {
   // JPS answered 400 "legacy cargo_type is not accepted; use cargo_hub_code" to the old key, so the old key must
   // not be sent at all, not even next to the new one.
   it('does not send the legacy cargo_type key, nor the short name JPS used before DataHub', () => {
-    const { payload } = buildJpsSubmitPayload(source(), OPTIONS);
+    const { payload } = buildJpsSubmitPayload(source());
     expect(payload?.cargo[0]).not.toHaveProperty('cargo_type');
     expect(payload?.cargo[0].cargo_hub_code).toBe('CMD-0006');
     expect(payload?.cargo[0].cargo_hub_code).not.toBe('CPO');
@@ -54,8 +51,7 @@ describe('cargo_hub_code is the DataHub code of the product', () => {
   it('holds the STO, saying which product, when a product has no DataHub code', () => {
     for (const code of [null, undefined, '', '   ']) {
       const { payload, problems } = buildJpsSubmitPayload(
-        source({ cargo: [{ contract_no: 'C1', po_no: 'P1', product: 'CPO', product_hub_code: code, sto_quantity_kg: 1000, contract_quantity_kg: 1000 }] }),
-        OPTIONS,
+        source({ cargo: [{ contract_no: 'C1', po_no: 'P1', product: 'CPO', product_hub_code: code, sto_quantity_kg: 1000, contract_quantity_kg: 1000 }] })
       );
       expect(payload).toBeUndefined();
       expect(problems.join(' ')).toContain('no DHM code on Master Product for "CPO"');
@@ -117,8 +113,7 @@ describe('buildJpsSubmitPayload', () => {
           { contract_no: '1004029443', po_no: '1001029443', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 300000, contract_quantity_kg: 300000 },
           { contract_no: '1004030198', po_no: '1001030198', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 1000000, contract_quantity_kg: 1000000 },
         ],
-      }),
-      OPTIONS,
+      })
     );
     expect(problems).toEqual([]);
     expect(payload?.cargo).toHaveLength(2);
@@ -127,7 +122,7 @@ describe('buildJpsSubmitPayload', () => {
   });
 
   it('always calls at BONTANG to discharge', () => {
-    const { payload } = buildJpsSubmitPayload(source(), OPTIONS);
+    const { payload } = buildJpsSubmitPayload(source());
     expect(payload?.purpose).toBe('Unloading');
     expect(payload?.port_hub_code).toBe('PRT-BONTANG');
     expect(payload?.port_id).toBeUndefined();
@@ -139,19 +134,23 @@ describe('buildJpsSubmitPayload', () => {
   // JPS rejects an unregistered shipper outright ("unknown shipper: ... Create it first"), and
   // KLIP's 57 BONTANG suppliers do not match its 25 registered names without a human mapping.
   it('never sends shipper_name', () => {
-    const { payload } = buildJpsSubmitPayload(source(), OPTIONS);
+    const { payload } = buildJpsSubmitPayload(source());
     expect(payload?.cargo[0]).not.toHaveProperty('shipper_name');
   });
 
-  it('prefers vessel_hub_code over vessel_name when DHM has supplied one', () => {
-    const { payload } = buildJpsSubmitPayload(source({ vessel_hub_code: 'VSL-0001' }), OPTIONS);
-    expect(payload?.vessel_hub_code).toBe('VSL-0001');
-    expect(payload?.vessel_name).toBeUndefined();
+  // JPS 5.3 requires vessel_hub_code and calls vessel_name a cross-check that must match the master.
+  it('names the vessel by its DataHub code and does not send the name', () => {
+    const { payload } = buildJpsSubmitPayload(source({ vessel_hub_code: 'VSL-0249', vessel_name: 'SMS 3002' }));
+    expect(payload?.vessel_hub_code).toBe('VSL-0249');
+    expect(payload).not.toHaveProperty('vessel_name');
   });
 
-  it('falls back to vessel_name while dhm_code is still empty', () => {
-    const { payload } = buildJpsSubmitPayload(source(), OPTIONS);
-    expect(payload?.vessel_name).toBe('BG. MARINI I');
+  it('holds the STO, naming the vessel, when its Master Vessel has no DataHub code', () => {
+    for (const code of [null, undefined, '', '  ']) {
+      const { payload, problems } = buildJpsSubmitPayload(source({ vessel_hub_code: code, vessel_name: 'SMS 3002' }));
+      expect(payload).toBeUndefined();
+      expect(problems).toContain('no DHM code on Master Vessel for "SMS 3002"');
+    }
   });
 
   it('sends document download URLs and omits a blank one', () => {
@@ -160,8 +159,7 @@ describe('buildJpsSubmitPayload', () => {
         contract_document_url: 'https://klip.example/api/documents/c/download',
         shipping_instruction_document_url: 'https://klip.example/api/documents/s/download',
         bl_document_url: '  ',
-      }),
-      OPTIONS,
+      })
     );
     expect(payload?.contract_document_url).toBe('https://klip.example/api/documents/c/download');
     expect(payload?.shipping_instruction_document_url).toBe('https://klip.example/api/documents/s/download');
@@ -169,13 +167,13 @@ describe('buildJpsSubmitPayload', () => {
   });
 
   it('holds the STO when Master Port has no DHM code', () => {
-    const { payload, problems } = buildJpsSubmitPayload(source({ port_hub_code: null }), OPTIONS);
+    const { payload, problems } = buildJpsSubmitPayload(source({ port_hub_code: null }));
     expect(payload).toBeUndefined();
     expect(problems.join(' ')).toContain('no DHM code');
   });
 
   it('refuses to build without an ETA, which JPS requires', () => {
-    const { payload, problems } = buildJpsSubmitPayload(source({ eta_discharge_arrival: null }), OPTIONS);
+    const { payload, problems } = buildJpsSubmitPayload(source({ eta_discharge_arrival: null }));
     expect(payload).toBeUndefined();
     expect(problems.join(' ')).toContain('ETA discharge arrival is empty');
   });
@@ -183,16 +181,14 @@ describe('buildJpsSubmitPayload', () => {
   // JPS rejects an etd that is not after eta, so a same-day discharge must simply omit it.
   it('omits etd when it does not follow eta', () => {
     const { payload } = buildJpsSubmitPayload(
-      source({ eta_discharge_complete: '2026-09-18' }),
-      OPTIONS,
+      source({ eta_discharge_complete: '2026-09-18' })
     );
     expect(payload?.etd).toBeUndefined();
   });
 
   it('holds the STO rather than guessing a cargo type', () => {
     const { payload, problems } = buildJpsSubmitPayload(
-      source({ cargo: [{ contract_no: 'C1', po_no: 'P1', product: 'GULA', sto_quantity_kg: 1000, contract_quantity_kg: 1000 }] }),
-      OPTIONS,
+      source({ cargo: [{ contract_no: 'C1', po_no: 'P1', product: 'GULA', sto_quantity_kg: 1000, contract_quantity_kg: 1000 }] })
     );
     expect(payload).toBeUndefined();
     expect(problems.join(' ')).toContain('no DHM code on Master Product for "GULA"');
@@ -202,8 +198,7 @@ describe('buildJpsSubmitPayload', () => {
   // that would book berth space for cargo that does not exist.
   it('drops a line whose STO quantity exceeds its own contract by more than 10%', () => {
     const { payload, problems } = buildJpsSubmitPayload(
-      source({ cargo: [{ contract_no: '1014002227', po_no: '1011002227', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 5000000, contract_quantity_kg: 1000000 }] }),
-      OPTIONS,
+      source({ cargo: [{ contract_no: '1014002227', po_no: '1011002227', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 5000000, contract_quantity_kg: 1000000 }] })
     );
     expect(payload).toBeUndefined();
     expect(problems.join(' ')).toContain('exceeds contract qty');
@@ -211,108 +206,24 @@ describe('buildJpsSubmitPayload', () => {
 
   it('accepts an STO quantity smaller than the contract, which is the normal split', () => {
     const { payload, problems } = buildJpsSubmitPayload(
-      source({ cargo: [{ contract_no: '1004029279', po_no: '1001029279', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 101220, contract_quantity_kg: 400000 }] }),
-      OPTIONS,
+      source({ cargo: [{ contract_no: '1004029279', po_no: '1001029279', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 101220, contract_quantity_kg: 400000 }] })
     );
     expect(problems).toEqual([]);
     expect(payload?.cargo[0].tonnage).toBe(101.22);
   });
 });
 
-describe('port id override (testing only)', () => {
-  it('sends the numeric port_id and no port_hub_code when an override is given', () => {
-    const { payload, problems } = buildJpsSubmitPayload(source(), { portId: 1 });
-    expect(problems).toEqual([]);
-    expect(payload?.port_id).toBe(1);
-    expect(payload).not.toHaveProperty('port_hub_code');
+describe('port', () => {
+  it('names the port by its DataHub code and sends no port_id', () => {
+    const { payload } = buildJpsSubmitPayload(source());
+    expect(payload?.port_hub_code).toBe('PRT-BONTANG');
+    expect(payload).not.toHaveProperty('port_id');
   });
 
-  it('does not hold an STO back for a missing port code while the override is on', () => {
-    const { payload, problems } = buildJpsSubmitPayload(source({ port_hub_code: null }), { portId: 1 });
-    expect(problems).toEqual([]);
-    expect(payload?.port_id).toBe(1);
-  });
-
-  it('still sends port_hub_code, and holds a missing one, without an override', () => {
-    expect(buildJpsSubmitPayload(source(), OPTIONS).payload).toMatchObject({ port_hub_code: 'PRT-BONTANG' });
-    expect(buildJpsSubmitPayload(source(), OPTIONS).payload).not.toHaveProperty('port_id');
-    const held = buildJpsSubmitPayload(source({ port_hub_code: null }), OPTIONS);
+  it('holds the STO when the discharge port has no DataHub code', () => {
+    const held = buildJpsSubmitPayload(source({ port_hub_code: null }));
     expect(held.payload).toBeUndefined();
     expect(held.problems).toContain('discharge port has no DHM code on Master Port');
-  });
-});
-
-describe('vessel name override (testing only)', () => {
-  it('sends the vessel name and no vessel_hub_code when asked to', () => {
-    const { payload, problems } = buildJpsSubmitPayload(
-      source({ vessel_name: 'SMS 3002', vessel_hub_code: 'VSL-0249' }),
-      { vesselNameOnly: true },
-    );
-    expect(problems).toEqual([]);
-    expect(payload?.vessel_name).toBe('SMS 3002');
-    expect(payload).not.toHaveProperty('vessel_hub_code');
-  });
-
-  it('holds an STO with no vessel name while the override is on, even if it has a code', () => {
-    const held = buildJpsSubmitPayload(
-      source({ vessel_name: null, vessel_hub_code: 'VSL-0249' }),
-      { vesselNameOnly: true },
-    );
-    expect(held.payload).toBeUndefined();
-    expect(held.problems).toContain('no vessel_name');
-  });
-
-  it('keeps the hub code first without the override', () => {
-    const { payload } = buildJpsSubmitPayload(
-      source({ vessel_name: 'SMS 3002', vessel_hub_code: 'VSL-0249' }),
-      OPTIONS,
-    );
-    expect(payload?.vessel_hub_code).toBe('VSL-0249');
-    expect(payload).not.toHaveProperty('vessel_name');
-  });
-});
-
-describe('jpsUseVesselName', () => {
-  const previous = process.env.JPS_USE_VESSEL_NAME;
-
-  afterEach(() => {
-    if (previous === undefined) delete process.env.JPS_USE_VESSEL_NAME;
-    else process.env.JPS_USE_VESSEL_NAME = previous;
-  });
-
-  it('is on only for the word true', () => {
-    delete process.env.JPS_USE_VESSEL_NAME;
-    expect(jpsUseVesselName()).toBe(false);
-    process.env.JPS_USE_VESSEL_NAME = 'true';
-    expect(jpsUseVesselName()).toBe(true);
-    process.env.JPS_USE_VESSEL_NAME = 'yes';
-    expect(jpsUseVesselName()).toBe(false);
-  });
-});
-
-describe('jpsPortIdOverride', () => {
-  const keys = ['JPS_USE_PORT_ID', 'JPS_PORT_ID'] as const;
-  const previous = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
-
-  afterEach(() => {
-    for (const k of keys) {
-      if (previous[k] === undefined) delete process.env[k];
-      else process.env[k] = previous[k];
-    }
-  });
-
-  it('is off unless the switch is on AND a valid id is set', () => {
-    delete process.env.JPS_USE_PORT_ID;
-    process.env.JPS_PORT_ID = '1';
-    expect(jpsPortIdOverride()).toBeNull();
-
-    process.env.JPS_USE_PORT_ID = 'true';
-    expect(jpsPortIdOverride()).toBe(1);
-
-    process.env.JPS_PORT_ID = 'abc';
-    expect(jpsPortIdOverride()).toBeNull();
-    delete process.env.JPS_PORT_ID;
-    expect(jpsPortIdOverride()).toBeNull();
   });
 });
 

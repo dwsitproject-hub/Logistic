@@ -29,7 +29,7 @@
 import { query } from './../database/connection';
 import logger from '../utils/logger';
 import { jpsRequest } from './client';
-import { jpsPortIdOverride, jpsRegionSite, jpsUseVesselName } from './config';
+import { jpsRegionSite } from './config';
 import { findEligibleStos } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
 import type { JpsInstruction, JpsSubmitPayload } from './types';
@@ -136,7 +136,6 @@ export async function amendPendingInstructions(limit = 50): Promise<JpsAmendSumm
 
     const built = buildJpsSubmitPayload(
       { ...source, revision: Number(row.revision ?? 1) },
-      { portId: jpsPortIdOverride(), vesselNameOnly: jpsUseVesselName() },
     );
     if (!built.payload) {
       // The STO no longer builds a valid payload at all - a product lost its mapping, say. Nothing

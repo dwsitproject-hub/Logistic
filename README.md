@@ -4312,23 +4312,17 @@ the number of lines). The four instructions JPS holds as `SUBMITTED / Pending` w
 with `port_id: 1`. So no instruction in the current shape has ever been accepted. Request ids for JPS support are in the
 backend log (`JPS submit will be retried`).
 
-**A switch to prove the loop meanwhile.** Integrations > JPS has `Send Port ID instead of port code`
-(`JPS_USE_PORT_ID`). With it on AND `Port ID` set, the payload carries `port_id` and no `port_hub_code`, and a port
-without a DHM code is not held back; the amend pass builds its payload the same way. Off by default, logged as a
-warning at startup, and testing only: it sends an id that is not tied to Master Port, and what port id 1 is in JPS has to
-be confirmed with them first.
+**The three testing switches are gone.** `Send Port ID instead of port code`, `Send vessel name instead of vessel code` (and
+the `Port ID` setting under them) were added the same day to tell where the 500s came from. They answered it: with
+`port_id` instead of `port_hub_code`, and with `vessel_name` instead of `vessel_hub_code`, the answer was the same 500, and
+then JPS published `GET /catalog` (api_version 5.3), which makes `port_hub_code` and `vessel_hub_code` required and lists no
+other way to name a port or a vessel. Their only possible output was a payload JPS refuses, so they were removed. The 500s
+came with the old key names: once the cargo line used `cargo_hub_code` the catalog and the payload agree field for field
+(`agent_name` null is allowed, `etd` after `eta`, no `shipper_name`).
 
-**Update, same day.** JPS moved its masters to DataHub codes in the days before, so the numeric `port_id` no longer
-means what it did, and the `Port ID` switch above proved nothing: with `port_id: 1` the answer was the same `500`.
-Nothing else in the payload is the cause, as far as KLIP can test: the instructions JPS accepted on 24 Sep had the same
-cargo shape (`contract_no`, `po_no`), `GET /agents` and `GET /terms` still use numeric ids (so `agent_name: "Other"`
-and `trade_term` are fine), and three different vessels (`VSL-0249`, `VSL-0274`, one to four cargo lines) all return 500.
-JPS answered 400 with a reason for an unknown port on 1 Oct, so the payload passes its validation and fails after it,
-which points at JPS (the hub code to local row mapping), not at the payload.
-
-`Send vessel name instead of vessel code` (`JPS_USE_VESSEL_NAME`) is the last switch: it sends `vessel_name` and no
-`vessel_hub_code`, to tell whether the failure is in JPS resolving a vessel hub code. Off by default, a warning at
-startup, testing only, and the amend pass builds its payload the same way.
+**An STO is held, with the reason, when its port, vessel or product has no DataHub code**: `discharge port has no DHM code on
+Master Port`, `no DHM code on Master Vessel for "<vessel>"`, `no DHM code on Master Product for "<product>"`. `vessel_name` is
+no longer sent as a fallback (the catalog calls it a cross-check that must match the master); the hub code names the vessel.
 
 **Integrations > JPS and DHM > History.** Every call KLIP makes to JPS or to DHM is recorded, in `jps_api_calls`
 (migration 220) and `dhm_api_calls` (migration 221): kind, method and URL, what names the call (the STO key and

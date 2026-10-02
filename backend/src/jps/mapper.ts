@@ -115,28 +115,20 @@ function absoluteDocumentUrl(value: string | null | undefined): string | undefin
  * master ("unknown shipper: ... Create it first via POST /shippers", verified on staging), and the
  * 57 suppliers in BONTANG scope do not match its 25 registered names without a human mapping.
  */
-export function buildJpsSubmitPayload(
-  source: JpsShipmentSource,
-  options: { portId?: number | null; vesselNameOnly?: boolean } = {},
-): JpsPayloadResult {
+export function buildJpsSubmitPayload(source: JpsShipmentSource): JpsPayloadResult {
   const problems: string[] = [];
 
   const eta = toJpsDateTime(source.eta_discharge_arrival);
   if (!eta) problems.push('ETA discharge arrival is empty');
 
-  // portId is the testing override (jpsPortIdOverride): the numeric id replaces the DHM code, so a port without
-  // a code is not held back while the override is on.
-  const portId = options.portId ?? null;
+  // JPS 5.3 (GET /catalog) makes port_hub_code and vessel_hub_code required, and lists no other way to name a port or a
+  // vessel, so an STO whose port or vessel has no DataHub code is held with the reason instead of sent to be refused.
   const portHubCode = String(source.port_hub_code ?? '').trim();
-  if (portId == null && !portHubCode) problems.push('discharge port has no DHM code on Master Port');
+  if (!portHubCode) problems.push('discharge port has no DHM code on Master Port');
 
-  // vesselNameOnly is the testing switch (jpsUseVesselName): the name goes and the hub code does not, so the
-  // vessel has to have a name even when it has a code.
-  const vesselNameOnly = options.vesselNameOnly === true;
-  if (vesselNameOnly) {
-    if (!String(source.vessel_name ?? '').trim()) problems.push('no vessel_name');
-  } else if (!source.vessel_hub_code && !String(source.vessel_name ?? '').trim()) {
-    problems.push('no vessel_hub_code and no vessel_name');
+  const vesselHubCode = String(source.vessel_hub_code ?? '').trim();
+  if (!vesselHubCode) {
+    problems.push(`no DHM code on Master Vessel for "${String(source.vessel_name ?? '').trim()}"`);
   }
 
   const cargo: JpsCargoLine[] = [];
@@ -177,9 +169,8 @@ export function buildJpsSubmitPayload(
   const etd = toJpsDateTime(source.eta_discharge_complete);
   const payload: JpsSubmitPayload = {
     external_reference: buildJpsExternalReference(source.sto_key, source.revision),
-    // JPS takes the DHM port code in place of the numeric port id. The id stays valid on their
-    // side only when this code is omitted, so a payload that has the code does not send both.
-    ...(portId != null ? { port_id: portId } : { port_hub_code: portHubCode }),
+    port_hub_code: portHubCode,
+    vessel_hub_code: vesselHubCode,
     purpose: 'Unloading',
     eta: eta as string,
     // No agent: KLIP has no shipping-agent master. It used to send the fixed "Other" (a JPS row, GET /agents id 5);
@@ -187,8 +178,8 @@ export function buildJpsSubmitPayload(
     agent_name: null,
     cargo,
   };
-  if (source.vessel_hub_code && !vesselNameOnly) payload.vessel_hub_code = source.vessel_hub_code;
-  else if (source.vessel_name) payload.vessel_name = String(source.vessel_name).trim();
+  // vessel_name is an optional cross-check that "must match master", and the hub code already names the vessel, so
+  // it is not sent: a spelling difference would be a refusal for no gain.
   // JPS rejects an etd that is not after eta; a same-day discharge would trip that.
   if (etd && etd > (eta as string)) payload.etd = etd;
   const tradeTerm = mapKlipIncotermToJpsTradeTerm(source.incoterm);

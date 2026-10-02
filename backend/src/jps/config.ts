@@ -80,33 +80,6 @@ export function jpsRetryFailedAfterMs(): number {
   return Number.isFinite(n) && n >= 60_000 ? n : 5 * 60_000;
 }
 
-/**
- * The numeric JPS port id to send in place of the DHM `port_hub_code`. TESTING ONLY, and off unless BOTH
- * JPS_USE_PORT_ID=true and JPS_PORT_ID are set.
- *
- * Every payload that carried port_hub_code PORT-0048 (BONTANG) came back 400 "No port found" and then 500, while
- * the instructions JPS accepted before the code existed were sent with `port_id: 1`. This lets one STO go through
- * that older shape, so the rest of the loop (submit, poll, amend, status on the page) can be proven while JPS
- * sorts out the port. It sends a port id that is not tied to Master Port, so it must not outlive the test.
- */
-export function jpsPortIdOverride(): number | null {
-  if (String(integrationEnv('JPS_USE_PORT_ID') || '').toLowerCase() !== 'true') return null;
-  const n = Number(integrationEnv('JPS_PORT_ID'));
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
-
-/**
- * Send the vessel NAME and no `vessel_hub_code`. TESTING ONLY, off unless JPS_USE_VESSEL_NAME=true.
- *
- * After JPS moved its masters to DataHub codes, every payload that passed its validation (no 400) came back 500,
- * with port_hub_code and with port_id, for three vessels. This isolates the vessel lookup: if an instruction goes
- * through by name, the failure is in how JPS resolves a vessel hub code. It sends a vessel the way the pilot did,
- * not the DataHub code the integration is meant to use, so it must not outlive the test.
- */
-export function jpsUseVesselName(): boolean {
-  return String(integrationEnv('JPS_USE_VESSEL_NAME') || '').toLowerCase() === 'true';
-}
-
 export function jpsSweepCron(): string {
   return integrationEnv('JPS_SWEEP_CRON') || '*/15 * * * *';
 }

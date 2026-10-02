@@ -120,7 +120,7 @@ describe('registry validation', () => {
     expect(validateSettingValue(def('jps', 'JPS_SWEEP_CRON'), '*/15 * * * *')).toBeNull();
     expect(validateSettingValue(def('jps', 'JPS_API_BASE_URL'), 'ftp://x')).not.toBeNull();
     expect(validateSettingValue(def('jps', 'JPS_API_BASE_URL'), 'http://172.28.92.56:3080/api/v1/integrations')).toBeNull();
-    expect(validateSettingValue(def('jps', 'JPS_PORT_ID'), '1.5')).not.toBeNull();
+    expect(validateSettingValue(def('jps', 'JPS_TIMEOUT_MS'), '1.5')).not.toBeNull();
   });
 
   it('rejects a key carrying an invisible character from a chat app', () => {
