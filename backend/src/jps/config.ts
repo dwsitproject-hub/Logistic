@@ -95,6 +95,18 @@ export function jpsPortIdOverride(): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+/**
+ * Send the vessel NAME and no `vessel_hub_code`. TESTING ONLY, off unless JPS_USE_VESSEL_NAME=true.
+ *
+ * After JPS moved its masters to DataHub codes, every payload that passed its validation (no 400) came back 500,
+ * with port_hub_code and with port_id, for three vessels. This isolates the vessel lookup: if an instruction goes
+ * through by name, the failure is in how JPS resolves a vessel hub code. It sends a vessel the way the pilot did,
+ * not the DataHub code the integration is meant to use, so it must not outlive the test.
+ */
+export function jpsUseVesselName(): boolean {
+  return String(integrationEnv('JPS_USE_VESSEL_NAME') || '').toLowerCase() === 'true';
+}
+
 export function jpsSweepCron(): string {
   return integrationEnv('JPS_SWEEP_CRON') || '*/15 * * * *';
 }

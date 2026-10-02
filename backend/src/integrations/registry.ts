@@ -76,6 +76,12 @@ export const INTEGRATIONS: IntegrationDef[] = [
         kind: 'boolean',
         help: 'Testing only. Sends the Port ID above and no port_hub_code. Leave off in production.',
       },
+      {
+        key: 'JPS_USE_VESSEL_NAME',
+        label: 'Send vessel name instead of vessel code',
+        kind: 'boolean',
+        help: 'Testing only. Sends the vessel name and no vessel_hub_code. Leave off in production.',
+      },
       { key: 'JPS_REGION_SITE', label: 'Region / site', kind: 'text' },
       { key: 'JPS_SWEEP_CRON', label: 'Sweep schedule (cron)', kind: 'cron', requiresRestart: true },
       { key: 'JPS_TIMEOUT_MS', label: 'Request timeout (ms)', kind: 'integer', min: 1000 },

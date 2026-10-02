@@ -8,6 +8,7 @@ import {
   jpsRegionSite,
   jpsRetryFailed,
   jpsRetryFailedAfterMs,
+  jpsUseVesselName,
 } from './config';
 import { findEligibleStos } from './eligibility';
 import { buildJpsExternalReference, buildJpsSubmitPayload } from './mapper';
@@ -133,7 +134,7 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
     const revision = await nextRevision(sto.sto_key);
     const built = buildJpsSubmitPayload(
       { ...sto, revision },
-      { agentName: JPS_AGENT_NAME, portId: jpsPortIdOverride() },
+      { agentName: JPS_AGENT_NAME, portId: jpsPortIdOverride(), vesselNameOnly: jpsUseVesselName() },
     );
 
     if (!built.payload) {

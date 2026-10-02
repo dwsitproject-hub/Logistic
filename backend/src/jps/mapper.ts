@@ -146,7 +146,7 @@ function absoluteDocumentUrl(value: string | null | undefined): string | undefin
  */
 export function buildJpsSubmitPayload(
   source: JpsShipmentSource,
-  options: { agentName: string; portId?: number | null },
+  options: { agentName: string; portId?: number | null; vesselNameOnly?: boolean },
 ): JpsPayloadResult {
   const problems: string[] = [];
 
@@ -159,7 +159,12 @@ export function buildJpsSubmitPayload(
   const portHubCode = String(source.port_hub_code ?? '').trim();
   if (portId == null && !portHubCode) problems.push('discharge port has no DHM code on Master Port');
 
-  if (!source.vessel_hub_code && !String(source.vessel_name ?? '').trim()) {
+  // vesselNameOnly is the testing switch (jpsUseVesselName): the name goes and the hub code does not, so the
+  // vessel has to have a name even when it has a code.
+  const vesselNameOnly = options.vesselNameOnly === true;
+  if (vesselNameOnly) {
+    if (!String(source.vessel_name ?? '').trim()) problems.push('no vessel_name');
+  } else if (!source.vessel_hub_code && !String(source.vessel_name ?? '').trim()) {
     problems.push('no vessel_hub_code and no vessel_name');
   }
 
@@ -209,7 +214,7 @@ export function buildJpsSubmitPayload(
     agent_name: options.agentName,
     cargo,
   };
-  if (source.vessel_hub_code) payload.vessel_hub_code = source.vessel_hub_code;
+  if (source.vessel_hub_code && !vesselNameOnly) payload.vessel_hub_code = source.vessel_hub_code;
   else if (source.vessel_name) payload.vessel_name = String(source.vessel_name).trim();
   // JPS rejects an etd that is not after eta; a same-day discharge would trip that.
   if (etd && etd > (eta as string)) payload.etd = etd;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { jpsDocumentDownloadUrl, jpsPortIdOverride } from './config';
+import { jpsDocumentDownloadUrl, jpsPortIdOverride, jpsUseVesselName } from './config';
 import {
   buildJpsExternalReference,
   buildJpsSubmitPayload,
@@ -223,6 +223,54 @@ describe('port id override (testing only)', () => {
     const held = buildJpsSubmitPayload(source({ port_hub_code: null }), OPTIONS);
     expect(held.payload).toBeUndefined();
     expect(held.problems).toContain('discharge port has no DHM code on Master Port');
+  });
+});
+
+describe('vessel name override (testing only)', () => {
+  it('sends the vessel name and no vessel_hub_code when asked to', () => {
+    const { payload, problems } = buildJpsSubmitPayload(
+      source({ vessel_name: 'SMS 3002', vessel_hub_code: 'VSL-0249' }),
+      { agentName: 'Other', vesselNameOnly: true },
+    );
+    expect(problems).toEqual([]);
+    expect(payload?.vessel_name).toBe('SMS 3002');
+    expect(payload).not.toHaveProperty('vessel_hub_code');
+  });
+
+  it('holds an STO with no vessel name while the override is on, even if it has a code', () => {
+    const held = buildJpsSubmitPayload(
+      source({ vessel_name: null, vessel_hub_code: 'VSL-0249' }),
+      { agentName: 'Other', vesselNameOnly: true },
+    );
+    expect(held.payload).toBeUndefined();
+    expect(held.problems).toContain('no vessel_name');
+  });
+
+  it('keeps the hub code first without the override', () => {
+    const { payload } = buildJpsSubmitPayload(
+      source({ vessel_name: 'SMS 3002', vessel_hub_code: 'VSL-0249' }),
+      OPTIONS,
+    );
+    expect(payload?.vessel_hub_code).toBe('VSL-0249');
+    expect(payload).not.toHaveProperty('vessel_name');
+  });
+});
+
+describe('jpsUseVesselName', () => {
+  const previous = process.env.JPS_USE_VESSEL_NAME;
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.JPS_USE_VESSEL_NAME;
+    else process.env.JPS_USE_VESSEL_NAME = previous;
+  });
+
+  it('is on only for the word true', () => {
+    delete process.env.JPS_USE_VESSEL_NAME;
+    expect(jpsUseVesselName()).toBe(false);
+    process.env.JPS_USE_VESSEL_NAME = 'true';
+    expect(jpsUseVesselName()).toBe(true);
+    process.env.JPS_USE_VESSEL_NAME = 'yes';
+    expect(jpsUseVesselName()).toBe(false);
   });
 });
 

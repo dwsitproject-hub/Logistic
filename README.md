@@ -4317,6 +4317,18 @@ without a DHM code is not held back; the amend pass builds its payload the same 
 warning at startup, and testing only: it sends an id that is not tied to Master Port, and what port id 1 is in JPS has to
 be confirmed with them first.
 
+**Update, same day.** JPS moved its masters to DataHub codes in the days before, so the numeric `port_id` no longer
+means what it did, and the `Port ID` switch above proved nothing: with `port_id: 1` the answer was the same `500`.
+Nothing else in the payload is the cause, as far as KLIP can test: the instructions JPS accepted on 24 Sep had the same
+cargo shape (`contract_no`, `po_no`), `GET /agents` and `GET /terms` still use numeric ids (so `agent_name: "Other"`
+and `trade_term` are fine), and three different vessels (`VSL-0249`, `VSL-0274`, one to four cargo lines) all return 500.
+JPS answered 400 with a reason for an unknown port on 1 Oct, so the payload passes its validation and fails after it,
+which points at JPS (the hub code to local row mapping), not at the payload.
+
+`Send vessel name instead of vessel code` (`JPS_USE_VESSEL_NAME`) is the last switch: it sends `vessel_name` and no
+`vessel_hub_code`, to tell whether the failure is in JPS resolving a vessel hub code. Off by default, a warning at
+startup, testing only, and the amend pass builds its payload the same way.
+
 #### ATA-ATC values have three doors: SAP, KLIP and JPS
 
 Every ATA-ATC field in the shipment modal carries a badge saying where its value came from, and a
