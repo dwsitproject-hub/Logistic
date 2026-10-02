@@ -80,6 +80,14 @@ export function jpsRetryFailedAfterMs(): number {
   return Number.isFinite(n) && n >= 60_000 ? n : 5 * 60_000;
 }
 
+/**
+ * The secret JPS showed once when the webhook endpoint was registered (whsec_...). Saved from Integrations > JPS and
+ * used to verify X-JPS-Signature on POST /api/jps/webhooks. Empty means every delivery is refused.
+ */
+export function jpsWebhookSecret(): string {
+  return String(integrationEnv('JPS_WEBHOOK_SECRET') || '').trim();
+}
+
 export function jpsSweepCron(): string {
   return integrationEnv('JPS_SWEEP_CRON') || '*/15 * * * *';
 }

@@ -4336,10 +4336,23 @@ KLIP does:
   when an instruction was sent or recovered, or when a poll found a status change, and only then (the clear makes the next
   load, and the warm-up behind it, do real work).
 
-Webhooks exist in 5.x (`POST /webhooks`, events `status.changed` and `schedule.updated`, `X-JPS-Signature` =
-`sha256=` HMAC of `<X-JPS-Timestamp>.<raw body>` with the endpoint's secret, at-least-once, dedupe on `X-JPS-Delivery-Id`, a 2xx
-within 15 seconds, URL must be HTTPS unless JPS allows HTTP on staging). KLIP has no receiver yet and polls instead (at most
-once per instruction every 5 minutes, which is what the document asks of a poller).
+#### JPS webhook receiver: `POST /api/jps/webhooks`
+
+JPS 5.x pushes `status.changed` and `schedule.updated` to a URL registered with `POST /webhooks` on its side. KLIP receives
+them at **`/api/jps/webhooks`** (`backend/src/jps/webhookHandler.ts`; the route sits before `express.json` in `server.ts`,
+because the signature covers the raw bytes). Polling stays as the fallback, at most once per instruction every 5 minutes.
+
+| | |
+|---|---|
+| URL to register | `http://172.28.92.57:5001/api/jps/webhooks` (the backend directly), or `http://test-klip.kpndomain.com/api/jps/webhooks` (through the frontend proxy). JPS requires HTTPS unless its staging has `INTEGRATION_WEBHOOK_ALLOW_HTTP=true`; SIT is plain http. |
+| Register | `POST <JPS base>/webhooks` with `{ "url": "...", "events": ["status.changed", "schedule.updated"] }`. The answer carries `secret` (`whsec_...`) **once**. |
+| Secret | Integrations > JPS > **Webhook secret** (`JPS_WEBHOOK_SECRET`, encrypted, write-only). With none set every delivery is refused (401). |
+| Signature | `X-JPS-Signature: sha256=<hex>` = HMAC-SHA256 of `<X-JPS-Timestamp>.<raw body>` with the secret. |
+| Dedupe | `X-JPS-Delivery-Id` in `jps_webhook_deliveries` (migration 222), written only AFTER the delivery was applied, so a delivery answered 5xx is processed again on the retry. |
+| Answers | 200 applied / duplicate / for a reference KLIP never sent (dropped so JPS does not retry it); 400 malformed or no delivery id; 401 bad signature; 500 apply failed (JPS retries); 503 JPS integration off. |
+| Effect | The same write as the poller (`applyJpsInstruction`), then the Shipments list cache is cleared, so the Jetty Status changes at once. |
+| Visibility | Every delivery, refused ones included, is a row of kind **webhook** in Integrations > JPS > History (the body of a refused delivery is not kept). |
+
 
 **The discharge port of a shipment planned by hand (2026-10-02).** `BG. AS WARRIOR 2` (`OP-1004032508-13705970`) was held on
 every sweep with `discharge port has no DHM code on Master Port`, although the Edit Shipment modal showed *EUP EDIBLE OIL

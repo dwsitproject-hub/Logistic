@@ -44,7 +44,7 @@ const PAGE_SIZE = 25
 
 const WORDING: Record<IntegrationId, { kinds: string[]; subject: string; reference: string; placeholder: string }> = {
   jps: {
-    kinds: ['submit', 'amend', 'poll', 'recover', 'test', 'other'],
+    kinds: ['submit', 'amend', 'poll', 'recover', 'test', 'webhook', 'other'],
     subject: 'STO',
     reference: 'External reference',
     placeholder: 'mis. OP-1004031960 atau req_5ab6',

@@ -6,9 +6,9 @@ import { boundJson, recordApiCall } from '../integrations/apiCallLog';
 
 export { boundJson };
 
-export type JpsCallKind = 'submit' | 'amend' | 'poll' | 'recover' | 'test' | 'other';
+export type JpsCallKind = 'submit' | 'amend' | 'poll' | 'recover' | 'test' | 'webhook' | 'other';
 
-export const JPS_CALL_KINDS: readonly JpsCallKind[] = ['submit', 'amend', 'poll', 'recover', 'test', 'other'];
+export const JPS_CALL_KINDS: readonly JpsCallKind[] = ['submit', 'amend', 'poll', 'recover', 'test', 'webhook', 'other'];
 
 /** What the caller knows about a call that the request alone does not say. */
 export interface JpsCallContext {

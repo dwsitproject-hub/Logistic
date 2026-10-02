@@ -63,6 +63,13 @@ export const INTEGRATIONS: IntegrationDef[] = [
       { key: 'JPS_ENABLED', label: 'Enabled', kind: 'boolean', requiresRestart: true },
       { key: 'JPS_API_BASE_URL', label: 'API base URL', kind: 'url' },
       { key: 'JPS_API_KEY', label: 'API key', kind: 'secret' },
+      {
+        key: 'JPS_WEBHOOK_SECRET',
+        label: 'Webhook secret',
+        kind: 'secret',
+        prefix: 'whsec_',
+        help: 'Shown once by JPS when the webhook endpoint is registered; begins with whsec_. KLIP receives at /api/jps/webhooks.',
+      },
       { key: 'JPS_REGION_SITE', label: 'Region / site', kind: 'text' },
       { key: 'JPS_SWEEP_CRON', label: 'Sweep schedule (cron)', kind: 'cron', requiresRestart: true },
       { key: 'JPS_TIMEOUT_MS', label: 'Request timeout (ms)', kind: 'integer', min: 1000 },

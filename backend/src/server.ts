@@ -140,6 +140,27 @@ app.post(
     res.status(200).json({ success: true, duplicate: Boolean(result.duplicate) });
   },
 );
+// JPS pushes approval and milestone changes here. Like the DHM route above it needs the RAW body, because the signature
+// covers the exact bytes, so it sits before express.json. The URL is what gets registered at JPS (POST /webhooks).
+app.post(
+  '/api/jps/webhooks',
+  express.raw({ type: '*/*', limit: '1mb' }),
+  async (req, res) => {
+    const { handleJpsWebhook } = await import('./jps');
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body ?? ''));
+    const result = await handleJpsWebhook(raw, {
+      timestamp: req.header('X-JPS-Timestamp'),
+      signature: req.header('X-JPS-Signature'),
+      event: req.header('X-JPS-Event'),
+      deliveryId: req.header('X-JPS-Delivery-Id'),
+    });
+    if (!result.accepted) {
+      res.status(result.status).json({ success: false, error: { message: result.error || 'Rejected' } });
+      return;
+    }
+    res.status(200).json({ success: true, duplicate: Boolean(result.duplicate), ignored: result.ignored ?? null });
+  },
+);
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 const swaggerOptions = {

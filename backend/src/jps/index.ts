@@ -7,6 +7,7 @@
  */
 export { isJpsEnabled, jpsRegionSite, jpsRetryFailed, jpsSweepCron } from './config';
 export { submitEligibleStos, type JpsSubmitSummary } from './submit';
+export { handleJpsWebhook, type JpsWebhookResult } from './webhookHandler';
 export { pollSubmittedInstructions, type JpsPollSummary } from './poll';
 export { amendPendingInstructions, buildJpsAmendBody, type JpsAmendSummary } from './amend';
 export { findEligibleStos, type EligibleSto } from './eligibility';
