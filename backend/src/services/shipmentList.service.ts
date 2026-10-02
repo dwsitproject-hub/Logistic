@@ -1241,12 +1241,21 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
   return rows;
 }
 
+/*
+ * The Jetty columns are part of the shell on purpose. The hydrate pass (skipSapJoin=false) carries them
+ * too, but the client merges only a fixed list of qty / port / vessel fields from it, so a column that is
+ * missing here stays empty and the badge reads "Not Sent" for an STO JPS already holds (MULIA VII,
+ * SUBMITTED / Pending, 2026-10-02). The lookup is one indexed read of jps_shipping_instructions per page
+ * row, not a sap_processed_data join, so it does not cost the shell its first-paint speed.
+ */
 const LIST_PAGE_SELECT_SHELL = `
       SELECT
         sp.*,
         mv.vessel_name_master,
-        ${shipmentEffectiveStatusExpr('sp')} AS effective_status
+        ${shipmentEffectiveStatusExpr('sp')} AS effective_status,
+${SHIPMENT_LIST_JPS_SELECT_SQL}
       FROM shipment_page sp
+      ${SHIPMENT_LIST_JPS_JOIN_SQL}
       ${SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN_SHELL}`;
 
 const LIST_PAGE_SELECT = `

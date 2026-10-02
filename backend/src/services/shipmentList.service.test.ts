@@ -95,6 +95,30 @@ describe('buildShipmentListPageQuery', () => {
     expect(q.text).toContain('vessel_name_master');
   });
 
+  // The client's hydrate merge copies a fixed list of fields and none of them is a jetty_* one, so a shell that
+  // leaves the Jetty columns out shows "Not Sent" for an STO JPS already holds.
+  it('skipSapJoin shell carries the Jetty columns, since hydrate never merges them into the rows', async () => {
+    const q = await buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: true,
+        cacheKey: 'k-shell-jetty',
+        filterCacheKey: 'fk-shell-jetty',
+        sortKey: 'created_at',
+        sortDir: 'DESC',
+      },
+      20,
+      0,
+    );
+    expect(q.text).toContain('AS jetty_status');
+    expect(q.text).toContain('jetty_last_synced_at');
+    expect(q.text).toContain('FROM jps_shipping_instructions j');
+    expect(q.text).toContain("j.state = 'SUBMITTED'");
+  });
+
   it('hydrate skipSapJoin=false keeps list qty SQL for OS, receive, and delivery', async () => {
     const q = await buildShipmentListPageQuery(
       {

@@ -80,6 +80,21 @@ export function jpsRetryFailedAfterMs(): number {
   return Number.isFinite(n) && n >= 60_000 ? n : 5 * 60_000;
 }
 
+/**
+ * The numeric JPS port id to send in place of the DHM `port_hub_code`. TESTING ONLY, and off unless BOTH
+ * JPS_USE_PORT_ID=true and JPS_PORT_ID are set.
+ *
+ * Every payload that carried port_hub_code PORT-0048 (BONTANG) came back 400 "No port found" and then 500, while
+ * the instructions JPS accepted before the code existed were sent with `port_id: 1`. This lets one STO go through
+ * that older shape, so the rest of the loop (submit, poll, amend, status on the page) can be proven while JPS
+ * sorts out the port. It sends a port id that is not tied to Master Port, so it must not outlive the test.
+ */
+export function jpsPortIdOverride(): number | null {
+  if (String(integrationEnv('JPS_USE_PORT_ID') || '').toLowerCase() !== 'true') return null;
+  const n = Number(integrationEnv('JPS_PORT_ID'));
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 export function jpsSweepCron(): string {
   return integrationEnv('JPS_SWEEP_CRON') || '*/15 * * * *';
 }

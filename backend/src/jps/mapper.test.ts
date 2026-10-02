@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { jpsDocumentDownloadUrl } from './config';
+import { jpsDocumentDownloadUrl, jpsPortIdOverride } from './config';
 import {
   buildJpsExternalReference,
   buildJpsSubmitPayload,
@@ -200,6 +200,55 @@ describe('buildJpsSubmitPayload', () => {
     );
     expect(problems).toEqual([]);
     expect(payload?.cargo[0].tonnage).toBe(101.22);
+  });
+});
+
+describe('port id override (testing only)', () => {
+  it('sends the numeric port_id and no port_hub_code when an override is given', () => {
+    const { payload, problems } = buildJpsSubmitPayload(source(), { agentName: 'Other', portId: 1 });
+    expect(problems).toEqual([]);
+    expect(payload?.port_id).toBe(1);
+    expect(payload).not.toHaveProperty('port_hub_code');
+  });
+
+  it('does not hold an STO back for a missing port code while the override is on', () => {
+    const { payload, problems } = buildJpsSubmitPayload(source({ port_hub_code: null }), { agentName: 'Other', portId: 1 });
+    expect(problems).toEqual([]);
+    expect(payload?.port_id).toBe(1);
+  });
+
+  it('still sends port_hub_code, and holds a missing one, without an override', () => {
+    expect(buildJpsSubmitPayload(source(), OPTIONS).payload).toMatchObject({ port_hub_code: 'PRT-BONTANG' });
+    expect(buildJpsSubmitPayload(source(), OPTIONS).payload).not.toHaveProperty('port_id');
+    const held = buildJpsSubmitPayload(source({ port_hub_code: null }), OPTIONS);
+    expect(held.payload).toBeUndefined();
+    expect(held.problems).toContain('discharge port has no DHM code on Master Port');
+  });
+});
+
+describe('jpsPortIdOverride', () => {
+  const keys = ['JPS_USE_PORT_ID', 'JPS_PORT_ID'] as const;
+  const previous = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+
+  afterEach(() => {
+    for (const k of keys) {
+      if (previous[k] === undefined) delete process.env[k];
+      else process.env[k] = previous[k];
+    }
+  });
+
+  it('is off unless the switch is on AND a valid id is set', () => {
+    delete process.env.JPS_USE_PORT_ID;
+    process.env.JPS_PORT_ID = '1';
+    expect(jpsPortIdOverride()).toBeNull();
+
+    process.env.JPS_USE_PORT_ID = 'true';
+    expect(jpsPortIdOverride()).toBe(1);
+
+    process.env.JPS_PORT_ID = 'abc';
+    expect(jpsPortIdOverride()).toBeNull();
+    delete process.env.JPS_PORT_ID;
+    expect(jpsPortIdOverride()).toBeNull();
   });
 });
 

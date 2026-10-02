@@ -146,15 +146,18 @@ function absoluteDocumentUrl(value: string | null | undefined): string | undefin
  */
 export function buildJpsSubmitPayload(
   source: JpsShipmentSource,
-  options: { agentName: string },
+  options: { agentName: string; portId?: number | null },
 ): JpsPayloadResult {
   const problems: string[] = [];
 
   const eta = toJpsDateTime(source.eta_discharge_arrival);
   if (!eta) problems.push('ETA discharge arrival is empty');
 
+  // portId is the testing override (jpsPortIdOverride): the numeric id replaces the DHM code, so a port without
+  // a code is not held back while the override is on.
+  const portId = options.portId ?? null;
   const portHubCode = String(source.port_hub_code ?? '').trim();
-  if (!portHubCode) problems.push('discharge port has no DHM code on Master Port');
+  if (portId == null && !portHubCode) problems.push('discharge port has no DHM code on Master Port');
 
   if (!source.vessel_hub_code && !String(source.vessel_name ?? '').trim()) {
     problems.push('no vessel_hub_code and no vessel_name');
@@ -200,7 +203,7 @@ export function buildJpsSubmitPayload(
     external_reference: buildJpsExternalReference(source.sto_key, source.revision),
     // JPS takes the DHM port code in place of the numeric port id. The id stays valid on their
     // side only when this code is omitted, so a payload that has the code does not send both.
-    port_hub_code: portHubCode,
+    ...(portId != null ? { port_id: portId } : { port_hub_code: portHubCode }),
     purpose: 'Unloading',
     eta: eta as string,
     agent_name: options.agentName,

@@ -4294,6 +4294,29 @@ cancelled in KLIP stands until a JPS operator removes it. `PATCH` works only whi
 KLIP change after approval cannot be pushed; an email notification for that case is the agreed next
 step and is not built.
 
+#### JPS on SIT, 2026-10-02: what was wrong, and a switch to prove one STO end to end
+
+Found while retesting SMS 3002, ETAM BERSAMA and MULIA VII on SIT.
+
+| Finding | Where | Fix |
+|---|---|---|
+| ATC Loading is entered through `PUT /shipments/:id/ata-override`, which cleared the list caches but never ran the JPS sweep, so a booking waited for the next cron tick | `shipmentAtaOverride.controller.ts` | the save now fires `runJpsSync('ata-override')` after the response |
+| JPS rejected the whole instruction (`VALIDATION_ERROR`) because the three document links were `http://` (SIT has no https) | `jpsDocumentDownloadUrl` | no link unless the public origin is `https://`; the instruction goes without the document |
+| The retry warning was printed as `Internal server error` and no grep found it: `message` in winston metadata replaces the log message | `submit.ts` | the field is `jpsMessage`; the line also carries `externalReference`, `requestId`, `cargoLines` |
+| The Jetty Status column read `Not Sent` for an STO JPS holds as `Pending` (MULIA VII). The compact shell query (`skipSapJoin=true`) did not select the Jetty columns, and the client's hydrate merge copies a fixed list of fields, none of them `jetty_*` | `LIST_PAGE_SELECT_SHELL` | the shell selects the Jetty columns and joins `jps_shipping_instructions` (one indexed read per page row) |
+
+**Still open at JPS.** Every payload that carries `port_hub_code: PORT-0048` came back `400 No port found` on 1 Oct and
+`500 INTERNAL_ERROR` since the code was registered (SMS 3002 three times, ETAM BERSAMA twice, one cargo line, so it is not
+the number of lines). The four instructions JPS holds as `SUBMITTED / Pending` were sent before `port_hub_code` existed,
+with `port_id: 1`. So no instruction in the current shape has ever been accepted. Request ids for JPS support are in the
+backend log (`JPS submit will be retried`).
+
+**A switch to prove the loop meanwhile.** Integrations > JPS has `Send Port ID instead of port code`
+(`JPS_USE_PORT_ID`). With it on AND `Port ID` set, the payload carries `port_id` and no `port_hub_code`, and a port
+without a DHM code is not held back; the amend pass builds its payload the same way. Off by default, logged as a
+warning at startup, and testing only: it sends an id that is not tied to Master Port, and what port id 1 is in JPS has to
+be confirmed with them first.
+
 #### ATA-ATC values have three doors: SAP, KLIP and JPS
 
 Every ATA-ATC field in the shipment modal carries a badge saying where its value came from, and a
