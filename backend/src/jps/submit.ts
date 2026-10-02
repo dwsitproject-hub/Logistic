@@ -186,6 +186,9 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
         code: res.code,
         jpsMessage: res.message,
         requestId: res.requestId,
+        // A retryable failure writes no row, so this is the only record of what JPS answered 500 to. It holds no
+        // secret (vessel, port, quantities, a reference), and JPS support needs the body to find the cause.
+        payload: JSON.stringify(payload),
       });
       continue;
     }
