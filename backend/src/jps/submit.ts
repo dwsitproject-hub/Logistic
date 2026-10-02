@@ -183,7 +183,7 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
         cargoLines: payload.cargo.length,
         status: res.status,
         code: res.code,
-        message: res.message,
+        jpsMessage: res.message,
         requestId: res.requestId,
       });
       continue;
