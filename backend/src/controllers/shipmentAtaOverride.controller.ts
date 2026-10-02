@@ -103,6 +103,14 @@ export const updateShipmentAtaOverride = async (req: AuthRequest, res: Response)
     const affectedIds = await resolveStoGroupShipmentIds(id);
     invalidateAfterShipmentWrite(affectedIds.length > 0 ? affectedIds : [id]);
 
+    // ATC Loading is entered here, not through the shipment edit, and it is the condition that makes an
+    // STO eligible for a jetty booking. Without this the Jetty Status stayed "Not Sent" until the next
+    // cron tick (up to 15 minutes) while the same edit through the shipment form sent at once. Fired after
+    // the response so a slow or unreachable JPS never delays the save; runJpsSync swallows its own failures.
+    setImmediate(() => {
+      void import('../jps').then(({ runJpsSync }) => runJpsSync('ata-override')).catch(() => {});
+    });
+
     return res.json({
       success: true,
       message: 'ATA override saved',
