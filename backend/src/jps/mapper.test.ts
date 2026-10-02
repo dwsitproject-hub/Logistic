@@ -27,8 +27,8 @@ function source(overrides: Partial<JpsShipmentSource> = {}): JpsShipmentSource {
   };
 }
 
-describe('cargo_type is the DataHub code of the product', () => {
-  it('sends products.code_dhm as cargo_type, whatever the product is called', () => {
+describe('cargo_hub_code is the DataHub code of the product', () => {
+  it('sends products.code_dhm as cargo_hub_code, whatever the product is called', () => {
     const { payload, problems } = buildJpsSubmitPayload(
       source({
         cargo: [
@@ -39,13 +39,16 @@ describe('cargo_type is the DataHub code of the product', () => {
       OPTIONS,
     );
     expect(problems).toEqual([]);
-    expect(payload?.cargo.map((line) => line.cargo_type)).toEqual(['CMD-0006', 'CMD-0037']);
+    expect(payload?.cargo.map((line) => line.cargo_hub_code)).toEqual(['CMD-0006', 'CMD-0037']);
   });
 
-  it('does not send the short name JPS used before DataHub', () => {
+  // JPS answered 400 "legacy cargo_type is not accepted; use cargo_hub_code" to the old key, so the old key must
+  // not be sent at all, not even next to the new one.
+  it('does not send the legacy cargo_type key, nor the short name JPS used before DataHub', () => {
     const { payload } = buildJpsSubmitPayload(source(), OPTIONS);
-    expect(payload?.cargo[0].cargo_type).toBe('CMD-0006');
-    expect(payload?.cargo[0].cargo_type).not.toBe('CPO');
+    expect(payload?.cargo[0]).not.toHaveProperty('cargo_type');
+    expect(payload?.cargo[0].cargo_hub_code).toBe('CMD-0006');
+    expect(payload?.cargo[0].cargo_hub_code).not.toBe('CPO');
   });
 
   it('holds the STO, saying which product, when a product has no DataHub code', () => {
@@ -119,7 +122,7 @@ describe('buildJpsSubmitPayload', () => {
     );
     expect(problems).toEqual([]);
     expect(payload?.cargo).toHaveLength(2);
-    expect(payload?.cargo[0]).toMatchObject({ cargo_type: 'CMD-0006', tonnage: 300, unit: 'MT', po_no: '1001029443' });
+    expect(payload?.cargo[0]).toMatchObject({ cargo_hub_code: 'CMD-0006', tonnage: 300, unit: 'MT', po_no: '1001029443' });
     expect(payload?.cargo[1].tonnage).toBe(1000);
   });
 

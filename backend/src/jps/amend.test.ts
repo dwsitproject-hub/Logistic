@@ -8,7 +8,7 @@ const base = (over: Partial<JpsSubmitPayload> = {}): JpsSubmitPayload => ({
   purpose: 'Unloading',
   eta: '2026-09-25T00:00:00Z',
   agent_name: 'Other',
-  cargo: [{ cargo_type: 'CPO', tonnage: 100, unit: 'MT', contract_no: 'C-1', po_no: 'PO-1' }],
+  cargo: [{ cargo_hub_code: 'CPO', tonnage: 100, unit: 'MT', contract_no: 'C-1', po_no: 'PO-1' }],
   ...over,
 });
 
@@ -37,14 +37,14 @@ describe('buildJpsAmendBody', () => {
   it('identifies a cargo line by contract_no, not by position', () => {
     const sent = base({
       cargo: [
-        { cargo_type: 'CPO', tonnage: 100, unit: 'MT', contract_no: 'C-1', po_no: 'PO-1' },
-        { cargo_type: 'PK', tonnage: 50, unit: 'MT', contract_no: 'C-2', po_no: 'PO-2' },
+        { cargo_hub_code: 'CPO', tonnage: 100, unit: 'MT', contract_no: 'C-1', po_no: 'PO-1' },
+        { cargo_hub_code: 'PK', tonnage: 50, unit: 'MT', contract_no: 'C-2', po_no: 'PO-2' },
       ],
     });
     // C-1 has dropped off, so C-2 is now first. Matching by line_order would write C-2's new PO
     // onto C-1's row at JPS.
     const now = base({
-      cargo: [{ cargo_type: 'PK', tonnage: 50, unit: 'MT', contract_no: 'C-2', po_no: 'PO-9' }],
+      cargo: [{ cargo_hub_code: 'PK', tonnage: 50, unit: 'MT', contract_no: 'C-2', po_no: 'PO-9' }],
     });
     expect(buildJpsAmendBody(sent, now)).toEqual({
       cargo: [{ contract_no: 'C-2', po_no: 'PO-9' }],
@@ -54,8 +54,8 @@ describe('buildJpsAmendBody', () => {
   it('leaves a cargo line JPS does not have alone, because PATCH cannot add one', () => {
     const now = base({
       cargo: [
-        { cargo_type: 'CPO', tonnage: 100, unit: 'MT', contract_no: 'C-1', po_no: 'PO-1' },
-        { cargo_type: 'PK', tonnage: 50, unit: 'MT', contract_no: 'C-NEW', po_no: 'PO-NEW' },
+        { cargo_hub_code: 'CPO', tonnage: 100, unit: 'MT', contract_no: 'C-1', po_no: 'PO-1' },
+        { cargo_hub_code: 'PK', tonnage: 50, unit: 'MT', contract_no: 'C-NEW', po_no: 'PO-NEW' },
       ],
     });
     expect(buildJpsAmendBody(base(), now)).toBeNull();

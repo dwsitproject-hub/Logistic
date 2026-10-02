@@ -87,7 +87,7 @@ export async function findEligibleStos(
    * for", where:
    *
    *   SKIPPED_NO_CARGO is deliberately absent. An STO held back because a product had no JPS
-   *   cargo_type, or because its STO quantity looked wrong, must be picked up once the data is
+   *   cargo_hub_code, or because its STO quantity looked wrong, must be picked up once the data is
    *   corrected.
    *
    *   SUBMITTED and SKIPPED_PRE_EXISTING are settled for good: both name an instruction JPS
@@ -280,7 +280,7 @@ export async function findEligibleStos(
             SELECT 1 FROM contract_stos cs3 WHERE cs3.contract_id = c.id
           )
       ) x ON TRUE
-      -- cargo_type is the DataHub code of the product, matched by name; NULL (no such product, or one not yet synced)
+      -- cargo_hub_code is the DataHub code of the product, matched by name; NULL (no such product, or one not yet synced)
       -- holds the STO with a reason instead of sending a guess.
       LEFT JOIN LATERAL (
         SELECT p.code_dhm

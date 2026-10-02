@@ -8,10 +8,11 @@
 import type { JpsCargoLine, JpsSubmitPayload } from './types';
 
 /*
- * cargo_type is the DataHub code of the product (products.code_dhm, e.g. CMD-0006 for CPO), the same code on both
- * sides since JPS moved its masters to DataHub. It used to be a short name read from JPS's valid_cargo_types list
- * (CPO, PK, PKS, ...) through a table in this file; that table is gone, and a product with no code is held rather than
- * sent under a guessed one.
+ * cargo_hub_code is the DataHub code of the product (products.code_dhm, e.g. CMD-0006 for CPO), the same code on
+ * both sides since JPS moved its masters to DataHub. It used to be `cargo_type`, a short name read from JPS's
+ * valid_cargo_types list (CPO, PK, PKS, ...) through a table in this file; JPS now refuses that name ("legacy
+ * cargo_type is not accepted; use cargo_hub_code"). The table is gone, and a product with no code is held rather
+ * than sent under a guessed one.
  */
 
 /**
@@ -58,7 +59,7 @@ export interface JpsCargoSource {
   po_no: string | null;
   /** contracts.product */
   product: string | null;
-  /** products.code_dhm of that product, the DataHub code JPS takes as cargo_type. Empty until Master Product is synced. */
+  /** products.code_dhm of that product, the DataHub code JPS takes as cargo_hub_code. Empty until Master Product is synced. */
   product_hub_code?: string | null;
   /** contract_stos.sto_quantity, in KILOGRAMS */
   sto_quantity_kg: number | null;
@@ -140,8 +141,8 @@ export function buildJpsSubmitPayload(
 
   const cargo: JpsCargoLine[] = [];
   for (const line of source.cargo) {
-    const cargoType = String(line.product_hub_code ?? '').trim();
-    if (!cargoType) {
+    const cargoHubCode = String(line.product_hub_code ?? '').trim();
+    if (!cargoHubCode) {
       problems.push(`no DHM code on Master Product for "${String(line.product ?? '').trim()}"`);
       continue;
     }
@@ -161,7 +162,7 @@ export function buildJpsSubmitPayload(
       continue;
     }
     cargo.push({
-      cargo_type: cargoType,
+      cargo_hub_code: cargoHubCode,
       tonnage: kgToMt(kg),
       unit: 'MT',
       ...(line.contract_no ? { contract_no: line.contract_no } : {}),

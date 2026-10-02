@@ -36,7 +36,11 @@ export interface JpsApproval {
 }
 
 export interface JpsCargoLine {
-  cargo_type: string;
+  /**
+   * The DataHub code of the product (products.code_dhm). JPS renamed this from `cargo_type`, which it now
+   * refuses: "legacy cargo_type is not accepted; use cargo_hub_code".
+   */
+  cargo_hub_code: string;
   description?: string;
   tonnage: number;
   unit: 'MT' | 'KL';

@@ -4352,9 +4352,11 @@ retried DHM read records every attempt. Writing the history never changes what a
 and swallowed. ADMIN only, like the rest of the menu: `GET /integrations/:id/calls` and `/:id/calls/:callId` with `:id` =
 `jps` or `dhm`. Not recorded: what DHM sends TO KLIP (the webhook), which is the other direction.
 
-**Cargo type and agent (2026-10-02).** JPS now takes DataHub codes, so `cargo_type` is the product's DataHub code,
+**Cargo type and agent (2026-10-02).** JPS now takes DataHub codes, so the cargo line carries the product's DataHub code,
 `products.code_dhm` (CPO = `CMD-0006`, PK = `CMD-0021`, CPKO = `CMD-0005`, POME = `CMD-0026`, SHELL PALM = `CMD-0037`),
-not the short name (`CPO`, `PKS`, ...) read from JPS's `valid_cargo_types`. The old table in `mapper.ts` is gone. The code is
+not the short name (`CPO`, `PKS`, ...) read from JPS's `valid_cargo_types`. The key is **`cargo_hub_code`**: JPS answered
+`400 legacy cargo_type is not accepted; use cargo_hub_code` to the first attempt under the old key `cargo_type`, so the old key
+is no longer sent at all. The old table in `mapper.ts` is gone. The code is
 looked up by product name (`UPPER(TRIM(product_name))`) in the eligibility query and travels on each cargo line as
 `product_hub_code`; a product with no code, or no Master Product of that name, holds the STO with
 `no DHM code on Master Product for "<product>"` instead of sending a guess. One thing to watch: the old table also
