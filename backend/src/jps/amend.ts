@@ -34,9 +34,6 @@ import { findEligibleStos } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
 import type { JpsInstruction, JpsSubmitPayload } from './types';
 
-/** Same fixed agent the submission uses; it is not amended, only needed to rebuild the payload. */
-const JPS_AGENT_NAME = 'Other';
-
 export interface JpsAmendSummary {
   checked: number;
   amended: number;
@@ -139,7 +136,7 @@ export async function amendPendingInstructions(limit = 50): Promise<JpsAmendSumm
 
     const built = buildJpsSubmitPayload(
       { ...source, revision: Number(row.revision ?? 1) },
-      { agentName: JPS_AGENT_NAME, portId: jpsPortIdOverride(), vesselNameOnly: jpsUseVesselName() },
+      { portId: jpsPortIdOverride(), vesselNameOnly: jpsUseVesselName() },
     );
     if (!built.payload) {
       // The STO no longer builds a valid payload at all - a product lost its mapping, say. Nothing

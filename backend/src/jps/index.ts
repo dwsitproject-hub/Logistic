@@ -13,10 +13,8 @@ export { findEligibleStos, type EligibleSto } from './eligibility';
 export {
   buildJpsSubmitPayload,
   buildJpsExternalReference,
-  mapKlipProductToJpsCargoType,
   mapKlipIncotermToJpsTradeTerm,
   toJpsDateTime,
-  JPS_CARGO_TYPES,
 } from './mapper';
 export type { JpsInstruction, JpsPartnerStatus, JpsSubmitPayload } from './types';
 

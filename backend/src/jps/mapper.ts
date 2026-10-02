@@ -7,44 +7,12 @@
  */
 import type { JpsCargoLine, JpsSubmitPayload } from './types';
 
-/**
- * Commodity short names as the STAGING API reports them, read from the `valid_cargo_types` list
- * returned with a 400. The partner document's §5.1 table disagrees on five codes - it lists
- * METHANOL for MEOH, RBD PO for RPO, INS POME FAD for INS POMEFAD, SPLIT CPKO FA for SCPKOFA and
- * SPLIT RBD PKO FA for SRPKFA - and omits COAL, SAND and SBE. Mapping from the document would have
- * produced five codes JPS rejects.
+/*
+ * cargo_type is the DataHub code of the product (products.code_dhm, e.g. CMD-0006 for CPO), the same code on both
+ * sides since JPS moved its masters to DataHub. It used to be a short name read from JPS's valid_cargo_types list
+ * (CPO, PK, PKS, ...) through a table in this file; that table is gone, and a product with no code is held rather than
+ * sent under a guessed one.
  */
-export const JPS_CARGO_TYPES = [
-  'CG', 'COAL', 'CPKO', 'CPO', 'FAME', 'INS POMEFAD', 'INS RPOME', 'ISCC POMEPFAD', 'ISCC RPOME',
-  'MEOH', 'PFAD', 'PK', 'PKE', 'PKM', 'PKS', 'POME', 'RG', 'ROL', 'RPKO', 'RPO', 'RPOME',
-  'SAND', 'SBE', 'SCPKOFA', 'SRPKFA',
-] as const;
-
-/**
- * KLIP product -> JPS cargo_type. Only products that actually reach BONTANG are mapped; anything
- * else returns null and the STO is held rather than sent with a guessed commodity.
- *
- * `PK` needed no mapping: JPS does carry raw Palm Kernel, which the document's 20-row table did
- * not show. `SHELL PALM` -> `PKS` (Palm Kernel Shell) was confirmed by Ryan.
- */
-const KLIP_PRODUCT_TO_JPS_CARGO: Record<string, string> = {
-  CPO: 'CPO',
-  PK: 'PK',
-  CPKO: 'CPKO',
-  RPKO: 'RPKO',
-  RPO: 'RPO',
-  PFAD: 'PFAD',
-  PKE: 'PKE',
-  'SHELL PALM': 'PKS',
-  'WASTE OIL (POME)': 'POME',
-  POME: 'POME',
-};
-
-export function mapKlipProductToJpsCargoType(product: unknown): string | null {
-  const key = String(product ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
-  if (!key) return null;
-  return KLIP_PRODUCT_TO_JPS_CARGO[key] ?? null;
-}
 
 /**
  * JPS accepts only the trade terms in `GET /terms`: FOB, CIF, CFR (plus a stray "1"). KLIP's two
@@ -90,6 +58,8 @@ export interface JpsCargoSource {
   po_no: string | null;
   /** contracts.product */
   product: string | null;
+  /** products.code_dhm of that product, the DataHub code JPS takes as cargo_type. Empty until Master Product is synced. */
+  product_hub_code?: string | null;
   /** contract_stos.sto_quantity, in KILOGRAMS */
   sto_quantity_kg: number | null;
   /** contracts.quantity_ordered, in KILOGRAMS - used only to flag a suspect sto_quantity */
@@ -146,7 +116,7 @@ function absoluteDocumentUrl(value: string | null | undefined): string | undefin
  */
 export function buildJpsSubmitPayload(
   source: JpsShipmentSource,
-  options: { agentName: string; portId?: number | null; vesselNameOnly?: boolean },
+  options: { portId?: number | null; vesselNameOnly?: boolean } = {},
 ): JpsPayloadResult {
   const problems: string[] = [];
 
@@ -170,9 +140,9 @@ export function buildJpsSubmitPayload(
 
   const cargo: JpsCargoLine[] = [];
   for (const line of source.cargo) {
-    const cargoType = mapKlipProductToJpsCargoType(line.product);
+    const cargoType = String(line.product_hub_code ?? '').trim();
     if (!cargoType) {
-      problems.push(`no JPS cargo_type for product "${String(line.product ?? '').trim()}"`);
+      problems.push(`no DHM code on Master Product for "${String(line.product ?? '').trim()}"`);
       continue;
     }
     const kg = Number(line.sto_quantity_kg ?? 0);
@@ -211,7 +181,9 @@ export function buildJpsSubmitPayload(
     ...(portId != null ? { port_id: portId } : { port_hub_code: portHubCode }),
     purpose: 'Unloading',
     eta: eta as string,
-    agent_name: options.agentName,
+    // No agent: KLIP has no shipping-agent master. It used to send the fixed "Other" (a JPS row, GET /agents id 5);
+    // JPS is now asked for none, so the field goes as an explicit null.
+    agent_name: null,
     cargo,
   };
   if (source.vessel_hub_code && !vesselNameOnly) payload.vessel_hub_code = source.vessel_hub_code;

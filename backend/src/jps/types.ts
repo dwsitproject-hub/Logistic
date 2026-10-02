@@ -62,7 +62,8 @@ export interface JpsSubmitPayload {
   purpose: 'Loading' | 'Unloading';
   eta: string;
   etd?: string;
-  agent_name: string;
+  /** Always sent, as null: KLIP has no shipping-agent master, so no agent is named. */
+  agent_name: string | null;
   agent_contact?: string;
   trade_term?: string;
   surveyor_name?: string;

@@ -4264,8 +4264,9 @@ map: CPO, PK, CPKO, POME, and SHELL PALM as `PKS`.
 
 `shipper_name` is never sent. The document is right that a shipper must already exist in JPS
 ("unknown shipper: ... Create it first via POST /shippers", confirmed on staging), and KLIP's 57
-BONTANG suppliers do not match its 25 registered names without a human mapping. `agent_name` is the
-fixed `"Other"`, a real row in JPS master data, because KLIP has no shipping-agent master at all.
+BONTANG suppliers do not match its 25 registered names without a human mapping. `agent_name` was the
+fixed `"Other"` (a real row in JPS master data) because KLIP has no shipping-agent master at all; since 2026-10-02 it is
+sent as an explicit `null` (see "Cargo type and agent" below).
 `trade_term` goes only for FOB/CIF/CFR; FRC (12,056 contracts) and LCO (4,018) have no counterpart
 in `GET /terms`, and the field is optional.
 
@@ -4350,6 +4351,18 @@ are deleted by the writer itself (the first write after a start, then every 200)
 retried DHM read records every attempt. Writing the history never changes what a call does: a failure to write is logged
 and swallowed. ADMIN only, like the rest of the menu: `GET /integrations/:id/calls` and `/:id/calls/:callId` with `:id` =
 `jps` or `dhm`. Not recorded: what DHM sends TO KLIP (the webhook), which is the other direction.
+
+**Cargo type and agent (2026-10-02).** JPS now takes DataHub codes, so `cargo_type` is the product's DataHub code,
+`products.code_dhm` (CPO = `CMD-0006`, PK = `CMD-0021`, CPKO = `CMD-0005`, POME = `CMD-0026`, SHELL PALM = `CMD-0037`),
+not the short name (`CPO`, `PKS`, ...) read from JPS's `valid_cargo_types`. The old table in `mapper.ts` is gone. The code is
+looked up by product name (`UPPER(TRIM(product_name))`) in the eligibility query and travels on each cargo line as
+`product_hub_code`; a product with no code, or no Master Product of that name, holds the STO with
+`no DHM code on Master Product for "<product>"` instead of sending a guess. One thing to watch: the old table also
+knew `WASTE OIL (POME)` as POME, but the lookup matches the name exactly, so a contract whose product is spelled that way
+needs a Master Product of that name (or the contract's product corrected) to be sent.
+
+`agent_name` is sent as `null`, explicitly (the key is present with a null value, not left out). KLIP has no
+shipping-agent master and no longer names one.
 
 #### ATA-ATC values have three doors: SAP, KLIP and JPS
 

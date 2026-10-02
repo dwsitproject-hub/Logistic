@@ -4,12 +4,11 @@ import {
   buildJpsExternalReference,
   buildJpsSubmitPayload,
   mapKlipIncotermToJpsTradeTerm,
-  mapKlipProductToJpsCargoType,
   toJpsDateTime,
   type JpsShipmentSource,
 } from './mapper';
 
-const OPTIONS = { agentName: 'Other' };
+const OPTIONS = {};
 
 function source(overrides: Partial<JpsShipmentSource> = {}): JpsShipmentSource {
   return {
@@ -22,30 +21,42 @@ function source(overrides: Partial<JpsShipmentSource> = {}): JpsShipmentSource {
     eta_discharge_complete: '2026-09-20',
     incoterm: 'FOB',
     cargo: [
-      { contract_no: '1004029443', po_no: '1001029443', product: 'CPO', sto_quantity_kg: 300000, contract_quantity_kg: 300000 },
+      { contract_no: '1004029443', po_no: '1001029443', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 300000, contract_quantity_kg: 300000 },
     ],
     ...overrides,
   };
 }
 
-describe('mapKlipProductToJpsCargoType', () => {
-  it('maps every product that reaches BONTANG', () => {
-    expect(mapKlipProductToJpsCargoType('CPO')).toBe('CPO');
-    expect(mapKlipProductToJpsCargoType('CPKO')).toBe('CPKO');
-    expect(mapKlipProductToJpsCargoType('WASTE OIL (POME)')).toBe('POME');
-    expect(mapKlipProductToJpsCargoType('SHELL PALM')).toBe('PKS');
+describe('cargo_type is the DataHub code of the product', () => {
+  it('sends products.code_dhm as cargo_type, whatever the product is called', () => {
+    const { payload, problems } = buildJpsSubmitPayload(
+      source({
+        cargo: [
+          { contract_no: 'C1', po_no: 'P1', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 1000, contract_quantity_kg: 1000 },
+          { contract_no: 'C2', po_no: 'P2', product: 'SHELL PALM', product_hub_code: 'CMD-0037', sto_quantity_kg: 2000, contract_quantity_kg: 2000 },
+        ],
+      }),
+      OPTIONS,
+    );
+    expect(problems).toEqual([]);
+    expect(payload?.cargo.map((line) => line.cargo_type)).toEqual(['CMD-0006', 'CMD-0037']);
   });
 
-  // The partner document's 20-row table has no raw Palm Kernel, so the plan was to map it onto one
-  // of the derivatives. The live valid_cargo_types list has PK, so it goes across untouched.
-  it('sends PK as PK, which the partner document does not list', () => {
-    expect(mapKlipProductToJpsCargoType('PK')).toBe('PK');
+  it('does not send the short name JPS used before DataHub', () => {
+    const { payload } = buildJpsSubmitPayload(source(), OPTIONS);
+    expect(payload?.cargo[0].cargo_type).toBe('CMD-0006');
+    expect(payload?.cargo[0].cargo_type).not.toBe('CPO');
   });
 
-  it('returns null rather than guessing for a product JPS does not carry', () => {
-    expect(mapKlipProductToJpsCargoType('GULA')).toBeNull();
-    expect(mapKlipProductToJpsCargoType('RBDPS')).toBeNull();
-    expect(mapKlipProductToJpsCargoType('')).toBeNull();
+  it('holds the STO, saying which product, when a product has no DataHub code', () => {
+    for (const code of [null, undefined, '', '   ']) {
+      const { payload, problems } = buildJpsSubmitPayload(
+        source({ cargo: [{ contract_no: 'C1', po_no: 'P1', product: 'CPO', product_hub_code: code, sto_quantity_kg: 1000, contract_quantity_kg: 1000 }] }),
+        OPTIONS,
+      );
+      expect(payload).toBeUndefined();
+      expect(problems.join(' ')).toContain('no DHM code on Master Product for "CPO"');
+    }
   });
 });
 
@@ -100,15 +111,15 @@ describe('buildJpsSubmitPayload', () => {
     const { payload, problems } = buildJpsSubmitPayload(
       source({
         cargo: [
-          { contract_no: '1004029443', po_no: '1001029443', product: 'CPO', sto_quantity_kg: 300000, contract_quantity_kg: 300000 },
-          { contract_no: '1004030198', po_no: '1001030198', product: 'CPO', sto_quantity_kg: 1000000, contract_quantity_kg: 1000000 },
+          { contract_no: '1004029443', po_no: '1001029443', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 300000, contract_quantity_kg: 300000 },
+          { contract_no: '1004030198', po_no: '1001030198', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 1000000, contract_quantity_kg: 1000000 },
         ],
       }),
       OPTIONS,
     );
     expect(problems).toEqual([]);
     expect(payload?.cargo).toHaveLength(2);
-    expect(payload?.cargo[0]).toMatchObject({ cargo_type: 'CPO', tonnage: 300, unit: 'MT', po_no: '1001029443' });
+    expect(payload?.cargo[0]).toMatchObject({ cargo_type: 'CMD-0006', tonnage: 300, unit: 'MT', po_no: '1001029443' });
     expect(payload?.cargo[1].tonnage).toBe(1000);
   });
 
@@ -117,7 +128,9 @@ describe('buildJpsSubmitPayload', () => {
     expect(payload?.purpose).toBe('Unloading');
     expect(payload?.port_hub_code).toBe('PRT-BONTANG');
     expect(payload?.port_id).toBeUndefined();
-    expect(payload?.agent_name).toBe('Other');
+    // No agent is named: it goes as an explicit null, not as the old fixed "Other" and not left out.
+    expect(payload?.agent_name).toBeNull();
+    expect(payload).toHaveProperty('agent_name', null);
   });
 
   // JPS rejects an unregistered shipper outright ("unknown shipper: ... Create it first"), and
@@ -179,14 +192,14 @@ describe('buildJpsSubmitPayload', () => {
       OPTIONS,
     );
     expect(payload).toBeUndefined();
-    expect(problems.join(' ')).toContain('no JPS cargo_type');
+    expect(problems.join(' ')).toContain('no DHM code on Master Product for "GULA"');
   });
 
   // One contract of 5,000 MT was spread over five STOs totalling 10,000 MT in production. Sending
   // that would book berth space for cargo that does not exist.
   it('drops a line whose STO quantity exceeds its own contract by more than 10%', () => {
     const { payload, problems } = buildJpsSubmitPayload(
-      source({ cargo: [{ contract_no: '1014002227', po_no: '1011002227', product: 'CPO', sto_quantity_kg: 5000000, contract_quantity_kg: 1000000 }] }),
+      source({ cargo: [{ contract_no: '1014002227', po_no: '1011002227', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 5000000, contract_quantity_kg: 1000000 }] }),
       OPTIONS,
     );
     expect(payload).toBeUndefined();
@@ -195,7 +208,7 @@ describe('buildJpsSubmitPayload', () => {
 
   it('accepts an STO quantity smaller than the contract, which is the normal split', () => {
     const { payload, problems } = buildJpsSubmitPayload(
-      source({ cargo: [{ contract_no: '1004029279', po_no: '1001029279', product: 'CPO', sto_quantity_kg: 101220, contract_quantity_kg: 400000 }] }),
+      source({ cargo: [{ contract_no: '1004029279', po_no: '1001029279', product: 'CPO', product_hub_code: 'CMD-0006', sto_quantity_kg: 101220, contract_quantity_kg: 400000 }] }),
       OPTIONS,
     );
     expect(problems).toEqual([]);
@@ -205,14 +218,14 @@ describe('buildJpsSubmitPayload', () => {
 
 describe('port id override (testing only)', () => {
   it('sends the numeric port_id and no port_hub_code when an override is given', () => {
-    const { payload, problems } = buildJpsSubmitPayload(source(), { agentName: 'Other', portId: 1 });
+    const { payload, problems } = buildJpsSubmitPayload(source(), { portId: 1 });
     expect(problems).toEqual([]);
     expect(payload?.port_id).toBe(1);
     expect(payload).not.toHaveProperty('port_hub_code');
   });
 
   it('does not hold an STO back for a missing port code while the override is on', () => {
-    const { payload, problems } = buildJpsSubmitPayload(source({ port_hub_code: null }), { agentName: 'Other', portId: 1 });
+    const { payload, problems } = buildJpsSubmitPayload(source({ port_hub_code: null }), { portId: 1 });
     expect(problems).toEqual([]);
     expect(payload?.port_id).toBe(1);
   });
@@ -230,7 +243,7 @@ describe('vessel name override (testing only)', () => {
   it('sends the vessel name and no vessel_hub_code when asked to', () => {
     const { payload, problems } = buildJpsSubmitPayload(
       source({ vessel_name: 'SMS 3002', vessel_hub_code: 'VSL-0249' }),
-      { agentName: 'Other', vesselNameOnly: true },
+      { vesselNameOnly: true },
     );
     expect(problems).toEqual([]);
     expect(payload?.vessel_name).toBe('SMS 3002');
@@ -240,7 +253,7 @@ describe('vessel name override (testing only)', () => {
   it('holds an STO with no vessel name while the override is on, even if it has a code', () => {
     const held = buildJpsSubmitPayload(
       source({ vessel_name: null, vessel_hub_code: 'VSL-0249' }),
-      { agentName: 'Other', vesselNameOnly: true },
+      { vesselNameOnly: true },
     );
     expect(held.payload).toBeUndefined();
     expect(held.problems).toContain('no vessel_name');

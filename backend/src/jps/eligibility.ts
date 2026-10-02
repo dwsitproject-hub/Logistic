@@ -236,6 +236,7 @@ export async function findEligibleStos(
                'contract_no', x.contract_no,
                'po_no', x.po_no,
                'product', x.product,
+               'product_hub_code', pc.code_dhm,
                'sto_quantity_kg', x.sto_quantity_kg,
                'contract_quantity_kg', x.contract_quantity_kg
              ) ORDER BY x.contract_no) AS lines
@@ -279,6 +280,16 @@ export async function findEligibleStos(
             SELECT 1 FROM contract_stos cs3 WHERE cs3.contract_id = c.id
           )
       ) x ON TRUE
+      -- cargo_type is the DataHub code of the product, matched by name; NULL (no such product, or one not yet synced)
+      -- holds the STO with a reason instead of sending a guess.
+      LEFT JOIN LATERAL (
+        SELECT p.code_dhm
+        FROM products p
+        WHERE UPPER(TRIM(p.product_name)) = UPPER(TRIM(x.product))
+          AND NULLIF(TRIM(p.code_dhm), '') IS NOT NULL
+        ORDER BY p.code_dhm
+        LIMIT 1
+      ) pc ON TRUE
       GROUP BY e.sto_key
     ),
     docs AS (
@@ -345,6 +356,7 @@ export async function findEligibleStos(
       contract_no: line.contract_no ?? null,
       po_no: line.po_no ?? null,
       product: line.product ?? null,
+      product_hub_code: line.product_hub_code ?? null,
       sto_quantity_kg: line.sto_quantity_kg == null ? null : Number(line.sto_quantity_kg),
       contract_quantity_kg:
         line.contract_quantity_kg == null ? null : Number(line.contract_quantity_kg),

@@ -14,12 +14,6 @@ import { findEligibleStos } from './eligibility';
 import { buildJpsExternalReference, buildJpsSubmitPayload } from './mapper';
 import type { JpsInstruction, JpsSubmitPayload } from './types';
 
-/**
- * KLIP has no shipping-agent master, and JPS requires `agent_name`. Ryan chose a fixed "Other"
- * for now; it is a real row in JPS master data (`GET /agents` id 5), so it passes validation.
- */
-const JPS_AGENT_NAME = 'Other';
-
 export interface JpsSubmitSummary {
   considered: number;
   submitted: number;
@@ -134,7 +128,7 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
     const revision = await nextRevision(sto.sto_key);
     const built = buildJpsSubmitPayload(
       { ...sto, revision },
-      { agentName: JPS_AGENT_NAME, portId: jpsPortIdOverride(), vesselNameOnly: jpsUseVesselName() },
+      { portId: jpsPortIdOverride(), vesselNameOnly: jpsUseVesselName() },
     );
 
     if (!built.payload) {
