@@ -4,14 +4,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import api from '@/lib/api'
-import { Copy, Loader2, RefreshCw } from 'lucide-react'
+import { Check, Copy, Loader2, RefreshCw } from 'lucide-react'
 
 /**
- * Integrations > JPS > History: every call KLIP made to JPS, with what was sent and what came back.
+ * Integrations > JPS | DHM > History: every call KLIP made to the other system, with what was sent and what came back.
  *
  * The list leaves the bodies out; a row loads its own on click. A call that never got a response (a timeout) shows as
- * "no response". The API key is never part of a record. Times are WIB.
+ * "no response". Credentials are never part of a record (the DHM private key is replaced before it is stored). Times
+ * are WIB.
  */
+
+type IntegrationId = 'jps' | 'dhm'
 
 interface CallRow {
   id: string
@@ -19,8 +22,10 @@ interface CallRow {
   kind: string
   method: string
   url: string
-  sto_key: string | null
-  external_reference: string | null
+  /** The STO key (JPS) or the slug (DHM). */
+  subject: string | null
+  /** The external reference (JPS) or the record code (DHM). */
+  reference: string | null
   response_status: number
   ok: boolean
   error_code: string | null
@@ -36,7 +41,21 @@ interface CallDetail extends CallRow {
 }
 
 const PAGE_SIZE = 25
-const KINDS = ['submit', 'amend', 'poll', 'recover', 'test', 'other']
+
+const WORDING: Record<IntegrationId, { kinds: string[]; subject: string; reference: string; placeholder: string }> = {
+  jps: {
+    kinds: ['submit', 'amend', 'poll', 'recover', 'test', 'other'],
+    subject: 'STO',
+    reference: 'External reference',
+    placeholder: 'mis. OP-1004031960 atau req_5ab6',
+  },
+  dhm: {
+    kinds: ['auth', 'push', 'sync', 'catalog', 'lookup', 'other'],
+    subject: 'Slug',
+    reference: 'Kode record',
+    placeholder: 'mis. company, ORG-0003 atau req_5ab6',
+  },
+}
 
 function formatWib(value: string): string {
   const d = new Date(value)
@@ -61,11 +80,38 @@ function pretty(value: unknown): string {
   }
 }
 
-async function copyText(text: string): Promise<void> {
+/**
+ * Copy to the clipboard, and say whether it worked.
+ *
+ * SIT is served over plain http, where `navigator.clipboard` does not exist (it is limited to secure contexts), so the
+ * first version of the Copy button did nothing and said nothing. The fallback selects the text in a hidden textarea
+ * and uses the old `execCommand('copy')`, which still works over http.
+ */
+async function copyText(text: string): Promise<boolean> {
   try {
-    await navigator.clipboard.writeText(text)
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
   } catch {
-    // Clipboard can be blocked (plain http, permissions); the text is still on screen to select.
+    // fall through to the textarea route
+  }
+  try {
+    const area = document.createElement('textarea')
+    area.value = text
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.top = '0'
+    area.style.left = '0'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.focus()
+    area.select()
+    const done = document.execCommand('copy')
+    document.body.removeChild(area)
+    return done
+  } catch {
+    return false
   }
 }
 
@@ -85,6 +131,14 @@ function StatusBadge({ row }: { row: CallRow }) {
 
 function JsonBlock({ title, value }: { title: string; value: unknown }) {
   const text = pretty(value)
+  const [copied, setCopied] = useState<'ok' | 'failed' | null>(null)
+
+  const copy = async () => {
+    const done = await copyText(text)
+    setCopied(done ? 'ok' : 'failed')
+    window.setTimeout(() => setCopied(null), 2000)
+  }
+
   return (
     <div className="min-w-0">
       <div className="mb-1 flex items-center justify-between gap-2">
@@ -92,11 +146,13 @@ function JsonBlock({ title, value }: { title: string; value: unknown }) {
         {text !== '-' ? (
           <button
             type="button"
-            className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline"
-            onClick={() => void copyText(text)}
+            className={`inline-flex items-center gap-1 text-[11px] hover:underline ${
+              copied === 'failed' ? 'text-red-600' : copied === 'ok' ? 'text-green-700' : 'text-blue-600'
+            }`}
+            onClick={() => void copy()}
           >
-            <Copy className="h-3 w-3" />
-            Copy
+            {copied === 'ok' ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            {copied === 'ok' ? 'Tersalin' : copied === 'failed' ? 'Gagal - blok teks lalu Ctrl+C' : 'Copy'}
           </button>
         ) : null}
       </div>
@@ -107,7 +163,7 @@ function JsonBlock({ title, value }: { title: string; value: unknown }) {
   )
 }
 
-function DetailPanel({ id }: { id: string }) {
+function DetailPanel({ integration, id }: { integration: IntegrationId; id: string }) {
   const [detail, setDetail] = useState<CallDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -116,7 +172,7 @@ function DetailPanel({ id }: { id: string }) {
     setDetail(null)
     setError(null)
     api
-      .get(`/integrations/jps/calls/${id}`)
+      .get(`/integrations/${integration}/calls/${id}`)
       .then((res) => {
         if (!cancelled) setDetail(res.data.data as CallDetail)
       })
@@ -126,7 +182,7 @@ function DetailPanel({ id }: { id: string }) {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [integration, id])
 
   if (error) return <p className="px-3 py-2 text-xs text-red-600">{error}</p>
   if (!detail) {
@@ -138,16 +194,17 @@ function DetailPanel({ id }: { id: string }) {
     )
   }
 
+  const wording = WORDING[integration]
   return (
     <div className="space-y-3 bg-white px-3 py-3">
       <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-xs md:grid-cols-2">
         <div className="flex gap-2">
-          <dt className="w-28 shrink-0 text-gray-500">Request ID (JPS)</dt>
+          <dt className="w-28 shrink-0 text-gray-500">Request ID</dt>
           <dd className="break-all font-mono text-gray-800">{detail.request_id ?? '-'}</dd>
         </div>
         <div className="flex gap-2">
-          <dt className="w-28 shrink-0 text-gray-500">External reference</dt>
-          <dd className="break-all font-mono text-gray-800">{detail.external_reference ?? '-'}</dd>
+          <dt className="w-28 shrink-0 text-gray-500">{wording.reference}</dt>
+          <dd className="break-all font-mono text-gray-800">{detail.reference ?? '-'}</dd>
         </div>
         <div className="flex gap-2">
           <dt className="w-28 shrink-0 text-gray-500">Error</dt>
@@ -171,7 +228,48 @@ function DetailPanel({ id }: { id: string }) {
   )
 }
 
-export function JpsCallHistory() {
+function CallRowView({
+  integration,
+  row,
+  open,
+  onToggle,
+}: {
+  integration: IntegrationId
+  row: CallRow
+  open: boolean
+  onToggle: () => void
+}) {
+  return (
+    <>
+      <tr className={`cursor-pointer hover:bg-gray-50 ${open ? 'bg-gray-50' : ''}`} onClick={onToggle}>
+        <td className="whitespace-nowrap px-3 py-2 tabular-nums text-gray-700">{formatWib(row.created_at)}</td>
+        <td className="px-3 py-2 text-gray-700">{row.kind}</td>
+        <td className="px-3 py-2 font-mono text-[11px] text-gray-700">
+          <span className="font-semibold">{row.method}</span> {row.url}
+        </td>
+        <td className="px-3 py-2 font-mono text-[11px] text-gray-700">{row.subject ?? '-'}</td>
+        <td className="px-3 py-2 font-mono text-[11px] text-gray-700">
+          {integration === 'dhm' ? row.reference ?? '-' : ''}
+        </td>
+        <td className="px-3 py-2">
+          <StatusBadge row={row} />
+        </td>
+        <td className="px-3 py-2 font-mono text-[11px] text-gray-600">{row.request_id ?? '-'}</td>
+        <td className="px-3 py-2 text-right tabular-nums text-gray-600">{row.duration_ms ?? '-'}</td>
+      </tr>
+      {open ? (
+        <tr>
+          <td colSpan={8} className="border-t border-gray-100 p-0">
+            <DetailPanel integration={integration} id={row.id} />
+          </td>
+        </tr>
+      ) : null}
+    </>
+  )
+}
+
+export function ApiCallHistory({ integration }: { integration: IntegrationId }) {
+  const wording = WORDING[integration]
   const [items, setItems] = useState<CallRow[]>([])
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
@@ -187,17 +285,17 @@ export function JpsCallHistory() {
     setLoading(true)
     setError(null)
     try {
-      const res = await api.get('/integrations/jps/calls', {
+      const res = await api.get(`/integrations/${integration}/calls`, {
         params: { limit: PAGE_SIZE, offset, kind, ok: outcome, q: query },
       })
       setItems(res.data.data.items as CallRow[])
       setTotal(Number(res.data.data.pagination.total) || 0)
     } catch {
-      setError('Gagal memuat riwayat panggilan JPS.')
+      setError('Gagal memuat riwayat panggilan.')
     } finally {
       setLoading(false)
     }
-  }, [offset, kind, outcome, query])
+  }, [integration, offset, kind, outcome, query])
 
   useEffect(() => {
     void load()
@@ -223,7 +321,7 @@ export function JpsCallHistory() {
             onChange={(e) => changeFilter(() => setKind(e.target.value))}
           >
             <option value="">Semua</option>
-            {KINDS.map((k) => (
+            {wording.kinds.map((k) => (
               <option key={k} value={k}>
                 {k}
               </option>
@@ -243,11 +341,11 @@ export function JpsCallHistory() {
           </select>
         </label>
         <label className="min-w-[14rem] flex-1 text-[11px] text-gray-500">
-          Cari (STO, reference, request id)
+          Cari ({wording.subject}, {wording.reference.toLowerCase()}, request id)
           <Input
             className="mt-0.5 h-8 text-xs"
             value={draftQuery}
-            placeholder="mis. OP-1004031960 atau req_5ab6"
+            placeholder={wording.placeholder}
             onChange={(e) => setDraftQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') changeFilter(() => setQuery(draftQuery.trim()))
@@ -266,13 +364,14 @@ export function JpsCallHistory() {
       {error ? <p className="text-xs text-red-600">{error}</p> : null}
 
       <div className="overflow-x-auto rounded border border-gray-200 bg-white">
-        <table className="w-full min-w-[56rem] text-left text-xs">
+        <table className="w-full min-w-[60rem] text-left text-xs">
           <thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
             <tr>
               <th className="px-3 py-2 font-medium">Waktu (WIB)</th>
               <th className="px-3 py-2 font-medium">Jenis</th>
               <th className="px-3 py-2 font-medium">Request</th>
-              <th className="px-3 py-2 font-medium">STO</th>
+              <th className="px-3 py-2 font-medium">{wording.subject}</th>
+              <th className="px-3 py-2 font-medium">{integration === 'dhm' ? wording.reference : ''}</th>
               <th className="px-3 py-2 font-medium">Status</th>
               <th className="px-3 py-2 font-medium">Request ID</th>
               <th className="px-3 py-2 text-right font-medium">ms</th>
@@ -281,13 +380,19 @@ export function JpsCallHistory() {
           <tbody className="divide-y divide-gray-100">
             {items.length === 0 && !loading ? (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-gray-500">
+                <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
                   Belum ada panggilan yang tercatat.
                 </td>
               </tr>
             ) : null}
             {items.map((row) => (
-              <FragmentRow key={row.id} row={row} open={openId === row.id} onToggle={() => setOpenId(openId === row.id ? null : row.id)} />
+              <CallRowView
+                key={row.id}
+                integration={integration}
+                row={row}
+                open={openId === row.id}
+                onToggle={() => setOpenId(openId === row.id ? null : row.id)}
+              />
             ))}
           </tbody>
         </table>
@@ -320,35 +425,9 @@ export function JpsCallHistory() {
         </div>
       </div>
       <p className="text-[11px] text-gray-400">
-        Riwayat disimpan 30 hari. API key tidak pernah ikut tercatat.
+        Riwayat disimpan 30 hari. Kredensial (API key, private key) tidak pernah ikut tercatat.
+        {integration === 'dhm' ? ' Respons bacaan yang berhasil (sync, katalog) hanya disimpan 2.000 karakter pertama.' : ''}
       </p>
     </div>
-  )
-}
-
-function FragmentRow({ row, open, onToggle }: { row: CallRow; open: boolean; onToggle: () => void }) {
-  return (
-    <>
-      <tr className={`cursor-pointer hover:bg-gray-50 ${open ? 'bg-gray-50' : ''}`} onClick={onToggle}>
-        <td className="whitespace-nowrap px-3 py-2 tabular-nums text-gray-700">{formatWib(row.created_at)}</td>
-        <td className="px-3 py-2 text-gray-700">{row.kind}</td>
-        <td className="px-3 py-2 font-mono text-[11px] text-gray-700">
-          <span className="font-semibold">{row.method}</span> {row.url}
-        </td>
-        <td className="px-3 py-2 font-mono text-[11px] text-gray-700">{row.sto_key ?? '-'}</td>
-        <td className="px-3 py-2">
-          <StatusBadge row={row} />
-        </td>
-        <td className="px-3 py-2 font-mono text-[11px] text-gray-600">{row.request_id ?? '-'}</td>
-        <td className="px-3 py-2 text-right tabular-nums text-gray-600">{row.duration_ms ?? '-'}</td>
-      </tr>
-      {open ? (
-        <tr>
-          <td colSpan={7} className="border-t border-gray-100 p-0">
-            <DetailPanel id={row.id} />
-          </td>
-        </tr>
-      ) : null}
-    </>
   )
 }

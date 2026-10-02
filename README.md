@@ -4329,17 +4329,27 @@ which points at JPS (the hub code to local row mapping), not at the payload.
 `vessel_hub_code`, to tell whether the failure is in JPS resolving a vessel hub code. Off by default, a warning at
 startup, testing only, and the amend pass builds its payload the same way.
 
-**Integrations > JPS > History.** Every call KLIP makes to JPS is recorded in `jps_api_calls` (migration 220): kind
-(submit / amend / poll / recover / test), method and URL, the STO key and `external_reference`, the request params and
-body, the HTTP status, the response body, JPS's `request_id`, the error code and the duration. A retryable failure (500,
-timeout) writes no row in `jps_shipping_instructions` on purpose, so this table is the only place the payload JPS
-answered 500 to, and the answer, can be read back. The page lists newest first, filters by kind, outcome and a search
-over STO key, reference and request id, and a row opens to show both bodies with a Copy button.
+**Integrations > JPS and DHM > History.** Every call KLIP makes to JPS or to DHM is recorded, in `jps_api_calls`
+(migration 220) and `dhm_api_calls` (migration 221): kind, method and URL, what names the call (the STO key and
+`external_reference` for JPS; the slug and record code for DHM), the request params and body, the HTTP status, the
+response body, the other system's request id, the error and the duration. A retryable JPS failure (500, timeout) writes
+no row in `jps_shipping_instructions` on purpose, so this is the only place the payload JPS answered 500 to, and the
+answer, can be read back. Both cards on Integrations get a History button: newest first, filters by kind and outcome, a
+search over the subject, the reference and the request id, and a row opens to show both bodies with a Copy button (which
+falls back to a hidden textarea, because SIT is plain http and `navigator.clipboard` does not exist there).
 
-The API key is a header and is never stored. Each body is capped at 32,000 characters (a larger one is kept as a marker
-with its first 32,000), rows older than 30 days are deleted by the writer itself (the first write after a start, then
-every 200), and nothing is recorded under test. Writing the history never changes what a call does: a failure to write is
-logged and swallowed. ADMIN only, like the rest of the menu (`GET /integrations/jps/calls`, `.../calls/:callId`).
+| | JPS | DHM |
+|---|---|---|
+| kinds | submit, amend, poll, recover, test | auth, push (`/v1/inbound`), sync (`/v1/sync`), catalog, lookup |
+| subject / reference | STO key / `external_reference` | slug / record code |
+| not stored | the API key (a header) | the private key: the token request is stored with it replaced and a successful answer as `{ token: '***' }`; any `dhm_sk_` key in any body is masked |
+| successful reads | full | the first 2,000 characters (a sync page is large and the same every 15 minutes) |
+
+Bodies are capped at 32,000 characters (a larger one is kept as a marker with its first 32,000), rows older than 30 days
+are deleted by the writer itself (the first write after a start, then every 200), and nothing is recorded under test. A
+retried DHM read records every attempt. Writing the history never changes what a call does: a failure to write is logged
+and swallowed. ADMIN only, like the rest of the menu: `GET /integrations/:id/calls` and `/:id/calls/:callId` with `:id` =
+`jps` or `dhm`. Not recorded: what DHM sends TO KLIP (the webhook), which is the other direction.
 
 #### ATA-ATC values have three doors: SAP, KLIP and JPS
 

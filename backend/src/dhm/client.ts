@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios';
 import logger from '../utils/logger';
 import { onIntegrationSettingsChanged } from '../integrations/integrationEnv';
+import { recordDhmCall, redactedAuthRequest } from './callLog';
 import {
   dhmBaseUrl,
   dhmPrivateKey,
@@ -59,16 +60,51 @@ async function fetchDhmBearerToken(): Promise<string> {
   if (tokenCache && Date.now() < tokenCache.expiresAt) {
     return tokenCache.token;
   }
-  const res = await axios.post<{ token?: string }>(
-    `${dhmBaseUrl()}/auth/token`,
-    { publicKey: dhmPublicKey(), privateKey: dhmPrivateKey() },
-    {
-      timeout: dhmRequestTimeoutMs(),
-      validateStatus: () => true,
-      headers: { 'Content-Type': 'application/json' },
-    },
-  );
+  // The token request is recorded in the call history like any other, but with the private key replaced and a
+  // successful answer reduced to a placeholder (dhm/callLog.ts): "DHM token failed (401)" is what an ADMIN traces.
+  const startedAt = Date.now();
+  const authRecord = {
+    method: 'POST',
+    url: '/auth/token',
+    requestBody: null,
+    auth: { requestBody: redactedAuthRequest(dhmPublicKey()), responseBody: null as unknown },
+  };
+  let res;
+  try {
+    res = await axios.post<{ token?: string }>(
+      `${dhmBaseUrl()}/auth/token`,
+      { publicKey: dhmPublicKey(), privateKey: dhmPrivateKey() },
+      {
+        timeout: dhmRequestTimeoutMs(),
+        validateStatus: () => true,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
+  } catch (error) {
+    void recordDhmCall({
+      ...authRecord,
+      responseStatus: 0,
+      responseBody: null,
+      ok: false,
+      errorCode: 'NETWORK_ERROR',
+      errorMessage: error instanceof Error ? error.message : 'request failed',
+      requestId: null,
+      durationMs: Date.now() - startedAt,
+    });
+    throw error;
+  }
   const token = res.status === 200 ? String(res.data?.token || '').trim() : '';
+  void recordDhmCall({
+    ...authRecord,
+    auth: { ...authRecord.auth, responseBody: token ? { token: '***' } : res.data ?? null },
+    responseStatus: res.status,
+    responseBody: null,
+    ok: Boolean(token),
+    errorCode: token ? null : `HTTP_${res.status}`,
+    errorMessage: token ? null : `DHM token failed (${res.status})${describeDhmRejection(res.data)}`,
+    requestId: null,
+    durationMs: Date.now() - startedAt,
+  });
   if (!token) {
     throw new Error(`DHM token failed (${res.status})${describeDhmRejection(res.data)}`);
   }
@@ -144,9 +180,46 @@ export async function dhmRequest<T = unknown>(
   }
   const method = String(config.method || 'get').toLowerCase();
   const run = async () => {
-    const res = await dhmHttp().request<T>(config);
-    if (res.status === 401) tokenCache = null;
-    return { status: res.status, data: res.data };
+    const startedAt = Date.now();
+    const verb = method.toUpperCase();
+    const url = String(config.url || '');
+    try {
+      const res = await dhmHttp().request<T>(config);
+      if (res.status === 401) tokenCache = null;
+      const ok = res.status >= 200 && res.status < 300;
+      // Every attempt is recorded, a retried read included: three failures in a row are the point of the history.
+      void recordDhmCall({
+        method: verb,
+        url,
+        requestBody: config.data ?? null,
+        responseStatus: res.status,
+        responseBody: res.data ?? null,
+        ok,
+        errorCode: ok ? null : `HTTP_${res.status}`,
+        errorMessage: ok ? null : describeDhmRejection(res.data).replace(/^: /, '') || null,
+        requestId: String(res.headers?.['x-request-id'] ?? '') || null,
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: res.status, data: res.data };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // A token request that failed has its own record, with DHM's answer; do not add a second without one.
+      if (!message.startsWith('DHM token failed')) {
+        void recordDhmCall({
+          method: verb,
+          url,
+          requestBody: config.data ?? null,
+          responseStatus: 0,
+          responseBody: null,
+          ok: false,
+          errorCode: 'NETWORK_ERROR',
+          errorMessage: message,
+          requestId: null,
+          durationMs: Date.now() - startedAt,
+        });
+      }
+      throw error;
+    }
   };
   if (method === 'get') {
     return withGetRetry(run);

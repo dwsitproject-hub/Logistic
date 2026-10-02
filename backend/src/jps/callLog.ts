@@ -1,11 +1,10 @@
 /**
- * The history of calls KLIP makes to JPS, behind Integrations > JPS > History.
- *
- * Writing it must never change what a call does: every failure here is logged and swallowed, and nothing is recorded
- * under test. The API key is a header and is not part of a record.
+ * What is specific to the JPS side of the call history (Integrations > JPS > History): the kinds, how a call is named
+ * from its request, and the mapping onto the shared recorder in integrations/apiCallLog.ts.
  */
-import { query } from '../database/connection';
-import logger from '../utils/logger';
+import { boundJson, recordApiCall } from '../integrations/apiCallLog';
+
+export { boundJson };
 
 export type JpsCallKind = 'submit' | 'amend' | 'poll' | 'recover' | 'test' | 'other';
 
@@ -34,28 +33,6 @@ export interface JpsCallRecord {
   durationMs: number;
 }
 
-export const JPS_CALL_LOG_RETENTION_DAYS = 30;
-const MAX_JSON_CHARS = 32_000;
-const PRUNE_EVERY = 200;
-let writes = 0;
-
-/**
- * JSON for a jsonb column. A body over the cap is stored as a marker with the start of the text rather than dropped,
- * so the history still shows that a large body was sent and how it began.
- */
-export function boundJson(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  let text: string | undefined;
-  try {
-    text = JSON.stringify(value);
-  } catch {
-    return JSON.stringify({ unserializable: true });
-  }
-  if (text === undefined) return null;
-  if (text.length <= MAX_JSON_CHARS) return text;
-  return JSON.stringify({ truncated: true, chars: text.length, preview: text.slice(0, MAX_JSON_CHARS) });
-}
-
 /** The kind of a call from its shape, for callers that did not say. */
 export function inferJpsCallKind(method: string | undefined, url: string | undefined): JpsCallKind {
   const m = String(method ?? 'GET').toUpperCase();
@@ -75,40 +52,20 @@ export function stoKeyFromReference(reference: unknown): string | null {
 }
 
 export async function recordJpsCall(record: JpsCallRecord): Promise<void> {
-  if (process.env.NODE_ENV === 'test') return;
-  try {
-    await query(
-      `INSERT INTO jps_api_calls (
-         kind, method, url, sto_key, external_reference, request_params, request_body,
-         response_status, response_body, ok, error_code, error_message, request_id, duration_ms
-       ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, $10, $11, $12, $13, $14)`,
-      [
-        record.kind,
-        record.method.toUpperCase(),
-        record.url,
-        record.stoKey,
-        record.externalReference,
-        boundJson(record.requestParams),
-        boundJson(record.requestBody),
-        record.responseStatus,
-        boundJson(record.responseBody),
-        record.ok,
-        record.errorCode,
-        record.errorMessage,
-        record.requestId,
-        record.durationMs,
-      ],
-    );
-    writes += 1;
-    // First write after a start, then every PRUNE_EVERY: cheap, and no cron to forget.
-    if (writes % PRUNE_EVERY === 1) {
-      await query(`DELETE FROM jps_api_calls WHERE created_at < NOW() - ($1::int || ' days')::interval`, [
-        JPS_CALL_LOG_RETENTION_DAYS,
-      ]);
-    }
-  } catch (error) {
-    logger.warn('JPS call history could not be written', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  await recordApiCall('jps', {
+    kind: record.kind,
+    method: record.method,
+    url: record.url,
+    subject: record.stoKey,
+    reference: record.externalReference,
+    requestParams: record.requestParams,
+    requestBody: record.requestBody,
+    responseStatus: record.responseStatus,
+    responseBody: record.responseBody,
+    ok: record.ok,
+    errorCode: record.errorCode,
+    errorMessage: record.errorMessage,
+    requestId: record.requestId,
+    durationMs: record.durationMs,
+  });
 }

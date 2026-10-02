@@ -5,7 +5,7 @@ import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { JpsCallHistory } from '@/components/integrations/JpsCallHistory'
+import { ApiCallHistory } from '@/components/integrations/ApiCallHistory'
 import api from '@/lib/api'
 import { AlertTriangle, CheckCircle2, History, Loader2, Plug, RotateCcw, XCircle } from 'lucide-react'
 
@@ -177,12 +177,10 @@ function IntegrationCard({
           <p className="mt-1 text-xs text-gray-500">{integration.description}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {integration.id === 'jps' ? (
-            <Button variant="outline" size="sm" onClick={() => setHistoryOpen((open) => !open)}>
-              <History className="mr-1 h-3.5 w-3.5" />
-              {historyOpen ? 'Hide history' : 'History'}
-            </Button>
-          ) : null}
+          <Button variant="outline" size="sm" onClick={() => setHistoryOpen((open) => !open)}>
+            <History className="mr-1 h-3.5 w-3.5" />
+            {historyOpen ? 'Hide history' : 'History'}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => void runTest()} disabled={testing || editing}>
             {testing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
             Test connection
@@ -205,7 +203,7 @@ function IntegrationCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {integration.id === 'jps' && historyOpen ? <JpsCallHistory /> : null}
+        {historyOpen ? <ApiCallHistory integration={integration.id} /> : null}
 
         {test ? (
           <div

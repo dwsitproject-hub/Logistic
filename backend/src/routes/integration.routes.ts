@@ -1,9 +1,9 @@
 import express from 'express';
 import { authenticateToken, authorize } from '../middleware/auth';
 import {
+  getApiCall,
   getIntegrations,
-  getJpsCall,
-  listJpsCalls,
+  listApiCalls,
   testIntegration,
   updateIntegration,
 } from '../controllers/integration.controller';
@@ -18,9 +18,10 @@ router.use(authenticateToken);
 router.use(authorize('ADMIN'));
 
 router.get('/', getIntegrations);
-// What KLIP sent to JPS and what came back. Bodies can hold vessel, port and quantities, so ADMIN only like the rest.
-router.get('/jps/calls', listJpsCalls);
-router.get('/jps/calls/:callId', getJpsCall);
+// What KLIP sent to JPS or DHM and what came back (:id is jps or dhm). Bodies can hold vessel, port and quantities,
+// so ADMIN only like the rest.
+router.get('/:id/calls', listApiCalls);
+router.get('/:id/calls/:callId', getApiCall);
 router.put('/:id', updateIntegration);
 router.post('/:id/test', testIntegration);
 
