@@ -165,6 +165,7 @@ export async function amendPendingInstructions(limit = 50): Promise<JpsAmendSumm
             params: { external_reference: String(row.external_reference) },
             data: body,
           },
+      { audit: { stoKey: source.sto_key, kind: 'amend' } },
     );
 
     if (res.ok) {

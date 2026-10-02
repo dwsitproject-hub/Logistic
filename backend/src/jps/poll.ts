@@ -37,13 +37,17 @@ export async function pollSubmittedInstructions(limit = 50): Promise<JpsPollSumm
 
   for (const row of due.rows as Array<Record<string, unknown>>) {
     const jpsId = row.jps_id == null ? null : Number(row.jps_id);
+    const audit = { audit: { stoKey: String(row.sto_key), kind: 'poll' as const } };
     const res = jpsId
-      ? await jpsRequest<JpsInstruction>({ method: 'GET', url: `/shipping-instructions/${jpsId}` })
-      : await jpsRequest<JpsInstruction>({
-          method: 'GET',
-          url: '/shipping-instructions',
-          params: { external_reference: String(row.external_reference) },
-        });
+      ? await jpsRequest<JpsInstruction>({ method: 'GET', url: `/shipping-instructions/${jpsId}` }, audit)
+      : await jpsRequest<JpsInstruction>(
+          {
+            method: 'GET',
+            url: '/shipping-instructions',
+            params: { external_reference: String(row.external_reference) },
+          },
+          audit,
+        );
 
     summary.polled += 1;
 

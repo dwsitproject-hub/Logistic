@@ -145,11 +145,14 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
     }
 
     const payload = built.payload;
-    const res = await jpsRequest<JpsInstruction>({
-      method: 'POST',
-      url: '/shipping-instructions',
-      data: payload,
-    });
+    const res = await jpsRequest<JpsInstruction>(
+      {
+        method: 'POST',
+        url: '/shipping-instructions',
+        data: payload,
+      },
+      { audit: { stoKey: sto.sto_key, kind: 'submit' } },
+    );
 
     if (res.ok) {
       await recordSubmitted(sto.sto_key, revision, payload, res.data);
@@ -160,11 +163,14 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
     if (res.code === 'DUPLICATE_REFERENCE') {
       // JPS already holds this reference - an earlier attempt reached it and the response did not
       // reach us. Recover the id rather than burning a revision on a duplicate.
-      const found = await jpsRequest<JpsInstruction>({
-        method: 'GET',
-        url: '/shipping-instructions',
-        params: { external_reference: payload.external_reference },
-      });
+      const found = await jpsRequest<JpsInstruction>(
+        {
+          method: 'GET',
+          url: '/shipping-instructions',
+          params: { external_reference: payload.external_reference },
+        },
+        { audit: { stoKey: sto.sto_key, kind: 'recover' } },
+      );
       if (found.ok) {
         await recordSubmitted(sto.sto_key, revision, payload, found.data);
         summary.recovered += 1;

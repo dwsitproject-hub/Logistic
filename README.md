@@ -4329,6 +4329,18 @@ which points at JPS (the hub code to local row mapping), not at the payload.
 `vessel_hub_code`, to tell whether the failure is in JPS resolving a vessel hub code. Off by default, a warning at
 startup, testing only, and the amend pass builds its payload the same way.
 
+**Integrations > JPS > History.** Every call KLIP makes to JPS is recorded in `jps_api_calls` (migration 220): kind
+(submit / amend / poll / recover / test), method and URL, the STO key and `external_reference`, the request params and
+body, the HTTP status, the response body, JPS's `request_id`, the error code and the duration. A retryable failure (500,
+timeout) writes no row in `jps_shipping_instructions` on purpose, so this table is the only place the payload JPS
+answered 500 to, and the answer, can be read back. The page lists newest first, filters by kind, outcome and a search
+over STO key, reference and request id, and a row opens to show both bodies with a Copy button.
+
+The API key is a header and is never stored. Each body is capped at 32,000 characters (a larger one is kept as a marker
+with its first 32,000), rows older than 30 days are deleted by the writer itself (the first write after a start, then
+every 200), and nothing is recorded under test. Writing the history never changes what a call does: a failure to write is
+logged and swallowed. ADMIN only, like the rest of the menu (`GET /integrations/jps/calls`, `.../calls/:callId`).
+
 #### ATA-ATC values have three doors: SAP, KLIP and JPS
 
 Every ATA-ATC field in the shipment modal carries a badge saying where its value came from, and a

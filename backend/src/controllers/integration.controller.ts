@@ -9,6 +9,8 @@ import {
 import { findIntegration } from '../integrations/registry';
 import { verifyDhmCredentials } from '../dhm/client';
 import { jpsRequest } from '../jps/client';
+import { JPS_CALL_KINDS } from '../jps/callLog';
+import { query } from '../database/connection';
 
 /**
  * Integrations menu (ADMIN only). Secrets are write-only: no response from this controller ever
@@ -73,10 +75,89 @@ export const testIntegration = async (req: AuthRequest, res: Response): Promise<
   if (integration.id === 'dhm') {
     result = await verifyDhmCredentials();
   } else {
-    const r = await jpsRequest<unknown>({ method: 'GET', url: '/terms' }, { requireEnabled: false });
+    const r = await jpsRequest<unknown>(
+      { method: 'GET', url: '/terms' },
+      { requireEnabled: false, audit: { kind: 'test' } },
+    );
     result = r.ok
       ? { ok: true, message: 'Authenticated - JPS returned the trade-terms list.' }
       : { ok: false, message: `${r.code}: ${r.message}` };
   }
   res.json({ success: true, data: { ...result, elapsedMs: Date.now() - startedAt } });
+};
+
+const CALL_LIST_COLUMNS = `id, created_at, kind, method, url, sto_key, external_reference, response_status, ok,
+  error_code, error_message, request_id, duration_ms`;
+
+/**
+ * Integrations > JPS > History: what KLIP sent to JPS and what came back, newest first. The list leaves the bodies out
+ * (they can be large); one row's bodies come from getJpsCall.
+ *
+ * `q` matches the STO key, the external reference and JPS's request id, the three things a person has in hand when
+ * tracing a call.
+ */
+export const listJpsCalls = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const limit = Math.min(200, Math.max(1, Math.trunc(Number(req.query.limit)) || 50));
+    const offset = Math.max(0, Math.trunc(Number(req.query.offset)) || 0);
+    const kind = String(req.query.kind ?? '').trim();
+    const ok = String(req.query.ok ?? '').trim();
+    const search = String(req.query.q ?? '').trim();
+
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (kind && (JPS_CALL_KINDS as readonly string[]).includes(kind)) {
+      params.push(kind);
+      where.push(`kind = $${params.length}`);
+    }
+    if (ok === 'true' || ok === 'false') {
+      params.push(ok === 'true');
+      where.push(`ok = $${params.length}`);
+    }
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(
+        `(sto_key ILIKE $${params.length} OR external_reference ILIKE $${params.length} OR request_id ILIKE $${params.length})`,
+      );
+    }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const [rows, count] = await Promise.all([
+      query(
+        `SELECT ${CALL_LIST_COLUMNS} FROM jps_api_calls ${clause}
+         ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset],
+      ),
+      query(`SELECT COUNT(*) AS count FROM jps_api_calls ${clause}`, params),
+    ]);
+    res.json({
+      success: true,
+      data: {
+        items: rows.rows,
+        pagination: { total: parseInt(String(count.rows[0]?.count ?? '0'), 10), limit, offset },
+      },
+    });
+  } catch (error) {
+    logger.error('List JPS calls error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load JPS call history.' } });
+  }
+};
+
+export const getJpsCall = async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.callId ?? '');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    res.status(404).json({ success: false, error: { message: 'Call not found.' } });
+    return;
+  }
+  try {
+    const result = await query(`SELECT * FROM jps_api_calls WHERE id = $1::uuid`, [id]);
+    if (result.rows.length === 0) {
+      res.status(404).json({ success: false, error: { message: 'Call not found.' } });
+      return;
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (error) {
+    logger.error('Get JPS call error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the call.' } });
+  }
 };
