@@ -3,9 +3,9 @@
  *
  * The poll only reads instructions that can still move, and a webhook only fires on a change, so an instruction that
  * reached Sailed before the JPS lane existed would never be written. This reads what jps_shipping_instructions already
- * holds (schedule_ta / tb / cargo_ops_start_at / tc) and applies it with the same function the poll and the
- * webhook use. `schedule_cargo_ops_start_at` is empty for instructions older than API v5.4; those get ATS on their next
- * response, if JPS still sends one.
+ * holds (schedule_ta / tb / cargo_ops_start_at / cargo_ops_end_at) and applies it with the same function the poll and the
+ * webhook use. `schedule_cargo_ops_start_at` / `schedule_cargo_ops_end_at` are empty for instructions older than API v5.4
+ * / v5.5; those get ATS and ATC on their next response, if JPS still sends one.
  *
  * Dry run unless --apply:
  *   node dist/scripts/backfillJpsAtaLane.js            (prints what would change)

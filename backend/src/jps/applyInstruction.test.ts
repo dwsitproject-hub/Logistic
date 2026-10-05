@@ -16,7 +16,8 @@ const instruction = (extra: Partial<JpsInstruction> = {}): JpsInstruction =>
       ta: '2026-09-28T01:00:00Z',
       tb: '2026-09-28T03:00:00Z',
       cargo_ops_start_at: '2026-09-28T07:45:00Z',
-      tc: '2026-09-29T16:30:00Z',
+      tc: '2026-09-29T15:00:00Z',
+      cargo_ops_end_at: '2026-09-29T16:30:00Z',
       sailed_at: '2026-09-29T17:00:00Z',
     },
     ...extra,
@@ -36,12 +37,14 @@ describe('applyJpsInstruction: status and actual times arrive together', () => {
     expect(sql).toContain('schedule_cargo_ops_start_at = COALESCE($20::timestamptz, schedule_cargo_ops_start_at)');
     expect(sql).toContain('RETURNING sto_key');
     expect(params[19]).toBe('2026-09-28T07:45:00Z');
+    expect(sql).toContain('schedule_cargo_ops_end_at = COALESCE($21::timestamptz, schedule_cargo_ops_end_at)');
+    expect(params[20]).toBe('2026-09-29T16:30:00Z');
   });
 
   it('applies the actual times to the STO\'s shipments, by webhook or poll alike (same function)', async () => {
     await applyJpsInstruction('row-1', instruction());
     expect(applyLaneMock).toHaveBeenCalledTimes(1);
-    expect(applyLaneMock).toHaveBeenCalledWith('1006019026', expect.objectContaining({ tc: '2026-09-29T16:30:00Z' }));
+    expect(applyLaneMock).toHaveBeenCalledWith('1006019026', expect.objectContaining({ cargo_ops_end_at: '2026-09-29T16:30:00Z' }));
   });
 
   it('does not touch shipments for a v4.x response that has no schedule', async () => {

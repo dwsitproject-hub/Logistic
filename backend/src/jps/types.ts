@@ -24,8 +24,13 @@ export interface JpsSchedule {
   etc?: string | null;
   /** Time of Completion, actual. */
   tc?: string | null;
-  /** v5.4. Cargo operations start (partner ATS): Cargo Operations, Entry 1 start. Absent from v5.3 responses. */
+  /**
+   * Hose On (partner ATS): the START of the Cargo Operations window. v5.4 sent the Entry 1 start under the same name;
+   * v5.5 redefined it as the window start. Absent from v5.3 responses.
+   */
   cargo_ops_start_at?: string | null;
+  /** v5.5. Hose Off (partner ATC): the END of the Cargo Operations window. Absent before v5.5. */
+  cargo_ops_end_at?: string | null;
   cast_off_at?: string | null;
   sailed_at?: string | null;
 }

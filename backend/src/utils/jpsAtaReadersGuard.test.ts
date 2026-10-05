@@ -94,12 +94,13 @@ describe('every effective discharge ATA puts the JPS lane first', () => {
 });
 
 describe("the modal's JPS reference follows the same mapping", () => {
-  it('reads ATA at DP, ATB, ATS and ATC from ta, tb, cargo_ops_start_at and tc, in WIB', () => {
+  it('reads ATA at DP, ATB, ATS and ATC from ta, tb, cargo_ops_start_at and cargo_ops_end_at, in WIB', () => {
     const expr = sqlJpsAtaJsonExpr('jps');
     expect(expr).toContain("'ata_vessel_arrive_at_discharge_port', ((jps.schedule_ta AT TIME ZONE 'Asia/Jakarta')::date)::text");
     expect(expr).toContain("'ata_vessel_berthed_at_discharge_port', ((jps.schedule_tb AT TIME ZONE 'Asia/Jakarta')::date)::text");
     expect(expr).toContain("'ata_vessel_start_discharging', ((jps.schedule_cargo_ops_start_at AT TIME ZONE 'Asia/Jakarta')::date)::text");
-    expect(expr).toContain("'ata_vessel_complete_discharge', ((jps.schedule_tc AT TIME ZONE 'Asia/Jakarta')::date)::text");
+    expect(expr).toContain("'ata_vessel_complete_discharge', ((jps.schedule_cargo_ops_end_at AT TIME ZONE 'Asia/Jakarta')::date)::text");
+    expect(expr).not.toContain('schedule_tc');
     expect(expr).not.toContain('schedule_sailed_at');
     expect(expr).not.toContain('schedule_cast_off_at');
   });

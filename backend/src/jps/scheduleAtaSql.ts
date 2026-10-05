@@ -4,18 +4,19 @@ import type { ShipmentAtaApiField } from '../utils/shipmentAtaOverrideFields';
  * Which KLIP ATA field each JPS actual corresponds to - the ONE place this is decided.
  *
  * KLIP submits INBOUND instructions for BONTANG, so every JPS actual describes the DISCHARGE port. From the v5.4
- * `schedule`, with ATC chosen by the business:
+ * `schedule` (v5.5 for ATS and ATC, JPS's own table for KLIP Hose On / Hose Off):
  *
- *   ta                  Time of Arrival (operator arrival log)            -> ATA at DP        (partner ATA)
- *   tb                  Time of Berthing, actual (berthing log)           -> ATB              (partner ATB)
- *   cargo_ops_start_at  Cargo Operations, Entry 1 start        (v5.4)    -> ATS Discharge    (partner ATS)
- *   tc                  Operations completed (sign-off approval)          -> ATC Discharge
+ *   ta                  Time of Arrival (operator arrival log)             -> ATA at DP        (partner ATA)
+ *   tb                  Time of Berthing, actual (berthing log)            -> ATB              (partner ATB)
+ *   cargo_ops_start_at  Hose On: Cargo Operations window START             -> ATS Discharge    (partner ATS)
+ *   cargo_ops_end_at    Hose Off: Cargo Operations window END     (v5.5)   -> ATC Discharge    (partner ATC)
  *
- * Two readings of this file changed with the move from v5.0 to v5.4:
- *   - Start Discharging used to be unmapped ("JPS has no such event"); v5.4 added `cargo_ops_start_at`.
- *   - ATC Discharge stays on `tc`, as it was. JPS's own alias table names `cast_off_at` as its "ATC", but KLIP's ATC
- *     Discharge is the end of discharging, which is the sign-off, so the business keeps `tc`. `cast_off_at` and
- *     `sailed_at` (the departure) are still stored in jps_shipping_instructions.schedule_* and feed nothing here.
+ * What moved since v5.0:
+ *   - Start Discharging used to be unmapped ("JPS has no such event"); v5.4 added `cargo_ops_start_at`, and v5.5 made it
+ *     the window start (v5.4: Entry 1 start).
+ *   - ATC Discharge was `tc` (operations signed off) until v5.5 added `cargo_ops_end_at`; JPS tells KLIP integrators to
+ *     use that. `tc`, `cast_off_at` and `sailed_at` (the departure, not Hose Off) are still stored in
+ *     jps_shipping_instructions.schedule_* and feed nothing here.
  *
  * Still NOT mapped: the estimates (eta, etb, etc) - this is the ACTUALS lane.
  *
@@ -24,7 +25,7 @@ import type { ShipmentAtaApiField } from '../utils/shipmentAtaOverrideFields';
  */
 export const JPS_SCHEDULE_ATA_FIELDS: ReadonlyArray<{
   /** Key of the `schedule` object in the JPS response. */
-  scheduleKey: 'ta' | 'tb' | 'cargo_ops_start_at' | 'tc';
+  scheduleKey: 'ta' | 'tb' | 'cargo_ops_start_at' | 'cargo_ops_end_at';
   /** jps_shipping_instructions column holding JPS's timestamp. */
   column: string;
   ataField: ShipmentAtaApiField;
@@ -40,7 +41,7 @@ export const JPS_SCHEDULE_ATA_FIELDS: ReadonlyArray<{
   { scheduleKey: 'ta', column: 'schedule_ta', ataField: 'ata_vessel_arrive_at_discharge_port', overrideColumn: 'jps_ata_discharge_arrival', klip: 'ATA at DP' },
   { scheduleKey: 'tb', column: 'schedule_tb', ataField: 'ata_vessel_berthed_at_discharge_port', overrideColumn: 'jps_ata_discharge_berthed', klip: 'ATB' },
   { scheduleKey: 'cargo_ops_start_at', column: 'schedule_cargo_ops_start_at', ataField: 'ata_vessel_start_discharging', overrideColumn: 'jps_ata_discharge_start', klip: 'ATS Discharge' },
-  { scheduleKey: 'tc', column: 'schedule_tc', ataField: 'ata_vessel_complete_discharge', overrideColumn: 'jps_ata_discharge_complete', klip: 'ATC Discharge' },
+  { scheduleKey: 'cargo_ops_end_at', column: 'schedule_cargo_ops_end_at', ataField: 'ata_vessel_complete_discharge', overrideColumn: 'jps_ata_discharge_complete', klip: 'ATC Discharge' },
 ];
 
 /**

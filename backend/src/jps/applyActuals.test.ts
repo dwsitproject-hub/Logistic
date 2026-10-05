@@ -23,12 +23,12 @@ describe('toJakartaDate', () => {
 });
 
 describe('the lane follows the one mapping', () => {
-  it('ta, tb, cargo_ops_start_at and tc feed ATA at DP, ATB, ATS Discharge and ATC Discharge', () => {
+  it('ta, tb, cargo_ops_start_at (Hose On) and cargo_ops_end_at (Hose Off) feed ATA at DP, ATB, ATS and ATC Discharge', () => {
     expect(JPS_SCHEDULE_ATA_FIELDS.map((f) => [f.scheduleKey, f.ataField])).toEqual([
       ['ta', 'ata_vessel_arrive_at_discharge_port'],
       ['tb', 'ata_vessel_berthed_at_discharge_port'],
       ['cargo_ops_start_at', 'ata_vessel_start_discharging'],
-      ['tc', 'ata_vessel_complete_discharge'],
+      ['cargo_ops_end_at', 'ata_vessel_complete_discharge'],
     ]);
     expect(JPS_ATA_LANE.map((l) => l.column)).toEqual([
       'jps_ata_discharge_arrival',
@@ -38,8 +38,12 @@ describe('the lane follows the one mapping', () => {
     ]);
   });
 
-  it('does not take cast_off_at or sailed_at (the departure)', () => {
-    const plan = planJpsAtaLane({ cast_off_at: '2026-09-28T11:00:00Z', sailed_at: '2026-09-29T16:30:00Z' });
+  it('does not take tc, cast_off_at or sailed_at: sign-off and departure are not Hose Off', () => {
+    const plan = planJpsAtaLane({
+      tc: '2026-09-28T10:00:00Z',
+      cast_off_at: '2026-09-28T11:00:00Z',
+      sailed_at: '2026-09-29T16:30:00Z',
+    });
     expect(plan).toEqual({});
   });
 });
@@ -51,7 +55,7 @@ describe('planJpsAtaLane', () => {
         ta: '2026-09-27T20:00:00Z',
         tb: '2026-09-28T03:00:00Z',
         cargo_ops_start_at: '2026-09-28T07:45:00Z',
-        tc: '2026-09-29T16:30:00Z',
+        cargo_ops_end_at: '2026-09-29T16:30:00Z',
       }),
     ).toEqual({
       jps_ata_discharge_arrival: '2026-09-28',
@@ -92,7 +96,7 @@ describe('applyJpsAtaLane', () => {
 
   it('writes the lane for every shipment of the STO and refreshes them', async () => {
     mockDb(['a', 'b'], []);
-    const result = await applyJpsAtaLane('1006019026', { ta: '2026-09-28T01:00:00Z', tc: '2026-09-29T16:30:00Z' });
+    const result = await applyJpsAtaLane('1006019026', { ta: '2026-09-28T01:00:00Z', cargo_ops_end_at: '2026-09-29T16:30:00Z' });
     expect(result.changedShipmentIds).toEqual(['a', 'b']);
     expect(writes()).toHaveLength(2);
     const [sql, params] = writes()[0] as [string, unknown[]];

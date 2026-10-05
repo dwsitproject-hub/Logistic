@@ -2,7 +2,7 @@
  * JPS's actual times, as the third lane of discharge ATA (SAP, KLIP, JPS).
  *
  * Which JPS actual feeds which KLIP milestone is decided in ONE place, JPS_SCHEDULE_ATA_FIELDS (scheduleAtaSql.ts):
- * ta -> ATA at DP, tb -> ATB, cargo_ops_start_at -> ATS Discharge, tc -> ATC Discharge.
+ * ta -> ATA at DP, tb -> ATB, cargo_ops_start_at -> ATS Discharge (Hose On), cargo_ops_end_at -> ATC Discharge (Hose Off).
  *
  * Stored on shipment_ata_overrides.jps_ata_discharge_*; the readers put them FIRST for a shipment that is not COMPLETED
  * (sqlJpsAtaWhileOpen in utils/shipmentAtaOverrideSql.ts), so a JPS value wins while the voyage is open and KLIP / SAP

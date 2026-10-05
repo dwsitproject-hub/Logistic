@@ -34,6 +34,7 @@ export async function applyJpsInstruction(rowId: string, data: JpsInstruction): 
          schedule_cast_off_at = COALESCE($18::timestamptz, schedule_cast_off_at),
          schedule_sailed_at = COALESCE($19::timestamptz, schedule_sailed_at),
          schedule_cargo_ops_start_at = COALESCE($20::timestamptz, schedule_cargo_ops_start_at),
+         schedule_cargo_ops_end_at = COALESCE($21::timestamptz, schedule_cargo_ops_end_at),
          last_polled_at = NOW(),
          last_error = NULL,
          updated_at = CURRENT_TIMESTAMP
@@ -60,6 +61,7 @@ export async function applyJpsInstruction(rowId: string, data: JpsInstruction): 
       sch.cast_off_at ?? null,
       sch.sailed_at ?? null,
       sch.cargo_ops_start_at ?? null,
+      sch.cargo_ops_end_at ?? null,
     ],
   );
 
