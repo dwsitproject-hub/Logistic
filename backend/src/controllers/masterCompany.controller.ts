@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { pushMasterCompanyToDhm } from '../dhm';
+import { attachDhmPushState, pushMasterCompanyToDhm } from '../dhm';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
@@ -77,7 +77,7 @@ export const listMasterCompanies = async (req: AuthRequest, res: Response): Prom
     res.json({
       success: true,
       data: {
-        items: listResult.rows,
+        items: await attachDhmPushState('company', listResult.rows),
         pagination: {
           total: parseInt(countResult.rows[0]?.count ?? '0', 10),
           page: Number(page),

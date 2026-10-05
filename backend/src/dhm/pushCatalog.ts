@@ -2,6 +2,7 @@ import { query } from '../database/connection';
 import { isDhmEnabled } from './config';
 import { pushNamedMasterToDhm, pushMasterCompanyToDhm, pushMasterExternalPartyToDhm, pushMasterPlantToDhm, pushMasterPortToDhm, pushMasterSiteToDhm } from './pushMaster';
 import { pushMasterVesselToDhm, type DhmPushAttachment } from './pushVessel';
+import { recordPushOutcome } from './pushState';
 import type { KlipVesselForDhm } from './types';
 
 export const DHM_SYNC_MASTERS = ['vessel', 'product', 'port', 'plant', 'site', 'company', 'ext_company', 'incoterm'] as const;
@@ -25,7 +26,7 @@ export function readDhmSyncMaster(value: unknown): DhmSyncMaster | null {
   return isSyncMaster(master) ? master : null;
 }
 
-function rowName(master: DhmSyncMaster, row: Record<string, unknown>): string {
+export function rowName(master: DhmSyncMaster, row: Record<string, unknown>): string {
   const value =
     master === 'vessel'
       ? row.vessel_name
@@ -79,7 +80,34 @@ async function loadRows(master: DhmSyncMaster): Promise<Record<string, unknown>[
   return result.rows as Record<string, unknown>[];
 }
 
-async function pushRow(master: DhmSyncMaster, row: Record<string, unknown>, overwrite: boolean): Promise<DhmPushAttachment> {
+/** The table (and the filter that picks a master out of a shared one) behind each master, to load rows by id. */
+const ROW_SOURCE: Record<DhmSyncMaster, { from: string; where: string }> = {
+  vessel: { from: 'master_vessels', where: '' },
+  product: { from: 'products', where: '' },
+  port: { from: 'master_loading_ports', where: '' },
+  plant: { from: 'master_plants', where: '' },
+  site: { from: 'master_sites', where: '' },
+  company: { from: 'master_companies', where: '' },
+  incoterm: { from: 'master_reference_items', where: "kind = 'incoterm'" },
+  ext_company: { from: 'master_reference_items', where: "kind = 'ext_company'" },
+};
+
+/** The CURRENT rows for these ids, so a retry pushes what the master holds now and not what failed earlier. */
+export async function loadRowsByIds(master: DhmSyncMaster, ids: string[]): Promise<Record<string, unknown>[]> {
+  if (ids.length === 0) return [];
+  const { from, where } = ROW_SOURCE[master];
+  const result = await query(`SELECT * FROM ${from} WHERE id = ANY($1::uuid[])${where ? ` AND ${where}` : ''}`, [ids]);
+  return result.rows as Record<string, unknown>[];
+}
+
+/** Push one row and remember how it went (see pushState.ts), whoever asked: the Sync button or the retry job. */
+export async function pushRow(master: DhmSyncMaster, row: Record<string, unknown>, overwrite: boolean): Promise<DhmPushAttachment> {
+  const result = await pushRowUntracked(master, row, overwrite);
+  await recordPushOutcome(master, String(row.id), result);
+  return result;
+}
+
+async function pushRowUntracked(master: DhmSyncMaster, row: Record<string, unknown>, overwrite: boolean): Promise<DhmPushAttachment> {
   const id = String(row.id);
   if (master === 'vessel') return pushMasterVesselToDhm(id, vesselForDhm(row), { overwrite });
   if (master === 'port') return pushMasterPortToDhm(id, row, { overwrite });

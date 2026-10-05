@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { pushMasterExternalPartyToDhm, pushNamedMasterToDhm } from '../dhm';
+import { attachDhmPushState, pushMasterExternalPartyToDhm, pushNamedMasterToDhm } from '../dhm';
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
@@ -78,7 +78,11 @@ export const listMasterReferences = async (req: AuthRequest, res: Response): Pro
     res.json({
       success: true,
       data: {
-        items: listResult.rows,
+        // Truck Transporter has no DHM slug, so there is nothing of it to be undelivered.
+        items:
+          kind === 'incoterm' || kind === 'ext_company'
+            ? await attachDhmPushState(kind, listResult.rows)
+            : listResult.rows,
         total: countResult.rows[0]?.count ?? 0,
         page: pageNum,
         limit: limitNum,

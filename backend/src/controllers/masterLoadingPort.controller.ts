@@ -1,6 +1,6 @@
 import { wantsExcludeDhmDeleted } from '../utils/dhmDeletedFilter';
 import { Response } from 'express';
-import { pushMasterPortToDhm } from '../dhm';
+import { attachDhmPushState, pushMasterPortToDhm } from '../dhm';
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
@@ -234,7 +234,7 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
     res.json({
       success: true,
       data: {
-        items: listResult.rows,
+        items: await attachDhmPushState('port', listResult.rows),
         pagination: {
           total: parseInt(countResult.rows[0]?.count ?? '0', 10),
           page: Number(page),

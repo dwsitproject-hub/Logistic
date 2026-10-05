@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ApiCallHistory } from '@/components/integrations/ApiCallHistory'
+import { DhmPushPanel } from '@/components/integrations/DhmPushPanel'
 import api from '@/lib/api'
 import { AlertTriangle, CheckCircle2, History, Loader2, Plug, RotateCcw, XCircle } from 'lucide-react'
 
@@ -204,6 +205,7 @@ function IntegrationCard({
       </CardHeader>
       <CardContent className="space-y-3">
         {historyOpen ? <ApiCallHistory integration={integration.id} /> : null}
+        {integration.id === 'dhm' ? <DhmPushPanel /> : null}
 
         {test ? (
           <div

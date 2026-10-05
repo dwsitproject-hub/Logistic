@@ -184,3 +184,40 @@ export const getApiCall = async (req: AuthRequest, res: Response): Promise<void>
     res.status(500).json({ success: false, error: { message: 'Failed to load the call.' } });
   }
 };
+
+/**
+ * Masters KLIP saved but could not deliver to DHM (dhm_push_state): what, why, how many tries, when the next one is.
+ * Empty when everything has gone through.
+ */
+export const getDhmPushState = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { listDhmPushStates } = await import('../dhm');
+    const items = await listDhmPushStates();
+    res.json({
+      success: true,
+      data: {
+        items,
+        failed: items.filter((i) => i.status === 'FAILED').length,
+        conflicts: items.filter((i) => i.status === 'CONFLICT').length,
+      },
+    });
+  } catch (error) {
+    logger.error('List DHM push state error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the undelivered DHM masters.' } });
+  }
+};
+
+/**
+ * Push the FAILED masters again now, ignoring the backoff and the cap on automatic attempts. A CONFLICT is not touched:
+ * DHM holds a different record under that name and somebody has to choose to overwrite it from the Master page.
+ */
+export const retryDhmPushNow = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { retryDhmPushes } = await import('../dhm');
+    const summary = await retryDhmPushes({ onlyDue: false, limit: 100 });
+    res.json({ success: true, data: summary });
+  } catch (error) {
+    logger.error('Retry DHM pushes error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to retry the DHM pushes.' } });
+  }
+};

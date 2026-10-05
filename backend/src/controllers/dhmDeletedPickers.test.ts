@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const queryMock = vi.hoisted(() => vi.fn());
 vi.mock('../database/connection', () => ({ query: queryMock, pool: {} }));
-vi.mock('../dhm', () => ({}));
+// the lists attach the push state to their rows; here every row simply comes back as it is
+vi.mock('../dhm', () => ({ attachDhmPushState: async (_kind: string, items: unknown[]) => items }));
 vi.mock('../dhm/pushCatalog', () => ({}));
 
 import { listMasterLoadingPorts } from './masterLoadingPort.controller';

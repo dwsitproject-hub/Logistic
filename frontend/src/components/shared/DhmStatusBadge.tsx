@@ -1,24 +1,29 @@
 'use client'
 
-import { masterVesselDhmStatusLabel } from '@/lib/masterVesselDhmStatus'
+import {
+  dhmStatusHint,
+  masterVesselDhmStatusLabel,
+  type DhmStatusLabel,
+  type DhmStatusRow,
+} from '@/lib/masterVesselDhmStatus'
 
-export function DhmStatusBadge({
-  row,
-}: {
-  row: { dhm_id?: string | null; dhm_code?: string | null; code_dhm?: string | null }
-}) {
-  const synced = masterVesselDhmStatusLabel(row) === 'Sync'
-  const code = String(row.code_dhm || row.dhm_code || '').trim()
+const TONE: Record<DhmStatusLabel, string> = {
+  Sync: 'bg-blue-100 text-blue-800',
+  'Not Sync': 'bg-red-100 text-red-800',
+  // Linked to DHM, but the last change did not reach it: the row differs from DHM until the retry succeeds.
+  'Sync Failed': 'bg-amber-100 text-amber-900',
+  // DHM already holds something different under this name or code; a person has to choose.
+  Conflict: 'bg-orange-100 text-orange-900',
+}
+
+export function DhmStatusBadge({ row }: { row: DhmStatusRow }) {
+  const label = masterVesselDhmStatusLabel(row)
   return (
     <span
-      className={
-        synced
-          ? 'inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800'
-          : 'inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800'
-      }
-      title={code ? `DHM: ${code}` : undefined}
+      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${TONE[label]}`}
+      title={dhmStatusHint(row) || undefined}
     >
-      {synced ? 'Sync' : 'Not Sync'}
+      {label}
     </span>
   )
 }

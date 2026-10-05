@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { pushMasterSiteToDhm } from '../dhm';
+import { attachDhmPushState, pushMasterSiteToDhm } from '../dhm';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
@@ -62,7 +62,7 @@ export const listMasterSites = async (req: AuthRequest, res: Response): Promise<
     res.json({
       success: true,
       data: {
-        items: listResult.rows,
+        items: await attachDhmPushState('site', listResult.rows),
         pagination: {
           total: parseInt(countResult.rows[0]?.count ?? '0', 10),
           page: Number(page),

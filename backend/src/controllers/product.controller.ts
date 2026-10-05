@@ -1,7 +1,7 @@
 import { wantsExcludeDhmDeleted } from '../utils/dhmDeletedFilter';
 import { Request, Response } from 'express';
 import { query } from '../database/connection';
-import { pushNamedMasterToDhm } from '../dhm';
+import { attachDhmPushState, pushNamedMasterToDhm } from '../dhm';
 import logger from '../utils/logger';
 
 interface AuthRequest extends Request { user?: { id: string; role: string } }
@@ -58,7 +58,7 @@ export const listProducts = async (req: AuthRequest, res: Response): Promise<voi
       [...params, limitNum, offset]
     );
     const countRes = await query(`SELECT COUNT(*)::int AS count FROM ${TABLE} ${whereSql}`, params);
-    res.json({ success: true, data: { items: dataRes.rows, total: countRes.rows[0].count, page: pageNum, limit: limitNum } });
+    res.json({ success: true, data: { items: await attachDhmPushState('product', dataRes.rows), total: countRes.rows[0].count, page: pageNum, limit: limitNum } });
   } catch (error) {
     logger.error('Error listing products:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to list products' } });

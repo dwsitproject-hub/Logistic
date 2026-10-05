@@ -18,7 +18,7 @@ import {
   MASTER_VESSEL_TYPE_OPTIONS,
   parseMasterVesselListQuery,
 } from '../utils/masterVesselListFilters';
-import { pushMasterVesselToDhm } from '../dhm';
+import { attachDhmPushState, pushMasterVesselToDhm } from '../dhm';
 import type { KlipVesselForDhm } from '../dhm/types';
 
 /** Charter type accepts T/C, V/C, or CIF (case-insensitive); anything else stores NULL. */
@@ -87,7 +87,10 @@ export const listMasterVessels = async (req: AuthRequest, res: Response): Promis
     res.json({
       success: true,
       data: {
-        items: listResult.rows.map((row) => mapMasterVesselForApi(row)),
+        items: await attachDhmPushState(
+          'vessel',
+          listResult.rows.map((row) => mapMasterVesselForApi(row)),
+        ),
         pagination: {
           total,
           page: Number(page),

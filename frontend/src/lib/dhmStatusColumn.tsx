@@ -1,12 +1,6 @@
 import type { ReactNode } from 'react'
 import { DhmStatusBadge } from '@/components/shared/DhmStatusBadge'
-import { masterVesselDhmStatusLabel } from '@/lib/masterVesselDhmStatus'
-
-type DhmStatusRow = {
-  dhm_id?: string | null
-  dhm_code?: string | null
-  code_dhm?: string | null
-}
+import { masterVesselDhmStatusLabel, type DhmStatusRow } from '@/lib/masterVesselDhmStatus'
 
 export function dhmStatusListColumn<T extends DhmStatusRow>(): {
   id: string

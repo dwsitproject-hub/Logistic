@@ -1,6 +1,6 @@
 import { sqlExcludeDhmDeleted, wantsExcludeDhmDeleted } from '../utils/dhmDeletedFilter';
 import { Response } from 'express';
-import { pushMasterPlantToDhm } from '../dhm';
+import { attachDhmPushState, pushMasterPlantToDhm } from '../dhm';
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
@@ -88,7 +88,7 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
     res.json({
       success: true,
       data: {
-        items: listResult.rows,
+        items: await attachDhmPushState('plant', listResult.rows),
         pagination: {
           total: parseInt(countResult.rows[0]?.count ?? '0', 10),
           page: Number(page),
