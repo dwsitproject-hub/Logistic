@@ -1,5 +1,5 @@
 import logger from '../utils/logger';
-import { applyDhmMasterRecord, markDhmMasterDeleted } from './applyMaster';
+import { applyDhmMasterRecord, markDhmMasterDeleted, NOT_NEWER_THAN_DELETE_SQL } from './applyMaster';
 import { applyDhmVesselRecord, markDhmWebhookDelivery } from './replica';
 import { parseDhmWebhookPayload, verifyDhmSignature } from './webhook';
 import type { DhmRecord } from './types';
@@ -35,7 +35,8 @@ export async function handleDhmWebhook(
         data: payload.data && typeof payload.data === 'object' ? payload.data : {},
         updatedAt: payload.occurredAt || '',
       };
-      await applyDhmMasterRecord(payload.entityType, record);
+      // A body without a version cannot be ordered against the replica; the `|| 1` above is a placeholder, not a version.
+      await applyDhmMasterRecord(payload.entityType, record, { versionKnown: typeof payload.version === 'number' });
       return { accepted: true };
     }
 
@@ -43,7 +44,7 @@ export async function handleDhmWebhook(
       await query(
         `UPDATE master_vessels
          SET dhm_is_deleted = true, dhm_version = COALESCE($2, dhm_version), updated_at = CURRENT_TIMESTAMP
-         WHERE dhm_id = $1::uuid`,
+         WHERE dhm_id = $1::uuid${NOT_NEWER_THAN_DELETE_SQL}`,
         [payload.recordId, payload.version ?? null],
       );
       return { accepted: true };
@@ -56,7 +57,7 @@ export async function handleDhmWebhook(
       data: payload.data && typeof payload.data === 'object' ? payload.data : {},
       updatedAt: payload.occurredAt || '',
     };
-    await applyDhmVesselRecord(record);
+    await applyDhmVesselRecord(record, { versionKnown: typeof payload.version === 'number' });
     return { accepted: true };
   } catch (error) {
     logger.error('DHM webhook apply failed', { deliveryId: payload.deliveryId, error });

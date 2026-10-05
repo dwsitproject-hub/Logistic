@@ -1,6 +1,7 @@
 import { query } from '../database/connection';
 import { normalizeVesselName, uppercaseText } from '../utils/vesselNameNormalize';
 import { fromDhmVesselData } from './mapper';
+import { shouldApplyDhmRecord, type DhmApplyOptions } from './versionGuard';
 import type { DhmRecord } from './types';
 
 /** Inbound 201 often returns `code` on the envelope while `record.data` is empty. */
@@ -79,7 +80,15 @@ async function findLocalVesselId(record: DhmRecord): Promise<string | null> {
 }
 
 /** Upsert replica from a DHM vessel record. Does not delete shipment-linked KLIP rows. */
-export async function applyDhmVesselRecord(record: DhmRecord): Promise<{ id: string; created: boolean }> {
+export async function applyDhmVesselRecord(
+  record: DhmRecord,
+  options: DhmApplyOptions = {},
+): Promise<{ id: string; created: boolean; skipped?: 'stale' }> {
+  // A vessel DHM delivered at an older version than the replica holds is left alone (see versionGuard.ts).
+  if (!(await shouldApplyDhmRecord('vessel', record, options))) {
+    const known = await query(`SELECT id FROM master_vessels WHERE dhm_id = $1::uuid LIMIT 1`, [record.id]);
+    return { id: String(known.rows[0]?.id ?? ''), created: false, skipped: 'stale' };
+  }
   const mapped = fromDhmVesselData(record.data);
   const existingId = await findLocalVesselId(record);
   const vesselName = uppercaseText(mapped.vessel_name) || 'UNKNOWN VESSEL';

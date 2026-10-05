@@ -14,7 +14,7 @@ interface SyncPage {
 
 async function syncSlugPages(
   slug: string,
-  apply: (record: DhmRecord) => Promise<void>,
+  apply: (record: DhmRecord) => Promise<boolean | void>,
   options?: { snapshot?: boolean; continueOnError?: boolean },
 ): Promise<{ applied: number; pages: number }> {
   let cursor = options?.snapshot ? null : await getDhmSyncCursor(slug);
@@ -39,8 +39,9 @@ async function syncSlugPages(
     const records = Array.isArray(data?.records) ? data.records : [];
     for (const record of records) {
       try {
-        await apply(record);
-        applied += 1;
+        // false = not written (older than the replica); only written records are counted.
+        const written = await apply(record);
+        if (written !== false) applied += 1;
       } catch (error) {
         logger.warn('DHM sync record skipped', { slug, recordId: record.id, error });
         if (!options?.continueOnError) throw error;
@@ -72,7 +73,12 @@ export async function syncDhmVessels(options?: { snapshot?: boolean }): Promise<
   if (!isDhmEnabled()) {
     return { applied: 0, pages: 0 };
   }
-  return syncSlugPages('vessel', (record) => applyDhmVesselRecord(record).then(() => undefined), options);
+  // A snapshot rebuilds the replica from DHM, so it is not held back by the version guard (see versionGuard.ts).
+  return syncSlugPages(
+    'vessel',
+    (record) => applyDhmVesselRecord(record, { force: options?.snapshot === true }).then((r) => r.skipped !== 'stale'),
+    options,
+  );
 }
 
 export async function syncDhmMasters(options?: { snapshot?: boolean }): Promise<{
@@ -99,7 +105,7 @@ export async function syncDhmMasters(options?: { snapshot?: boolean }): Promise<
       logger.warn('DHM catalog unavailable; remaining master sync skipped', { slug: preferred, error });
       break;
     }
-    const page = await syncSlugPages(slug, (record) => applyDhmMasterRecord(slug, record).then(() => undefined), {
+    const page = await syncSlugPages(slug, (record) => applyDhmMasterRecord(slug, record, { force: options?.snapshot === true }), {
       ...options,
       continueOnError: true,
     });

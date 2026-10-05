@@ -1,6 +1,7 @@
 import { query } from '../database/connection';
 import { dhmDataName, dhmRefCode } from './mapper';
 import { asDhmUuid, persistMasterReplica, rememberDhmOrganization, replicaCode } from './masterReplica';
+import { shouldApplyDhmRecord, type DhmApplyOptions } from './versionGuard';
 import type { DhmRecord } from './types';
 
 export const DHM_MASTER_SLUGS = [
@@ -352,8 +353,17 @@ async function applyPort(record: DhmRecord): Promise<void> {
   }
 }
 
-export async function applyDhmMasterRecord(slug: string, record: DhmRecord): Promise<boolean> {
+/**
+ * Apply one DHM master record. Returns false when it was not written: an unknown slug, or a record OLDER than what the
+ * replica already holds (see versionGuard.ts).
+ */
+export async function applyDhmMasterRecord(
+  slug: string,
+  record: DhmRecord,
+  options: DhmApplyOptions = {},
+): Promise<boolean> {
   if (!isMasterSlug(slug)) return false;
+  if (!(await shouldApplyDhmRecord(slug, record, options))) return false;
   if (slug === 'company' || slug === 'organization') {
     await applyCompany(record);
     const name = dhmDataName(record.data);
@@ -369,6 +379,13 @@ export async function applyDhmMasterRecord(slug: string, record: DhmRecord): Pro
   return true;
 }
 
+/**
+ * A tombstone only counts if the replica does not already hold a NEWER version: a late "deleted" must not bury a record
+ * that was updated after it. Unknown on either side (no version in the delivery, a row never versioned) still applies.
+ * Written into the UPDATE, not checked beforehand, so a delete and an update arriving together cannot slip past each other.
+ */
+export const NOT_NEWER_THAN_DELETE_SQL = ` AND ($2::int IS NULL OR dhm_version IS NULL OR dhm_version <= $2::int)`;
+
 export async function markDhmMasterDeleted(slug: string, recordId: string, version: number | null): Promise<boolean> {
   if (!isMasterSlug(slug)) return false;
   const id = asDhmUuid(recordId);
@@ -377,13 +394,13 @@ export async function markDhmMasterDeleted(slug: string, recordId: string, versi
     await query(
       `UPDATE dhm_organizations
        SET dhm_is_deleted = true, dhm_version = COALESCE($2, dhm_version), updated_at = CURRENT_TIMESTAMP
-       WHERE dhm_id = $1::uuid`,
+       WHERE dhm_id = $1::uuid${NOT_NEWER_THAN_DELETE_SQL}`,
       [id, version],
     );
     await query(
       `UPDATE master_companies
        SET dhm_is_deleted = true, dhm_version = COALESCE($2, dhm_version), updated_at = CURRENT_TIMESTAMP
-       WHERE dhm_id = $1::uuid`,
+       WHERE dhm_id = $1::uuid${NOT_NEWER_THAN_DELETE_SQL}`,
       [id, version],
     );
     return true;
@@ -403,7 +420,7 @@ export async function markDhmMasterDeleted(slug: string, recordId: string, versi
   await query(
     `UPDATE ${table}
      SET dhm_is_deleted = true, dhm_version = COALESCE($2, dhm_version), updated_at = CURRENT_TIMESTAMP
-     WHERE dhm_id = $1::uuid${kindSql}`,
+     WHERE dhm_id = $1::uuid${kindSql}${NOT_NEWER_THAN_DELETE_SQL}`,
     [id, version],
   );
   return true;
