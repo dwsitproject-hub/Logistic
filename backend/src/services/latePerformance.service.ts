@@ -1,3 +1,4 @@
+import { sqlJpsAtaWhileOpen } from '../utils/shipmentAtaOverrideSql';
 import {
   diffCalendarDays,
   hasCalendarDate,
@@ -419,7 +420,8 @@ ${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS 
              * Purely additive: nothing that had an ATC loses it.
              */
             MAX(COALESCE(
-              sao_atc.ata_discharge_complete::date,
+              ${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao_atc', 's2')}::date,
+      sao_atc.ata_discharge_complete::date,
               s2.ata_discharge_complete::date,
               vlp_discharge.ata_loading_completed::date
             )) AS last_ata_vessel_complete_discharge,

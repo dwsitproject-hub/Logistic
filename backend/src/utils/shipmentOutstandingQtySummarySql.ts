@@ -1,3 +1,4 @@
+import { sqlJpsAtaWhileOpen } from './shipmentAtaOverrideSql';
 import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 /**
  * Shipments page — Outstanding Qty KPI strip (FOB/CIF/CFR × Interco / 3rd Party).
@@ -299,6 +300,7 @@ export function sqlShipmentExecutionOsPerContractCtes(
    */
   const contractAtc = `(
     SELECT MAX(COALESCE(
+      ${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao_f', 's_f')}::date,
       sao_f.ata_discharge_complete::date,
       s_f.ata_discharge_complete::date,
       vlp_f.ata_loading_completed::date

@@ -1,3 +1,4 @@
+import { sqlJpsAtaWhileOpen } from './shipmentAtaOverrideSql';
 import {
   sqlMaxTruckingLastReceiveDateForContract,
   sqlMaxTruckingWbActualsDateForContract,
@@ -18,6 +19,7 @@ import { TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG } from './truckingQuantitySql';
 export function sqlLastAtaVesselCompleteDischargeForContract(contractIdExpr: string): string {
   return `(
     SELECT MAX(COALESCE(
+      ${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao_atc', 's_atc')}::date,
       sao_atc.ata_discharge_complete::date,
       s_atc.ata_discharge_complete::date,
       vlp_atc.ata_loading_completed::date

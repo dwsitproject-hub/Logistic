@@ -87,6 +87,25 @@ export function sqlSapAtaCompleteDischarge(_sAlias = 's', vlpAlias = 'vlpd'): st
   return `${vlpAlias}.sap_ata_loading_completed`;
 }
 
+/**
+ * JPS's actual for a discharge milestone, or NULL once the shipment is COMPLETED.
+ *
+ * The three lanes of discharge ATA are read JPS -> KLIP -> SAP while a shipment is open: this is the first argument of
+ * the COALESCE, so a missing JPS value falls through to the KLIP edit and then to the SAP-filled stored value. A
+ * COMPLETED shipment never reads it - its history stays as KLIP and SAP closed it. The values are filled by
+ * jps/applyActuals.ts into shipment_ata_overrides.jps_ata_discharge_*.
+ *
+ * Every query that spells an effective discharge ATA has to carry it, or two pages disagree on the same voyage; the
+ * list of those spellings is in the test for this function.
+ */
+export function sqlJpsAtaWhileOpen(
+  column: 'jps_ata_discharge_arrival' | 'jps_ata_discharge_berthed' | 'jps_ata_discharge_start' | 'jps_ata_discharge_complete',
+  saoAlias = 'sao',
+  shipmentAlias = 's',
+): string {
+  return `CASE WHEN ${shipmentAlias}.status IS DISTINCT FROM 'COMPLETED' THEN ${saoAlias}.${column} END`;
+}
+
 /** Effective ATA: manual override first, then stored KLIP ATA (not SAP snapshot). */
 export function sqlEffectiveAtaArrivalLoading(
   sAlias = 's',
@@ -113,19 +132,19 @@ export function sqlEffectiveAtaSailedLoading(sAlias = 's', vlpAlias = 'vlp1'): s
 }
 
 export function sqlEffectiveAtaArrivalDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
-  return `COALESCE(sao.ata_discharge_arrival, ${sqlKlipStoredAtaArrivalDischarge(sAlias, vlpAlias)})`;
+  return `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_arrival', 'sao', sAlias)}, sao.ata_discharge_arrival, ${sqlKlipStoredAtaArrivalDischarge(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaBerthedDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
-  return `COALESCE(sao.ata_discharge_berthed, ${sqlKlipStoredAtaBerthedDischarge(sAlias, vlpAlias)})`;
+  return `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed', 'sao', sAlias)}, sao.ata_discharge_berthed, ${sqlKlipStoredAtaBerthedDischarge(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaStartDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
-  return `COALESCE(sao.ata_discharge_start, ${sqlKlipStoredAtaStartDischarge(sAlias, vlpAlias)})`;
+  return `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_start', 'sao', sAlias)}, sao.ata_discharge_start, ${sqlKlipStoredAtaStartDischarge(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaCompleteDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
-  return `COALESCE(sao.ata_discharge_complete, ${sqlKlipStoredAtaCompleteDischarge(sAlias, vlpAlias)})`;
+  return `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao', sAlias)}, sao.ata_discharge_complete, ${sqlKlipStoredAtaCompleteDischarge(sAlias, vlpAlias)})`;
 }
 
 /**
@@ -149,7 +168,7 @@ export function sqlEffectiveAtaCompleteDischarge(sAlias = 's', vlpAlias = 'vlpd'
  * summary refresh fails on the one that does not.
  */
 export function buildShipmentListAtaSelectSql(groupKeyExpr?: string): string {
-  const atc = `COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)`;
+  const atc = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete')}, sao.ata_discharge_complete, s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)`;
   const ownStoFilter = groupKeyExpr
     ? `FILTER (WHERE NULLIF(TRIM(s.shipment_id::text), '') IS NULL
             OR TRIM(s.shipment_id::text) = TRIM((${groupKeyExpr})::text))`
@@ -160,9 +179,9 @@ export function buildShipmentListAtaSelectSql(groupKeyExpr?: string): string {
           MAX(COALESCE(sao.ata_loading_start, s.ata_loading_start, vlp_l.vlp_load_ata_ls)) as ata_vessel_start_loading,
           MAX(COALESCE(sao.ata_loading_complete, s.ata_loading_complete, vlp_l.vlp_load_ata_lc)) as ata_vessel_completed_loading,
           MAX(COALESCE(sao.ata_sailed, s.ata_sailed, vlp_l.vlp_load_ata_vs)) as ata_vessel_sailed_from_loading_port,
-          MAX(COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival, vlp_d.vlp_disc_ata_va)) as ata_vessel_arrive_at_discharge_port,
-          MAX(COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed, vlp_d.vlp_disc_ata_vb)) as ata_vessel_berthed_at_discharge_port,
-          MAX(COALESCE(sao.ata_discharge_start, s.ata_discharge_start, vlp_d.vlp_disc_ata_ls)) as ata_vessel_start_discharging,
+          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_arrival')}, sao.ata_discharge_arrival, s.ata_discharge_arrival, vlp_d.vlp_disc_ata_va)) as ata_vessel_arrive_at_discharge_port,
+          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed')}, sao.ata_discharge_berthed, s.ata_discharge_berthed, vlp_d.vlp_disc_ata_vb)) as ata_vessel_berthed_at_discharge_port,
+          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_start')}, sao.ata_discharge_start, s.ata_discharge_start, vlp_d.vlp_disc_ata_ls)) as ata_vessel_start_discharging,
           MAX(${atc}) as ata_vessel_complete_discharge,
           MAX(${atc}) ${ownStoFilter} as ata_vessel_complete_discharge_own_sto,`;
 }

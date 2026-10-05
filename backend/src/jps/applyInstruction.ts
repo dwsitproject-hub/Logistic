@@ -3,6 +3,8 @@
  * cannot drift: a status that arrives either way lands in the same columns.
  */
 import { query } from '../database/connection';
+import logger from '../utils/logger';
+import { applyJpsAtaLane } from './applyActuals';
 import type { JpsInstruction } from './types';
 
 export async function applyJpsInstruction(rowId: string, data: JpsInstruction): Promise<void> {
@@ -11,7 +13,7 @@ export async function applyJpsInstruction(rowId: string, data: JpsInstruction): 
    * would otherwise blank a milestone JPS had already told us about.
    */
   const sch = data.schedule ?? {};
-  await query(
+  const updated = await query(
     `UPDATE jps_shipping_instructions
      SET jps_id = COALESCE($2, jps_id),
          jps_status = $3,
@@ -31,10 +33,12 @@ export async function applyJpsInstruction(rowId: string, data: JpsInstruction): 
          schedule_tc = COALESCE($17::timestamptz, schedule_tc),
          schedule_cast_off_at = COALESCE($18::timestamptz, schedule_cast_off_at),
          schedule_sailed_at = COALESCE($19::timestamptz, schedule_sailed_at),
+         schedule_cargo_ops_start_at = COALESCE($20::timestamptz, schedule_cargo_ops_start_at),
          last_polled_at = NOW(),
          last_error = NULL,
          updated_at = CURRENT_TIMESTAMP
-     WHERE id = $1`,
+     WHERE id = $1
+     RETURNING sto_key`,
     [
       rowId,
       data.id ?? null,
@@ -55,6 +59,24 @@ export async function applyJpsInstruction(rowId: string, data: JpsInstruction): 
       sch.tc ?? null,
       sch.cast_off_at ?? null,
       sch.sailed_at ?? null,
+      sch.cargo_ops_start_at ?? null,
     ],
   );
+
+  /*
+   * The same response also carries the actual times, which KLIP keeps as the JPS lane of the discharge ATA (SAP, KLIP,
+   * JPS). The status above is already saved, so a failure here is logged and left for the next poll or webhook to make
+   * again - it compares with what the lane holds - instead of failing the status update.
+   */
+  const stoKey = (updated.rows[0] as { sto_key?: string } | undefined)?.sto_key;
+  if (stoKey && data.schedule) {
+    try {
+      await applyJpsAtaLane(stoKey, data.schedule);
+    } catch (error) {
+      logger.warn('JPS actual times not applied to shipments; retried on the next poll or webhook', {
+        stoKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }

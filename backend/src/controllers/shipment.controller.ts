@@ -210,28 +210,7 @@ import {
   shipmentListSeaStoKeyExpr,
   shipmentListSeaDisplayStoNumberExpr,
 } from '../utils/shipmentStoTypeSql';
-import {
-  buildShipmentListAtaSelectSql,
-  SHIPMENT_ATA_OVERRIDES_JOIN,
-  sqlEffectiveAtaArrivalDischarge,
-  sqlEffectiveAtaArrivalLoading,
-  sqlEffectiveAtaBerthedDischarge,
-  sqlEffectiveAtaBerthedLoading,
-  sqlEffectiveAtaCompleteDischarge,
-  sqlEffectiveAtaCompletedLoading,
-  sqlEffectiveAtaSailedLoading,
-  sqlEffectiveAtaStartDischarge,
-  sqlEffectiveAtaStartLoading,
-  sqlSapAtaArrivalDischarge,
-  sqlSapAtaArrivalLoading,
-  sqlSapAtaBerthedDischarge,
-  sqlSapAtaBerthedLoading,
-  sqlSapAtaCompleteDischarge,
-  sqlSapAtaCompletedLoading,
-  sqlSapAtaSailedLoading,
-  sqlSapAtaStartDischarge,
-  sqlSapAtaStartLoading,
-} from '../utils/shipmentAtaOverrideSql';
+import { buildShipmentListAtaSelectSql, SHIPMENT_ATA_OVERRIDES_JOIN, sqlEffectiveAtaArrivalDischarge, sqlEffectiveAtaArrivalLoading, sqlEffectiveAtaBerthedDischarge, sqlEffectiveAtaBerthedLoading, sqlEffectiveAtaCompleteDischarge, sqlEffectiveAtaCompletedLoading, sqlEffectiveAtaSailedLoading, sqlEffectiveAtaStartDischarge, sqlEffectiveAtaStartLoading, sqlSapAtaArrivalDischarge, sqlSapAtaArrivalLoading, sqlSapAtaBerthedDischarge, sqlSapAtaBerthedLoading, sqlSapAtaCompleteDischarge, sqlSapAtaCompletedLoading, sqlSapAtaSailedLoading, sqlSapAtaStartDischarge, sqlSapAtaStartLoading, sqlJpsAtaWhileOpen } from '../utils/shipmentAtaOverrideSql';
 import { hydrateShipmentInfoAtaGaps } from '../utils/shipmentAtaHydration';
 import { sqlShipmentListPrimaryFieldAgg, sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
 import { dedupeStoGroupPorts } from '../utils/vesselLoadingPortDedupe';
@@ -3791,10 +3770,10 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           MAX(COALESCE(sao.ata_loading_start, s.ata_loading_start, vlp1.ata_loading_start::date)) as ata_vessel_start_loading,
           MAX(COALESCE(sao.ata_loading_complete, s.ata_loading_complete, vlp1.ata_loading_completed::date)) as ata_vessel_completed_loading,
           MAX(COALESCE(sao.ata_sailed, s.ata_sailed, vlp1.ata_vessel_sailed::date)) as ata_vessel_sailed_from_loading_port,
-          MAX(COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival, vlpd.ata_vessel_arrival::date)) as ata_vessel_arrive_at_discharge_port,
-          MAX(COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed, vlpd.ata_vessel_berthed::date)) as ata_vessel_berthed_at_discharge_port,
-          MAX(COALESCE(sao.ata_discharge_start, s.ata_discharge_start, vlpd.ata_loading_start::date)) as ata_vessel_start_discharging,
-          MAX(COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete, vlpd.ata_loading_completed::date)) as ata_vessel_complete_discharge,
+          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_arrival', 'sao', 's')}, sao.ata_discharge_arrival, s.ata_discharge_arrival, vlpd.ata_vessel_arrival::date)) as ata_vessel_arrive_at_discharge_port,
+          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed', 'sao', 's')}, sao.ata_discharge_berthed, s.ata_discharge_berthed, vlpd.ata_vessel_berthed::date)) as ata_vessel_berthed_at_discharge_port,
+          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_start', 'sao', 's')}, sao.ata_discharge_start, s.ata_discharge_start, vlpd.ata_loading_start::date)) as ata_vessel_start_discharging,
+          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao', 's')}, sao.ata_discharge_complete, s.ata_discharge_complete, vlpd.ata_loading_completed::date)) as ata_vessel_complete_discharge,
           -- ETA fields from loading ports
           MAX(vlp1.eta_vessel_arrival::date) as eta_vessel_arrival_at_loading_port,
           MAX(vlp1.eta_vessel_berthed_at_loading_port::date) as eta_vessel_berthed_at_loading_port,

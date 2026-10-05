@@ -122,7 +122,26 @@ export async function upsertShipmentAtaOverride(
 
   const hasAnyValue = Object.values(merged).some((v) => v != null);
   if (!hasAnyValue) {
-    await runQuery(executor, `DELETE FROM shipment_ata_overrides WHERE shipment_id = $1::uuid`, [shipmentId]);
+    // The row also carries the JPS lane (jps_ata_discharge_*): clear only the KLIP columns, and drop the row only when
+    // JPS holds nothing on it either. Deleting it outright would throw away JPS's actual times along with the edit.
+    await runQuery(
+      executor,
+      `UPDATE shipment_ata_overrides
+       SET ata_arrival = NULL, ata_berthed = NULL, ata_loading_start = NULL, ata_loading_complete = NULL,
+           ata_sailed = NULL, ata_discharge_arrival = NULL, ata_discharge_berthed = NULL,
+           ata_discharge_start = NULL, ata_discharge_complete = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE shipment_id = $1::uuid`,
+      [shipmentId],
+    );
+    await runQuery(
+      executor,
+      `DELETE FROM shipment_ata_overrides
+       WHERE shipment_id = $1::uuid
+         AND jps_ata_discharge_arrival IS NULL AND jps_ata_discharge_berthed IS NULL
+         AND jps_ata_discharge_start IS NULL AND jps_ata_discharge_complete IS NULL`,
+      [shipmentId],
+    );
     return null;
   }
 

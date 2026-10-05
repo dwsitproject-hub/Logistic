@@ -3095,6 +3095,12 @@ export function EditShipmentModal({
                           const sapRef = resolveAtaSapReference(key, dischargePortRow)
                           const klipVal = ataFields[key]
                           const hasOverride = Boolean(klipVal && klipVal !== (sapRef || ''))
+                          // While the shipment is open JPS is read first (JPS -> KLIP -> SAP), so a KLIP edit of a
+                          // milestone JPS already reported would be saved but never shown. Lock it instead of letting
+                          // the save look ignored; it opens again when JPS has no value or the shipment is Completed.
+                          const jpsHeld =
+                            Boolean(jettyStatus?.jps_ata?.[key]) &&
+                            normalizeShipmentStatusKey(shipmentStatus) !== 'COMPLETED'
                           return (
                             <KlipSapCompareField
                               key={key}
@@ -3117,7 +3123,7 @@ export function EditShipmentModal({
                                 showAtaDifferencesOnly &&
                                 !hasKlipSapMismatch(klipVal, sapRef, 'date')
                               }
-                              editing={ataIsEditing && canEditAtaQuality}
+                              editing={ataIsEditing && canEditAtaQuality && !jpsHeld}
                               editControl={
                                 <DateInputDdMmYyyy
                                   valueIso={klipVal}
@@ -3131,6 +3137,18 @@ export function EditShipmentModal({
                           )
                         })}
                       </div>
+                      {ataIsEditing &&
+                      canEditAtaQuality &&
+                      DISCHARGE_ATA_FIELD_ROWS.some(
+                        ({ key }) =>
+                          Boolean(jettyStatus?.jps_ata?.[key]) &&
+                          normalizeShipmentStatusKey(shipmentStatus) !== 'COMPLETED',
+                      ) ? (
+                        <p className="mt-2 text-[10px] text-gray-500">
+                          Tanggal yang sudah dikirim JPS tidak bisa diubah di sini selama shipment belum Completed
+                          (prioritas pembacaan: JPS, lalu KLIP, lalu SAP).
+                        </p>
+                      ) : null}
                     </div>
                   </>
                 ) : (

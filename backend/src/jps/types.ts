@@ -24,6 +24,8 @@ export interface JpsSchedule {
   etc?: string | null;
   /** Time of Completion, actual. */
   tc?: string | null;
+  /** v5.4. Cargo operations start (partner ATS): Cargo Operations, Entry 1 start. Absent from v5.3 responses. */
+  cargo_ops_start_at?: string | null;
   cast_off_at?: string | null;
   sailed_at?: string | null;
 }

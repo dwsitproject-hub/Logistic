@@ -1,25 +1,46 @@
 import type { ShipmentAtaApiField } from '../utils/shipmentAtaOverrideFields';
 
 /**
- * Which KLIP ATA field each JPS actual corresponds to.
+ * Which KLIP ATA field each JPS actual corresponds to - the ONE place this is decided.
  *
- * KLIP submits INBOUND instructions for BONTANG, so every JPS actual describes the DISCHARGE port.
- * From the v5.0 schedule table:
+ * KLIP submits INBOUND instructions for BONTANG, so every JPS actual describes the DISCHARGE port. From the v5.4
+ * `schedule`, with ATC chosen by the business:
  *
- *   ta  Time of Arrival (operator arrival log)       -> ATA at Discharge Port
- *   tb  Time of Berthing, actual (berthing log)       -> ATB at Discharge Port
- *   tc  Operations completed (sign-off approval)      -> ATC Discharge
+ *   ta                  Time of Arrival (operator arrival log)            -> ATA at DP        (partner ATA)
+ *   tb                  Time of Berthing, actual (berthing log)           -> ATB              (partner ATB)
+ *   cargo_ops_start_at  Cargo Operations, Entry 1 start        (v5.4)    -> ATS Discharge    (partner ATS)
+ *   tc                  Operations completed (sign-off approval)          -> ATC Discharge
  *
- * Deliberately NOT mapped:
- *   - Start Discharging: JPS has no such event, so that field stays SAP / KLIP only.
- *   - cast_off_at / sailed_at: departure FROM Bontang. KLIP has no discharge-side sailed field, and
- *     "Sailed from Loading Port" is the other end of the voyage - mapping it there would be wrong.
- *   - the estimates (eta, etb, etc): this is the ACTUALS badge. An estimate is not an actual.
+ * Two readings of this file changed with the move from v5.0 to v5.4:
+ *   - Start Discharging used to be unmapped ("JPS has no such event"); v5.4 added `cargo_ops_start_at`.
+ *   - ATC Discharge stays on `tc`, as it was. JPS's own alias table names `cast_off_at` as its "ATC", but KLIP's ATC
+ *     Discharge is the end of discharging, which is the sign-off, so the business keeps `tc`. `cast_off_at` and
+ *     `sailed_at` (the departure) are still stored in jps_shipping_instructions.schedule_* and feed nothing here.
+ *
+ * Still NOT mapped: the estimates (eta, etb, etc) - this is the ACTUALS lane.
+ *
+ * `overrideColumn` is where the value is kept for the readers (shipment_ata_overrides.jps_ata_discharge_*, see
+ * applyActuals.ts and sqlJpsAtaWhileOpen); `column` is JPS's own timestamp, which the modal's JPS reference reads.
  */
-export const JPS_SCHEDULE_ATA_FIELDS: ReadonlyArray<{ column: string; ataField: ShipmentAtaApiField }> = [
-  { column: 'schedule_ta', ataField: 'ata_vessel_arrive_at_discharge_port' },
-  { column: 'schedule_tb', ataField: 'ata_vessel_berthed_at_discharge_port' },
-  { column: 'schedule_tc', ataField: 'ata_vessel_complete_discharge' },
+export const JPS_SCHEDULE_ATA_FIELDS: ReadonlyArray<{
+  /** Key of the `schedule` object in the JPS response. */
+  scheduleKey: 'ta' | 'tb' | 'cargo_ops_start_at' | 'tc';
+  /** jps_shipping_instructions column holding JPS's timestamp. */
+  column: string;
+  ataField: ShipmentAtaApiField;
+  /** shipment_ata_overrides column holding the WIB date the readers take first. */
+  overrideColumn:
+    | 'jps_ata_discharge_arrival'
+    | 'jps_ata_discharge_berthed'
+    | 'jps_ata_discharge_start'
+    | 'jps_ata_discharge_complete';
+  /** KLIP's name for it, for logs and messages. */
+  klip: string;
+}> = [
+  { scheduleKey: 'ta', column: 'schedule_ta', ataField: 'ata_vessel_arrive_at_discharge_port', overrideColumn: 'jps_ata_discharge_arrival', klip: 'ATA at DP' },
+  { scheduleKey: 'tb', column: 'schedule_tb', ataField: 'ata_vessel_berthed_at_discharge_port', overrideColumn: 'jps_ata_discharge_berthed', klip: 'ATB' },
+  { scheduleKey: 'cargo_ops_start_at', column: 'schedule_cargo_ops_start_at', ataField: 'ata_vessel_start_discharging', overrideColumn: 'jps_ata_discharge_start', klip: 'ATS Discharge' },
+  { scheduleKey: 'tc', column: 'schedule_tc', ataField: 'ata_vessel_complete_discharge', overrideColumn: 'jps_ata_discharge_complete', klip: 'ATC Discharge' },
 ];
 
 /**
