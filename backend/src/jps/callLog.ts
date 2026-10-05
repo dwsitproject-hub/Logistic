@@ -51,6 +51,23 @@ export function stoKeyFromReference(reference: unknown): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * `POST /webhooks` answers with the endpoint's signing secret (whsec_...) exactly once, and `PATCH` with `rotate_secret`
+ * does the same. A history that kept that answer would keep the key that signs every delivery, so any property called
+ * `secret` is replaced before a body is stored. `secret_prefix` is not a secret and stays.
+ */
+export function maskWebhookSecrets<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => maskWebhookSecrets(item)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = key === 'secret' && typeof inner === 'string' ? '***' : maskWebhookSecrets(inner);
+    }
+    return out as T;
+  }
+  return value;
+}
+
 export async function recordJpsCall(record: JpsCallRecord): Promise<void> {
   await recordApiCall('jps', {
     kind: record.kind,
@@ -59,9 +76,9 @@ export async function recordJpsCall(record: JpsCallRecord): Promise<void> {
     subject: record.stoKey,
     reference: record.externalReference,
     requestParams: record.requestParams,
-    requestBody: record.requestBody,
+    requestBody: maskWebhookSecrets(record.requestBody),
     responseStatus: record.responseStatus,
-    responseBody: record.responseBody,
+    responseBody: maskWebhookSecrets(record.responseBody),
     ok: record.ok,
     errorCode: record.errorCode,
     errorMessage: record.errorMessage,

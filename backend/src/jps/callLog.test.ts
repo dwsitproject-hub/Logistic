@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boundJson, inferJpsCallKind, stoKeyFromReference } from './callLog';
+import { boundJson, inferJpsCallKind, maskWebhookSecrets, stoKeyFromReference } from './callLog';
 
 describe('boundJson', () => {
   it('stores a small body as it is and nothing as null', () => {
@@ -45,5 +45,26 @@ describe('stoKeyFromReference', () => {
   it('answers null for anything else', () => {
     expect(stoKeyFromReference('something else')).toBeNull();
     expect(stoKeyFromReference(undefined)).toBeNull();
+  });
+});
+
+// POST /webhooks answers with the signing secret once; the history must not keep it.
+describe('maskWebhookSecrets', () => {
+  it('replaces the secret JPS shows at registration, wherever it sits', () => {
+    const masked = maskWebhookSecrets({
+      success: true,
+      data: { id: 1, url: 'http://x', secret_prefix: 'whsec_a1b2c3d4', secret: 'whsec_a1b2c3d4e5f6', events: ['status.changed'] },
+    });
+    expect(JSON.stringify(masked)).not.toContain('e5f6');
+    expect(masked.data.secret).toBe('***');
+    // the prefix is how a person tells two endpoints apart, and is not the secret
+    expect(masked.data.secret_prefix).toBe('whsec_a1b2c3d4');
+    expect(masked.data.events).toEqual(['status.changed']);
+  });
+
+  it('reaches into arrays and leaves other values and non-objects alone', () => {
+    expect(maskWebhookSecrets({ list: [{ secret: 'a' }, { name: 'b' }] })).toEqual({ list: [{ secret: '***' }, { name: 'b' }] });
+    expect(maskWebhookSecrets(null)).toBeNull();
+    expect(maskWebhookSecrets('plain')).toBe('plain');
   });
 });
