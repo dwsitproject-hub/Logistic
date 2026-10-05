@@ -120,30 +120,13 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
       sortDir: q.sortDir || null,
     };
 
-    const includeSummary = String(q.includeSummary ?? 'true').toLowerCase() !== 'false';
-
     const { sql, countSql, values } = buildCommercialDocumentsListQuery(listParams);
-    const summaryQuery = includeSummary
-      ? buildCommercialDocumentsSummaryQuery({ dateFrom, dateTo })
-      : null;
-    const [rowsResult, countResult, summaryResult] = await Promise.all([
+    const [rowsResult, countResult] = await Promise.all([
       query(sql, values),
       query(countSql, values.slice(0, values.length - 2)),
-      summaryQuery
-        ? query(summaryQuery.sql, summaryQuery.values)
-        : Promise.resolve({ rows: [] as Record<string, unknown>[] }),
     ]);
 
     const total = Number(countResult.rows[0]?.total ?? 0);
-    const summaryRow = summaryResult.rows[0] ?? {};
-    const openCount = Number(summaryRow.open_contract_count ?? 0);
-
-    const buildCard = (checkedKey: string) => {
-      const checked = Number(summaryRow[checkedKey] ?? 0);
-      const pct = openCount > 0 ? Math.round((checked / openCount) * 100) : 0;
-      return { openCount, checkedCount: checked, checkedPct: pct, uncheckedPct: 100 - pct };
-    };
-
     return res.json({
       success: true,
       data: {
@@ -154,26 +137,55 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
           limit,
           totalPages: Math.max(1, Math.ceil(total / limit)),
         },
-        ...(includeSummary
-          ? {
-              summary: {
-                draft_contract: buildCard('checked_draft_contract'),
-                contract: buildCard('checked_contract'),
-                addendum_contract: buildCard('checked_addendum_contract'),
-                bea_cukai: buildCard('checked_bea_cukai'),
-                delivery_order: buildCard('checked_delivery_order'),
-                invoice_fp_dp: buildCard('checked_invoice_fp_dp'),
-                invoice_fp_payoff: buildCard('checked_invoice_fp_payoff'),
-                invoice_fp_full: buildCard('checked_invoice_fp_full'),
-              },
-            }
-          : {}),
         filters: { dateFrom, dateTo },
       },
     });
   } catch (err) {
     logger.error('getCommercialDocuments error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch commercial documents' } });
+  }
+};
+
+export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Response) => {
+  try {
+    const ytd = defaultYtdRange();
+    const q = req.query as Record<string, string | undefined>;
+    const dateFrom = q.dateFrom || ytd.dateFrom;
+    const dateTo = q.dateTo || ytd.dateTo;
+    const summaryQuery = buildCommercialDocumentsSummaryQuery({
+      dateFrom,
+      dateTo,
+      search: q.search || null,
+      incoterm: q.incoterm || null,
+      product: q.product || null,
+      supplier: q.supplier || null,
+      plant: parseQueryStringList(req.query.plant),
+    });
+    const result = await query(summaryQuery.sql, summaryQuery.values);
+    const row = result.rows[0] ?? {};
+    const totalCount = Number(row.total_contract_count ?? 0);
+
+    // Percentages are derived on the client from these two counts, to one decimal.
+    const card = (key: string) => ({ totalCount, uploadedCount: Number(row[key] ?? 0) });
+    return res.json({
+      success: true,
+      data: {
+        summary: {
+          draft_contract: card('uploaded_draft_contract'),
+          contract: card('uploaded_contract'),
+          addendum_contract: card('uploaded_addendum_contract'),
+          bea_cukai: card('uploaded_bea_cukai'),
+          delivery_order: card('uploaded_delivery_order'),
+          invoice_fp_dp: card('uploaded_invoice_fp_dp'),
+          invoice_fp_payoff: card('uploaded_invoice_fp_payoff'),
+          invoice_fp_full: card('uploaded_invoice_fp_full'),
+        },
+        filters: { dateFrom, dateTo },
+      },
+    });
+  } catch (err) {
+    logger.error('getCommercialDocumentsSummary error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch commercial documents summary' } });
   }
 };
 

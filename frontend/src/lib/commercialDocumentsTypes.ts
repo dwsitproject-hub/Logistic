@@ -22,9 +22,6 @@ export const COMMERCIAL_DOCUMENT_TYPES: CommercialDocumentType[] = [
 export const COMMERCIAL_DOCUMENTS_PAGE_PERMISSION = 'page.commercial_documents'
 export const COMMERCIAL_DOCUMENTS_DATA_PERMISSION = 'data.commercial_documents'
 
-/** Section 1 summary cards (Contract → Invoice + FP Full Receive). Set false to hide UI and skip summary SQL. */
-export const COMMERCIAL_DOCUMENTS_SHOW_SUMMARY_SECTION = false
-
 export const COMMERCIAL_DOCUMENT_LABELS: Record<CommercialDocumentType, string> = {
   draft_contract: 'Draft Contract',
   contract: 'Contract',
@@ -110,10 +107,10 @@ export type CommercialDocumentRow = {
 }
 
 export type CommercialDocSummaryCard = {
-  openCount: number
-  checkedCount: number
-  checkedPct: number
-  uncheckedPct: number
+  /** Contracts in the selected date range / filters (the same for every card). */
+  totalCount: number
+  /** Of those, contracts with at least one file of this document type uploaded. */
+  uploadedCount: number
 }
 
 export type CommercialDocumentsSummary = Record<CommercialDocumentType, CommercialDocSummaryCard>

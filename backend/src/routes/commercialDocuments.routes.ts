@@ -7,6 +7,7 @@ import {
   getCommercialDocumentFiles,
   getCommercialDocumentHistory,
   getCommercialDocuments,
+  getCommercialDocumentsSummary,
   uploadCommercialDocument,
   viewCommercialDocument,
 } from '../controllers/commercialDocuments.controller';
@@ -20,6 +21,7 @@ import {
 const router = express.Router();
 
 router.get('/', authenticateToken, getCommercialDocuments);
+router.get('/summary', authenticateToken, getCommercialDocumentsSummary);
 router.get('/history/:poNumber', authenticateToken, getCommercialDocumentHistory);
 router.get('/files/:poNumber', authenticateToken, getCommercialDocumentFiles);
 router.post('/upload', authenticateToken, commercialDocumentUpload.single('file'), uploadCommercialDocument);

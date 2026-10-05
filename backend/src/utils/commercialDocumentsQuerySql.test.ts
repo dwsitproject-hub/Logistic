@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCommercialDocumentsBaseCte,
   buildCommercialDocumentsListQuery,
+  buildCommercialDocumentsSummaryQuery,
 } from './commercialDocumentsQuerySql';
 
 describe('commercialDocumentsQuerySql Region/Site', () => {
@@ -54,5 +55,44 @@ describe('commercialDocumentsQuerySql Region/Site', () => {
     expect(cte).toContain('AS doc_draft_contract');
     expect(cte).toContain('AS doc_bea_cukai');
     expect(cte).toContain('AS doc_delivery_order');
+  });
+});
+
+describe('commercialDocumentsQuerySql summary cards', () => {
+  const scope = { dateFrom: '2026-01-01', dateTo: '2026-10-05', product: 'CPO', plant: ['BONTANG'] };
+
+  it('counts every document type in one pass over all contracts in scope (not only open)', () => {
+    const { sql } = buildCommercialDocumentsSummaryQuery(scope);
+    expect(sql).toContain('COUNT(*)::int AS total_contract_count');
+    for (const key of [
+      'draft_contract',
+      'contract',
+      'addendum_contract',
+      'bea_cukai',
+      'delivery_order',
+      'invoice_fp_dp',
+      'invoice_fp_payoff',
+      'invoice_fp_full',
+    ]) {
+      expect(sql).toContain(`FILTER (WHERE e.doc_${key})::int AS uploaded_${key}`);
+    }
+    expect(sql).not.toContain('is_open = true');
+  });
+
+  it('uses the same scope filters and bind values as the table, so a card number equals its table total', () => {
+    const summary = buildCommercialDocumentsSummaryQuery(scope);
+    const list = buildCommercialDocumentsListQuery({ ...scope, page: 1, limit: 50 });
+    expect(summary.values).toEqual(list.values.slice(0, list.values.length - 2));
+  });
+
+  it('table click-through (document type + status) filters on the flag without forcing open', () => {
+    const { sql } = buildCommercialDocumentsListQuery({
+      documentType: 'contract',
+      documentStatus: 'checked',
+      page: 1,
+      limit: 50,
+    });
+    expect(sql).toContain('e.doc_contract = true');
+    expect(sql).not.toContain('e.is_open = true');
   });
 });

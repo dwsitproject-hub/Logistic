@@ -10,7 +10,7 @@ import {
   usePermissions,
 } from '@/components/PermissionsContext'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateClientCacheByPathPrefix } from '@/lib/clientDataCache'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -50,6 +50,7 @@ import { filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScop
 import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
+import { CommercialDocumentsSummaryCards } from '@/components/commercial-documents/CommercialDocumentsSummaryCards'
 import { DocumentCheckingModal } from '@/components/commercial-documents/DocumentCheckingModal'
 import { TandaTerimaDownloadModal } from '@/components/commercial-documents/TandaTerimaDownloadModal'
 import {
@@ -91,10 +92,10 @@ import {
   COMMERCIAL_DOCUMENT_TYPES,
   COMMERCIAL_DOCUMENTS_DATA_PERMISSION,
   COMMERCIAL_DOCUMENTS_PAGE_PERMISSION,
-  COMMERCIAL_DOCUMENTS_SHOW_SUMMARY_SECTION,
   defaultCommercialDocsYtdRange,
   type CommercialDocumentRow,
   type CommercialDocumentType,
+  type CommercialDocumentsSummary,
 } from '@/lib/commercialDocumentsTypes'
 
 const VISIBLE_COLUMNS_KEY = 'commercial-documents.visibleColumns.v3'
@@ -137,6 +138,8 @@ function CommercialDocumentsPageContent() {
   const [loading, setLoading] = useState(true)
   const [fetching, setFetching] = useState(false)
   const [totalRows, setTotalRows] = useState(0)
+  const [summary, setSummary] = useState<CommercialDocumentsSummary | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(true)
   const [totalPages, setTotalPages] = useState(1)
   const [currentPage, setCurrentPage] = useState(1)
 
@@ -259,7 +262,6 @@ function CommercialDocumentsPageContent() {
       params.set('sortDir', sortDir)
       params.set('dateFrom', dateFrom)
       params.set('dateTo', dateTo)
-      params.set('includeSummary', COMMERCIAL_DOCUMENTS_SHOW_SUMMARY_SECTION ? 'true' : 'false')
       if (debouncedSearch) params.set('search', debouncedSearch)
       if (documentTypeFilter) params.set('documentType', documentTypeFilter)
       if (documentStatusFilter) params.set('documentStatus', documentStatusFilter)
@@ -340,6 +342,65 @@ function CommercialDocumentsPageContent() {
 
     void fetchData()
   }, [filterSignature, currentPage, fetchData, perms.loaded, canViewPage])
+
+  /**
+   * The cards count every document type for the contracts in scope, so they follow the scope filters
+   * (date, search, incoterm, product, supplier, region/plant) but not the document type/status
+   * selection, the page number or the sort - clicking a card must not change its own number.
+   */
+  const summaryScopeSignature = useMemo(
+    () =>
+      JSON.stringify({
+        dateFrom,
+        dateTo,
+        debouncedSearch,
+        selectedIncoterms,
+        selectedProducts,
+        selectedSuppliers,
+        selectedPlants,
+      }),
+    [dateFrom, dateTo, debouncedSearch, selectedIncoterms, selectedProducts, selectedSuppliers, selectedPlants],
+  )
+
+  const fetchSummary = useCallback(async () => {
+    setSummaryLoading(true)
+    try {
+      const params = new URLSearchParams()
+      params.set('dateFrom', dateFrom)
+      params.set('dateTo', dateTo)
+      if (debouncedSearch) params.set('search', debouncedSearch)
+      if (selectedIncoterms.length === 1) params.set('incoterm', selectedIncoterms[0])
+      if (selectedProducts.length === 1) params.set('product', selectedProducts[0])
+      if (selectedSuppliers.length === 1) params.set('supplier', selectedSuppliers[0])
+      selectedPlants.forEach((p) => params.append('plant', p))
+
+      const url = `/commercial-documents/summary?${params.toString()}`
+      const cacheKey = buildCacheKey('GET', url)
+      const { data } = await cachedGet(cacheKey, (signal) => api.get(url, { signal }).then((r) => r.data))
+      setSummary((data?.data?.summary as CommercialDocumentsSummary | undefined) ?? null)
+    } catch {
+      setSummary(null)
+    } finally {
+      setSummaryLoading(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summaryScopeSignature])
+
+  useEffect(() => {
+    if (!perms.loaded || !canViewPage) return
+    void fetchSummary()
+  }, [fetchSummary, perms.loaded, canViewPage])
+
+  const onSummaryCardSelect = (type: CommercialDocumentType) => {
+    if (documentTypeFilter === type && documentStatusFilter === 'checked') {
+      setDocumentTypeFilter('')
+      setDocumentStatusFilter('')
+    } else {
+      setDocumentTypeFilter(type)
+      setDocumentStatusFilter('checked')
+    }
+    setCurrentPage(1)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -648,6 +709,13 @@ function CommercialDocumentsPageContent() {
           />
         </div>
       </ListFilterPanel>
+
+      <CommercialDocumentsSummaryCards
+        summary={summary}
+        loading={summaryLoading}
+        activeType={documentStatusFilter === 'checked' ? documentTypeFilter : ''}
+        onSelect={onSummaryCardSelect}
+      />
 
       {/* Section 3 */}
       <Card>
@@ -1032,7 +1100,12 @@ function CommercialDocumentsPageContent() {
         row={modalRow}
         canModifyDocuments={canModifyDocuments}
         onClose={() => setModalRow(null)}
-        onSaved={() => void fetchData()}
+        onSaved={() => {
+          // Uploads change both the rows and the card counts; drop the cached responses first.
+          invalidateClientCacheByPathPrefix('/commercial-documents')
+          void fetchData()
+          void fetchSummary()
+        }}
       />
     </div>
     </StitchFields>

@@ -205,15 +205,17 @@ function docTypeCheckedColumn(documentType: string): string | null {
   return map[documentType] ?? null;
 }
 
-export function buildCommercialDocumentsListQuery(params: CommercialDocumentsListParams): {
-  sql: string;
-  countSql: string;
-  values: unknown[];
-} {
-  const page = Math.max(1, Number(params.page) || 1);
-  const limit = Math.min(200, Math.max(1, Number(params.limit) || 50));
-  const offset = (page - 1) * limit;
+/**
+ * The WHERE conditions shared by the contract table and the summary cards, so a card's number is the
+ * number of rows the table shows after that card is clicked. Document type/status are NOT here: the
+ * cards count every type at once, the table narrows to one.
+ */
+export type CommercialDocumentsScopeParams = Pick<
+  CommercialDocumentsListParams,
+  'dateFrom' | 'dateTo' | 'search' | 'incoterm' | 'product' | 'supplier' | 'plant'
+>;
 
+function buildScopeWhere(params: CommercialDocumentsScopeParams): { where: string[]; values: unknown[]; nextIndex: number } {
   const values: unknown[] = [];
   let idx = 1;
   const where: string[] = ['1=1'];
@@ -257,8 +259,23 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
     values.push(...regionSiteFilter.params);
     idx = regionSiteFilter.nextIndex;
   }
+  return { where, values, nextIndex: idx };
+}
+
+export function buildCommercialDocumentsListQuery(params: CommercialDocumentsListParams): {
+  sql: string;
+  countSql: string;
+  values: unknown[];
+} {
+  const page = Math.max(1, Number(params.page) || 1);
+  const limit = Math.min(200, Math.max(1, Number(params.limit) || 50));
+  const offset = (page - 1) * limit;
+
+  const scope = buildScopeWhere(params);
+  const values = scope.values;
+  const where = scope.where;
+  let idx = scope.nextIndex;
   if (params.documentType && params.documentStatus) {
-    where.push('e.is_open = true');
     const col = docTypeCheckedColumn(params.documentType);
     if (col) {
       where.push(params.documentStatus === 'checked' ? `e.${col} = true` : `e.${col} = false`);
@@ -287,36 +304,26 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
   return { sql, countSql, values };
 }
 
-export function buildCommercialDocumentsSummaryQuery(params: {
-  dateFrom?: string | null;
-  dateTo?: string | null;
-}): { sql: string; values: unknown[] } {
-  const values: unknown[] = [];
-  let idx = 1;
-  const where: string[] = ['e.is_open = true'];
-  if (params.dateFrom) {
-    where.push(`e.contract_date >= $${idx++}::date`);
-    values.push(params.dateFrom);
-  }
-  if (params.dateTo) {
-    where.push(`e.contract_date <= $${idx++}::date`);
-    values.push(params.dateTo);
-  }
-
+export function buildCommercialDocumentsSummaryQuery(params: CommercialDocumentsScopeParams): {
+  sql: string;
+  values: unknown[];
+} {
+  const scope = buildScopeWhere(params);
+  const count = (flag: string) => `COUNT(*) FILTER (WHERE e.${flag})::int`;
   const sql = `
     ${buildCommercialDocumentsBaseCte()}
     SELECT
-      COUNT(*) FILTER (WHERE e.is_open)::int AS open_contract_count,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_draft_contract)::int AS checked_draft_contract,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_contract)::int AS checked_contract,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_addendum_contract)::int AS checked_addendum_contract,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_bea_cukai)::int AS checked_bea_cukai,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_delivery_order)::int AS checked_delivery_order,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_fp_dp)::int AS checked_invoice_fp_dp,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_fp_payoff)::int AS checked_invoice_fp_payoff,
-      COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_fp_full)::int AS checked_invoice_fp_full
+      COUNT(*)::int AS total_contract_count,
+      ${count('doc_draft_contract')} AS uploaded_draft_contract,
+      ${count('doc_contract')} AS uploaded_contract,
+      ${count('doc_addendum_contract')} AS uploaded_addendum_contract,
+      ${count('doc_bea_cukai')} AS uploaded_bea_cukai,
+      ${count('doc_delivery_order')} AS uploaded_delivery_order,
+      ${count('doc_invoice_fp_dp')} AS uploaded_invoice_fp_dp,
+      ${count('doc_invoice_fp_payoff')} AS uploaded_invoice_fp_payoff,
+      ${count('doc_invoice_fp_full')} AS uploaded_invoice_fp_full
     FROM enriched e
-    WHERE ${where.join(' AND ')}
+    WHERE ${scope.where.join(' AND ')}
   `;
-  return { sql, values };
+  return { sql, values: scope.values };
 }
