@@ -402,6 +402,54 @@ describe('truckingActualsTemplate', () => {
     expect(sheet.G2?.v).toBe('Planned')
   })
 
+  it('adds a TOTAL row of OS Qty and Plan Qty under the data, and the upload parser ignores it', async () => {
+    const rows = [
+      {
+        contract_ext_no: 'EXT-A',
+        po_number: 'PO-A',
+        supplier: 'Sup A',
+        group_name: 'G1',
+        source_type: '3rd Party',
+        contract_date: '2026-05-20',
+        outstanding_quantity: 100000,
+        templateKind: 'planned' as const,
+        daily_deliverables: [
+          { date: REF_TODAY, quantity_delivered: 25000 },
+          { date: shiftIsoDate(REF_TODAY, 1), quantity_delivered: 15000 },
+        ],
+      },
+      {
+        contract_ext_no: 'EXT-B',
+        po_number: 'PO-B',
+        supplier: 'Sup B',
+        group_name: 'G1',
+        source_type: '3rd Party',
+        contract_date: '2026-05-21',
+        outstanding_quantity: 205780, // 205.78 MT -> 206 in the sheet
+        templateKind: 'unplanned' as const,
+      },
+    ]
+    const blob = buildTruckingActualsTemplateXlsxBlob(rows, REF_TODAY)
+    const wb = XLSX.read(await blob.arrayBuffer(), { type: 'array', cellFormula: true })
+    const sheet = wb.Sheets[wb.SheetNames[0]!]
+
+    // two data rows (2, 3), one blank row (4), TOTAL on row 5
+    expect(sheet.A5?.v).toBe('TOTAL')
+    expect(sheet.H5?.f).toBe('SUM(H2:H3)')
+    expect(sheet.H5?.v).toBe(100 + 206)
+    expect(sheet.I5?.f).toBe('SUM(I2:I3)')
+    expect(sheet.I5?.v).toBe(40)
+    expect(sheet.A4).toBeUndefined()
+    expect(sheet['!ref']).toMatch(/5$/)
+    // nothing in the date columns of the TOTAL row
+    expect(sheet.J5).toBeUndefined()
+
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true }) as unknown[][]
+    const parsed = parseTruckingWidePlanningTemplateMatrix(matrix.filter((r) => r.some((c) => String(c) !== '')))
+    expect(parsed.rowParseFailures).toEqual([])
+    expect(parsed.rows.map((r) => r.po_number)).toEqual(['PO-A'])
+  })
+
   it('includes Status before OS Qty and parses both Status-present and legacy templates', () => {
     const matrix = buildActualsTemplateMatrix(
       [

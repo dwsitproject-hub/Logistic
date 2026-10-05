@@ -587,6 +587,67 @@ function applyUnplannedPlanQtyFormulas(ws: XLSX.WorkSheet, matrix: string[][]): 
   }
 }
 
+export const TEMPLATE_TOTAL_ROW_LABEL = 'TOTAL'
+
+/**
+ * Appends a TOTAL row under the wide planning template: a live SUM of OS Qty (MT) and Plan Qty (MT).
+ *
+ * It sits one blank row below the data so Excel's sort/filter and Ctrl+A leave it alone, and it
+ * fills only the label, OS Qty and Plan Qty cells. The date columns stay empty on purpose: the
+ * upload parser skips a row with no Contract Ext No / PO and no date quantity, but it would reject
+ * the TOTAL row as "Contract Ext No or PO is required" if a daily sum sat in a date column.
+ *
+ * Only the XLSX export gets it. The CSV and the failed-rows file are built from the matrix, which
+ * stays data-only, so the upload and per-row Plan Qty formulas never see this row.
+ */
+function appendWideTemplateTotalRow(ws: XLSX.WorkSheet, matrix: string[][]): void {
+  if (matrix.length < 2) return
+  const header = matrix[0] ?? []
+  const isWideMetadata =
+    header.length >= UNPLANNED_TEMPLATE_METADATA_HEADERS.length &&
+    header[0]?.trim().toLowerCase() === 'group'
+  if (!isWideMetadata) return
+
+  const lastDateColIdx = resolveWideTemplateLastDateColIdx(header)
+  const osQtyColIdx = UNPLANNED_TEMPLATE_PLAN_QTY_COL_INDEX - 1
+  const planQtyColIdx = UNPLANNED_TEMPLATE_PLAN_QTY_COL_INDEX
+  const lastDataRow = matrix.length - 1 // 0-based row index of the last data row
+  const totalRow = lastDataRow + 2 // one blank row in between
+
+  let osSum = 0
+  let planSum = 0
+  for (let r = 1; r <= lastDataRow; r += 1) {
+    const row = matrix[r] ?? []
+    const os = parseTemplateQtyMtCell(row[osQtyColIdx])
+    if (os != null) osSum += Math.round(os)
+    for (let c = UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX; c <= lastDateColIdx; c += 1) {
+      const qtyMt = parseTemplateQtyMtCell(row[c])
+      if (qtyMt != null) planSum += qtyMt
+    }
+  }
+
+  const sumFormula = (colIdx: number) => {
+    const col = XLSX.utils.encode_col(colIdx)
+    return `SUM(${col}2:${col}${lastDataRow + 1})`
+  }
+  ws[XLSX.utils.encode_cell({ r: totalRow, c: 0 })] = { t: 's', v: TEMPLATE_TOTAL_ROW_LABEL }
+  ws[XLSX.utils.encode_cell({ r: totalRow, c: osQtyColIdx })] = {
+    f: sumFormula(osQtyColIdx),
+    t: 'n',
+    v: osSum,
+    z: '0',
+  }
+  ws[XLSX.utils.encode_cell({ r: totalRow, c: planQtyColIdx })] = {
+    f: sumFormula(planQtyColIdx),
+    t: 'n',
+    v: planSum,
+  }
+
+  const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1')
+  range.e.r = Math.max(range.e.r, totalRow)
+  ws['!ref'] = XLSX.utils.encode_range(range)
+}
+
 export function buildTruckingActualsTemplateXlsxBlob(
   rows: TruckingActualsTemplateRow[],
   referenceToday?: string,
@@ -596,6 +657,7 @@ export function buildTruckingActualsTemplateXlsxBlob(
   if (rows.some(isWidePlanningTemplateRow)) {
     applyWideTemplateNumericQtyCells(ws, matrix)
     applyUnplannedPlanQtyFormulas(ws, matrix)
+    appendWideTemplateTotalRow(ws, matrix)
   }
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Planning')

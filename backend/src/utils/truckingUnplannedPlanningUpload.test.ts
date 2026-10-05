@@ -73,6 +73,20 @@ describe('truckingUnplannedPlanningUpload', () => {
     expect(setEntries[1].qtyMt).toBe(20000);
   });
 
+  it('ignores the TOTAL row the template download appends (label, OS Qty and Plan Qty only)', () => {
+    const header = [
+      'Group', 'Supplier', 'Source', 'Contract Date', 'Contract Ext No', 'PO', 'Status',
+      'OS Qty (MT)', 'Plan Qty (MT)', '1-Jun-2026', '2-Jun-2026',
+    ];
+    const { rows, rowParseFailures } = parseUnplannedWidePlanningMatrix([
+      header,
+      ['G1', 'Sup A', '3rd Party', '1-May-2026', 'EXT-1', 'PO-1', 'Planned', 100, 30, 10, 20],
+      ['TOTAL', '', '', '', '', '', '', 100, 30, '', ''],
+    ]);
+    expect(rowParseFailures).toEqual([]);
+    expect(rows.map((r) => r.po_number)).toEqual(['PO-1']);
+  });
+
   it('parses blank date cells as clear candidates (qtyMt null)', () => {
     const { rows, rowParseFailures } = parseUnplannedWidePlanningMatrix([
       ['Contract Ext No', 'PO', '1-Jun-2026', '2-Jun-2026'],
