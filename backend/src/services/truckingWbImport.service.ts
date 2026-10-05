@@ -12,6 +12,7 @@ import {
   filterWbRekapUserFacingRowParseFailures,
   parseWbRekapWorkbook,
   resolveWbActualQtyKg,
+  wbClockSecondsToSqlTime,
   type WbRekapAggregatedRow,
   type WbRekapParseFailure,
   type WbRekapWorkbookSheet,
@@ -509,6 +510,9 @@ async function upsertDailyActualWithWbImport(
   quantityDeliveryKg: number,
   quantityReceiveKg: number,
   stoNumber = '',
+  /** The day's first weighbridge entry / last exit as 'HH:MM:SS'; null when the file has no time columns. */
+  firstTimeIn: string | null = null,
+  lastTimeOut: string | null = null,
 ): Promise<void> {
   // A given (operation, progress_date) holds EITHER one PO-level row (blank sto_number)
   // OR per-STO rows — never both, or every sum counts the same weighbridge day twice
@@ -543,15 +547,20 @@ async function upsertDailyActualWithWbImport(
        quantity_receive_kg,
        source,
        wb_import_id,
-       sto_number
+       sto_number,
+       first_time_in,
+       last_time_out
      )
-     VALUES ($1, $2::date, $3::numeric, $5::numeric, $6::numeric, 'wb_rekap', $4::uuid, $7)
+     VALUES ($1, $2::date, $3::numeric, $5::numeric, $6::numeric, 'wb_rekap', $4::uuid, $7, $8::time, $9::time)
      ON CONFLICT (trucking_operation_id, progress_date, sto_number) DO UPDATE SET
        quantity_kg = EXCLUDED.quantity_kg,
        quantity_delivery_kg = EXCLUDED.quantity_delivery_kg,
        quantity_receive_kg = EXCLUDED.quantity_receive_kg,
        source = EXCLUDED.source,
        wb_import_id = EXCLUDED.wb_import_id,
+       -- replaced with the quantities they belong to: a re-upload describes the whole day again
+       first_time_in = EXCLUDED.first_time_in,
+       last_time_out = EXCLUDED.last_time_out,
        updated_at = CURRENT_TIMESTAMP`,
     [
       truckingOperationId,
@@ -561,6 +570,8 @@ async function upsertDailyActualWithWbImport(
       quantityDeliveryKg,
       quantityReceiveKg,
       String(stoNumber ?? '').trim(),
+      firstTimeIn,
+      lastTimeOut,
     ],
   );
 }
@@ -729,6 +740,8 @@ async function applyResolvedRow(
     row.sumNettoPksKg,
     row.sumNettoEupKg,
     '',
+    row.firstTimeInSec != null ? wbClockSecondsToSqlTime(row.firstTimeInSec) : null,
+    row.lastTimeOutSec != null ? wbClockSecondsToSqlTime(row.lastTimeOutSec) : null,
   );
 
   if (qtyResult.softWarning) {

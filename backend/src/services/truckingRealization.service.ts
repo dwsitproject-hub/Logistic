@@ -95,6 +95,10 @@ export type TruckingDailyActualRow = {
   quantity_receive_kg?: number | null;
   /** Empty string = legacy PO-level row (no STO on WB). */
   sto_number?: string;
+  /** First weighbridge entry of the day, 'HH:MM'; null when the WB file had no time column. */
+  first_time_in?: string | null;
+  /** Last weighbridge exit of the day, 'HH:MM'; null when the WB file had no time column. */
+  last_time_out?: string | null;
 };
 
 /** Input row for upsert/replace — only effective quantity_kg is required. */
@@ -112,7 +116,9 @@ export async function listTruckingDailyActuals(
        quantity_kg::float8 AS quantity_kg,
        quantity_delivery_kg::float8 AS quantity_delivery_kg,
        quantity_receive_kg::float8 AS quantity_receive_kg,
-       COALESCE(NULLIF(TRIM(sto_number), ''), '') AS sto_number
+       COALESCE(NULLIF(TRIM(sto_number), ''), '') AS sto_number,
+       to_char(first_time_in, 'HH24:MI') AS first_time_in,
+       to_char(last_time_out, 'HH24:MI') AS last_time_out
      FROM trucking_daily_actuals
      WHERE trucking_operation_id = $1
      ORDER BY

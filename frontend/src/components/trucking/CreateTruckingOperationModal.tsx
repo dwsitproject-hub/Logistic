@@ -45,6 +45,7 @@ import {
   formatQtyKgAsMt,
   formatSapQtyMtOrDash,
   filterActualRowsForSto,
+  formatWbTimeRange,
   normalizeDailyActualRows,
   normalizePlanningDeliverableRows,
   normalizeStoActuals,
@@ -737,12 +738,24 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   </td>
                 </tr>
               ) : (
-                rows.map((row) => (
+                rows.map((row) => {
+                  const timeRange = formatWbTimeRange(row.time_in, row.time_out)
+                  return (
                   <tr
                     key={`${row.sto_number || '_'}::${row.date}`}
                     className="border-t border-gray-100"
                   >
-                    <td className="px-3 py-2 tabular-nums text-gray-800">{fmtIsoDate(row.date)}</td>
+                    <td className="px-3 py-2 tabular-nums text-gray-800 whitespace-nowrap">
+                      {fmtIsoDate(row.date)}
+                      {timeRange ? (
+                        <span
+                          className="ml-2 text-xs text-gray-500"
+                          title="First weighbridge entry - last exit of the day (from the WB upload)"
+                        >
+                          {timeRange}
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums text-gray-800">
                       {formatQtyKgAsMt(row.quantity_delivery_kg)}
                     </td>
@@ -752,7 +765,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         : formatQtyKgAsMt(row.quantity_receive_kg)}
                     </td>
                   </tr>
-                ))
+                  )
+                })
               )}
             </tbody>
             {rows.length > 0 && (

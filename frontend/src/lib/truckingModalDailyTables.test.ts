@@ -3,6 +3,7 @@ import {
   combineSapStoActuals,
   formatSapQtyMtOrDash,
   filterActualRowsForSto,
+  formatWbTimeRange,
   normalizeDailyActualRows,
   normalizePlanningDeliverableRows,
   normalizeStoActuals,
@@ -24,6 +25,30 @@ describe('truckingModalDailyTables', () => {
       { date: '2026-06-02', quantity_delivery_kg: 2000 },
     ])
     expect(sumPlanningDeliveryKg(rows)).toBe(3000)
+  })
+
+  it('formats the weighbridge window after the date as first entry - last exit', () => {
+    expect(formatWbTimeRange('09:00', '17:00')).toBe('09.00-17.00')
+    expect(formatWbTimeRange('9:05', '17:30:45')).toBe('09.05-17.30')
+    // one side missing keeps the dash where it belongs
+    expect(formatWbTimeRange('09:00', null)).toBe('09.00-')
+    expect(formatWbTimeRange(undefined, '17:00')).toBe('-17.00')
+    // neither: the caller shows the date alone
+    expect(formatWbTimeRange(null, null)).toBe('')
+    expect(formatWbTimeRange('', 'abc')).toBe('')
+  })
+
+  it('carries the weighbridge times onto the WB rows, and leaves them off rows without any', () => {
+    const rows = normalizeDailyActualRows([
+      { progress_date: '2026-09-05', quantity_delivery_kg: 5000, first_time_in: '09:00', last_time_out: '17:00' },
+      { progress_date: '2026-09-06', quantity_delivery_kg: 1000, first_time_in: null, last_time_out: null },
+      { progress_date: '2026-09-07', quantity_delivery_kg: 2000, first_time_in: '8:30' },
+    ])
+    expect(rows[0]).toMatchObject({ date: '2026-09-05', time_in: '09:00', time_out: '17:00' })
+    expect('time_in' in rows[1]).toBe(false)
+    expect('time_out' in rows[1]).toBe(false)
+    expect(rows[2]).toMatchObject({ time_in: '08:30' })
+    expect('time_out' in rows[2]).toBe(false)
   })
 
   it('normalizes WB actuals with dual qty and legacy quantity_kg fallback', () => {

@@ -79,7 +79,9 @@ async function mergeDailyActualsIntoKeeper(
        quantity_receive_kg,
        source,
        wb_import_id,
-       sto_number
+       sto_number,
+       first_time_in,
+       last_time_out
      )
      SELECT
        $1::uuid,
@@ -89,7 +91,9 @@ async function mergeDailyActualsIntoKeeper(
        da.quantity_receive_kg,
        da.source,
        da.wb_import_id,
-       COALESCE(NULLIF(TRIM(da.sto_number), ''), '')
+       COALESCE(NULLIF(TRIM(da.sto_number), ''), ''),
+       da.first_time_in,
+       da.last_time_out
      FROM trucking_daily_actuals da
      WHERE da.trucking_operation_id = $2::uuid
      ON CONFLICT (trucking_operation_id, progress_date, sto_number) DO UPDATE SET
@@ -106,7 +110,10 @@ async function mergeDailyActualsIntoKeeper(
          COALESCE(EXCLUDED.quantity_receive_kg, 0)
        ),
        source = COALESCE(EXCLUDED.source, trucking_daily_actuals.source),
-       wb_import_id = COALESCE(EXCLUDED.wb_import_id, trucking_daily_actuals.wb_import_id)`,
+       wb_import_id = COALESCE(EXCLUDED.wb_import_id, trucking_daily_actuals.wb_import_id),
+       -- the day's first entry / last exit across both operations (LEAST/GREATEST skip NULLs)
+       first_time_in = LEAST(trucking_daily_actuals.first_time_in, EXCLUDED.first_time_in),
+       last_time_out = GREATEST(trucking_daily_actuals.last_time_out, EXCLUDED.last_time_out)`,
     [keeperId, loserId],
   );
   return res.rowCount ?? 0;

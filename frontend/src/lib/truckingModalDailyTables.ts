@@ -11,6 +11,26 @@ export interface TruckingModalActualRow {
   quantity_receive_kg: number | null
   /** Empty = legacy PO-level WB row (pre multi-STO split). */
   sto_number: string
+  /** First weighbridge entry of the day, 'HH:MM'. Absent when the WB file had no time column. */
+  time_in?: string
+  /** Last weighbridge exit of the day, 'HH:MM'. Absent when the WB file had no time column. */
+  time_out?: string
+}
+
+/**
+ * The weighbridge window shown after the date, "09.00-17.00": first entry to last exit of the day.
+ * One side missing keeps the dash in its place ("09.00-"); neither gives an empty string so the
+ * caller shows the date alone.
+ */
+export function formatWbTimeRange(timeIn?: string | null, timeOut?: string | null): string {
+  const clean = (t?: string | null) => {
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(t ?? '').trim())
+    return m ? `${m[1].padStart(2, '0')}.${m[2]}` : ''
+  }
+  const a = clean(timeIn)
+  const b = clean(timeOut)
+  if (!a && !b) return ''
+  return `${a}-${b}`
 }
 
 export interface TruckingModalStoActual {
@@ -125,11 +145,20 @@ export function normalizeDailyActualRows(raw: unknown): TruckingModalActualRow[]
         receiveRaw == null || receiveRaw === ''
           ? null
           : Number(receiveRaw)
+      // 'HH:MM' from the API; anything else is not a time and is left off the row.
+      const asTime = (v: unknown): string | undefined => {
+        const m = /^(\d{1,2}):(\d{2})/.exec(String(v ?? '').trim())
+        return m ? `${m[1].padStart(2, '0')}:${m[2]}` : undefined
+      }
+      const timeIn = asTime(r.first_time_in ?? r.time_in)
+      const timeOut = asTime(r.last_time_out ?? r.time_out)
       return {
         date,
         quantity_delivery_kg: Number.isFinite(delivery) ? delivery : 0,
         quantity_receive_kg: receive != null && Number.isFinite(receive) ? receive : null,
         sto_number: String(r.sto_number ?? '').trim(),
+        ...(timeIn ? { time_in: timeIn } : {}),
+        ...(timeOut ? { time_out: timeOut } : {}),
       }
     })
     .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date))

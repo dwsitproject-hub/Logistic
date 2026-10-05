@@ -32,6 +32,10 @@ export type WbRekapTicketRow = {
   nettoPksKg: number;
   /** Qty Receive (Netto EUP / Netto EOP / Timbangan SPC Netto). */
   nettoEupKg: number;
+  /** Time the truck came onto the weighbridge, seconds since midnight; absent when the file has none. */
+  timeInSec?: number | null;
+  /** Time the truck left, seconds since midnight; absent when the file has none. */
+  timeOutSec?: number | null;
 };
 
 export type WbRekapAggregatedRow = {
@@ -48,6 +52,10 @@ export type WbRekapAggregatedRow = {
   stoNumber: string;
   /** Distinct STO values across tickets aggregated into this PO+date row. */
   stoNumbers: string[];
+  /** Earliest entry of the day's tickets, seconds since midnight; absent when no ticket had one. */
+  firstTimeInSec?: number;
+  /** Latest exit of the day's tickets, seconds since midnight; absent when no ticket had one. */
+  lastTimeOutSec?: number;
 };
 
 export type WbRekapParseFailure = {
@@ -170,6 +178,55 @@ function findColumnIndexByCandidates(headers: string[], candidates: string[]): n
     }
   }
   return -1;
+}
+
+const SECONDS_PER_DAY = 86_400;
+
+/**
+ * Seconds since midnight from a weighbridge clock-time cell, or null when it is empty / not a time.
+ *
+ * The files store the time as an Excel time (`h:mm:ss`, a fraction of a day), which the workbook
+ * reader turns into a Date on 1899-12-30. SheetJS builds that Date from LOCAL time, and the local
+ * offset in 1899 (Asia/Jakarta was +7:07:12) is not today's, so getHours() / getUTCHours() are off
+ * in any process that is not running in UTC. Measuring from the local midnight of the same epoch
+ * day cancels the offset, so the result is the same in every time zone.
+ *
+ * Text such as "13:23", "13.23" or "13.23.43" is accepted too (some sites type it by hand). A time
+ * of exactly 00:00:00 is read as "not filled": the empty cells of a formatted column come through
+ * as 0, and no truck is weighed at midnight to the second.
+ */
+export function parseWbClockTimeSeconds(raw: unknown): number | null {
+  let seconds: number | null = null;
+  if (raw instanceof Date) {
+    const ms = raw.getTime();
+    if (!Number.isFinite(ms)) return null;
+    seconds =
+      raw.getFullYear() < 1901
+        ? Math.round((ms - new Date(1899, 11, 30).getTime()) / 1000)
+        : raw.getHours() * 3600 + raw.getMinutes() * 60 + raw.getSeconds();
+  } else if (typeof raw === 'number') {
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    seconds = Math.round((raw - Math.floor(raw)) * SECONDS_PER_DAY);
+  } else if (typeof raw === 'string') {
+    const m = /^\s*(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?\s*$/.exec(raw);
+    if (!m) return null;
+    const h = Number(m[1]);
+    const min = Number(m[2]);
+    const s = m[3] ? Number(m[3]) : 0;
+    if (h > 23 || min > 59 || s > 59) return null;
+    seconds = h * 3600 + min * 60 + s;
+  }
+  if (seconds == null) return null;
+  const wrapped = ((seconds % SECONDS_PER_DAY) + SECONDS_PER_DAY) % SECONDS_PER_DAY;
+  return wrapped === 0 ? null : wrapped;
+}
+
+/** 'HH:MM:SS' for a Postgres TIME parameter. */
+export function wbClockSecondsToSqlTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
 }
 
 function parseQtyKg(raw: unknown): number | null {
@@ -314,8 +371,43 @@ type ResolvedWbColumns = {
   dateIdx: number;
   deliveryIdx: number;
   receiveIdx: number;
+  /** Weighbridge entry / exit time columns; -1 when the layout has none. */
+  timeInIdx: number;
+  timeOutIdx: number;
   dataStartRow: number;
 };
+
+/**
+ * Entry / exit time columns, which each site names differently:
+ *   Bontang (EUP/EOP)         Jam Masuk            / Jam Keluar
+ *   Kumai, Tj Pura            Jam 1st              / Jam 2nd     (first and second weighing)
+ *   Palembang, SPC, Tj Buton  Jam Datang Di EUP|RSB / Jam Keluar Dari EUP|RSB
+ * "Jam Pengiriman" / "Waktu Pengiriman Vendor" is when the VENDOR dispatched the truck, not a
+ * weighbridge time, so it is deliberately not matched. The label can sit on the header row or on
+ * either of the two rows below it (merged parent headers), hence the three rows searched.
+ */
+export function isWbTimeInHeader(h: string): boolean {
+  return h === 'jam masuk' || h.startsWith('jam datang') || h === 'jam 1st';
+}
+
+export function isWbTimeOutHeader(h: string): boolean {
+  return h === 'jam keluar' || h.startsWith('jam keluar ') || h === 'jam 2nd';
+}
+
+function resolveWbTimeColumns(
+  matrix: unknown[][],
+  headerIdx: number,
+): { timeInIdx: number; timeOutIdx: number } {
+  const rows = [0, 1, 2].map((offset) => (matrix[headerIdx + offset] ?? []).map(normalizeHeader));
+  const find = (predicate: (h: string) => boolean): number => {
+    for (const headers of rows) {
+      const idx = findColumnIndex(headers, predicate);
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+  return { timeInIdx: find(isWbTimeInHeader), timeOutIdx: find(isWbTimeOutHeader) };
+}
 
 function resolveWbColumns(matrix: unknown[][], headerIdx: number): ResolvedWbColumns | null {
   const headerRow = matrix[headerIdx] ?? [];
@@ -452,7 +544,15 @@ function resolveWbColumns(matrix: unknown[][], headerIdx: number): ResolvedWbCol
     dataStartRow += 1;
   }
 
-  return { poIdx, stoIdx, dateIdx, deliveryIdx, receiveIdx, dataStartRow };
+  return {
+    poIdx,
+    stoIdx,
+    dateIdx,
+    deliveryIdx,
+    receiveIdx,
+    ...resolveWbTimeColumns(matrix, headerIdx),
+    dataStartRow,
+  };
 }
 
 /**
@@ -576,6 +676,9 @@ export function parseWbRekapSheetMatrix(
 
     if (nettoPksKg <= 0 && nettoEupKg <= 0) continue;
 
+    const timeInSec = cols.timeInIdx >= 0 ? parseWbClockTimeSeconds(cells[cols.timeInIdx]) : null;
+    const timeOutSec = cols.timeOutIdx >= 0 ? parseWbClockTimeSeconds(cells[cols.timeOutIdx]) : null;
+
     tickets.push({
       sheetName,
       klipProduct,
@@ -586,6 +689,8 @@ export function parseWbRekapSheetMatrix(
       progressDateIso,
       nettoPksKg,
       nettoEupKg,
+      ...(timeInSec != null ? { timeInSec } : {}),
+      ...(timeOutSec != null ? { timeOutSec } : {}),
     });
   }
 
@@ -615,6 +720,19 @@ export function aggregateWbRekapTickets(tickets: WbRekapTicketRow[]): WbRekapAgg
       if (!existing.poNumber && ticket.poNumber) {
         existing.poNumber = ticket.poNumber;
       }
+      // First entry and last exit of the day across its tickets.
+      if (ticket.timeInSec != null) {
+        existing.firstTimeInSec =
+          existing.firstTimeInSec == null
+            ? ticket.timeInSec
+            : Math.min(existing.firstTimeInSec, ticket.timeInSec);
+      }
+      if (ticket.timeOutSec != null) {
+        existing.lastTimeOutSec =
+          existing.lastTimeOutSec == null
+            ? ticket.timeOutSec
+            : Math.max(existing.lastTimeOutSec, ticket.timeOutSec);
+      }
     } else {
       byKey.set(key, {
         poNumber: ticket.poNumber || ticket.stoNumber || '',
@@ -625,6 +743,8 @@ export function aggregateWbRekapTickets(tickets: WbRekapTicketRow[]): WbRekapAgg
         sheetNames: [ticket.sheetName],
         stoNumber: sto,
         stoNumbers: sto ? [sto] : [],
+        ...(ticket.timeInSec != null ? { firstTimeInSec: ticket.timeInSec } : {}),
+        ...(ticket.timeOutSec != null ? { lastTimeOutSec: ticket.timeOutSec } : {}),
       });
     }
   }
