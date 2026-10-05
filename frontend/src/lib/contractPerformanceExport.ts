@@ -1,18 +1,14 @@
 /**
  * Contract Performance "Download Table" — cell values must match the visible table,
  * and the sheet must include only columns the user set visible (same left-to-right order).
+ *
+ * Numbers are exported as numbers with the unit in the header ("Contract Qty (MT)"), so the file
+ * can be summed and counted; see exportNumbers.ts.
  */
 
-import {
-  formatLogCycleDaysCompact,
-  formatSignedCycleDaysCompact,
-} from '@/lib/cycleDaysDisplay'
 import { formatDateDMY } from '@/lib/dateFormat'
-import {
-  formatSapDisplayValue,
-  formatSapOutstandingQtyMtDisplay,
-  formatSapQtyMtDisplay,
-} from '@/lib/sapDisplayValue'
+import { exportHeaderWithUnit, exportNumberCell, kgToMtNumber } from '@/lib/exportNumbers'
+import { formatSapDisplayValue, formatSapQtyMtDisplay } from '@/lib/sapDisplayValue'
 
 /**
  * Rows arrive here as whatever the page holds, so the entry points still take `object` - a typed
@@ -58,6 +54,18 @@ export const CONTRACT_PERF_EXPORT_SIGNED_CYCLE_COLUMN_IDS = new Set([
   'dp_cycle_days',
 ])
 
+/** Unit shown in the export header of a numeric column; the cell itself is a bare number. */
+export const CONTRACT_PERF_EXPORT_UNIT_BY_COLUMN_ID: Record<string, string> = {
+  contract_qty: 'MT',
+  delivery_qty: 'MT',
+  received_qty: 'MT',
+  outstanding_qty_mt: 'MT',
+  trade_cycle_days: 'days',
+  cash_cycle_days: 'days',
+  dp_cycle_days: 'days',
+  log_cycle_days: 'days',
+}
+
 const QTY_ROW_FIELD_BY_COLUMN_ID: Record<string, string> = {
   contract_qty: 'quantity_ordered',
   delivery_qty: 'quantity_delivery',
@@ -86,10 +94,10 @@ export function formatContractViewTableReceiveQtyMt(value: unknown): string {
   return formatSapQtyMtDisplay(parseContractPerfKg(value) ?? 0)
 }
 
-function parseOptionalNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null
-  const n = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(n) ? n : null
+/** The table shows the magnitude only (late/ahead is colour), so the export does the same. */
+function cycleDaysMagnitudeCell(value: unknown): number | '' {
+  const n = exportNumberCell(value)
+  return n === '' ? '' : Math.abs(n)
 }
 
 function dashIfEmpty(value: string | number | null | undefined): string | number {
@@ -123,22 +131,18 @@ export function resolveContractPerfExportCell(
     return raw ? formatDateDMY(String(raw)) : '-'
   }
   if (CONTRACT_PERF_EXPORT_QTY_MT_COLUMN_IDS.has(id)) {
-    const field = QTY_ROW_FIELD_BY_COLUMN_ID[id]
-    if (id === 'received_qty') {
-      return formatContractViewTableReceiveQtyMt(rec[field])
-    }
-    return formatSapQtyMtDisplay(rec[field] as number | string | null | undefined)
+    // Missing qty is 0, as in the table (received included).
+    return kgToMtNumber(rec[QTY_ROW_FIELD_BY_COLUMN_ID[id]])
   }
   if (id === 'outstanding_qty_mt') {
-    return formatSapOutstandingQtyMtDisplay(
-      rec.outstanding_quantity as number | string | null | undefined,
-    )
+    // Negative = over-delivered (the table shows it as "+N MT"), so the column nets out when summed.
+    return kgToMtNumber(rec.outstanding_quantity)
   }
   if (id === 'log_cycle_days') {
-    return formatLogCycleDaysCompact(parseOptionalNumber(rec.log_cycle_days))
+    return cycleDaysMagnitudeCell(rec.log_cycle_days)
   }
   if (CONTRACT_PERF_EXPORT_SIGNED_CYCLE_COLUMN_IDS.has(id)) {
-    return formatSignedCycleDaysCompact(parseOptionalNumber(rec[id]))
+    return cycleDaysMagnitudeCell(rec[id])
   }
 
   return dashIfEmpty(column.getSortValue ? column.getSortValue(rec) : '')
@@ -150,7 +154,9 @@ export function buildContractPerfExportMatrix(
   rows: object[],
   formatters: ContractPerfExportFormatters,
 ): (string | number)[][] {
-  const header = visibleColumns.map((col) => col.label)
+  const header = visibleColumns.map((col) =>
+    exportHeaderWithUnit(col.label, CONTRACT_PERF_EXPORT_UNIT_BY_COLUMN_ID[col.id]),
+  )
   const body = rows.map((row) =>
     visibleColumns.map((col) => resolveContractPerfExportCell(col, row, formatters)),
   )

@@ -138,6 +138,28 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
     expect(parsedBad.issues[0]?.reason).toMatch(/Qty Delivery/i);
   });
 
+  it('writes Contract Qty (MT) and OS Qty (MT) as numeric cells so the columns can be summed', () => {
+    const buf = buildShipmentGroupingTemplateXlsxBuffer(
+      [
+        {
+          id: '1', supplier: 'A', plant_site: 'BONTANG', product: 'CPO', incoterm: 'CIF', buyer: 'KPN',
+          po_number: '1001', contract_date: '2026-03-15', contract_qty_kg: '2500000.00', outstanding_qty_kg: 1200500,
+        },
+      ],
+      { vesselNames: [] },
+    );
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const sheet = wb.Sheets[SHIPMENT_GROUPING_SHEET_NAME]!;
+    const contractCol = SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Contract Qty (MT)');
+    const osCol = SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('OS Qty (MT)');
+    const contractCell = sheet[XLSX.utils.encode_cell({ r: 2, c: contractCol })];
+    const osCell = sheet[XLSX.utils.encode_cell({ r: 2, c: osCol })];
+    expect(contractCell?.t).toBe('n');
+    expect(contractCell?.v).toBe(2500);
+    expect(osCell?.t).toBe('n');
+    expect(osCell?.v).toBe(1200.5);
+  });
+
   it('embeds Master Vessel sheet and named-range list validation on the Vessel column', () => {
     const buf = buildShipmentGroupingTemplateXlsxBuffer([], { vesselNames: ['ALPHA STAR', 'BETA'] });
     const wb = XLSX.read(buf, { type: 'buffer' });

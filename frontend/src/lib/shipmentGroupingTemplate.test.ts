@@ -116,13 +116,13 @@ describe('shipmentGroupingTemplate', () => {
       },
     ])
     expect(matrix[1]).toEqual([...SHIPMENT_GROUPING_TEMPLATE_HEADERS])
-    const data = matrix[2] as string[]
+    const data = matrix[2] as (string | number)[]
     expect(data[0]).toBe('')
     expect(data[1]).toBe('')
     expect(data[7]).toBe('1001')
-    expect(data[9]).toBe(formatGroupingQtyMtFromKg(2500000))
-    expect(data[9]).toBe('2500')
-    expect(data[10]).toBe('1200.5')
+    // Contract Qty (MT) / OS Qty (MT) are numbers so they can be summed
+    expect(data[9]).toBe(2500)
+    expect(data[10]).toBe(1200.5)
     expect(data[11]).toBe('Unplanned')
     expect(data[12]).toBe('')
     expect(data[13]).toBe('')

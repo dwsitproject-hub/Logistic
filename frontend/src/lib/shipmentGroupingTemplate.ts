@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx'
+import { kgToMtCell } from '@/lib/exportNumbers'
 
 /**
  * Shipments Unplanned → Preplanned or Planned grouping Excel.
@@ -195,8 +196,9 @@ export function buildShipmentGroupingTemplateMatrix(
       cellText(row.buyer),
       cellText(row.poNumber),
       sliceIsoDate(row.contractDate),
-      formatGroupingQtyMtFromKg(row.contractQtyKg),
-      formatGroupingQtyMtFromKg(row.outstandingQtyKg),
+      // numbers, not text, so the columns can be summed in Excel; the unit is in the header
+      kgToMtCell(row.contractQtyKg),
+      kgToMtCell(row.outstandingQtyKg),
       'Unplanned',
       '',
       '',

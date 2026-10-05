@@ -1,5 +1,8 @@
 /**
  * Shipments View Table "Download Table" — visible columns only, values match the table.
+ *
+ * Numbers are exported as numbers with the unit in the header ("Contract Qty (MT)"), so the file
+ * can be summed and counted; see exportNumbers.ts.
  */
 
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
@@ -15,19 +18,14 @@ import {
 } from '@/lib/shipmentQuantityUnits'
 import {
   formatOperationalTableTextDisplayForColumn,
-  formatSapDisplayNumber,
-  formatSapOutstandingQtyMtDisplay,
-  formatSapQtyMtDisplay,
   formatVesselTableDisplay,
 } from '@/lib/sapDisplayValue'
-import { formatSignedCycleDaysCompact } from '@/lib/cycleDaysDisplay'
+import { exportHeaderWithUnit, exportNumberCell, kgToMtNumber } from '@/lib/exportNumbers'
 
 export interface ShipmentViewTableExportColumn {
   id: string
   label: string
 }
-
-const QTY_MT_OPTS = { maxFractionDigits: 0 } as const
 
 export const SHIPMENT_EXPORT_DATE_COLUMN_IDS = new Set([
   'contract_date',
@@ -60,12 +58,28 @@ const DATE_FIELD_BY_COLUMN_ID: Record<string, string> = {
   delivery_end: 'delivery_end_date',
 }
 
-const NUMBER_SUFFIX_BY_COLUMN_ID: Record<string, string> = {
-  estimated_nautical_miles: ' NM',
-  vessel_draft: ' m',
-  vessel_loa: ' m',
-  vessel_capacity: ' Kg',
-  average_vessel_speed: ' knots',
+/** Columns whose table cell is "<number> <unit>"; 0 means "not filled" there, so it exports blank. */
+const NUMBER_UNIT_BY_COLUMN_ID: Record<string, string> = {
+  estimated_nautical_miles: 'NM',
+  vessel_draft: 'm',
+  vessel_loa: 'm',
+  vessel_capacity: 'Kg',
+  average_vessel_speed: 'knots',
+}
+
+/** Unit shown in the export header of a numeric column; the cell itself is a bare number. */
+export const SHIPMENT_EXPORT_UNIT_BY_COLUMN_ID: Record<string, string> = {
+  contract_qty: 'MT',
+  sto_quantity: 'MT',
+  quantity_delivered: 'MT',
+  quantity_receive: 'MT',
+  outstanding_quantity: 'MT',
+  outstanding_qty_planning: 'MT',
+  sfal_qty: 'MT',
+  sfbd_qty: 'MT',
+  trade_cycle_days: 'days',
+  gain_loss_percentage: '%',
+  ...NUMBER_UNIT_BY_COLUMN_ID,
 }
 
 function asRecord(row: object): Record<string, unknown> {
@@ -137,51 +151,44 @@ export function resolveShipmentViewTableExportCell(
     return formatOperationalTableTextDisplayForColumn(id, rec.po_numbers ?? rec.po_number)
   }
   if (id === 'freight_budget') {
-    return rec.vessel_oa_budget == null || rec.vessel_oa_budget === ''
-      ? '-'
-      : formatSapDisplayNumber(rec.vessel_oa_budget as number | string | null)
+    return exportNumberCell(rec.vessel_oa_budget)
   }
+  // Quantities: exact MT as a number; a missing value is 0, as in the table. Outstanding keeps its
+  // sign (negative = over-delivered, shown as "+N MT" on screen) so the column nets out when summed.
   if (id === 'contract_qty') {
-    return formatSapQtyMtDisplay(rec.contract_qty as number | string | null, QTY_MT_OPTS)
+    return kgToMtNumber(rec.contract_qty)
   }
   if (id === 'sto_quantity') {
-    return formatSapQtyMtDisplay(resolveShipmentListStoKg(rec), QTY_MT_OPTS)
+    return kgToMtNumber(resolveShipmentListStoKg(rec))
   }
   if (id === 'quantity_delivered') {
-    return formatSapQtyMtDisplay(shipmentListDeliveredKgForViewTable(rec), QTY_MT_OPTS)
+    return kgToMtNumber(shipmentListDeliveredKgForViewTable(rec))
   }
   if (id === 'quantity_receive') {
-    return formatSapQtyMtDisplay(shipmentListReceiveKgForViewTable(rec), QTY_MT_OPTS)
+    return kgToMtNumber(shipmentListReceiveKgForViewTable(rec))
   }
   if (id === 'outstanding_quantity') {
-    return formatSapOutstandingQtyMtDisplay(shipmentListOutstandingKgForViewTable(rec), QTY_MT_OPTS)
+    return kgToMtNumber(shipmentListOutstandingKgForViewTable(rec))
   }
   if (id === 'outstanding_qty_planning') {
-    return formatSapOutstandingQtyMtDisplay(
-      rec.outstanding_qty_planning as number | string | null,
-      QTY_MT_OPTS,
-    )
+    return kgToMtNumber(rec.outstanding_qty_planning)
   }
   if (id === 'trade_cycle_days') {
-    const raw = rec.trade_cycle_days
-    if (raw == null || raw === '') return '-'
-    const n = typeof raw === 'number' ? raw : Number(raw)
-    if (!Number.isFinite(n)) return '-'
-    return formatSignedCycleDaysCompact(n)
+    // The table shows the magnitude only (late/ahead is colour), so the export does the same.
+    const n = exportNumberCell(rec.trade_cycle_days)
+    return n === '' ? '' : Math.abs(n)
   }
   if (id === 'sfal_qty' || id === 'sfbd_qty') {
-    return formatSapQtyMtDisplay(rec[id] as number | string | null, QTY_MT_OPTS)
+    return kgToMtNumber(rec[id])
   }
   if (SHIPMENT_EXPORT_DATE_COLUMN_IDS.has(id)) {
     const field = DATE_FIELD_BY_COLUMN_ID[id] ?? id
     const raw = rec[field]
     return raw ? formatDateDMY(String(raw)) : '-'
   }
-  const suffix = NUMBER_SUFFIX_BY_COLUMN_ID[id]
-  if (suffix) {
-    const n = rec[id]
-    if (n == null || n === '' || n === 0) return '-'
-    return `${formatSapDisplayNumber(n as number | string)}${suffix}`
+  if (NUMBER_UNIT_BY_COLUMN_ID[id]) {
+    const n = exportNumberCell(rec[id])
+    return n === '' || n === 0 ? '' : n
   }
   if (
     id === 'fuel_consumption' ||
@@ -193,12 +200,9 @@ export function resolveShipmentViewTableExportCell(
     id === 'gain_loss_amount' ||
     id === 'vessel_registration_year'
   ) {
-    if (rec[id] == null || rec[id] === '') return '-'
-    if (id === 'gain_loss_percentage') {
-      const formatted = formatSapDisplayNumber(rec[id] as number | string)
-      return formatted === '-' ? '-' : `${formatted}%`
-    }
-    return formatSapDisplayNumber(rec[id] as number | string)
+    // Blank when missing so COUNT counts only filled rows. A year is a bare number as well: no
+    // thousands separator.
+    return exportNumberCell(rec[id])
   }
 
   return dashIfEmpty(formatOperationalTableTextDisplayForColumn(id, rec[id]))
@@ -208,7 +212,9 @@ export function buildShipmentViewTableExportMatrix(
   visibleColumns: ShipmentViewTableExportColumn[],
   rows: object[],
 ): (string | number)[][] {
-  const header = visibleColumns.map((col) => col.label)
+  const header = visibleColumns.map((col) =>
+    exportHeaderWithUnit(col.label, SHIPMENT_EXPORT_UNIT_BY_COLUMN_ID[col.id]),
+  )
   const body = rows.map((row) =>
     visibleColumns.map((col) => resolveShipmentViewTableExportCell(col, row)),
   )

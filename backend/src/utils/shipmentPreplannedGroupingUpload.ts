@@ -88,6 +88,17 @@ export function formatGroupingQtyMtFromKg(kg: unknown): string {
   });
 }
 
+/**
+ * Qty (MT) as a number cell, not text, so the column can be summed in Excel; the unit is in the
+ * header ("Contract Qty (MT)"). Empty when missing.
+ */
+export function groupingQtyMtCell(kg: unknown): number | '' {
+  if (kg === null || kg === undefined || kg === '') return '';
+  const n = typeof kg === 'string' ? Number(String(kg).replace(/,/g, '')) : Number(kg);
+  if (!Number.isFinite(n)) return '';
+  return Math.round((n / 1000) * 1e6) / 1e6;
+}
+
 function cellText(value: unknown): string {
   if (value == null) return '';
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
@@ -336,8 +347,8 @@ export function buildShipmentGroupingTemplateMatrixFromDb(
       row.buyer,
       row.poNumber,
       row.contractDate,
-      formatGroupingQtyMtFromKg(row.contractQtyKg),
-      formatGroupingQtyMtFromKg(row.outstandingQtyKg),
+      groupingQtyMtCell(row.contractQtyKg),
+      groupingQtyMtCell(row.outstandingQtyKg),
       'Unplanned',
       '',
       '',

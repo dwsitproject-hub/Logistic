@@ -1,22 +1,20 @@
 /**
  * Trucking View Table "Download Table" — visible columns only, values match the table.
+ *
+ * Numbers are exported as numbers with the unit in the header ("Contract Qty (MT)"), so the file
+ * can be summed and counted; see exportNumbers.ts. OA Budget / OA Actual have no single unit (the
+ * currency is per row), so each is followed by its own currency column.
  */
 
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { formatDateDMY } from '@/lib/dateFormat'
-import {
-  formatOperationalTableTextDisplayForColumn,
-  formatSapDisplayNumber,
-  formatSapOutstandingQtyMtDisplay,
-  formatSapQtyMtDisplay,
-} from '@/lib/sapDisplayValue'
+import { formatOperationalTableTextDisplayForColumn } from '@/lib/sapDisplayValue'
+import { exportHeaderWithUnit, exportNumberCell, kgToMtNumber } from '@/lib/exportNumbers'
 
 export interface TruckingViewTableExportColumn {
   id: string
   label: string
 }
-
-const QTY_MT_OPTS = { maxFractionDigits: 0 } as const
 
 const TRUCKING_STATUS_LABELS: Record<string, string> = {
   UNPLANNED: 'Unplanned',
@@ -42,6 +40,24 @@ const QTY_MT_COLUMN_IDS = new Set([
   'quantity_delivered',
   'quantity_receive',
 ])
+
+/** Unit shown in the export header of a numeric column; the cell itself is a bare number. */
+export const TRUCKING_EXPORT_UNIT_BY_COLUMN_ID: Record<string, string> = {
+  contract_qty: 'MT',
+  sto_quantity: 'MT',
+  quantity_delivered: 'MT',
+  quantity_receive: 'MT',
+  outstanding_qty_mt: 'MT',
+  gain_loss_percentage: '%',
+  gain_loss_amount: 'Kg',
+  estimated_km: 'km',
+}
+
+/** Amount columns that carry a per-row currency, and the row field holding it. */
+const TRUCKING_EXPORT_CURRENCY_FIELD_BY_COLUMN_ID: Record<string, string> = {
+  oa_budget: 'oa_budget_currency',
+  oa_actual: 'oa_actual_currency',
+}
 
 function asRecord(row: object): Record<string, unknown> {
   return row as Record<string, unknown>
@@ -104,60 +120,59 @@ export function resolveTruckingViewTableExportCell(
     )
   }
   if (id === 'quantity_receive') {
-    const kg = parseTruckingExportQtyKg(rec.quantity_receive ?? rec.quantity_delivered) ?? 0
-    return formatSapQtyMtDisplay(kg, QTY_MT_OPTS)
+    return kgToMtNumber(rec.quantity_receive ?? rec.quantity_delivered)
   }
   if (id === 'quantity_delivered') {
-    const kg = parseTruckingExportQtyKg(rec.quantity_delivered) ?? 0
-    return formatSapQtyMtDisplay(kg, QTY_MT_OPTS)
+    return kgToMtNumber(rec.quantity_delivered)
   }
   if (QTY_MT_COLUMN_IDS.has(id)) {
-    return formatSapQtyMtDisplay(rec[id] as number | string | null, QTY_MT_OPTS)
+    return kgToMtNumber(rec[id])
   }
   if (id === 'outstanding_qty_mt') {
-    return formatSapOutstandingQtyMtDisplay(
-      rec.outstanding_quantity as number | string | null,
-      QTY_MT_OPTS,
-    )
+    // Negative = over-delivered (the table shows it as "+N MT"), so the column nets out when summed.
+    return kgToMtNumber(rec.outstanding_quantity)
   }
   if (TRUCKING_EXPORT_DATE_COLUMN_IDS.has(id)) {
     const raw = rec[id]
     return raw ? formatDateDMY(String(raw)) : '-'
   }
-  if (id === 'gain_loss_percentage') {
-    if (rec.gain_loss_percentage == null || rec.gain_loss_percentage === '') return '-'
-    const formatted = formatSapDisplayNumber(rec.gain_loss_percentage as number | string)
-    return formatted === '-' ? '-' : `${formatted}%`
-  }
-  if (id === 'gain_loss_amount') {
-    if (rec.gain_loss_amount == null || rec.gain_loss_amount === '') return '-'
-    const formatted = formatSapDisplayNumber(rec.gain_loss_amount as number | string)
-    return formatted === '-' ? '-' : `${formatted} Kg`
-  }
-  if (id === 'oa_budget' || id === 'oa_actual') {
-    const amount = rec[id]
-    if (amount == null || amount === '') return '-'
-    const formatted = formatSapDisplayNumber(amount as number | string)
-    if (formatted === '-') return '-'
-    const currencyField = id === 'oa_budget' ? rec.oa_budget_currency : rec.oa_actual_currency
-    const cur = String(currencyField ?? '').trim()
-    return cur ? `${formatted} ${cur}` : formatted
+  // Blank when missing, so COUNT counts only filled rows.
+  if (
+    id === 'gain_loss_percentage' ||
+    id === 'gain_loss_amount' ||
+    id in TRUCKING_EXPORT_CURRENCY_FIELD_BY_COLUMN_ID
+  ) {
+    return exportNumberCell(rec[id])
   }
   if (id === 'estimated_km') {
-    if (rec.estimated_km == null || rec.estimated_km === '' || rec.estimated_km === 0) return '-'
-    return `${formatSapDisplayNumber(rec.estimated_km as number | string)} km`
+    // 0 means "not filled" in the table, so it exports blank.
+    const n = exportNumberCell(rec.estimated_km)
+    return n === '' || n === 0 ? '' : n
   }
 
   return dashIfEmpty(formatOperationalTableTextDisplayForColumn(id, rec[id]))
+}
+
+/** The row field holding the currency that follows an OA amount column, or null for any other column. */
+function currencyFieldFor(columnId: string): string | null {
+  return TRUCKING_EXPORT_CURRENCY_FIELD_BY_COLUMN_ID[columnId] ?? null
 }
 
 export function buildTruckingViewTableExportMatrix(
   visibleColumns: TruckingViewTableExportColumn[],
   rows: object[],
 ): (string | number)[][] {
-  const header = visibleColumns.map((col) => col.label)
-  const body = rows.map((row) =>
-    visibleColumns.map((col) => resolveTruckingViewTableExportCell(col, row)),
-  )
+  const header = visibleColumns.flatMap((col) => {
+    const label = exportHeaderWithUnit(col.label, TRUCKING_EXPORT_UNIT_BY_COLUMN_ID[col.id])
+    return currencyFieldFor(col.id) ? [label, `${col.label} Currency`] : [label]
+  })
+  const body = rows.map((row) => {
+    const rec = asRecord(row)
+    return visibleColumns.flatMap((col) => {
+      const cell = resolveTruckingViewTableExportCell(col, row)
+      const field = currencyFieldFor(col.id)
+      return field ? [cell, String(rec[field] ?? '').trim()] : [cell]
+    })
+  })
   return [header, ...body]
 }

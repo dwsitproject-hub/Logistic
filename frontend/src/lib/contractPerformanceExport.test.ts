@@ -81,55 +81,73 @@ describe('buildContractPerfExportMatrix', () => {
     ])
     const matrix = buildContractPerfExportMatrix(visible, [row], formatters)
 
-    expect(matrix[0]).toEqual(['Supplier', 'Delivery Qty', 'Contract Qty'])
+    expect(matrix[0]).toEqual(['Supplier', 'Delivery Qty (MT)', 'Contract Qty (MT)'])
     expect(matrix[0]).not.toContain('Created')
-    expect(matrix[0]).not.toContain('Received Qty')
+    expect(matrix[0]).not.toContain('Received Qty (MT)')
     expect(matrix[1]).toHaveLength(3)
     expect(matrix[1][0]).toBe('PT Test Supplier')
   })
 
-  it('formats kg quantity strings the same way as the table (MT), not 0/blank', () => {
+  it('exports kg quantity strings as exact MT numbers (summable), not 0/blank', () => {
     const visible = allColumns.filter((c) =>
       ['contract_qty', 'delivery_qty', 'outstanding_qty_mt', 'received_qty'].includes(c.id),
     )
     const matrix = buildContractPerfExportMatrix(visible, [row], formatters)
-    expect(matrix[1][0]).toBe('3,003 MT')
-    expect(matrix[1][1]).toBe('3,003 MT')
-    expect(matrix[1][2]).toBe('1,500 MT')
-    expect(matrix[1][3]).toBe('0 MT')
+    expect(matrix[1][0]).toBe(3002.849)
+    expect(matrix[1][1]).toBe(3002.849)
+    expect(matrix[1][2]).toBe(1500)
+    expect(matrix[1][3]).toBe(0)
   })
 
-  it('exports missing outstanding qty as 0 MT', () => {
+  it('exports missing outstanding qty as 0', () => {
     expect(
       resolveContractPerfExportCell(
         col('outstanding_qty_mt', 'Outstanding Qty'),
         {},
         formatters,
       ),
-    ).toBe('0 MT')
+    ).toBe(0)
     expect(
       resolveContractPerfExportCell(
         col('contract_qty', 'Contract Qty'),
         {},
         formatters,
       ),
-    ).toBe('0 MT')
+    ).toBe(0)
   })
 
-  it('exports "-" for missing cycle days instead of 0', () => {
+  it('keeps over-delivery negative instead of the on-screen "+N MT", so the column nets out', () => {
+    expect(
+      resolveContractPerfExportCell(
+        col('outstanding_qty_mt', 'Outstanding Qty'),
+        { outstanding_quantity: -206000 },
+        formatters,
+      ),
+    ).toBe(-206)
+  })
+
+  it('exports an empty cell for missing cycle days (not 0, not text), and the number otherwise', () => {
     const cell = resolveContractPerfExportCell(
       col('trade_cycle_days', 'Trade Cycle'),
       row,
       formatters,
     )
-    expect(cell).toBe('-')
+    expect(cell).toBe('')
     expect(
       resolveContractPerfExportCell(
         col('trade_cycle_days', 'Trade Cycle'),
         { trade_cycle_days: 5 },
         formatters,
       ),
-    ).toBe('5 days')
+    ).toBe(5)
+    const matrix = buildContractPerfExportMatrix(
+      [col('trade_cycle_days', 'Trade Cycle')],
+      [{ trade_cycle_days: -5 }],
+      formatters,
+    )
+    expect(matrix[0]).toEqual(['Trade Cycle (days)'])
+    // the table shows the magnitude only (late/ahead is colour), so the export does the same
+    expect(matrix[1]).toEqual([5])
   })
 
   it('formats calendar dates as DD/MM/YYYY', () => {
@@ -146,7 +164,7 @@ describe('buildContractPerfExportMatrix', () => {
     const visibleIds = new Set(['contract_qty'])
     const visible = buildContractPerfVisibleColumns(allColumns, visibleIds)
     const matrix = buildContractPerfExportMatrix(visible, [row], formatters)
-    expect(matrix[0]).toEqual(['Contract Qty'])
-    expect(matrix[1]).toEqual(['3,003 MT'])
+    expect(matrix[0]).toEqual(['Contract Qty (MT)'])
+    expect(matrix[1]).toEqual([3002.849])
   })
 })
