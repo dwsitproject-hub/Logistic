@@ -1,3 +1,5 @@
+import { sqlExcludeDhmDeleted, wantsExcludeDhmDeleted } from './dhmDeletedFilter';
+
 /**
  * SAP codes for one vessel, newest-first by primary then code. A vessel can hold several - SAP
  * issues a code per tug/barge combination, so BG. AS MARINA 12 carries four - which is why this is
@@ -38,6 +40,8 @@ export type MasterVesselListFilterParams = {
   heating?: string[];
   lambungTypes?: string[];
   terms?: string[];
+  /** Pickers only: leave out vessels deleted in DHM. The Master Vessel table does not set it. */
+  excludeDhmDeleted?: boolean;
 };
 
 export function buildMasterVesselListWhere(
@@ -45,6 +49,7 @@ export function buildMasterVesselListWhere(
 ): { where: string; params: unknown[] } {
   const params: unknown[] = [];
   let where = 'WHERE 1=1';
+  where += sqlExcludeDhmDeleted(filters.excludeDhmDeleted === true);
 
   if (filters.search && filters.search.trim().length > 0) {
     params.push(`%${filters.search.trim()}%`);
@@ -158,6 +163,7 @@ export function parseMasterVesselListQuery(query: Record<string, unknown>): Mast
     heating: parseMultiQueryParam(query.heating),
     lambungTypes: parseMultiQueryParam(query.lambungTypes),
     terms: parseMultiQueryParam(query.terms),
+    excludeDhmDeleted: wantsExcludeDhmDeleted(query.excludeDeleted),
     sortKey,
     sortDir,
   };

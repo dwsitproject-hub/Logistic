@@ -227,6 +227,46 @@ describe('port', () => {
   });
 });
 
+describe('a master deleted in DHM holds the STO and says so', () => {
+  it('names a deleted Master Port, not a missing code', () => {
+    const held = buildJpsSubmitPayload(source({ port_hub_code: null, port_deleted: true }));
+    expect(held.payload).toBeUndefined();
+    expect(held.problems).toContain('discharge port was deleted in DHM (Master Port)');
+    expect(held.problems).not.toContain('discharge port has no DHM code on Master Port');
+  });
+
+  it('names a deleted Master Vessel', () => {
+    const held = buildJpsSubmitPayload(source({ vessel_hub_code: null, vessel_deleted: true }));
+    expect(held.payload).toBeUndefined();
+    expect(held.problems).toContain('Master Vessel "BG. MARINI I" was deleted in DHM');
+  });
+
+  it('names a deleted Master Product and skips only that line', () => {
+    const held = buildJpsSubmitPayload(
+      source({
+        cargo: [
+          { contract_no: 'C1', po_no: 'P1', product: 'CPO', product_hub_code: null, product_deleted: true, sto_quantity_kg: 1000, contract_quantity_kg: 1000 },
+        ],
+      })
+    );
+    expect(held.payload).toBeUndefined();
+    expect(held.problems).toContain('Master Product "CPO" was deleted in DHM');
+  });
+
+  it('still reports a plain missing code when nothing was deleted', () => {
+    const held = buildJpsSubmitPayload(source({ vessel_hub_code: null }));
+    expect(held.problems).toContain('no DHM code on Master Vessel for "BG. MARINI I"');
+  });
+
+  it('a live master with a code is sent unchanged', () => {
+    const { payload, problems } = buildJpsSubmitPayload(
+      source({ port_deleted: false, vessel_deleted: false })
+    );
+    expect(problems).toEqual([]);
+    expect(payload?.vessel_hub_code).toBe('VSL-0001');
+  });
+});
+
 describe('jpsDocumentDownloadUrl', () => {
   const previousOrigin = process.env.APP_PUBLIC_ORIGIN;
   const previousFrontend = process.env.FRONTEND_URL;

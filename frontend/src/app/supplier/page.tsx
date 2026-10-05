@@ -216,7 +216,7 @@ export default function SupplierPage() {
 
   const fetchProductConfigs = async () => {
     try {
-      const res = await api.get('/products?limit=200')
+      const res = await api.get('/products?limit=200&excludeDeleted=true')
       const map: Record<string, any> = {}
       for (const p of res.data.data.items || []) {
         const key = String(p.product_name || '').toUpperCase()

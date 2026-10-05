@@ -81,7 +81,7 @@ export function PlantSiteCombobox({ value, onChange, placeholder = 'Search plant
     debounceRef.current = setTimeout(async () => {
       setLoading(true)
       try {
-        const res = await api.get('/master-plants', { params: { search: q, limit: 20 } })
+        const res = await api.get('/master-plants', { params: { search: q, limit: 20, excludeDeleted: true } })
         setOptions(res.data?.data?.items || [])
       } catch {
         setOptions([])

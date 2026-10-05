@@ -147,12 +147,22 @@ export async function findEligibleStos(
       -- Discharge port name on the shipment, matched to Master Port. "BONTANG" and "PORT BONTANG"
       -- are the same row. The latest named port wins; its code_dhm is what JPS calls port_hub_code.
       -- Local rows have no code_dhm yet — that column is filled on SIT — so a local submit is held.
+      -- A Master Port deleted in DHM (dhm_is_deleted) resolves to no code, like a port with none: JPS no longer knows it,
+      -- so sending its old hub code would only be refused. port_deleted tells the two apart for the hold reason.
       SELECT e.sto_key,
              (ARRAY_AGG(
-                CASE WHEN matched.port IS NOT NULL THEN matched.code_dhm ELSE via_alias.code_dhm END
+                CASE WHEN matched.port IS NOT NULL
+                     THEN CASE WHEN COALESCE(matched.dhm_is_deleted, FALSE) THEN NULL ELSE matched.code_dhm END
+                     ELSE CASE WHEN COALESCE(via_alias.dhm_is_deleted, FALSE) THEN NULL ELSE via_alias.code_dhm END
+                END
                 ORDER BY
                   CASE WHEN NULLIF(BTRIM(dp.name), '') IS NULL THEN 1 ELSE 0 END,
-                  s.updated_at DESC NULLS LAST))[1] AS port_hub_code
+                  s.updated_at DESC NULLS LAST))[1] AS port_hub_code,
+             (ARRAY_AGG(
+                COALESCE(matched.dhm_is_deleted, via_alias.dhm_is_deleted, FALSE)
+                ORDER BY
+                  CASE WHEN NULLIF(BTRIM(dp.name), '') IS NULL THEN 1 ELSE 0 END,
+                  s.updated_at DESC NULLS LAST))[1] AS port_deleted
       FROM eligible e
       INNER JOIN shipments s ON TRUE
       INNER JOIN contracts c ON c.id = s.contract_id
@@ -174,7 +184,7 @@ export async function findEligibleStos(
         ) AS name
       ) dp ON TRUE
       LEFT JOIN LATERAL (
-        SELECT mp.port, mp.code_dhm
+        SELECT mp.port, mp.code_dhm, mp.dhm_is_deleted
         FROM master_loading_ports mp
         WHERE NULLIF(BTRIM(dp.name), '') IS NOT NULL
           AND (
@@ -186,6 +196,7 @@ export async function findEligibleStos(
               = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
           )
         ORDER BY
+          COALESCE(mp.dhm_is_deleted, FALSE),
           CASE
             WHEN regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
               = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
@@ -200,7 +211,7 @@ export async function findEligibleStos(
         -- and use the port named "PORT <site>". Only that exact name: a Site can have many ports (BONTANG has
         -- 24) and "the Site's only port" picked PORT KUMAI for BEKASI. No alias, no such port, or a port with
         -- no DHM code: NULL, and the STO is held. Master Port itself stays free of plant names.
-        SELECT sp.code_dhm
+        SELECT sp.code_dhm, sp.dhm_is_deleted
         FROM discharge_port_aliases dpa
         INNER JOIN master_sites st ON st.id = dpa.site_id
         INNER JOIN master_loading_ports sp
@@ -210,6 +221,7 @@ export async function findEligibleStos(
           AND NULLIF(BTRIM(dp.name), '') IS NOT NULL
           AND regexp_replace(upper(btrim(dpa.alias_name)), '\\s+', ' ', 'g')
               = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
+        ORDER BY COALESCE(sp.dhm_is_deleted, FALSE)
         LIMIT 1
       ) via_alias ON TRUE
       WHERE ${STO_KEY_SQL} = e.sto_key
@@ -219,8 +231,10 @@ export async function findEligibleStos(
       -- The vessel of record for the STO. master_vessels.dhm_code is the vessel_hub_code JPS
       -- prefers; it is empty everywhere until the DHM sync runs, so vessel_name carries the pilot.
       SELECT e.sto_key,
+             -- A vessel deleted in DHM gives no code (JPS would refuse it); vessel_deleted names the reason.
              (ARRAY_AGG(mv.dhm_code ORDER BY mv.updated_at DESC)
-                FILTER (WHERE mv.dhm_code IS NOT NULL))[1] AS vessel_hub_code,
+                FILTER (WHERE mv.dhm_code IS NOT NULL AND COALESCE(mv.dhm_is_deleted, FALSE) IS NOT TRUE))[1] AS vessel_hub_code,
+             COALESCE(BOOL_OR(mv.dhm_is_deleted), FALSE) AS vessel_deleted,
              (ARRAY_AGG(COALESCE(mv.vessel_name, s.vessel_name) ORDER BY s.updated_at DESC)
                 FILTER (WHERE COALESCE(mv.vessel_name, s.vessel_name) IS NOT NULL))[1] AS vessel_name
       FROM eligible e
@@ -255,7 +269,8 @@ export async function findEligibleStos(
                'contract_no', x.contract_no,
                'po_no', x.po_no,
                'product', x.product,
-               'product_hub_code', pc.code_dhm,
+               'product_hub_code', CASE WHEN COALESCE(pc.dhm_is_deleted, FALSE) THEN NULL ELSE pc.code_dhm END,
+               'product_deleted', COALESCE(pc.dhm_is_deleted, FALSE),
                'sto_quantity_kg', x.sto_quantity_kg,
                'contract_quantity_kg', x.contract_quantity_kg
              ) ORDER BY x.contract_no) AS lines
@@ -302,11 +317,11 @@ export async function findEligibleStos(
       -- cargo_hub_code is the DataHub code of the product, matched by name; NULL (no such product, or one not yet synced)
       -- holds the STO with a reason instead of sending a guess.
       LEFT JOIN LATERAL (
-        SELECT p.code_dhm
+        SELECT p.code_dhm, p.dhm_is_deleted
         FROM products p
         WHERE UPPER(TRIM(p.product_name)) = UPPER(TRIM(x.product))
           AND NULLIF(TRIM(p.code_dhm), '') IS NOT NULL
-        ORDER BY p.code_dhm
+        ORDER BY COALESCE(p.dhm_is_deleted, FALSE), p.code_dhm
         LIMIT 1
       ) pc ON TRUE
       GROUP BY e.sto_key
@@ -335,8 +350,10 @@ export async function findEligibleStos(
            e.eta_discharge_complete,
            e.shipment_ids,
            v.vessel_hub_code,
+           v.vessel_deleted,
            v.vessel_name,
            p.port_hub_code,
+           p.port_deleted,
            t.incoterm,
            d.contract_document_id,
            d.si_document_id,
@@ -363,7 +380,9 @@ export async function findEligibleStos(
     revision: 1,
     vessel_name: (row.vessel_name as string | null) ?? null,
     vessel_hub_code: (row.vessel_hub_code as string | null) ?? null,
+    vessel_deleted: row.vessel_deleted === true,
     port_hub_code: (row.port_hub_code as string | null) ?? null,
+    port_deleted: row.port_deleted === true,
     eta_discharge_arrival: row.eta_discharge_arrival,
     eta_discharge_complete: row.eta_discharge_complete,
     incoterm: (row.incoterm as string | null) ?? null,
@@ -376,6 +395,7 @@ export async function findEligibleStos(
       po_no: line.po_no ?? null,
       product: line.product ?? null,
       product_hub_code: line.product_hub_code ?? null,
+      product_deleted: line.product_deleted === true,
       sto_quantity_kg: line.sto_quantity_kg == null ? null : Number(line.sto_quantity_kg),
       contract_quantity_kg:
         line.contract_quantity_kg == null ? null : Number(line.contract_quantity_kg),

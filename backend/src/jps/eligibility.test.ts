@@ -20,7 +20,10 @@ describe('findEligibleStos: which port a plant-named discharge port resolves to'
     const sql = await sqlOf();
     expect(sql).toContain('FROM discharge_port_aliases dpa');
     expect(sql).toContain('WHERE matched.port IS NULL');
-    expect(sql).toContain('CASE WHEN matched.port IS NOT NULL THEN matched.code_dhm ELSE via_alias.code_dhm END');
+    // a Master Port that carries the name wins; the alias route is the ELSE branch of the same CASE
+    expect(sql).toContain('CASE WHEN matched.port IS NOT NULL');
+    expect(sql).toContain('THEN CASE WHEN COALESCE(matched.dhm_is_deleted, FALSE) THEN NULL ELSE matched.code_dhm END');
+    expect(sql).toContain('ELSE CASE WHEN COALESCE(via_alias.dhm_is_deleted, FALSE) THEN NULL ELSE via_alias.code_dhm END');
   });
 
   it('takes the port named "PORT <site>" and nothing looser', async () => {
@@ -70,5 +73,42 @@ describe('findEligibleStos: which Master Vessel an STO takes its DataHub code fr
     expect(vessel).toContain('master_vessel_code_aliases');
     expect(vessel).toContain('normalize_vessel_name');
     expect(vessel).toContain('s.master_vessel_id');
+  });
+});
+
+// A master deleted in DHM is flagged, not removed, and JPS no longer knows its hub code: sending it would only be refused.
+// These are string checks on the SQL (it cannot run without a database), so the query still needs one real run on SIT.
+describe('findEligibleStos: masters deleted in DHM give no code', () => {
+  beforeEach(() => vi.mocked(query).mockReset());
+
+  it('port: a deleted Master Port resolves to no code, a live one is preferred, and the reason is exposed', async () => {
+    const sql = await sqlOf();
+    const port = sql.slice(sql.indexOf('port AS ('), sql.indexOf('vessel AS ('));
+    expect(port).toContain('COALESCE(matched.dhm_is_deleted, FALSE) THEN NULL ELSE matched.code_dhm');
+    expect(port).toContain('COALESCE(via_alias.dhm_is_deleted, FALSE) THEN NULL ELSE via_alias.code_dhm');
+    expect(port).toContain('COALESCE(mp.dhm_is_deleted, FALSE),');
+    expect(port).toContain('ORDER BY COALESCE(sp.dhm_is_deleted, FALSE)');
+    expect(port).toContain('AS port_deleted');
+  });
+
+  it('vessel: a deleted Master Vessel gives no code and sets vessel_deleted', async () => {
+    const sql = await sqlOf();
+    const vessel = sql.slice(sql.indexOf('vessel AS ('), sql.indexOf('terms AS ('));
+    expect(vessel).toContain('mv.dhm_code IS NOT NULL AND COALESCE(mv.dhm_is_deleted, FALSE) IS NOT TRUE');
+    expect(vessel).toContain('AS vessel_deleted');
+  });
+
+  it('product: a deleted Master Product gives no code, a live one is preferred, and the line says why', async () => {
+    const sql = await sqlOf();
+    const cargo = sql.slice(sql.indexOf('cargo AS ('), sql.indexOf('docs AS ('));
+    expect(cargo).toContain('ORDER BY COALESCE(p.dhm_is_deleted, FALSE), p.code_dhm');
+    expect(cargo).toContain("'product_hub_code', CASE WHEN COALESCE(pc.dhm_is_deleted, FALSE) THEN NULL ELSE pc.code_dhm END");
+    expect(cargo).toContain("'product_deleted'");
+  });
+
+  it('the final SELECT hands the flags to the mapper', async () => {
+    const sql = await sqlOf();
+    expect(sql).toContain('v.vessel_deleted');
+    expect(sql).toContain('p.port_deleted');
   });
 });

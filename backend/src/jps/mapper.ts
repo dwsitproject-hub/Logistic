@@ -61,6 +61,8 @@ export interface JpsCargoSource {
   product: string | null;
   /** products.code_dhm of that product, the DataHub code JPS takes as cargo_hub_code. Empty until Master Product is synced. */
   product_hub_code?: string | null;
+  /** The product's Master Product was deleted in DHM: no code is sent for it, and the hold says why. */
+  product_deleted?: boolean;
   /** contract_stos.sto_quantity, in KILOGRAMS */
   sto_quantity_kg: number | null;
   /** contracts.quantity_ordered, in KILOGRAMS - used only to flag a suspect sto_quantity */
@@ -72,8 +74,12 @@ export interface JpsShipmentSource {
   revision: number;
   vessel_name: string | null;
   vessel_hub_code: string | null;
+  /** The Master Vessel was deleted in DHM (dhm_is_deleted): no code is sent, and the hold says why. */
+  vessel_deleted?: boolean;
   /** `master_loading_ports.code_dhm` for the discharge port. Empty until that port is synced on SIT. */
   port_hub_code: string | null;
+  /** The Master Port was deleted in DHM (dhm_is_deleted): no code is sent, and the hold says why. */
+  port_deleted?: boolean;
   eta_discharge_arrival: unknown;
   eta_discharge_complete: unknown;
   incoterm: string | null;
@@ -124,18 +130,34 @@ export function buildJpsSubmitPayload(source: JpsShipmentSource): JpsPayloadResu
   // JPS 5.3 (GET /catalog) makes port_hub_code and vessel_hub_code required, and lists no other way to name a port or a
   // vessel, so an STO whose port or vessel has no DataHub code is held with the reason instead of sent to be refused.
   const portHubCode = String(source.port_hub_code ?? '').trim();
-  if (!portHubCode) problems.push('discharge port has no DHM code on Master Port');
+  if (!portHubCode) {
+    problems.push(
+      source.port_deleted
+        ? 'discharge port was deleted in DHM (Master Port)'
+        : 'discharge port has no DHM code on Master Port',
+    );
+  }
 
   const vesselHubCode = String(source.vessel_hub_code ?? '').trim();
   if (!vesselHubCode) {
-    problems.push(`no DHM code on Master Vessel for "${String(source.vessel_name ?? '').trim()}"`);
+    const vesselName = String(source.vessel_name ?? '').trim();
+    problems.push(
+      source.vessel_deleted
+        ? `Master Vessel "${vesselName}" was deleted in DHM`
+        : `no DHM code on Master Vessel for "${vesselName}"`,
+    );
   }
 
   const cargo: JpsCargoLine[] = [];
   for (const line of source.cargo) {
     const cargoHubCode = String(line.product_hub_code ?? '').trim();
     if (!cargoHubCode) {
-      problems.push(`no DHM code on Master Product for "${String(line.product ?? '').trim()}"`);
+      const productName = String(line.product ?? '').trim();
+      problems.push(
+        line.product_deleted
+          ? `Master Product "${productName}" was deleted in DHM`
+          : `no DHM code on Master Product for "${productName}"`,
+      );
       continue;
     }
     const kg = Number(line.sto_quantity_kg ?? 0);

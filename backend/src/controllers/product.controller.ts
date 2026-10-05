@@ -1,3 +1,4 @@
+import { wantsExcludeDhmDeleted } from '../utils/dhmDeletedFilter';
 import { Request, Response } from 'express';
 import { query } from '../database/connection';
 import { pushNamedMasterToDhm } from '../dhm';
@@ -37,13 +38,15 @@ async function pushProduct(row: Record<string, unknown>, overwrite: boolean) {
 
 export const listProducts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { page = '1', limit = '100', search = '' } = req.query as Record<string, string>;
+    const { page = '1', limit = '100', search = '', excludeDeleted } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page as string, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit as string, 10) || 100, 1), 500);
     const offset = (pageNum - 1) * limitNum;
 
     const where: string[] = [];
     const params: any[] = [];
+    // Pickers pass excludeDeleted=true; the Master Product table does not, so it still lists every row.
+    if (wantsExcludeDhmDeleted(excludeDeleted)) where.push('COALESCE(dhm_is_deleted, FALSE) IS NOT TRUE');
     if (search) {
       params.push(`%${search}%`);
       where.push(`(product_name ILIKE $${params.length} OR long_name ILIKE $${params.length} OR commodity_type ILIKE $${params.length} OR code_klip ILIKE $${params.length} OR code_dhm ILIKE $${params.length})`);

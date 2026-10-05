@@ -910,7 +910,7 @@ export function AddNewShipmentModal({
       const wanted = name.trim().toUpperCase()
       if (wanted.length < 2) return false
       try {
-        const res = await api.get('/master-vessels', { params: { search: name.trim(), limit: 20 } })
+        const res = await api.get('/master-vessels', { params: { search: name.trim(), limit: 20, excludeDeleted: true } })
         const items = (res.data?.data?.items ?? []) as MasterVesselOption[]
         const match = items.find((item) => String(item.vessel_name ?? '').trim().toUpperCase() === wanted)
         if (!match) return false
@@ -1030,7 +1030,7 @@ export function AddNewShipmentModal({
     let cancelled = false
     void (async () => {
       try {
-        const res = await api.get('/master-plants', { params: { search: resolvedPlantCode, limit: 50 } })
+        const res = await api.get('/master-plants', { params: { search: resolvedPlantCode, limit: 50, excludeDeleted: true } })
         const items: Array<{ plant_code?: string; group_plant?: string | null }> =
           res.data?.data?.items ?? []
         const codeUpper = resolvedPlantCode.toUpperCase()

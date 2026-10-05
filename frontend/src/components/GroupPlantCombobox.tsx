@@ -96,7 +96,7 @@ export function GroupPlantCombobox({
         }
         setLoading(true)
         try {
-          const res = await api.get('/master-plants', { params: { search: term, limit: 20 } })
+          const res = await api.get('/master-plants', { params: { search: term, limit: 20, excludeDeleted: true } })
           const items: GroupPlantOption[] = (res.data?.data?.items || []).filter(
             (row: GroupPlantOption) => String(row.group_plant ?? '').trim(),
           )

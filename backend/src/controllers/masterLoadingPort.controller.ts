@@ -1,3 +1,4 @@
+import { wantsExcludeDhmDeleted } from '../utils/dhmDeletedFilter';
 import { Response } from 'express';
 import { pushMasterPortToDhm } from '../dhm';
 import { AuthRequest } from '../middleware/auth';
@@ -57,10 +58,13 @@ const NON_NUMERIC_SAP = NON_NUMERIC_PORT_NAME_FILTER('sap.port_text');
 
 export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { search, page = 1, limit = 50, masterOnly } = req.query as any;
+    const { search, page = 1, limit = 50, masterOnly, excludeDeleted } = req.query as any;
     const offset = (Number(page) - 1) * Number(limit);
     const searchTerm = typeof search === 'string' ? search.trim() : '';
     const catalogOnly = String(masterOnly ?? '').toLowerCase() === 'true' || String(masterOnly ?? '') === '1';
+    // Pickers pass excludeDeleted=true: a port deleted in DHM must not be offered (JPS would refuse its code).
+    // The Master Port table does not, so it still lists every row.
+    const hideDhmDeleted = wantsExcludeDhmDeleted(excludeDeleted);
 
     const params: any[] = [];
     let searchFilter = '';
@@ -79,6 +83,7 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
       LEFT JOIN master_sites s ON s.id = p.site_id
       WHERE ${NON_NUMERIC_PORT_NAME_FILTER('p.port')}
         ${catalogSearch}
+        ${hideDhmDeleted ? 'AND COALESCE(p.dhm_is_deleted, FALSE) IS NOT TRUE' : ''}
       ORDER BY p.port
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
@@ -88,11 +93,13 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
       LEFT JOIN master_sites s ON s.id = p.site_id
       WHERE ${NON_NUMERIC_PORT_NAME_FILTER('p.port')}
         ${catalogSearch}
+        ${hideDhmDeleted ? 'AND COALESCE(p.dhm_is_deleted, FALSE) IS NOT TRUE' : ''}
     `;
 
     const listSql = catalogOnly ? catalogListSql : `
       WITH port_sources AS (
-        SELECT id::text AS id, port, region, code_klip, code_dhm, dhm_site_code, 0 AS priority
+        SELECT id::text AS id, port, region, code_klip, code_dhm, dhm_site_code, 0 AS priority,
+               COALESCE(dhm_is_deleted, FALSE) AS dhm_is_deleted
         FROM master_loading_ports
         WHERE 1=1
           ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1)` : ''}
@@ -106,7 +113,8 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
           NULL::varchar AS code_klip,
           NULL::varchar AS code_dhm,
           NULL::varchar AS dhm_site_code,
-          1 AS priority
+          1 AS priority,
+          FALSE AS dhm_is_deleted
         FROM vessel_loading_ports vlp
         WHERE vlp.is_discharge_port = false
           AND ${NON_NUMERIC_VLP}
@@ -121,7 +129,8 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
           NULL::varchar AS code_klip,
           NULL::varchar AS code_dhm,
           NULL::varchar AS dhm_site_code,
-          2 AS priority
+          2 AS priority,
+          FALSE AS dhm_is_deleted
         FROM shipments s
         WHERE ${NON_NUMERIC_SHIP}
           ${searchTerm.length > 0 ? `AND s.port_of_loading::text ILIKE $1` : ''}
@@ -135,7 +144,8 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
           NULL::varchar AS code_klip,
           NULL::varchar AS code_dhm,
           NULL::varchar AS dhm_site_code,
-          3 AS priority
+          3 AS priority,
+          FALSE AS dhm_is_deleted
         FROM (
           SELECT DISTINCT NULLIF(TRIM(COALESCE(
             spd.data->'raw'->>'Vessel Loading Port 1',
@@ -155,7 +165,8 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
           code_klip,
           code_dhm,
           dhm_site_code,
-          priority
+          priority,
+          dhm_is_deleted
         FROM port_sources
         ORDER BY port, priority
       )
@@ -163,19 +174,20 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
       FROM ranked
       WHERE ${NON_NUMERIC_PORT}
         ${searchFilter}
+        ${hideDhmDeleted ? 'AND dhm_is_deleted IS NOT TRUE' : ''}
       ORDER BY priority, port
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
     const countSql = catalogOnly ? catalogCountSql : `
       WITH port_sources AS (
-        SELECT port, region, 0 AS priority
+        SELECT port, region, 0 AS priority, COALESCE(dhm_is_deleted, FALSE) AS dhm_is_deleted
         FROM master_loading_ports
         WHERE 1=1
           ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1)` : ''}
 
         UNION ALL
 
-        SELECT vlp.port_name AS port, NULL::varchar AS region, 1 AS priority
+        SELECT vlp.port_name AS port, NULL::varchar AS region, 1 AS priority, FALSE AS dhm_is_deleted
         FROM vessel_loading_ports vlp
         WHERE vlp.is_discharge_port = false
           AND ${NON_NUMERIC_VLP}
@@ -183,14 +195,14 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
 
         UNION ALL
 
-        SELECT s.port_of_loading::text AS port, NULL::varchar AS region, 2 AS priority
+        SELECT s.port_of_loading::text AS port, NULL::varchar AS region, 2 AS priority, FALSE AS dhm_is_deleted
         FROM shipments s
         WHERE ${NON_NUMERIC_SHIP}
           ${searchTerm.length > 0 ? `AND s.port_of_loading::text ILIKE $1` : ''}
 
         UNION ALL
 
-        SELECT sap.port_text AS port, NULL::varchar AS region, 3 AS priority
+        SELECT sap.port_text AS port, NULL::varchar AS region, 3 AS priority, FALSE AS dhm_is_deleted
         FROM (
           SELECT DISTINCT NULLIF(TRIM(COALESCE(
             spd.data->'raw'->>'Vessel Loading Port 1',
@@ -203,7 +215,7 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
           ${searchTerm.length > 0 ? `AND sap.port_text ILIKE $1` : ''}
       ),
       ranked AS (
-        SELECT DISTINCT ON (port) port, region, priority
+        SELECT DISTINCT ON (port) port, region, priority, dhm_is_deleted
         FROM port_sources
         ORDER BY port, priority
       )
@@ -211,6 +223,7 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
       FROM ranked
       WHERE ${NON_NUMERIC_PORT}
         ${searchFilter}
+        ${hideDhmDeleted ? 'AND dhm_is_deleted IS NOT TRUE' : ''}
     `;
 
     const [listResult, countResult] = await Promise.all([

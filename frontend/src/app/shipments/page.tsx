@@ -3272,7 +3272,7 @@ function ShipmentsPageContent() {
       let allShipmentsForLookup: Shipment[] = []
       try {
         const [pRes, cRes, sRes] = await Promise.all([
-          api.get('/master-loading-ports', { params: { limit: 9999 } }),
+          api.get('/master-loading-ports', { params: { limit: 9999, excludeDeleted: true } }),
           api.get('/contracts', { params: { limit: 9999 } }),
           api.get('/shipments', { params: { limit: 9999, compact: true, includeSummary: false } }),
         ])
@@ -6312,7 +6312,7 @@ function ShipmentsPageContent() {
       return
     }
     try {
-      const res = await api.get('/master-vessels', { params: { search: search.trim(), limit: 20 } })
+      const res = await api.get('/master-vessels', { params: { search: search.trim(), limit: 20, excludeDeleted: true } })
       const items = res.data?.data?.items ?? []
       setVesselSuggestions(items)
       setShowVesselSuggestions(true)
@@ -6327,7 +6327,7 @@ function ShipmentsPageContent() {
       return
     }
     try {
-      const res = await api.get('/master-loading-ports', { params: { search: search.trim(), limit: 20 } })
+      const res = await api.get('/master-loading-ports', { params: { search: search.trim(), limit: 20, excludeDeleted: true } })
       const items = res.data?.data?.items ?? []
       setPortSuggestions(items)
       setShowPortSuggestions(true)

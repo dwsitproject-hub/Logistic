@@ -1,3 +1,4 @@
+import { sqlExcludeDhmDeleted, wantsExcludeDhmDeleted } from '../utils/dhmDeletedFilter';
 import { Response } from 'express';
 import { pushMasterPlantToDhm } from '../dhm';
 import { AuthRequest } from '../middleware/auth';
@@ -11,11 +12,13 @@ function wantsDhmOverwrite(req: AuthRequest): boolean {
 
 export const listMasterPlants = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { search, page = 1, limit = 50 } = req.query as any;
+    const { search, page = 1, limit = 50, excludeDeleted } = req.query as any;
     const offset = (Number(page) - 1) * Number(limit);
 
     const params: any[] = [];
     let where = 'WHERE 1=1';
+    // Pickers pass excludeDeleted=true; the Master Plant table does not, so it still lists every row.
+    where += sqlExcludeDhmDeleted(wantsExcludeDhmDeleted(excludeDeleted), 'master_plants.dhm_is_deleted');
     if (search && typeof search === 'string' && search.trim().length > 0) {
       params.push(`%${search.trim()}%`);
       where += ` AND (

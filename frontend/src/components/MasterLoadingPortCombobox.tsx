@@ -85,7 +85,7 @@ export function MasterLoadingPortCombobox({
     const requestId = ++requestIdRef.current
     setLoading(true)
     try {
-      const res = await api.get('/master-loading-ports', { params: { search: q, limit: 20 } })
+      const res = await api.get('/master-loading-ports', { params: { search: q, limit: 20, excludeDeleted: true } })
       if (requestId !== requestIdRef.current) return
       setOptions(res.data?.data?.items || [])
     } catch {

@@ -102,7 +102,7 @@ export function MasterVesselCombobox({
     const requestId = ++requestIdRef.current
     setLoading(true)
     try {
-      const res = await api.get('/master-vessels', { params: { search, limit: 20 } })
+      const res = await api.get('/master-vessels', { params: { search, limit: 20, excludeDeleted: true } })
       if (requestId !== requestIdRef.current) return
       setOptions((res.data?.data?.items ?? []) as MasterVesselOption[])
     } catch {
