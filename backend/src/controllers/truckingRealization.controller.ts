@@ -7,6 +7,7 @@ import { refreshTruckingStageSnapshotForOperationIds } from '../services/pipelin
 import {
   deriveDbStatusFromRealization,
   listTruckingDailyActuals,
+  mapTruckingDailyActualForApi,
   replaceTruckingDailyActuals,
   resolveTruckingOperationByExtNoAndPo,
   upsertTruckingDailyActualRows,
@@ -94,15 +95,7 @@ export const getTruckingRealization = async (req: AuthRequest, res: Response) =>
       success: true,
       data: {
         ...row,
-        daily_actuals: dailyActuals.map((a) => ({
-          date: a.progress_date,
-          progress_date: a.progress_date,
-          quantity_kg: a.quantity_kg,
-          quantity_delivered: a.quantity_kg,
-          quantity_delivery_kg:
-            a.quantity_delivery_kg != null ? a.quantity_delivery_kg : a.quantity_kg,
-          quantity_receive_kg: a.quantity_receive_kg,
-        })),
+        daily_actuals: dailyActuals.map(mapTruckingDailyActualForApi),
       },
     });
   } catch (err) {

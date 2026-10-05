@@ -107,6 +107,26 @@ export type TruckingDailyActualInput = {
   quantity_kg: number;
 };
 
+/**
+ * A daily-actual row as the trucking API returns it (modal Section 4 reads this).
+ *
+ * One mapper for every endpoint: each used to list the fields by hand, and the two WB times added
+ * to the table were silently dropped by both, so the modal never saw them although they were stored.
+ */
+export function mapTruckingDailyActualForApi(a: TruckingDailyActualRow) {
+  return {
+    date: a.progress_date,
+    progress_date: a.progress_date,
+    quantity_kg: a.quantity_kg,
+    quantity_delivered: a.quantity_kg,
+    quantity_delivery_kg: a.quantity_delivery_kg != null ? a.quantity_delivery_kg : a.quantity_kg,
+    quantity_receive_kg: a.quantity_receive_kg,
+    sto_number: a.sto_number ?? '',
+    first_time_in: a.first_time_in ?? null,
+    last_time_out: a.last_time_out ?? null,
+  };
+}
+
 export async function listTruckingDailyActuals(
   truckingOperationId: string,
 ): Promise<TruckingDailyActualRow[]> {

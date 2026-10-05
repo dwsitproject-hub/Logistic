@@ -57,7 +57,10 @@ import {
 } from '../utils/truckingIncotermScope';
 import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUniqueness';
 import { sqlContractGlobalOutstandingExpr } from '../utils/contractGlobalOutstandingSql';
-import { listTruckingDailyActuals } from '../services/truckingRealization.service';
+import {
+  listTruckingDailyActuals,
+  mapTruckingDailyActualForApi,
+} from '../services/truckingRealization.service';
 import { ensureUnplannedTruckingOpsForRequest } from '../services/truckingEnsureUnplannedOps.service';
 import {
   sqlSapTruckingLastReceiveDate,
@@ -371,16 +374,7 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
       success: true,
       data: {
         ...result.rows[0],
-        daily_actuals: dailyActuals.map((a) => ({
-          date: a.progress_date,
-          progress_date: a.progress_date,
-          quantity_kg: a.quantity_kg,
-          quantity_delivered: a.quantity_kg,
-          quantity_delivery_kg:
-            a.quantity_delivery_kg != null ? a.quantity_delivery_kg : a.quantity_kg,
-          quantity_receive_kg: a.quantity_receive_kg,
-          sto_number: a.sto_number ?? '',
-        })),
+        daily_actuals: dailyActuals.map(mapTruckingDailyActualForApi),
         sto_actuals: stoActuals,
       },
     });
