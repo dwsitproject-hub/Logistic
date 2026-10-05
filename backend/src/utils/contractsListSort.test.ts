@@ -5,6 +5,7 @@ import {
   CONTRACTS_LIST_NODE_SORT_KEYS,
   CONTRACTS_LIST_SQL_SORT_COLUMNS,
   resolveContractsListSort,
+  resolveContractsListSortStack,
 } from './contractsListSort';
 
 describe('resolveContractsListSort', () => {
@@ -77,5 +78,87 @@ describe('compareContractsListSortRows', () => {
       compareContractsListSortRows(a, b, 'status_overall', 1, today),
     );
     expect(computeStatusOverallSortValue(sorted[0])).toBe('Close');
+  });
+});
+
+describe('resolveContractsListSortStack', () => {
+  it('without `sort` it is exactly the single sort it always was', () => {
+    const r = resolveContractsListSortStack({ sortKey: 'supplier', sortDir: 'asc' });
+    expect(r.orderBySql).toBe('supplier ASC NULLS LAST');
+    expect(r.primaryDir).toBe('ASC');
+    expect(r.mode).toBe('sql');
+    expect(r.ignoredExtraKeys).toBe(false);
+    // the same expression the old ORDER BY was built from
+    expect(resolveContractsListSortStack({ sortKey: 'contract_date', sortDir: 'desc' }).orderBySql).toBe(
+      `${CONTRACTS_LIST_SQL_SORT_COLUMNS.contract_date} DESC NULLS LAST`,
+    );
+    // an unknown key still falls back to contract_date, and a missing direction to DESC
+    expect(resolveContractsListSortStack({ sortKey: 'nope' }).orderBySql).toBe(
+      `${CONTRACTS_LIST_SQL_SORT_COLUMNS.contract_date} DESC NULLS LAST`,
+    );
+  });
+
+  it('orders by incoterm, then product, then supplier, each with its own direction', () => {
+    const r = resolveContractsListSortStack({ sort: 'incoterm:asc,product:asc,supplier:desc' });
+    expect(r.orderBySql).toBe('incoterm ASC NULLS LAST, product ASC NULLS LAST, supplier DESC NULLS LAST');
+    expect(r.keys.map((k) => k.key)).toEqual(['incoterm', 'product', 'supplier']);
+    expect(r.mode).toBe('sql');
+    expect(r.primaryDir).toBe('ASC');
+    expect(r.sortKey).toBe('incoterm');
+  });
+
+  it('uses the static expression of each column, never the request text', () => {
+    const r = resolveContractsListSortStack({ sort: 'contract_date:desc,delivery_end:asc' });
+    expect(r.orderBySql).toBe(
+      `${CONTRACTS_LIST_SQL_SORT_COLUMNS.contract_date} DESC NULLS LAST, ${CONTRACTS_LIST_SQL_SORT_COLUMNS.delivery_end} ASC NULLS LAST`,
+    );
+  });
+
+  it('keeps at most three keys, and drops repeated, unknown and malformed ones', () => {
+    expect(resolveContractsListSortStack({ sort: 'a:asc,incoterm:asc,product:asc,supplier:asc,buyer:asc' }).keys).toHaveLength(3);
+    const r = resolveContractsListSortStack({
+      sort: 'incoterm:asc,incoterm:desc,product:sideways,supplier;DROP TABLE contracts:asc,buyer',
+    });
+    expect(r.keys.map((k) => k.key)).toEqual(['incoterm', 'buyer']);
+    expect(r.orderBySql).not.toContain('DROP');
+  });
+
+  it('an unusable `sort` falls back to the single sort', () => {
+    for (const sort of ['', 'zzz:asc', 'incoterm:sideways', undefined, 42]) {
+      const r = resolveContractsListSortStack({ sort, sortKey: 'supplier', sortDir: 'asc' });
+      expect(r.orderBySql).toBe('supplier ASC NULLS LAST');
+    }
+  });
+
+  it('reads the first value when the parameter is repeated in the query string', () => {
+    const r = resolveContractsListSortStack({ sort: ['incoterm:asc,product:asc', 'ignored:asc'] });
+    expect(r.keys.map((k) => k.key)).toEqual(['incoterm', 'product']);
+  });
+
+  it('a node column never joins a stack: only the first key is honoured, and the request is told so', () => {
+    const lowerNode = resolveContractsListSortStack({ sort: 'incoterm:asc,trade_cycle_days:desc,supplier:asc' });
+    expect(lowerNode.keys.map((k) => k.key)).toEqual(['incoterm']);
+    expect(lowerNode.mode).toBe('sql');
+    expect(lowerNode.ignoredExtraKeys).toBe(true);
+
+    const primaryNode = resolveContractsListSortStack({ sort: 'trade_cycle_days:desc,incoterm:asc' });
+    expect(primaryNode.keys.map((k) => k.key)).toEqual(['trade_cycle_days']);
+    expect(primaryNode.mode).toBe('node');
+    expect(primaryNode.primaryDir).toBe('DESC');
+    expect(primaryNode.ignoredExtraKeys).toBe(true);
+  });
+
+  it('every node column alone is still the node sort it was', () => {
+    for (const key of CONTRACTS_LIST_NODE_SORT_KEYS) {
+      const r = resolveContractsListSortStack({ sort: `${key}:asc` });
+      expect(r.mode).toBe('node');
+      expect(r.ignoredExtraKeys).toBe(false);
+    }
+  });
+
+  it('asks for the cycle fields when any key in the stack needs them', () => {
+    expect(resolveContractsListSortStack({ sort: 'incoterm:asc,product:asc' }).needsCycleFields).toBe(false);
+    expect(resolveContractsListSortStack({ sort: 'incoterm:asc,vessel_name:asc' }).needsCycleFields).toBe(true);
+    expect(resolveContractsListSortStack({ sort: 'vessel_name:asc,incoterm:asc' }).needsCycleFields).toBe(true);
   });
 });

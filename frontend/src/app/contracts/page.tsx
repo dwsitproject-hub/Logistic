@@ -20,6 +20,9 @@ import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
+import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { contractsSortStackParam, nextContractsPerfSortStack } from '@/lib/contractsSortStack'
+import { sortEntryFor, sortPriority, type SortEntry } from '@/lib/sortStack'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
@@ -1049,8 +1052,25 @@ function ContractsPageContent() {
     setExpandedContractIds(new Set())
   }, [])
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
-  const [sortKey, setSortKey] = useState<string>('contract_date')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  /**
+   * Sort by click history, newest click first. Contract Performance may hold up to three SQL columns (Supplier, then
+   * Product, then Incoterm sorts by Incoterm, Product, Supplier); everywhere else - the Contracts page, and any column
+   * the server derives in Node - it is a single entry, which is exactly the sortKey + sortDir this page always had.
+   * sortKey / sortDir stay as the PRIMARY entry so every use below keeps working unchanged.
+   */
+  const [sortStack, setSortStack] = useState<SortEntry[]>([{ key: 'contract_date', dir: 'desc' }])
+  const sortKey = sortStack[0]?.key ?? 'contract_date'
+  const sortDir: 'asc' | 'desc' = sortStack[0]?.dir ?? 'desc'
+  const setSortKey = useCallback(
+    (key: string) => setSortStack((prev) => [{ key, dir: prev[0]?.dir ?? 'desc' }]),
+    [],
+  )
+  const setSortDir = useCallback(
+    (dir: 'asc' | 'desc') => setSortStack((prev) => [{ key: prev[0]?.key ?? 'contract_date', dir }]),
+    [],
+  )
+  /** The `sort` request parameter: only when more than one SQL column is stacked. */
+  const sortStackParam = isContractPerformance ? contractsSortStackParam(sortStack, resolveApiSortKey) : ''
   // Contract Performance "Download Table" — exports every filtered row (all pages) + all columns to .xlsx.
   const [downloadingTable, setDownloadingTable] = useState(false)
 
@@ -2012,6 +2032,7 @@ function ContractsPageContent() {
     columnFilters,
     sortKey,
     sortDir,
+    sortStackParam,
     isContractPerformance,
     contractPerfSelectedSources,
     contractPerfSelectedProducts,
@@ -2169,6 +2190,8 @@ function ContractsPageContent() {
       if (apiSortKey) {
         params.append('sortKey', apiSortKey)
         params.append('sortDir', activeSortDir)
+        // A per-call override is a one-off single sort; the stack only describes the table as the user left it.
+        if (sortStackParam && !sortKeyOverride && !sortDirOverride) params.append('sort', sortStackParam)
       }
 
       console.log('[Contracts] fetchContracts request', {
@@ -3339,14 +3362,22 @@ function ContractsPageContent() {
           )
         }
       }
-      const rawSort = localStorage.getItem(sortStorageKey)
-      if (rawSort) {
-        const s = JSON.parse(rawSort) as { key?: string; dir?: 'asc' | 'desc' }
-        if (s?.key) setSortKey(s.key)
-        if (s?.dir) setSortDir(s.dir)
-      } else if (isContractPerformance) {
-        setSortKey('outstanding_qty_mt')
-        setSortDir('desc')
+      if (isContractPerformance) {
+        /*
+         * Contract Performance opens on its default and does not remember the last sort. A remembered one came back on
+         * every visit - including a cycle-days sort, which takes the slow 10,000-row path - and now that a sort can be
+         * a stack of columns, a stale stack would make the table look as if it had changed by itself. Visible columns
+         * and their order are still remembered. The old stored value is removed.
+         */
+        setSortStack([{ key: 'outstanding_qty_mt', dir: 'desc' }])
+        localStorage.removeItem(sortStorageKey)
+      } else {
+        const rawSort = localStorage.getItem(sortStorageKey)
+        if (rawSort) {
+          const s = JSON.parse(rawSort) as { key?: string; dir?: 'asc' | 'desc' }
+          if (s?.key) setSortKey(s.key)
+          if (s?.dir) setSortDir(s.dir)
+        }
       }
     } catch {
       // ignore
@@ -3403,11 +3434,13 @@ function ContractsPageContent() {
     try {
       localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(visibleColumnIds)))
       if (columnOrderIds.length > 0) localStorage.setItem(columnOrderStorageKey, JSON.stringify(columnOrderIds))
-      localStorage.setItem(sortStorageKey, JSON.stringify({ key: sortKey, dir: sortDir }))
+      if (!isContractPerformance) {
+        localStorage.setItem(sortStorageKey, JSON.stringify({ key: sortKey, dir: sortDir }))
+      }
     } catch {
       // ignore
     }
-  }, [columnOrderIds, columnStorageKey, columnOrderStorageKey, sortKey, sortDir, sortStorageKey, visibleColumnIds])
+  }, [columnOrderIds, columnStorageKey, columnOrderStorageKey, isContractPerformance, sortKey, sortDir, sortStorageKey, visibleColumnIds])
 
   // Persist per-user view (debounced, best-effort): visible columns + column order.
   useEffect(() => {
@@ -3476,6 +3509,7 @@ function ContractsPageContent() {
         if (apiSortKey) {
           params.set('sortKey', apiSortKey)
           params.set('sortDir', sortDir)
+          if (sortStackParam) params.set('sort', sortStackParam)
         }
         const response = await api.get(`/contracts?${params.toString()}`)
         const envelope = response.data as {
@@ -3690,9 +3724,12 @@ function ContractsPageContent() {
 
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
-    const nextDir: 'asc' | 'desc' = sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
-    setSortDir(nextDir)
-    setSortKey(col.id)
+    if (isContractPerformance) {
+      setSortStack((prev) => nextContractsPerfSortStack(prev, col.id, resolveApiSortKey))
+    } else {
+      const nextDir: 'asc' | 'desc' = sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
+      setSortStack([{ key: col.id, dir: nextDir }])
+    }
     setCurrentPage(1)
   }
 
@@ -4559,6 +4596,16 @@ function ContractsPageContent() {
                       </span>
                     </p>
                   )}
+                  {isContractPerformance ? (
+                    <SortStackSummary
+                      stack={sortStack}
+                      labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+                      onReset={() => {
+                        setSortStack([{ key: 'outstanding_qty_mt', dir: 'desc' }])
+                        setCurrentPage(1)
+                      }}
+                    />
+                  ) : null}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -4802,7 +4849,11 @@ function ContractsPageContent() {
                         className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}
                       >
                         {visibleColumns.map(col => {
-                          const activeSort = sortKey === col.id
+                          const sortEntry = sortEntryFor(sortStack, col.id)
+                          const activeSort = sortEntry != null
+                          const headerSortDir = sortEntry?.dir ?? sortDir
+                          const headerSortPriority =
+                            isContractPerformance && sortStack.length > 1 ? sortPriority(sortStack, col.id) : null
                           const filterActive = isColumnFilterActive(col.id)
                           const filterType = getFilterTypeForColumn(col.id)
                           const current = columnFilters[col.id]
@@ -4856,20 +4907,25 @@ function ContractsPageContent() {
                                 {col.sortable && (
                                   <button
                                     type="button"
-                                    className={`shrink-0 p-0.5 rounded hover:bg-gray-200 ${activeSort ? 'text-blue-600' : 'text-gray-400'}`}
+                                    className={`shrink-0 p-0.5 rounded hover:bg-gray-200 ${activeSort ? 'text-blue-600' : 'text-gray-400'}${
+                                      headerSortPriority != null ? ' inline-flex items-start' : ''
+                                    }`}
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       e.preventDefault()
                                       onSortHeaderClick(col)
                                     }}
-                                    title="Sort"
+                                    title={headerSortPriority != null ? `Sort - urutan ke-${headerSortPriority}` : 'Sort'}
                                   >
                                     {activeSort
-                                      ? sortDir === 'asc'
+                                      ? headerSortDir === 'asc'
                                         ? <ArrowUp className="h-3.5 w-3.5" />
                                         : <ArrowDown className="h-3.5 w-3.5" />
                                       : <ArrowUpDown className="h-3.5 w-3.5" />
                                     }
+                                    {activeSort && headerSortPriority != null ? (
+                                      <sup className="ml-0.5 text-[9px] font-semibold leading-none tabular-nums">{headerSortPriority}</sup>
+                                    ) : null}
                                   </button>
                                 )}
                               </div>

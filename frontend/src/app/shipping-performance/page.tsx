@@ -100,6 +100,16 @@ import {
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import { operationalTableColumnClass } from '@/lib/operationalTableLayout'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import {
+  clickSortStack,
+  serializeSortStack,
+  sortEntryFor,
+  sortPriority,
+  sortRowsByStack,
+  type SortEntry,
+  type SortValue,
+} from '@/lib/sortStack'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import {
   applySection3PortDisplay,
@@ -1225,6 +1235,9 @@ function buildInitialColumnPrefsByMode(): ShippingPerfColumnPrefsByMode {
 
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
 
+/** What the table is sorted by when it opens, and what Reset returns to: the biggest total delay first. */
+const DEFAULT_SHIPPING_PERF_SORT: SortEntry<ShippingPerfColumnKey>[] = [{ key: 'total_delta_days', dir: 'desc' }]
+
 function isColumnEligibleForView(key: string, tableViewMode: TableViewMode): boolean {
   const col = COLUMN_MAP[key]
   if (col?.byVesselOnly) {
@@ -1461,8 +1474,12 @@ function ShippingPerformancePageContent() {
   )
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [draggingColumn, setDraggingColumn] = useState<string | null>(null)
-  const [sortBy, setSortBy] = useState<ShippingPerfColumnKey>('total_delta_days')
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  /**
+   * Sort by click history, newest click first (Supplier, then Product, then Incoterm sorts by Incoterm, then Product,
+   * then Supplier). Up to three columns. Rows are sorted here in the browser, so nothing is sent to the server.
+   */
+  const [sortStack, setSortStack] = useState<SortEntry<ShippingPerfColumnKey>[]>(DEFAULT_SHIPPING_PERF_SORT)
+  const sortStackKey = serializeSortStack(sortStack)
   const [currentPage, setCurrentPage] = useState(1)
   const pageSize = 20
   const columnsMenuRef = useRef<HTMLDivElement | null>(null)
@@ -2295,24 +2312,17 @@ function ShippingPerformancePageContent() {
 
   // Step D: apply Section 3 sorting
   const filteredRows = useMemo(() => {
-    const sortDataKey = resolveColumnDataKey(sortBy, perfDashMode)
-    const sorted = [...section3DisplayRows].sort((a, b) => {
-      const aVal = a[sortDataKey]
-      const bVal = b[sortDataKey]
-      const colType = COLUMN_MAP[String(sortBy)]?.type ?? 'text'
-      if (colType === 'number') {
-        const aNum = aVal === null || aVal === undefined || aVal === '' ? Number.NEGATIVE_INFINITY : Number(aVal)
-        const bNum = bVal === null || bVal === undefined || bVal === '' ? Number.NEGATIVE_INFINITY : Number(bVal)
-        return sortDirection === 'asc' ? aNum - bNum : bNum - aNum
+    return sortRowsByStack(section3DisplayRows, sortStack, (row, key): SortValue => {
+      const value = row[resolveColumnDataKey(key, perfDashMode)]
+      if ((COLUMN_MAP[String(key)]?.type ?? 'text') === 'number') {
+        return {
+          type: 'number',
+          value: value === null || value === undefined || value === '' ? null : Number(value),
+        }
       }
-      const aStr = asDisplayValue(aVal).toLowerCase()
-      const bStr = asDisplayValue(bVal).toLowerCase()
-      if (aStr < bStr) return sortDirection === 'asc' ? -1 : 1
-      if (aStr > bStr) return sortDirection === 'asc' ? 1 : -1
-      return 0
+      return { type: 'text', value: asDisplayValue(value) }
     })
-    return sorted
-  }, [section3DisplayRows, sortBy, sortDirection, perfDashMode])
+  }, [section3DisplayRows, sortStack, perfDashMode])
 
   const byVesselRows = useMemo(() => {
     if (tableViewMode !== 'by_vessel') return []
@@ -2357,8 +2367,7 @@ function ShippingPerformancePageContent() {
     globalFilterEffectKey,
     drilldownFilters,
     tableViewMode,
-    sortBy,
-    sortDirection,
+    sortStackKey,
   ])
 
   useEffect(() => {
@@ -2393,10 +2402,7 @@ function ShippingPerformancePageContent() {
   }
 
   const onHeaderSort = (key: ShippingPerfColumnKey) => {
-    const nextDir: 'asc' | 'desc' =
-      sortBy === key ? (sortDirection === 'asc' ? 'desc' : 'asc') : 'asc'
-    setSortDirection(nextDir)
-    setSortBy(key)
+    setSortStack((prev) => clickSortStack(prev, key))
     setUseTopRankSort(false)
     setCurrentPage(1)
   }
@@ -2922,6 +2928,18 @@ function ShippingPerformancePageContent() {
                     </>
                   )}
                 </p>
+              <SortStackSummary
+                stack={sortStack}
+                labelFor={(key) => {
+                  const col = COLUMN_MAP[String(key)]
+                  return col ? getColumnHeaderLabel(col) : String(key)
+                }}
+                onReset={() => {
+                  setSortStack(DEFAULT_SHIPPING_PERF_SORT)
+                  setUseTopRankSort(false)
+                  setCurrentPage(1)
+                }}
+              />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="inline-flex rounded-lg border bg-white p-1">
@@ -3142,7 +3160,8 @@ function ShippingPerformancePageContent() {
                         const col = COLUMN_MAP[String(key)]
                         const columnLabel = getColumnHeaderLabel(col)
                         const columnTooltip = resolvePerfColumnTooltip(col.tooltip, tableLabelMode)
-                        const isSorted = sortBy === key
+                        const sortEntry = sortEntryFor(sortStack, key)
+                        const isSorted = sortEntry != null
                         const opColClass = operationalTableColumnClass(
                           getShippingPerfTableColumnLayout(String(key), tableViewMode),
                         )
@@ -3170,7 +3189,8 @@ function ShippingPerformancePageContent() {
                               label={columnLabel}
                               formulaHelp={columnTooltip}
                               activeSort={isSorted}
-                              sortDir={sortDirection}
+                              sortDir={sortEntry?.dir ?? 'asc'}
+                              sortPriority={sortStack.length > 1 ? sortPriority(sortStack, key) : null}
                               onSortClick={() => onHeaderSort(key)}
                             />
                           </th>

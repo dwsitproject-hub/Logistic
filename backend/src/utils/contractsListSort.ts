@@ -172,3 +172,84 @@ export function compareContractsListSortRows(
   if (!bs) return -1;
   return as.localeCompare(bs, undefined, { numeric: true, sensitivity: 'base' }) * dirMul;
 }
+
+/** Most columns a click-history sort may hold; the Contract Performance table caps it the same way. */
+export const CONTRACTS_LIST_MAX_SORT_KEYS = 3;
+
+export interface ContractsListSortStackResolution extends ContractsListSortResolution {
+  /** Direction of the primary key, for the node path's in-memory sort. */
+  primaryDir: 'ASC' | 'DESC';
+  /** The keys actually used, primary first. More than one only on the SQL path. */
+  keys: Array<{ key: string; dir: 'ASC' | 'DESC' }>;
+  /** `<expr> <dir> NULLS LAST[, ...]` for the keys, without the tie-breakers the caller appends. */
+  orderBySql: string;
+  /** True when a request asked for more keys than were honoured (see the node rule below). */
+  ignoredExtraKeys: boolean;
+}
+
+function parseContractsSortParam(raw: unknown): Array<{ key: string; dir: 'ASC' | 'DESC' }> {
+  const text = typeof raw === 'string' ? raw : Array.isArray(raw) ? String(raw[0] ?? '') : '';
+  const out: Array<{ key: string; dir: 'ASC' | 'DESC' }> = [];
+  const seen = new Set<string>();
+  for (const part of text.split(',')) {
+    const [keyRaw, dirRaw] = part.split(':');
+    const key = (keyRaw ?? '').trim();
+    const dir = (dirRaw ?? 'asc').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    if (dir !== 'asc' && dir !== 'desc') continue;
+    // Only columns this list can sort. An unknown key is dropped, never guessed at or interpolated.
+    if (!CONTRACTS_LIST_SQL_SORT_COLUMNS[key] && !CONTRACTS_LIST_NODE_SORT_KEYS.has(key)) continue;
+    seen.add(key);
+    out.push({ key, dir: dir === 'asc' ? 'ASC' : 'DESC' });
+    if (out.length >= CONTRACTS_LIST_MAX_SORT_KEYS) break;
+  }
+  return out;
+}
+
+/**
+ * Sort by click history: GET /contracts?sort=incoterm:asc,product:asc,supplier:asc (primary first, at most 3).
+ *
+ * Without `sort` this is exactly the single sort it always was (sortKey + sortDir), so every existing caller is unchanged.
+ *
+ * A node column (cycle days, overall status, over/under delivery) is derived in JavaScript after up to 10,000 rows are
+ * fetched, which is why it is expensive and why it is capped. It is never mixed into a stack: when any requested key is a
+ * node column, only the FIRST key is honoured. A client that lets such a stack through therefore cannot make the list
+ * take the expensive path with three keys; at worst it gets the single sort it would have had anyway.
+ *
+ * Every ORDER BY expression comes from CONTRACTS_LIST_SQL_SORT_COLUMNS, never from the request.
+ */
+export function resolveContractsListSortStack(input: {
+  sort?: unknown;
+  sortKey?: unknown;
+  sortDir?: unknown;
+}): ContractsListSortStackResolution {
+  const legacyDir: 'ASC' | 'DESC' = String(input.sortDir ?? 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const requested = parseContractsSortParam(input.sort);
+
+  if (requested.length === 0) {
+    const single = resolveContractsListSort(input.sortKey);
+    return {
+      ...single,
+      primaryDir: legacyDir,
+      keys: [{ key: single.sortKey, dir: legacyDir }],
+      orderBySql: `${single.orderExpr} ${legacyDir} NULLS LAST`,
+      ignoredExtraKeys: false,
+    };
+  }
+
+  const hasNodeKey = requested.some((k) => CONTRACTS_LIST_NODE_SORT_KEYS.has(k.key));
+  const keys = hasNodeKey ? requested.slice(0, 1) : requested;
+  const primary = resolveContractsListSort(keys[0].key);
+  return {
+    sortKey: primary.sortKey,
+    orderExpr: primary.orderExpr,
+    mode: primary.mode,
+    needsCycleFields: keys.some((k) => SQL_SORT_NEEDS_CYCLE_FIELDS.has(k.key)) || primary.needsCycleFields,
+    primaryDir: keys[0].dir,
+    keys,
+    orderBySql: keys
+      .map((k) => `${resolveContractsListSort(k.key).orderExpr} ${k.dir} NULLS LAST`)
+      .join(', '),
+    ignoredExtraKeys: hasNodeKey && requested.length > 1,
+  };
+}

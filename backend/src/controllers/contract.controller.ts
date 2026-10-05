@@ -36,7 +36,7 @@ import {
 } from '../utils/contractPlanningStatusSql';
 import {
   compareContractsListSortRows,
-  resolveContractsListSort,
+  resolveContractsListSortStack,
 } from '../utils/contractsListSort';
 import { sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
 import { parsePresenceFilter, sqlPresenceListFilter } from '../utils/sapPresenceSql';
@@ -308,9 +308,13 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           : [];
     const plant = (req.query as any).plant as string | string[] | undefined;
     const sortKeyRaw = String((req.query as any).sortKey || 'contract_date');
-    const sortDirRaw = String((req.query as any).sortDir || 'desc').toLowerCase();
-    const sortDir = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
-    const listSort = resolveContractsListSort(sortKeyRaw);
+    // `sort` is the click-history stack (Contract Performance); without it this is the single sortKey + sortDir.
+    const listSort = resolveContractsListSortStack({
+      sort: (req.query as any).sort,
+      sortKey: sortKeyRaw,
+      sortDir: (req.query as any).sortDir || 'desc',
+    });
+    const sortDir = listSort.primaryDir;
     const wantNodeSort = listSort.mode === 'node';
     // Allow filtering by a specific contract id (used by shipment details fallback)
     const contractIdFilter = (req.query as any).contract_id || (req.query as any).contractId || null;
@@ -687,7 +691,6 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     const offsetParam = paramIndex + 1;
 
     const sortKey = listSort.sortKey;
-    const orderExpr = listSort.orderExpr;
 
     // Late filter / node sort flags were computed above before the base CTE.
     // Use incoterm-aware import_status (UAT) — same as Open/Close filters and tree aggregation.
@@ -839,7 +842,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       ${sqlLateInject}
       , page AS (
         SELECT *${listTotalCol} FROM ${pageSource}
-        ORDER BY ${orderExpr} ${sortDir} NULLS LAST, contract_date DESC NULLS LAST, contract_id DESC
+        ORDER BY ${listSort.orderBySql}, contract_date DESC NULLS LAST, contract_id DESC
         LIMIT $${limitParam} OFFSET $${offsetParam}
       )
 `;
