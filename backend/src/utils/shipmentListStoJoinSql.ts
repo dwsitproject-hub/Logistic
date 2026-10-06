@@ -1,3 +1,5 @@
+import { sqlJettyStatusShown } from './jettyStatusSql';
+
 /**
  * The shipments-list STO join block, shared by the list service and the controller.
  *
@@ -50,7 +52,7 @@ export const SHIPMENT_LIST_STO_JOIN_SQL = `
 export const SHIPMENT_LIST_JPS_JOIN_SQL = `
       LEFT JOIN LATERAL (
         SELECT j.jps_status, j.jetty_name, j.planned_berthing_time, j.rejection_reason,
-               j.submitted_at, j.last_polled_at
+               j.submitted_at, j.last_polled_at, j.schedule_cargo_ops_end_at
         FROM jps_shipping_instructions j
         WHERE j.sto_key = sp.sto_key::text
           AND j.state = 'SUBMITTED'
@@ -60,7 +62,8 @@ export const SHIPMENT_LIST_JPS_JOIN_SQL = `
 
 /** Columns the shipments list and its shell both project for the Jetty columns. */
 export const SHIPMENT_LIST_JPS_SELECT_SQL = `
-        jps.jps_status AS jetty_status,
+        ${sqlJettyStatusShown('jps')} AS jetty_status,
+        jps.schedule_cargo_ops_end_at AS jetty_hose_off_at,
         jps.jetty_name AS jetty_name,
         jps.planned_berthing_time AS jetty_planned_berthing_time,
         jps.rejection_reason AS jetty_rejection_reason,

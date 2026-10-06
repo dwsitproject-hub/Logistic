@@ -211,6 +211,28 @@ export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus 
   return 'PLANNED';
 }
 
+/**
+ * The status a modal should SHOW: the stored one, or the ATA ladder's when that is further along.
+ *
+ * The Shipments table and the status cards derive a status from the effective ATAs on every load, while `shipments.status`
+ * is only written when a user saves, a SAP import runs or a shipment is created - never when JPS reports an actual time.
+ * So a vessel whose discharge JPS has finished read Completed in the table and Planned in the modal. It is deliberately not
+ * written back: the JPS lane is read first only while the stored status is not COMPLETED, so storing Completed from the
+ * JPS lane would switch that lane off and the status would fall back. Cancelled is never overridden, and the ladder only
+ * ever moves a status forward, so nothing a user saved is shown as less than it is.
+ */
+export function pickDisplayedShipmentStatus(
+  stored: unknown,
+  derived: ShipmentAutoStatus,
+): ShipmentAutoStatus {
+  const storedKey = String(stored ?? '').trim().toUpperCase();
+  if (storedKey === 'CANCELLED' || storedKey === 'CANCELED') return 'CANCELLED';
+  const storedStatus = normalizeShipmentDetailStatus(storedKey);
+  const derivedRank = SHIPMENT_STATUS_RANK[derived] ?? 1;
+  const storedRank = SHIPMENT_STATUS_RANK[storedStatus] ?? 1;
+  return derivedRank > storedRank ? derived : storedStatus === 'UNPLANNED' ? 'PLANNED' : storedStatus;
+}
+
 /** Monotonic rank for SAP upsert — higher = further along execution ladder. */
 export const SHIPMENT_STATUS_RANK: Readonly<Record<string, number>> = {
   /** Same rank as PLANNED — Unplanned card is PO-only; STO UNPLANNED is legacy alias. */

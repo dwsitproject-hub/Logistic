@@ -820,6 +820,12 @@ export function EditShipmentModal({
   const [uploadedDocTypes, setUploadedDocTypes] = useState<Set<string>>(new Set())
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null)
   const [shipmentStatus, setShipmentStatus] = useState<string | null>(null)
+  /**
+   * What the Shipment Status badge SHOWS: the status as the table and cards derive it from the effective ATAs (the server
+   * sends it as effectiveStatus). `shipmentStatus` above stays the STORED value on purpose - it decides whether a JPS actual
+   * locks an ATA field, and the server's JPS-first read uses that same stored value.
+   */
+  const [displayedShipmentStatus, setDisplayedShipmentStatus] = useState<string | null>(null)
   const [shipmentDocuments, setShipmentDocuments] = useState<ShipmentDocumentItem[]>([])
   const [docsLoading, setDocsLoading] = useState(false)
 
@@ -1106,6 +1112,7 @@ export function EditShipmentModal({
     setUploadedDocTypes(new Set())
     setUploadingDocType(null)
     setShipmentStatus(null)
+    setDisplayedShipmentStatus(null)
     setShipmentDocuments([])
     setDocsLoading(false)
     setEditContext(null)
@@ -1216,6 +1223,7 @@ export function EditShipmentModal({
           shipmentInfo?: Record<string, unknown> | null
           contractDetails?: Array<Record<string, unknown>>
           jettyStatus?: JettyStatusFields | null
+          effectiveStatus?: string | null
         } | null
         if (!payload?.shipment) throw new Error('Failed to load shipment')
 
@@ -1238,6 +1246,9 @@ export function EditShipmentModal({
         )
 
         setShipmentStatus(String(row.status ?? info.status ?? '').trim() || null)
+        setDisplayedShipmentStatus(
+          String(payload.effectiveStatus ?? row.status ?? info.status ?? '').trim() || null,
+        )
         setLoadingPorts(ports)
         setJettyStatus(payload.jettyStatus ?? null)
         setShipmentInfo(info)
@@ -2065,8 +2076,8 @@ export function EditShipmentModal({
                     {readOnly ? 'View Shipment' : 'Edit Shipment'}
                   </h3>
                   {readOnly && (
-                    <Badge className={shipmentStatusBadgeClass(shipmentStatus)}>
-                      {formatShipmentStatusLabel(shipmentStatus)}
+                    <Badge className={shipmentStatusBadgeClass(displayedShipmentStatus ?? shipmentStatus)}>
+                      {formatShipmentStatusLabel(displayedShipmentStatus ?? shipmentStatus)}
                     </Badge>
                   )}
                 </div>
@@ -2352,8 +2363,8 @@ export function EditShipmentModal({
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-gray-600">Shipment Status</span>
-                    <Badge className={shipmentStatusBadgeClass(shipmentStatus)}>
-                      {formatShipmentStatusLabel(shipmentStatus)}
+                    <Badge className={shipmentStatusBadgeClass(displayedShipmentStatus ?? shipmentStatus)}>
+                      {formatShipmentStatusLabel(displayedShipmentStatus ?? shipmentStatus)}
                     </Badge>
                   </div>
                   <div className="flex items-center gap-2">

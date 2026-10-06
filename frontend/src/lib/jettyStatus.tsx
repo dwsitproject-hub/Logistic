@@ -9,11 +9,16 @@ import type { ReactNode } from 'react'
  * operator), Approved (accepted, no berth yet), Allocated (berth assigned), Sailed (vessel departed
  * - terminal, added in JPS v5.0), Rejected (declined, with a reason). Anything else means KLIP has
  * not submitted this STO.
+ *
+ * "Completed (Hose Off)" is the one value JPS does not send: JPS goes from Allocated straight to Sailed, and KLIP shows
+ * the stretch in between - JPS has logged the end of the cargo operation (ATC Discharge) but the vessel has not sailed -
+ * under this name. The backend derives it (utils/jettyStatusSql.ts); it is never stored.
  */
 export type JettyStatusValue =
   | 'Pending'
   | 'Approved'
   | 'Allocated'
+  | 'Completed (Hose Off)'
   | 'Rejected'
   | 'Sailed'
   | null
@@ -26,6 +31,8 @@ export interface JettyStatusFields {
   jetty_rejection_reason?: string | null
   jetty_submitted_at?: string | null
   jetty_last_synced_at?: string | null
+  /** When JPS logged the end of the cargo operation (Hose Off); the reason for "Completed (Hose Off)". */
+  jetty_hose_off_at?: string | null
   /**
    * JPS actuals, keyed by the KLIP ATA field each corresponds to and already dated in WIB
    * (backend/src/jps/scheduleAtaSql.ts). Only the discharge fields JPS reports are present.
@@ -37,6 +44,8 @@ const BADGE_CLASS: Record<string, string> = {
   Pending: 'bg-amber-100 text-amber-800',
   Approved: 'bg-blue-100 text-blue-800',
   Allocated: 'bg-green-100 text-green-800',
+  // Discharge finished, vessel not sailed yet: a stage of its own, so it must not read like Allocated.
+  'Completed (Hose Off)': 'bg-teal-100 text-teal-800',
   // Terminal and uneventful: the voyage is done, so it reads quieter than Allocated.
   Sailed: 'bg-slate-100 text-slate-700',
   Rejected: 'bg-red-100 text-red-800',
@@ -61,6 +70,7 @@ export function jettyStatusTooltip(row: JettyStatusFields | null | undefined): s
   if (row.jetty_planned_berthing_time) {
     parts.push(`Planned berthing: ${formatJettyDate(row.jetty_planned_berthing_time)}`)
   }
+  if (row.jetty_hose_off_at) parts.push(`Hose Off: ${formatJettyDate(row.jetty_hose_off_at)}`)
   if (row.jetty_rejection_reason) parts.push(`Reason: ${row.jetty_rejection_reason}`)
   return parts.length > 0 ? parts.join(' · ') : undefined
 }

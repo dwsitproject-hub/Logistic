@@ -6,6 +6,8 @@ import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
 import { SHIPMENT_LIST_JPS_SELECT_SQL } from '../utils/shipmentListStoJoinSql';
 import { sqlJpsAtaJsonExpr } from '../jps/scheduleAtaSql';
 import { query } from '../database/connection';
+import { getContractImportStatusForShipment } from '../utils/contractDeliveryStatus';
+import { deriveShipmentStatus, pickDisplayedShipmentStatus } from '../utils/shipmentStatus';
 import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
@@ -238,6 +240,11 @@ export interface ShipmentEditPayload {
   contractDetails: Record<string, unknown>[];
   /** Latest JPS Shipping Instruction for this STO, or null when none has been submitted. */
   jettyStatus: Record<string, unknown> | null;
+  /**
+   * The Shipment Status to SHOW, as the table and cards would. `shipment.status` stays the stored value, which the modal
+   * still needs as it is (it decides whether a JPS actual locks an ATA field).
+   */
+  effectiveStatus: string;
 }
 
 async function loadPortsAndInfo(
@@ -516,6 +523,21 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
     hydrateFromMaster: true,
   });
 
+  const shipmentId = String(shipment.id);
+  const info = portsBundle.shipmentInfo ?? {};
+  const derivedStatus = deriveShipmentStatus({
+    ata_arrival_at_loading_port: info.ata_vessel_arrival_at_loading_port,
+    ata_berthed_at_loading_port: info.ata_vessel_berthed_at_loading_port,
+    ata_start_loading: info.ata_vessel_start_loading,
+    ata_completed_loading: info.ata_vessel_completed_loading,
+    ata_sailed_from_loading_port: info.ata_vessel_sailed_from_loading_port,
+    ata_arrive_at_discharge_port: info.ata_vessel_arrive_at_discharge_port,
+    ata_berthed_at_discharge_port: info.ata_vessel_berthed_at_discharge_port,
+    ata_start_discharging: info.ata_vessel_start_discharging,
+    ata_complete_discharge: info.ata_vessel_complete_discharge,
+    contract_import_status: await getContractImportStatusForShipment(shipmentId),
+  });
+
   return {
     fieldHistory,
     shipment,
@@ -523,6 +545,7 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
     ports: portsBundle.ports,
     shipmentInfo: portsBundle.shipmentInfo,
     contractDetails,
-    jettyStatus: await loadJettyStatusForShipment(String(shipment.id)),
+    jettyStatus: await loadJettyStatusForShipment(shipmentId),
+    effectiveStatus: pickDisplayedShipmentStatus(shipment.status ?? info.status, derivedStatus),
   };
 }
