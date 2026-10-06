@@ -14,7 +14,13 @@ import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 import { appendRegionSiteFilter, sqlRegionSiteDisplayForContract, sqlRegionSiteRawForContract } from './regionSiteSql';
-import { contractExtNoSubquery, resolvedPlantCodeSql } from './portDisplaySql';
+import {
+  contractExtNoSubquery,
+  humanReadablePortNameExpr,
+  resolvedPlantCodeSql,
+  sapDischargePortTextSubquery,
+  sapLoadingPortTextSubquery,
+} from './portDisplaySql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import {
   buildShipmentPageUnplannedOpenContractsCte,
@@ -368,6 +374,15 @@ export function unplannedContractBacklogRowSelectSql(
   )`;
   const sapDelivery = qtyMoveScalarSql('quantity_delivery');
   const sapReceive = qtyMoveScalarSql('quantity_receive');
+  /*
+   * The SAP loading / discharge port of the PO. A backlog row has no shipment, so KLIP knows no port yet - but SAP does, on the
+   * PO's own line, and the list shows SAP's port whenever KLIP has none (resolveShipmentListLoadingPorts). Without these two
+   * fields every Unplanned / Preplanned / Completed-without-shipment row read "-" in Loading Port and Discharge Port.
+   *
+   * Wrapped in a one-row subselect so the latest-SAP-row lookup runs once, not once per CASE arm of the name cleaner.
+   */
+  const sapLoadingPort = `(SELECT ${humanReadablePortNameExpr('bp.p')} FROM (SELECT ${sapLoadingPortTextSubquery('c.contract_id')} AS p) bp)`;
+  const sapDischargePort = `(SELECT ${humanReadablePortNameExpr('bp.p')} FROM (SELECT ${sapDischargePortTextSubquery('c.contract_id')} AS p) bp)`;
   const statusSql =
     options?.promoteLowOsToCompleted && statusLiteral !== 'COMPLETED'
       ? `CASE WHEN (${outstandingExpr}) <= ${BACKLOG_OS_COMPLETED_MAX_KG} THEN 'COMPLETED' ELSE '${statusLiteral}' END`
@@ -401,6 +416,8 @@ export function unplannedContractBacklogRowSelectSql(
     NULL::text AS vessel_owner,
     NULL::text AS port_of_loading,
     NULL::text AS port_of_discharge,
+    ${sapLoadingPort} AS sap_loading_ports,
+    ${sapDischargePort} AS sap_discharge_ports,
     NULL::date AS shipment_date,
     NULL::date AS arrival_date,
     0::numeric AS quantity_shipped,
