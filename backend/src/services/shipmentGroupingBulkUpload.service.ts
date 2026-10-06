@@ -16,7 +16,7 @@ import {
 import {
   classifyGroupingClusterMode,
   isCifIncoterm,
-  mergeClusterVoyageFields,
+  mergeClusterVoyageFieldsByPort,
   normalizeDischargePortKey,
 } from '../utils/shipmentGroupingPlannedClassify';
 import {
@@ -148,7 +148,17 @@ export async function applyShipmentGroupingBulkUpload(
   for (const cluster of clusters) {
     const clusterMatches = matchedOk.filter((m) => m.row.group.trim() === cluster.group);
     const contractIds = uniqueContractIds(clusterMatches);
-    const merged = mergeClusterVoyageFields(cluster.rows);
+    // SAP loading port per PO, needed here: loading ETAs are merged per port (one Group can load at two ports).
+    const sapPorts = await fetchSapPortsForContractUuids(contractIds);
+    const portKeyOf = (contractId: string): string =>
+      normalizeDischargePortKey(sapPorts.get(contractId)?.loadingPort ?? '');
+    const merged = mergeClusterVoyageFieldsByPort(
+      clusterMatches.map((m) => ({
+        vessel: m.row.vessel,
+        etas: m.row.etas,
+        portKey: portKeyOf(m.contractId),
+      })),
+    );
     if (merged.reason) {
       failures.push({
         excelRowNumbers: rowNumbers(cluster.rows),
@@ -166,7 +176,17 @@ export async function applyShipmentGroupingBulkUpload(
         return isCifIncoterm(incoterm);
       });
 
-    const classified = classifyGroupingClusterMode({ fields: merged.fields, allCif });
+    // Every port's ETA set has to qualify on its own: a port that is missing dates must not borrow another port's.
+    let classified = classifyGroupingClusterMode({ fields: merged.fields, allCif });
+    if (classified.mode === 'planned') {
+      for (const etas of merged.etasByPort.values()) {
+        const perPort = classifyGroupingClusterMode({ fields: { vessel: merged.fields.vessel, etas }, allCif });
+        if (perPort.mode === 'reject') {
+          classified = perPort;
+          break;
+        }
+      }
+    }
     if (classified.mode === 'reject') {
       failures.push({
         excelRowNumbers: rowNumbers(cluster.rows),
@@ -252,7 +272,6 @@ export async function applyShipmentGroupingBulkUpload(
       continue;
     }
 
-    const sapPorts = await fetchSapPortsForContractUuids(contractIds);
     const missingLoading: string[] = [];
     const missingContract: string[] = [];
     const dischargeNames = new Set<string>();
@@ -279,17 +298,19 @@ export async function applyShipmentGroupingBulkUpload(
       }
       if (dischargePort) dischargeNames.add(normalizeDischargePortKey(dischargePort));
       if (!firstLoadingPort && loadingPort) firstLoadingPort = loadingPort;
+      // This PO's own loading ETAs (those of its loading port) with the voyage's discharge ETAs.
+      const etas = merged.etasByPort.get(portKeyOf(match.contractId)) ?? merged.fields.etas;
       etaByContract[contractNumber] = {
         port_of_loading: loadingPort || null,
-        eta_arrival: merged.fields.etas.eta_arrival || null,
-        eta_berthed: merged.fields.etas.eta_berthed || null,
-        eta_loading_start: merged.fields.etas.eta_loading_start || null,
-        eta_loading_complete: merged.fields.etas.eta_loading_complete || null,
-        eta_sailed: merged.fields.etas.eta_sailed || null,
-        eta_discharge_arrival: merged.fields.etas.eta_discharge_arrival || null,
-        eta_discharge_berthed: merged.fields.etas.eta_discharge_berthed || null,
-        eta_discharge_start: merged.fields.etas.eta_discharge_start || null,
-        eta_discharge_complete: merged.fields.etas.eta_discharge_complete || null,
+        eta_arrival: etas.eta_arrival || null,
+        eta_berthed: etas.eta_berthed || null,
+        eta_loading_start: etas.eta_loading_start || null,
+        eta_loading_complete: etas.eta_loading_complete || null,
+        eta_sailed: etas.eta_sailed || null,
+        eta_discharge_arrival: etas.eta_discharge_arrival || null,
+        eta_discharge_berthed: etas.eta_discharge_berthed || null,
+        eta_discharge_start: etas.eta_discharge_start || null,
+        eta_discharge_complete: etas.eta_discharge_complete || null,
       };
       const qtyMt = qtyMtForMatch(match, identity);
       if (qtyMt > 0) {
