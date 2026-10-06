@@ -1894,6 +1894,31 @@ export function AddNewShipmentModal({
     firstSapPortFromKeys,
   ])
 
+  /**
+   * Which PO belongs to which estimation block. The effect above fills each block's Loading Port, but only when the shipment's
+   * PO list changes - "Add Estimation row", ticking a PO into a block and "All" change the blocks and not that list. A block
+   * created or filled afterwards kept an empty Loading Port, and an empty one marks step 3 incomplete, so Create Shipment
+   * stayed disabled with every field visibly filled (two loading ports: block 2 empty).
+   */
+  const etaBlockPoSignature = useMemo(
+    () => etaDetails.map((block) => `${block.id}:${block.contractIds.join('|')}`).join(';'),
+    [etaDetails],
+  )
+  useEffect(() => {
+    if (!open || isEditMode || loadingEdit) return
+    const sapLoading = firstSapPortFromKeys(newShipment.contractNumbers, 'port_of_loading')
+    setEtaDetails((prev) => {
+      let changed = false
+      const next = prev.map((block) => {
+        const fromBlock = firstSapPortFromKeys(block.contractIds, 'port_of_loading') || sapLoading
+        if (block.loadingPort === fromBlock) return block
+        changed = true
+        return { ...block, loadingPort: fromBlock }
+      })
+      return changed ? next : prev
+    })
+  }, [open, isEditMode, loadingEdit, etaBlockPoSignature, newShipment.contractNumbers, firstSapPortFromKeys])
+
   const validateShipmentForm = (transportMode: string | null): boolean => {
     const errors: Record<string, string> = {}
 
