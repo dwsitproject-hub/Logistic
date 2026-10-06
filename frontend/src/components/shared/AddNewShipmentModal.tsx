@@ -56,6 +56,7 @@ import {
   resolvePlotStoLookupKey,
   resolvePoPlantCode,
   buildQuantityShipmentPlanByContractKg,
+  groupSelectionKeysByLoadingPort,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
@@ -1539,7 +1540,12 @@ export function AddNewShipmentModal({
         stoNumber: String(prefilledStoNumber ?? prev.stoNumber ?? '').trim() || prev.stoNumber,
         portOfDischarge: prev.portOfDischarge.trim() || sapStoPreview?.port_of_discharge || '',
       }))
-      setEtaDetails([createShipmentEtaDetail([...keys])])
+      // One estimation block per SAP loading port (a mixed-port grouping suggestion becomes two blocks, not one).
+      setEtaDetails(
+        groupSelectionKeysByLoadingPort(keys, (key) => validations[key]?.contractData?.port_of_loading).map((group) =>
+          createShipmentEtaDetail(group),
+        ),
+      )
     },
     [prefilledStoNumber, sapStoPreview?.port_of_discharge, sapStoPreview?.vessel_name],
   )
@@ -1845,7 +1851,9 @@ export function AddNewShipmentModal({
 
     setEtaDetails((prev) => {
       if (prev.length === 0) {
-        return [createShipmentEtaDetail([...contractIds])]
+        return groupSelectionKeysByLoadingPort(contractIds, (key) =>
+          resolveContractDataForSelectionKey(key)?.port_of_loading as string | undefined,
+        ).map((group) => createShipmentEtaDetail(group))
       }
       const ownerMap = buildGlobalSelectedPoOwnerMap(prev)
       return prev.map((block, index) => {

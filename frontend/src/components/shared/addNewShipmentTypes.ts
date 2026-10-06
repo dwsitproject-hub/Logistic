@@ -178,6 +178,36 @@ export function mapStoContractDetailToPoOption(detail: Record<string, unknown>):
   }
 }
 
+/**
+ * Split the selected POs into one group per SAP loading port, in order of first appearance. A PO whose port is unknown joins the
+ * first group (the modal falls back to the first known port for it, so it would land there anyway); with no known port at all
+ * everything stays in one group. Used to open one estimation block per loading port - a grouping suggestion that mixes two ports
+ * (e.g. POM PANGKAL BALAM and POM BELINYU) is one shipment with two loading-port ETAs and a single discharge.
+ */
+export function groupSelectionKeysByLoadingPort(
+  keys: string[],
+  portOf: (key: string) => string | null | undefined,
+): string[][] {
+  const groups = new Map<string, string[]>()
+  const withoutPort: string[] = []
+  for (const key of keys) {
+    const port = String(portOf(key) ?? '').trim().toUpperCase()
+    if (!port) {
+      withoutPort.push(key)
+      continue
+    }
+    const group = groups.get(port)
+    if (group) group.push(key)
+    else groups.set(port, [key])
+  }
+  const out = [...groups.values()]
+  if (withoutPort.length > 0) {
+    if (out.length === 0) out.push(withoutPort)
+    else out[0].push(...withoutPort)
+  }
+  return out
+}
+
 function coalescePoField(preferred: unknown, fallback: unknown): unknown {
   if (preferred != null && preferred !== '') return preferred
   return fallback

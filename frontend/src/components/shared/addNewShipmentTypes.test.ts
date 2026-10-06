@@ -4,6 +4,7 @@ import {
   resolvePlotStoLookupKey,
   resolvePoPlantCode,
   buildQuantityShipmentPlanByContractKg,
+  groupSelectionKeysByLoadingPort,
 } from './addNewShipmentTypes'
 import { classifyShipmentTransportMode } from '@/lib/shipmentTransportMode'
 
@@ -80,5 +81,28 @@ describe('buildQuantityShipmentPlanByContractKg', () => {
         (key) => (key === 'k1' ? '1004001' : '1004002'),
       ),
     ).toEqual({ '1004001': 12500 })
+  })
+})
+
+describe('groupSelectionKeysByLoadingPort', () => {
+  const ports: Record<string, string> = {
+    '3296': 'POM BELINYU',
+    '3290': 'POM PANGKAL BALAM',
+    '3301': 'pom pangkal balam ',
+  }
+  const portOf = (key: string) => ports[key]
+
+  it('opens one group per loading port, in order of first appearance, ignoring case and spaces', () => {
+    expect(groupSelectionKeysByLoadingPort(['3296', '3290', '3301'], portOf)).toEqual([['3296'], ['3290', '3301']])
+  })
+
+  it('keeps a single group when every PO has the same port', () => {
+    expect(groupSelectionKeysByLoadingPort(['3290', '3301'], portOf)).toEqual([['3290', '3301']])
+  })
+
+  it('puts a PO with no known port in the first group, and keeps one group when none has a port', () => {
+    expect(groupSelectionKeysByLoadingPort(['3296', 'x', '3290'], portOf)).toEqual([['3296', 'x'], ['3290']])
+    expect(groupSelectionKeysByLoadingPort(['x', 'y'], () => null)).toEqual([['x', 'y']])
+    expect(groupSelectionKeysByLoadingPort([], portOf)).toEqual([])
   })
 })
