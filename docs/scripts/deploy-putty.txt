@@ -4,7 +4,8 @@ KLIP — Deploy rutin via PuTTY: SIT dan PRODUCTION
 Pakai file ini untuk deploy harian. Isinya hanya perintah yang di-paste ke PuTTY.
 Semua pemeriksaan ada di dalam skrip:
   docs/scripts/deploy-sit.sh    (branch SIT)
-  docs/scripts/deploy-prod.sh   (branch main)
+  docs/scripts/deploy-prod-backend.sh    (branch main, host ECS-DB)
+  docs/scripts/deploy-prod-frontend.sh   (branch main, host ECS-App)
 
 Setup pertama kali (bootstrap host baru, buka port) TIDAK dibahas di sini:
   production-deploy-putty.txt / staging-deploy-putty.txt
@@ -75,7 +76,7 @@ Skrip production menolak jalan kalau:
 
 ----- B1. PuTTY -> BACKEND PRODUCTION (8.215.56.98 port 1819) -----
 
-cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod.sh > /tmp/deploy-prod.sh && bash /tmp/deploy-prod.sh backend
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod-backend.sh > /tmp/deploy-prod-backend.sh && bash /tmp/deploy-prod-backend.sh
 
   Skrip akan berhenti dan bertanya DUA kali:
 
@@ -105,7 +106,7 @@ cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scrip
 
 ----- B2. PuTTY -> FRONTEND PRODUCTION (147.139.176.70 port 1818) -----
 
-cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod.sh > /tmp/deploy-prod.sh && bash /tmp/deploy-prod.sh frontend
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod-frontend.sh > /tmp/deploy-prod-frontend.sh && bash /tmp/deploy-prod-frontend.sh
 
   Konfirmasi: ketik frontend
   Yang perlu dibaca:

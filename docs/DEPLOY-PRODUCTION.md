@@ -21,8 +21,8 @@ verifikasi → amankan akun default**.
 Pakai skripnya, bukan perintah yang diketik dari ingatan:
 
 ```bash
-cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod.sh > /tmp/deploy-prod.sh && bash /tmp/deploy-prod.sh backend
-cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod.sh > /tmp/deploy-prod.sh && bash /tmp/deploy-prod.sh frontend
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod-backend.sh > /tmp/deploy-prod-backend.sh && bash /tmp/deploy-prod-backend.sh
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod-frontend.sh > /tmp/deploy-prod-frontend.sh && bash /tmp/deploy-prod-frontend.sh
 ```
 
 Skripnya diambil dari `origin/main`, bukan dari `/opt/klip/docs/scripts`. Salinan di server adalah

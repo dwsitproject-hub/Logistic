@@ -31,7 +31,7 @@
 # It never edits .env, never runs migrations by hand (compose does that in the right order, then
 # starts the matching code), and stops at the first failed check.
 #
-# Sibling script: docs/scripts/deploy-prod.sh - same shape, and production additionally needs
+# Sibling scripts: docs/scripts/deploy-prod-backend.sh and deploy-prod-frontend.sh - same shape, and production additionally needs
 # docker-compose.backend.sap-share.yml.
 
 set -euo pipefail
