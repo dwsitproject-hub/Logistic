@@ -4423,9 +4423,18 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => resolveShipmentListDischargePorts(s),
-      render: (s) => (
-        <span className="text-sm break-words">{formatOperationalTableTextDisplay(resolveShipmentListDischargePorts(s))}</span>
-      ),
+      render: (s) => {
+        // Same cell as Loading Port: one port per line, ellipsis when the column is narrower than the name, and the full
+        // value in the hover title - a bare span clipped the name with no way to read the rest.
+        const dischargePorts = resolveShipmentListDischargePorts(s)
+        return (
+          <OperationalStackedCommaCell
+            value={dischargePorts}
+            title={dischargePorts || ''}
+            truncateLongParts
+          />
+        )
+      },
     },
     {
       id: 'contract_date',
