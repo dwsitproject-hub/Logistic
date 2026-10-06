@@ -27,7 +27,7 @@ export const SHIPMENTS_SERVER_SORT_KEYS: ReadonlySet<string> = new Set([
   'ata_vessel_arrive_at_discharge_port', 'ata_vessel_berthed_at_discharge_port', 'ata_vessel_start_discharging',
   'late_indicator', 'contract_qty', 'loading_port', 'discharge_port', 'contract_ext_no',
   // enriched (SAP / qty) columns
-  'outstanding_quantity', 'outstanding_qty_planning', 'sto_quantity', 'b2b_flag',
+  'outstanding_quantity', 'outstanding_qty_planning', 'sto_quantity', 'b2b_flag', 'quantity_shipment_plan',
   // contract-backlog-only columns
   'pre_planned_group', 'trade_cycle_days',
 ])

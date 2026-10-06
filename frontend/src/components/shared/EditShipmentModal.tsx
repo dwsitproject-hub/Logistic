@@ -570,6 +570,8 @@ type ShipmentDetailRow = {
   quantity_delivered_sap: number | null
   /** SAP STO-scoped receive (read-only in PO table). */
   quantity_receive_sap: number | null
+  /** Qty Shipment Plan entered at Add New Shipment (read-only; a plan, not a delivery). */
+  quantity_shipment_plan: number | null
   /** KLIP delivered seed (editable without SLD/SDD). */
   quantity_delivered_klip: number | null
   /** KLIP receive seed (editable after SLD/SDD). */
@@ -627,6 +629,7 @@ function contractDetailRowFromApi(
     outstanding_qty: osActual,
     quantity_delivered_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_delivered), contractQty),
     quantity_receive_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_receive), contractQty),
+    quantity_shipment_plan: shipmentStoredQtyKg(parseApiNumber(d.quantity_shipment_plan)),
     quantity_delivered_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_delivered_klip)),
     quantity_receive_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_receive_klip)),
     vessel_oa_budget_sap: parseApiNumber(d.vessel_oa_budget_sap),
@@ -677,6 +680,7 @@ async function buildContractDetailRows(
         outstanding_qty: enriched.outstanding_qty,
         quantity_delivered_sap: null,
         quantity_receive_sap: null,
+        quantity_shipment_plan: null,
         quantity_delivered_klip: null,
         quantity_receive_klip: null,
         vessel_oa_budget_sap: null,
@@ -926,13 +930,19 @@ export function EditShipmentModal({
     let sapDelivered = 0
     let sapReceive = 0
     let osQty = 0
+    let shipmentPlan = 0
+    let hasShipmentPlan = false
     for (const row of detailRows) {
       contractQty += row.contract_qty ?? 0
       sapDelivered += row.quantity_delivered_sap ?? 0
       sapReceive += row.quantity_receive_sap ?? 0
       osQty += row.outstanding_qty_actual ?? 0
+      if (row.quantity_shipment_plan != null) {
+        shipmentPlan += row.quantity_shipment_plan
+        hasShipmentPlan = true
+      }
     }
-    return { contractQty, sapDelivered, sapReceive, osQty }
+    return { contractQty, sapDelivered, sapReceive, osQty, shipmentPlan: hasShipmentPlan ? shipmentPlan : null }
   }, [detailRows])
 
   const qtyTotals = useMemo(
@@ -2473,6 +2483,11 @@ export function EditShipmentModal({
                           </span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
+                          <span title="Planned quantity entered when the shipment was added. Read-only; does not reduce OS Qty.">
+                            Qty Shipment Plan
+                          </span>
+                        </TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
                           Delivered Qty (Klip)
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
@@ -2519,6 +2534,9 @@ export function EditShipmentModal({
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               <MtQtyReadOnly valueKg={row.outstanding_qty_actual} />
+                            </TableCell>
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              <MtQtyReadOnly valueKg={row.quantity_shipment_plan} />
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {readOnly ? (
@@ -2572,6 +2590,9 @@ export function EditShipmentModal({
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                           <MtQtyReadOnly valueKg={poTableQtyTotals.osQty} />
+                        </TableCell>
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={poTableQtyTotals.shipmentPlan} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                           <MtQtyReadOnly valueKg={qtyTotals.quantity_delivered} />

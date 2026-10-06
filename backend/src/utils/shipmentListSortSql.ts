@@ -36,6 +36,7 @@ export const SHIPMENT_LIST_SORT_COLUMNS: Record<string, string> = {
   delivery_start: 'fs.delivery_start_date',
   delivery_end: 'fs.delivery_end_date',
   quantity_shipped: 'fs.quantity_shipped',
+  quantity_shipment_plan: 'fs.quantity_shipment_plan',
   // Shell / skipSapJoin path — KLIP-first proxies (SAP Open/Close resolve needs enriched path).
   quantity_delivered:
     'COALESCE(fs.quantity_delivered_klip, fs.quantity_delivered)',

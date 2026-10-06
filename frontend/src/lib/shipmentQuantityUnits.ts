@@ -298,3 +298,16 @@ export function resolveShipmentListStoKg(shipment: {
     ?? shipmentStoredQtyKg(shipment.quantity_shipped)
   )
 }
+
+/**
+ * Qty Shipment Plan of a Shipments list row, in kg, or null when no plan was entered.
+ *
+ * A plan is not a delivery: it is its own column (shipments.quantity_shipment_plan), summed over the POs of the STO group by
+ * the list query, and it feeds no Delivered / Outstanding figure. Null stays null so an STO nobody planned reads "-", not 0.
+ */
+export function shipmentListShipmentPlanKg(row: object | null | undefined): number | null {
+  const raw = (row as { quantity_shipment_plan?: unknown } | null | undefined)?.quantity_shipment_plan
+  if (raw == null || raw === '') return null
+  const n = typeof raw === 'number' ? raw : Number(String(raw).replace(/,/g, '').trim())
+  return Number.isFinite(n) && n > 0 ? n : null
+}

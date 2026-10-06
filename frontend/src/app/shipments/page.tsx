@@ -98,6 +98,7 @@ import {
   shipmentListDeliveredKgForViewTable,
   shipmentListOutstandingKgForViewTable,
   shipmentListReceiveKgForViewTable,
+  shipmentListShipmentPlanKg,
   resolveShipmentListStoKg,
   sapContractDetailQtyToKg,
   shipmentStoredQtyKg,
@@ -3795,7 +3796,7 @@ function ShipmentsPageContent() {
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'trade_cycle_days' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'fuel_consumption' || colId === 'freight' || colId === 'freight_budget' || colId === 'pump_rate' || colId === 'sailing_speed' || colId === 'shortage' || colId === 'outstanding_quantity') return 'number'
+    if (colId === 'quantity_shipped' || colId === 'quantity_shipment_plan' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'trade_cycle_days' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'fuel_consumption' || colId === 'freight' || colId === 'freight_budget' || colId === 'pump_rate' || colId === 'sailing_speed' || colId === 'shortage' || colId === 'outstanding_quantity') return 'number'
     if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at' || colId === 'eta_arrival' || colId === 'eta_berthed' || colId === 'eta_loading_start' || colId === 'eta_loading_complete' || colId === 'eta_sailed' || colId === 'eta_discharge_arrival' || colId === 'eta_discharge_berthed' || colId === 'eta_discharge_start' || colId === 'eta_discharge_complete' || colId === 'ata_vessel_arrival_at_loading_port' || colId === 'ata_vessel_berthed_at_loading_port' || colId === 'ata_vessel_start_loading' || colId === 'ata_vessel_sailed_from_loading_port' || colId === 'ata_vessel_arrive_at_discharge_port' || colId === 'ata_vessel_berthed_at_discharge_port' || colId === 'ata_vessel_start_discharging') return 'date'
     return 'text'
   }
@@ -3830,6 +3831,7 @@ function ShipmentsPageContent() {
       case 'b2b_flag': return s.b2b_flag || ''
       case 'charter_type': return s.charter_type || ''
       case 'quantity_shipped': return typeof s.quantity_shipped === 'number' ? s.quantity_shipped : null
+      case 'quantity_shipment_plan': return shipmentListShipmentPlanKg(s)
       case 'quantity_delivered': return typeof s.quantity_delivered === 'number' ? s.quantity_delivered : null
       case 'sto_quantity': return typeof s.sto_quantity === 'number' ? s.sto_quantity : null
       case 'contract_qty': return typeof s.contract_qty === 'number' ? s.contract_qty : null
@@ -4556,6 +4558,22 @@ function ShipmentsPageContent() {
           {qtyFieldsReady
             ? formatSapQtyMtDisplay(resolveShipmentListStoKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
+        </span>
+      )
+    },
+    {
+      id: 'quantity_shipment_plan',
+      label: 'Qty Shipment Plan',
+      // The plan entered at Add New Shipment, summed over the STO's POs. Read-only here; a plan is not a delivery, so it is
+      // not part of Delivery Qty or OS Qty.
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => shipmentListShipmentPlanKg(s) ?? 0,
+      render: (s) => (
+        <span className="text-sm break-words tabular-nums">
+          {shipmentListShipmentPlanKg(s) == null
+            ? '-'
+            : formatSapQtyMtDisplay(shipmentListShipmentPlanKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },

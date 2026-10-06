@@ -198,6 +198,8 @@ export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
 
   sto_quantity: 96,
 
+  quantity_shipment_plan: 104,
+
   quantity_delivered: 96,
 
   quantity_receive: 96,

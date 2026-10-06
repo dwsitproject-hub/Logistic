@@ -62,8 +62,11 @@ export type CreateShipmentFormPayload = {
   /** Optional leftover planning allocation (MT). Add New no longer collects Shipment Plan Qty. */
   contractQtyAssigned?: Record<string, string | number>
   poQtyAssigned?: Record<string, string | number>
-  /** Per contract_id Qty Delivery (Klip) in kg. Optional; blank PO rows are omitted. */
-  quantityDeliveredByContract?: Record<string, number>
+  /**
+   * Per contract_id Qty Shipment Plan in kg. Optional; blank PO rows are omitted. It replaced Qty Delivery (Klip) here: a plan
+   * is stored on its own column and never counts as a delivery, so it does not reduce Outstanding.
+   */
+  quantityShipmentPlanByContract?: Record<string, number>
   vesselName: string
   vesselCode: string
   vesselOwner: string
@@ -385,8 +388,8 @@ export async function attachPurchaseOrderToShipment(args: {
   }
 }
 
-/** Convert optional per-PO Qty Delivery (Klip) MT strings to kg keyed by contract_id. */
-export function buildQuantityDeliveredByContractKg(
+/** Convert optional per-PO Qty Shipment Plan MT strings to kg keyed by contract_id. */
+export function buildQuantityShipmentPlanByContractKg(
   selectionKeys: string[],
   mtBySelectionKey: Record<string, string>,
   resolveContractId: (selectionKey: string) => string,

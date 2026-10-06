@@ -199,7 +199,7 @@ import {
   resolvedPlantCodeSql,
 } from '../utils/portDisplaySql';
 import { sqlUserStoQtyAssignedToKgSql } from '../utils/userStoAssignmentQty';
-import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
+import { buildShipmentPageSeaIncotermScopeSql, SHIPMENT_OUT_OF_SCOPE_MESSAGE } from '../utils/shipmentIncotermScope';
 import {
   sqlRelevantContractNumbersWithB2bOrigins,
   sqlShipmentListB2bOriginContractJoins,
@@ -983,6 +983,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_shipped')}, 0) as quantity_shipped,
           COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_delivered')}, 0) as quantity_delivered,
           COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_delivered_klip')}, 0) as quantity_delivered_klip,
+          -- Qty Shipment Plan is typed per PO, so a STO group is the SUM of its POs; NULL (not 0) when none was planned.
+          SUM(s.quantity_shipment_plan) as quantity_shipment_plan,
           COALESCE(SUM(s.inbound_weight), 0) as inbound_weight,
           COALESCE(SUM(s.outbound_weight), 0) as outbound_weight,
           COALESCE(AVG(s.gain_loss_percentage), 0) as gain_loss_percentage,
@@ -4864,6 +4866,8 @@ export const getContractSuggestions = async (req: AuthRequest, res: Response) =>
           c.po_number ILIKE $1
           OR c.contract_id ILIKE $1
         )
+        -- Only POs the Shipments page owns (Incoterm CIF / FOB / CFR). FRC / LCO is land trucking, which has its own search.
+        AND ${buildShipmentPageSeaIncotermScopeSql('c')}
         AND NOT (
           UPPER(TRIM(COALESCE(spd_b2b.b2b_flag, c.contract_type::text, ''))) = 'B2B'
           AND NULLIF(TRIM(COALESCE(spd_b2b.contract_reference_po, '')), '') IS NOT NULL
@@ -5008,7 +5012,8 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
         ${resolvedLoadingPortNameSql('c.contract_id')} AS port_of_loading,
         ${resolvedDischargePortNameSql('c.contract_id')} AS port_of_discharge,
-        ${SQL_CONTRACT_IMPORT_STATUS} AS import_status
+        ${SQL_CONTRACT_IMPORT_STATUS} AS import_status,
+        ${buildShipmentPageSeaIncotermScopeSql('c')} AS in_shipment_scope
       FROM matched c
       LIMIT 1
       `,
@@ -5024,6 +5029,16 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
     }
 
     const contractRow = result.rows[0];
+    // A PO of another module (land trucking) is refused here as well: typing it and pressing Enter must not get around the search.
+    if (contractRow.in_shipment_scope !== true) {
+      return res.json({
+        success: true,
+        exists: false,
+        outOfScope: true,
+        message: SHIPMENT_OUT_OF_SCOPE_MESSAGE,
+      });
+    }
+    delete contractRow.in_shipment_scope;
     const purchaseOrders = await fetchPurchaseOrderLines(String(contractRow.contract_id));
 
     return res.json({
@@ -5222,6 +5237,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       quantityShipped,
       quantityDelivered,
       quantityDeliveredByContract,
+      quantityShipmentPlanByContract,
       eta_arrival,
       eta_berthed,
       eta_loading_start,
@@ -5254,6 +5270,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       quantityShipped,
       quantityDelivered,
       quantityDeliveredByContract,
+      quantityShipmentPlanByContract,
       eta_arrival,
       eta_berthed,
       eta_loading_start,

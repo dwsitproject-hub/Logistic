@@ -10,6 +10,7 @@ import {
   shipmentListDeliveredKgForViewTable,
   shipmentListOutstandingKgForViewTable,
   shipmentListReceiveKgForViewTable,
+  shipmentListShipmentPlanKg,
 } from './shipmentQuantityUnits'
 
 describe('sapDeliveredOrReceiveMtToKg', () => {
@@ -322,5 +323,20 @@ describe('seedKlipQtyFromShipmentHeader', () => {
       },
     )
     expect(seeded).toEqual([{ quantity_delivered: 510_000, quantity_receive: 505_000 }])
+  })
+})
+
+describe('shipmentListShipmentPlanKg', () => {
+  it('is the planned kg, and null (not 0) when nobody planned the STO', () => {
+    expect(shipmentListShipmentPlanKg({ quantity_shipment_plan: 350000 })).toBe(350000)
+    expect(shipmentListShipmentPlanKg({ quantity_shipment_plan: '12,500' })).toBe(12500)
+    expect(shipmentListShipmentPlanKg({ quantity_shipment_plan: null })).toBeNull()
+    expect(shipmentListShipmentPlanKg({ quantity_shipment_plan: 0 })).toBeNull()
+    expect(shipmentListShipmentPlanKg({})).toBeNull()
+    expect(shipmentListShipmentPlanKg(null)).toBeNull()
+  })
+
+  it('is not part of Delivery Qty: a plan does not count as delivered', () => {
+    expect(shipmentListDeliveredKgForViewTable({ klip_delivery_qty: null, quantity_delivered_klip: null, ...({ quantity_shipment_plan: 350000 } as object) })).toBe(0)
   })
 })

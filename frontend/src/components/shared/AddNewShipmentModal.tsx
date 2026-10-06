@@ -55,7 +55,7 @@ import {
   formatPoPlantLabel,
   resolvePlotStoLookupKey,
   resolvePoPlantCode,
-  buildQuantityDeliveredByContractKg,
+  buildQuantityShipmentPlanByContractKg,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
@@ -463,7 +463,7 @@ export function AddNewShipmentModal({
   const [editShipmentId, setEditShipmentId] = useState<string | null>(null)
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
   const [newShipment, setNewShipment] = useState(emptyShipment)
-  const [qtyDeliveryKlipMtByKey, setQtyDeliveryKlipMtByKey] = useState<Record<string, string>>({})
+  const [qtyShipmentPlanMtByKey, setQtyShipmentPlanMtByKey] = useState<Record<string, string>>({})
   const [contractSuggestions, setContractSuggestions] = useState<any[]>([])
   const [contractSearchTerm, setContractSearchTerm] = useState('')
   const [showContractSuggestions, setShowContractSuggestions] = useState(false)
@@ -654,7 +654,10 @@ export function AddNewShipmentModal({
               checking: false,
               exists: false,
               contractData: null,
-              message: 'Contract number does not exist',
+              // A PO that belongs to another module says so, instead of reading as a typo.
+              message: response.data.outOfScope
+                ? String(response.data.message ?? 'PO ini bukan lingkup Shipment')
+                : 'Contract number does not exist',
             },
           }))
           return null
@@ -766,7 +769,7 @@ export function AddNewShipmentModal({
       contractNumbers: prev.contractNumbers.filter((id) => id !== contractId),
       operationId: prev.contractNumbers.filter((id) => id !== contractId).length > 0 ? prev.operationId : '',
     }))
-    setQtyDeliveryKlipMtByKey((prev) => {
+    setQtyShipmentPlanMtByKey((prev) => {
       const next = { ...prev }
       delete next[contractId]
       return next
@@ -1378,7 +1381,7 @@ export function AddNewShipmentModal({
     setNewShipment(emptyShipment())
     contractNumbersRef.current = []
     setContractValidations({})
-    setQtyDeliveryKlipMtByKey({})
+    setQtyShipmentPlanMtByKey({})
     setEtaDetails([])
     setContractSearchTerm('')
     setContractSuggestions([])
@@ -2106,9 +2109,9 @@ export function AddNewShipmentModal({
 
       const selectionKeys = newShipment.contractNumbers
       const contractNumbers = [...new Set(selectionKeys.map((k) => resolveContractIdForKey(k)))]
-      const quantityDeliveredByContract = buildQuantityDeliveredByContractKg(
+      const quantityShipmentPlanByContract = buildQuantityShipmentPlanByContractKg(
         selectionKeys,
-        qtyDeliveryKlipMtByKey,
+        qtyShipmentPlanMtByKey,
         resolveContractIdForKey,
       )
 
@@ -2117,8 +2120,8 @@ export function AddNewShipmentModal({
         operationId,
         stoNumber: newShipment.stoNumber.trim() || String(prefilledStoNumber ?? '').trim(),
         contractNumbers,
-        ...(Object.keys(quantityDeliveredByContract).length > 0
-          ? { quantityDeliveredByContract }
+        ...(Object.keys(quantityShipmentPlanByContract).length > 0
+          ? { quantityShipmentPlanByContract }
           : {}),
         vesselName: newShipment.vesselName,
         vesselCode: newShipment.vesselCode,
@@ -2534,7 +2537,7 @@ export function AddNewShipmentModal({
                             <TableHead className={COMPACT_TH}>Supplier / Product</TableHead>
                             <TableHead className={`${COMPACT_TH} text-right`}>Contract Qty</TableHead>
                             <TableHead className={`${COMPACT_TH} text-right`}>OS Qty</TableHead>
-                            <TableHead className={`${COMPACT_TH} text-right`}>Qty Delivery (Klip)</TableHead>
+                            <TableHead className={`${COMPACT_TH} text-right`}><span title="Planned quantity for this PO. Saved on its own and read-only afterwards; it does not reduce OS Qty.">Qty Shipment Plan</span></TableHead>
                             <TableHead className={COMPACT_TH}>Del. Start</TableHead>
                             <TableHead className={COMPACT_TH}>Del. End</TableHead>
                             {!isEditMode && <TableHead className={`${COMPACT_TH} w-8`} />}
@@ -2603,14 +2606,14 @@ export function AddNewShipmentModal({
                                       type="text"
                                       inputMode="decimal"
                                       autoComplete="off"
-                                      value={qtyDeliveryKlipMtByKey[contractId] ?? ''}
+                                      value={qtyShipmentPlanMtByKey[contractId] ?? ''}
                                       placeholder="—"
                                       title={DECIMAL_DOT_HINT}
                                       onKeyDown={blockCommaDecimalKeyDown}
                                       onChange={(e) => {
                                         const raw = e.target.value
                                         if (raw === '') {
-                                          setQtyDeliveryKlipMtByKey((prev) => {
+                                          setQtyShipmentPlanMtByKey((prev) => {
                                             const next = { ...prev }
                                             delete next[contractId]
                                             return next
@@ -2618,7 +2621,7 @@ export function AddNewShipmentModal({
                                           return
                                         }
                                         if (sanitizeDecimalDotInput(raw) === null) return
-                                        setQtyDeliveryKlipMtByKey((prev) => ({ ...prev, [contractId]: raw }))
+                                        setQtyShipmentPlanMtByKey((prev) => ({ ...prev, [contractId]: raw }))
                                       }}
                                       className="h-7 px-2 py-1 pr-8 text-right text-xs tabular-nums"
                                     />
@@ -2651,7 +2654,7 @@ export function AddNewShipmentModal({
                         </TableBody>
                       </Table>
                     </div>
-                    <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT} Optional; blank keeps SAP as the source until filled.</p>
+                    <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT} Optional. Qty Shipment Plan is a plan: it is saved separately and does not reduce OS Qty.</p>
                   </div>
                 )}
               </div>

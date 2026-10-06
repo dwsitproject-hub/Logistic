@@ -209,12 +209,14 @@ export function sqlSiblingShipmentGroupMatchSql(opts: {
  */
 export function sqlSiblingShipmentKlipQtyExpr(
   contractNumberExpr: string,
-  field: 'delivered' | 'receive',
+  field: 'delivered' | 'receive' | 'plan',
 ): string {
   const valueExpr =
     field === 'delivered'
       ? `COALESCE(s.quantity_delivered_klip, s.quantity_delivered)`
-      : `s.actual_vessel_qty_receive`;
+      : field === 'plan'
+        ? `s.quantity_shipment_plan`
+        : `s.actual_vessel_qty_receive`;
   const matchSql = sqlSiblingShipmentGroupMatchSql({
     lookupKeySql: '$1::text',
     contractNumberSql: contractNumberExpr,
@@ -469,6 +471,7 @@ export function buildContractDetailsForStoSql(): string {
         ${plOutstandingActual} AS outstanding_qty,
         ${plDeliveredKg} AS quantity_delivered,
         ${plReceiveKg} AS quantity_receive,
+        ${sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'plan')} AS quantity_shipment_plan,
         ${sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'delivered')} AS quantity_delivered_klip,
         ${sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'receive')} AS quantity_receive_klip,
         (SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')
@@ -512,6 +515,7 @@ export function buildContractDetailsForStoSql(): string {
         ${socOutstandingActual} AS outstanding_qty,
         ${socDeliveredKg} AS quantity_delivered,
         ${socReceiveKg} AS quantity_receive,
+        ${sqlSiblingShipmentKlipQtyExpr('soc.contract_number', 'plan')} AS quantity_shipment_plan,
         ${sqlSiblingShipmentKlipQtyExpr('soc.contract_number', 'delivered')} AS quantity_delivered_klip,
         ${sqlSiblingShipmentKlipQtyExpr('soc.contract_number', 'receive')} AS quantity_receive_klip,
         (SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')

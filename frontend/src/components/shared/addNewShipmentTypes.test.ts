@@ -3,7 +3,7 @@ import {
   formatPoPlantLabel,
   resolvePlotStoLookupKey,
   resolvePoPlantCode,
-  buildQuantityDeliveredByContractKg,
+  buildQuantityShipmentPlanByContractKg,
 } from './addNewShipmentTypes'
 import { classifyShipmentTransportMode } from '@/lib/shipmentTransportMode'
 
@@ -71,10 +71,10 @@ describe('classifyShipmentTransportMode', () => {
   })
 })
 
-describe('buildQuantityDeliveredByContractKg', () => {
+describe('buildQuantityShipmentPlanByContractKg', () => {
   it('converts positive MT inputs to kg and skips blanks', () => {
     expect(
-      buildQuantityDeliveredByContractKg(
+      buildQuantityShipmentPlanByContractKg(
         ['k1', 'k2', 'k3'],
         { k1: '12.5', k2: '', k3: '0' },
         (key) => (key === 'k1' ? '1004001' : '1004002'),

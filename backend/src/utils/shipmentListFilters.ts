@@ -120,6 +120,7 @@ const SB_COL: Record<string, string> = {
   eta_vessel_complete_discharge: 'sb.eta_vessel_complete_discharge',
   eta_discharge_complete: 'sb.eta_discharge_complete',
   quantity_shipped: 'sb.quantity_shipped',
+  quantity_shipment_plan: 'sb.quantity_shipment_plan',
   quantity_delivered: 'sb.quantity_delivered',
   inbound_weight: 'sb.inbound_weight',
   outbound_weight: 'sb.outbound_weight',

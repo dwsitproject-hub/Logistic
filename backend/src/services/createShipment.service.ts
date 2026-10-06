@@ -2,6 +2,7 @@ import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import logger from '../utils/logger';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import { buildShipmentPageSeaIncotermScopeSql, SHIPMENT_OUT_OF_SCOPE_MESSAGE } from '../utils/shipmentIncotermScope';
 import {
   allocateNextSyntheticSequenceDefault,
   buildSyntheticOperationId,
@@ -59,6 +60,8 @@ export interface CreateShipmentsFromContractsInput {
   quantityDelivered?: string | number | null;
   /** Per contract_id (business number) delivery qty in kg. Sets quantity_delivered and quantity_delivered_klip. */
   quantityDeliveredByContract?: Record<string, string | number | null> | null;
+  /** Per contract_id (business number) planned shipment qty in kg. Sets quantity_shipment_plan only - a plan is not a delivery. */
+  quantityShipmentPlanByContract?: Record<string, string | number | null> | null;
   eta_arrival?: string | null;
   eta_berthed?: string | null;
   eta_loading_start?: string | null;
@@ -128,6 +131,7 @@ export async function createShipmentsFromContracts(
     quantityShipped,
     quantityDelivered,
     quantityDeliveredByContract,
+    quantityShipmentPlanByContract,
     eta_arrival,
     eta_berthed,
     eta_loading_start,
@@ -168,7 +172,8 @@ export async function createShipmentsFromContracts(
   }
 
   const contractCheck = await query(
-    `SELECT contract_id, id FROM contracts WHERE contract_id = ANY($1)`,
+    `SELECT c.contract_id, c.id, ${buildShipmentPageSeaIncotermScopeSql('c')} AS in_shipment_scope
+       FROM contracts c WHERE c.contract_id = ANY($1)`,
     [contractNumbers],
   );
 
@@ -177,6 +182,15 @@ export async function createShipmentsFromContracts(
     const missingContracts = contractNumbers.filter((id) => !foundContracts.includes(id));
     throw new CreateShipmentClientError(
       `The following contract numbers do not exist: ${missingContracts.join(', ')}`,
+    );
+  }
+
+  const outOfScope = (
+    contractCheck.rows as Array<{ contract_id: string; in_shipment_scope: boolean | null }>
+  ).filter((row) => row.in_shipment_scope !== true);
+  if (outOfScope.length > 0) {
+    throw new CreateShipmentClientError(
+      `${SHIPMENT_OUT_OF_SCOPE_MESSAGE} (${outOfScope.map((row) => row.contract_id).join(', ')})`,
     );
   }
 
@@ -235,6 +249,13 @@ export async function createShipmentsFromContracts(
       ? quantityDeliveredByContract
       : {};
 
+  const planByContractMap =
+    quantityShipmentPlanByContract &&
+    typeof quantityShipmentPlanByContract === 'object' &&
+    !Array.isArray(quantityShipmentPlanByContract)
+      ? quantityShipmentPlanByContract
+      : {};
+
   const parsePositiveQtyKg = (value: unknown): number | null => {
     if (value == null || value === '') return null;
     const n = typeof value === 'number' ? value : parseFloat(String(value).replace(/,/g, '').trim());
@@ -248,6 +269,7 @@ export async function createShipmentsFromContracts(
         ? etaByContractMap[contractIdKey]
         : legacyEta;
     const quantityDeliveredKlipKg = parsePositiveQtyKg(qtyByContractMap[contractIdKey]);
+    const quantityShipmentPlanKg = parsePositiveQtyKg(planByContractMap[contractIdKey]);
     const quantityDeliveredKg =
       quantityDeliveredKlipKg ?? parsePositiveQtyKg(quantityDelivered);
 
@@ -324,6 +346,7 @@ export async function createShipmentsFromContracts(
             eta_discharge_berthed = COALESCE($20::date, eta_discharge_berthed),
             eta_discharge_start = COALESCE($21::date, eta_discharge_start),
             eta_discharge_complete = COALESCE($22::date, eta_discharge_complete),
+            quantity_shipment_plan = COALESCE($26::numeric, quantity_shipment_plan),
             status        = $23,
             updated_at    = CURRENT_TIMESTAMP
           WHERE id = $24
@@ -354,6 +377,7 @@ export async function createShipmentsFromContracts(
           derivedStatus,
           existingShipmentId,
           quantityDeliveredKlipKg,
+          quantityShipmentPlanKg,
         ],
       );
       resultId = existingShipmentId;
@@ -364,12 +388,14 @@ export async function createShipmentsFromContracts(
             shipment_id, operation_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
             vessel_draft, vessel_capacity, vessel_hull_type, charter_type,
             port_of_loading, port_of_discharge, quantity_shipped, quantity_delivered, quantity_delivered_klip,
+            quantity_shipment_plan,
             eta_arrival, eta_berthed, eta_loading_start, eta_loading_complete, eta_sailed,
             eta_discharge_arrival, eta_discharge_berthed, eta_discharge_start, eta_discharge_complete,
             status
           ) VALUES (
             $1, $2, $3::uuid, $4, $5, $6, $7, $8::numeric, $9::numeric, $10, $11,
             $12, $13, $14::numeric, $25::numeric, $26::numeric,
+            $27::numeric,
             $15::date, $16::date, $17::date, $18::date, $19::date,
             $20::date, $21::date, $22::date, $23::date,
             $24
@@ -402,6 +428,7 @@ export async function createShipmentsFromContracts(
           derivedStatus,
           quantityDeliveredKg,
           quantityDeliveredKlipKg,
+          quantityShipmentPlanKg,
         ],
       );
       resultId = result.rows[0].id;

@@ -15,6 +15,7 @@ import {
   shipmentListDeliveredKgForViewTable,
   shipmentListOutstandingKgForViewTable,
   shipmentListReceiveKgForViewTable,
+  shipmentListShipmentPlanKg,
 } from '@/lib/shipmentQuantityUnits'
 import {
   formatOperationalTableTextDisplayForColumn,
@@ -71,6 +72,7 @@ const NUMBER_UNIT_BY_COLUMN_ID: Record<string, string> = {
 export const SHIPMENT_EXPORT_UNIT_BY_COLUMN_ID: Record<string, string> = {
   contract_qty: 'MT',
   sto_quantity: 'MT',
+  quantity_shipment_plan: 'MT',
   quantity_delivered: 'MT',
   quantity_receive: 'MT',
   outstanding_quantity: 'MT',
@@ -160,6 +162,11 @@ export function resolveShipmentViewTableExportCell(
   }
   if (id === 'sto_quantity') {
     return kgToMtNumber(resolveShipmentListStoKg(rec))
+  }
+  if (id === 'quantity_shipment_plan') {
+    // Blank, not 0: nobody planned it.
+    const kg = shipmentListShipmentPlanKg(rec)
+    return kg == null ? '' : kgToMtNumber(kg)
   }
   if (id === 'quantity_delivered') {
     return kgToMtNumber(shipmentListDeliveredKgForViewTable(rec))
