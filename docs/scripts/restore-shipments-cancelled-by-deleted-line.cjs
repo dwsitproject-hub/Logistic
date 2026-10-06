@@ -50,12 +50,23 @@ const dist = (p) => require(path.join(process.cwd(), 'dist', p));
       continue;
     }
     const ships = await pool.query(
-      `SELECT id::text AS id, shipment_id, operation_id, status,
-              eta_arrival, eta_berthed, eta_loading_start, eta_loading_complete, eta_sailed,
-              eta_discharge_arrival, eta_discharge_berthed, eta_discharge_start, eta_discharge_complete,
-              ata_arrival, ata_berthed, ata_loading_start, ata_loading_complete, ata_sailed,
-              ata_discharge_arrival, ata_discharge_berthed, ata_discharge_start, ata_discharge_complete
-         FROM shipments WHERE contract_id = $1::uuid AND UPPER(COALESCE(status, '')) = 'CANCELLED'`,
+      // The ATAs the pages show: the JPS lane (the shipment is not COMPLETED, so it counts), then a KLIP edit
+      // (shipment_ata_overrides), then the shipment's own column. Reading only shipments.* missed an ATS typed in the modal.
+      `SELECT s.id::text AS id, s.shipment_id, s.operation_id, s.status,
+              s.eta_arrival, s.eta_berthed, s.eta_loading_start, s.eta_loading_complete, s.eta_sailed,
+              s.eta_discharge_arrival, s.eta_discharge_berthed, s.eta_discharge_start, s.eta_discharge_complete,
+              COALESCE(sao.ata_arrival, s.ata_arrival) AS ata_arrival,
+              COALESCE(sao.ata_berthed, s.ata_berthed) AS ata_berthed,
+              COALESCE(sao.ata_loading_start, s.ata_loading_start) AS ata_loading_start,
+              COALESCE(sao.ata_loading_complete, s.ata_loading_complete) AS ata_loading_complete,
+              COALESCE(sao.ata_sailed, s.ata_sailed) AS ata_sailed,
+              COALESCE(sao.jps_ata_discharge_arrival, sao.ata_discharge_arrival, s.ata_discharge_arrival) AS ata_discharge_arrival,
+              COALESCE(sao.jps_ata_discharge_berthed, sao.ata_discharge_berthed, s.ata_discharge_berthed) AS ata_discharge_berthed,
+              COALESCE(sao.jps_ata_discharge_start, sao.ata_discharge_start, s.ata_discharge_start) AS ata_discharge_start,
+              COALESCE(sao.jps_ata_discharge_complete, sao.ata_discharge_complete, s.ata_discharge_complete) AS ata_discharge_complete
+         FROM shipments s
+         LEFT JOIN shipment_ata_overrides sao ON sao.shipment_id = s.id
+        WHERE s.contract_id = $1::uuid AND UPPER(COALESCE(s.status, '')) = 'CANCELLED'`,
       [row.id],
     );
     const trucking = await pool.query(
@@ -85,7 +96,10 @@ const dist = (p) => require(path.join(process.cwd(), 'dist', p));
         ata_complete_discharge: s.ata_discharge_complete,
         contract_import_status: row.import_status,
       });
-      console.log(`    shipment ${s.shipment_id || s.operation_id}: CANCELLED -> ${next}${apply ? '' : '   (dry run)'}`);
+      console.log(
+        `    shipment ${s.shipment_id || s.operation_id}: CANCELLED -> ${next}${apply ? '' : '   (dry run)'}` +
+          `   [ATS discharge: ${s.ata_discharge_start ? String(s.ata_discharge_start).slice(0, 10) : '-'}, ATC: ${s.ata_discharge_complete ? String(s.ata_discharge_complete).slice(0, 10) : '-'}]`,
+      );
       if (apply) {
         const r = await pool.query(
           `UPDATE shipments SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid AND UPPER(COALESCE(status, '')) = 'CANCELLED' RETURNING id::text`,
