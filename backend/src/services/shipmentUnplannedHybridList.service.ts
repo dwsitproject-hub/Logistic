@@ -12,6 +12,7 @@ import {
   hybridListUsesGlobalMergeSort,
   sortShipmentListRows,
 } from '../utils/shipmentListSortSql';
+import { listSortThenByKey, type ListSortEntry } from '../utils/listSortStack';
 import {
   appendUnplannedContractBacklogColumnFilters,
   appendUnplannedContractBacklogGlobalSearch,
@@ -127,6 +128,8 @@ export function buildShipmentUnplannedHybridListContext(input: {
   colFilters: ColumnFilterPayload;
   sortKey?: string;
   sortDir?: 'ASC' | 'DESC';
+  /** Extra keys of a sort stack (absent or empty for a single sort). */
+  thenBy?: ListSortEntry[];
   tableStatusFilter?: string;
 }): UnplannedHybridListContext {
   return {
@@ -153,6 +156,8 @@ export function buildShipmentAllHybridListContext(input: {
   colFilters: ColumnFilterPayload;
   sortKey?: string;
   sortDir?: 'ASC' | 'DESC';
+  /** Extra keys of a sort stack (absent or empty for a single sort). */
+  thenBy?: ListSortEntry[];
   tableStatusFilter?: string;
 }): UnplannedHybridListContext {
   return {
@@ -178,6 +183,8 @@ export function buildShipmentCompletedHybridListContext(input: {
   colFilters: ColumnFilterPayload;
   sortKey?: string;
   sortDir?: 'ASC' | 'DESC';
+  /** Extra keys of a sort stack (absent or empty for a single sort). */
+  thenBy?: ListSortEntry[];
   tableStatusFilter?: string;
 }): UnplannedHybridListContext {
   return {
@@ -203,6 +210,8 @@ export function buildShipmentCancelledHybridListContext(input: {
   colFilters: ColumnFilterPayload;
   sortKey?: string;
   sortDir?: 'ASC' | 'DESC';
+  /** Extra keys of a sort stack (absent or empty for a single sort). */
+  thenBy?: ListSortEntry[];
   tableStatusFilter?: string;
 }): UnplannedHybridListContext {
   return {
@@ -228,6 +237,8 @@ function buildShipmentHybridListContext(input: {
   colFilters: ColumnFilterPayload;
   sortKey?: string;
   sortDir?: 'ASC' | 'DESC';
+  /** Extra keys of a sort stack (absent or empty for a single sort). */
+  thenBy?: ListSortEntry[];
   tableStatusFilter?: string;
 }): UnplannedHybridListContext {
   return {
@@ -237,12 +248,13 @@ function buildShipmentHybridListContext(input: {
       innerParams: input.innerParams,
       outerParams: input.toolbarOuterParams,
       skipSapJoin: input.skipSapJoin,
-      cacheKey: `${input.filterCacheKey}:${input.cacheKeySuffix}:sap=${input.skipSapJoin ? 0 : 1}:sk=${input.sortKey ?? 'created_at'}:${input.sortDir ?? 'DESC'}`,
+      cacheKey: `${input.filterCacheKey}:${input.cacheKeySuffix}:sap=${input.skipSapJoin ? 0 : 1}:sk=${input.sortKey ?? 'created_at'}:${input.sortDir ?? 'DESC'}${listSortThenByKey(input.thenBy)}`,
       filterCacheKey: input.filterCacheKey,
       usesStoKeyPaging: false,
       tableStatusFilter: input.tableStatusFilter,
       sortKey: input.sortKey ?? 'created_at',
       sortDir: input.sortDir ?? 'DESC',
+      thenBy: input.thenBy,
     },
     contractScope: input.contractScope,
     globalSearch: input.globalSearch,
@@ -406,6 +418,7 @@ async function fetchContractBacklogPage(
   const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
   const sortKey = ctx.shipmentCtx.sortKey ?? 'created_at';
   const sortDir = ctx.shipmentCtx.sortDir ?? 'DESC';
+  const thenBy = ctx.shipmentCtx.thenBy;
   const text = await (
     ctx.contractBacklogMode === 'cancelled'
       ? buildCancelledContractBacklogPageQuery(
@@ -415,6 +428,7 @@ async function fetchContractBacklogPage(
           offset,
           sortKey,
           sortDir,
+          thenBy,
         )
       : ctx.contractBacklogMode === 'completed'
         ? buildCompletedContractBacklogPageQuery(
@@ -424,6 +438,7 @@ async function fetchContractBacklogPage(
             offset,
             sortKey,
             sortDir,
+            thenBy,
           )
         : ctx.contractBacklogMode === 'all'
           ? buildAllHybridContractBacklogPageQuery(
@@ -433,6 +448,7 @@ async function fetchContractBacklogPage(
               offset,
               sortKey,
               sortDir,
+              thenBy,
             )
           : buildUnplannedContractBacklogPageQuery(
               contractScopeSql,
@@ -441,6 +457,7 @@ async function fetchContractBacklogPage(
               offset,
               sortKey,
               sortDir,
+              thenBy,
             ));
   const result = await query(text, params);
   return result.rows as Record<string, unknown>[];
@@ -577,6 +594,7 @@ async function computeHybridShipmentsList(
 
   const sortKey = ctx.shipmentCtx.sortKey ?? 'created_at';
   const sortDir = ctx.shipmentCtx.sortDir ?? 'DESC';
+  const thenBy = ctx.shipmentCtx.thenBy;
   const isUnplannedPoOnly = ctx.contractBacklogMode === 'unplanned';
 
   let contractPage: Record<string, unknown>[];
@@ -593,7 +611,7 @@ async function computeHybridShipmentsList(
     shipments = normalizeShipmentListRows(
       contractPage as Record<string, unknown>[],
     ) as ShipmentListResponseData['shipments'];
-    shipments = sortShipmentListRows(shipments, sortKey, sortDir);
+    shipments = sortShipmentListRows(shipments, sortKey, sortDir, thenBy);
   } else {
     const useGlobalSort = hybridListUsesGlobalMergeSort(sortKey);
 
@@ -616,7 +634,7 @@ async function computeHybridShipmentsList(
         ...shipmentPage,
         ...contractPage,
       ] as Record<string, unknown>[]) as ShipmentListResponseData['shipments'];
-      shipments = sortShipmentListRows(mergedRows, sortKey, sortDir).slice(
+      shipments = sortShipmentListRows(mergedRows, sortKey, sortDir, thenBy).slice(
         offset,
         offset + limitNum,
       );
@@ -640,7 +658,7 @@ async function computeHybridShipmentsList(
         ...shipmentPage,
         ...contractPage,
       ] as Record<string, unknown>[]) as ShipmentListResponseData['shipments'];
-      shipments = sortShipmentListRows(mergedRows, sortKey, sortDir);
+      shipments = sortShipmentListRows(mergedRows, sortKey, sortDir, thenBy);
     }
   }
 

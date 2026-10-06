@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  forgetShipmentsCompactSort,
   readShipmentsCompactSort,
   SHIPMENTS_COMPACT_SORT_STORAGE_KEY,
-  writeShipmentsCompactSort,
 } from './shipmentsCompactSort'
 
 function installMemoryLocalStorage() {
@@ -23,7 +23,7 @@ function installMemoryLocalStorage() {
   return store
 }
 
-describe('readShipmentsCompactSort', () => {
+describe('Shipments table forgets its sort', () => {
   beforeEach(() => {
     installMemoryLocalStorage()
   })
@@ -31,37 +31,28 @@ describe('readShipmentsCompactSort', () => {
     vi.unstubAllGlobals()
   })
 
-  it('defaults to created_at desc when nothing is stored', () => {
+  it('is created_at desc when nothing is stored', () => {
     expect(readShipmentsCompactSort()).toEqual({ sortKey: 'created_at', sortDir: 'desc' })
   })
 
-  it('restores vessel_name asc from compact sort storage', () => {
+  it('ignores a sort stored by an earlier version, and removes it', () => {
     window.localStorage.setItem(
       SHIPMENTS_COMPACT_SORT_STORAGE_KEY,
       JSON.stringify({ key: 'vessel_name', dir: 'asc' }),
     )
-    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'vessel_name', sortDir: 'asc' })
+    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'created_at', sortDir: 'desc' })
+    expect(window.localStorage.getItem(SHIPMENTS_COMPACT_SORT_STORAGE_KEY)).toBeNull()
   })
 
-  it('treats unknown dir as desc', () => {
-    window.localStorage.setItem(
-      SHIPMENTS_COMPACT_SORT_STORAGE_KEY,
-      JSON.stringify({ key: 'supplier', dir: 'sideways' }),
-    )
-    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'supplier', sortDir: 'desc' })
+  it('forgetShipmentsCompactSort clears the stored value', () => {
+    window.localStorage.setItem(SHIPMENTS_COMPACT_SORT_STORAGE_KEY, '{"key":"supplier","dir":"asc"}')
+    forgetShipmentsCompactSort()
+    expect(window.localStorage.getItem(SHIPMENTS_COMPACT_SORT_STORAGE_KEY)).toBeNull()
   })
-})
 
-describe('writeShipmentsCompactSort', () => {
-  beforeEach(() => {
-    installMemoryLocalStorage()
-  })
-  afterEach(() => {
+  it('is safe where there is no window (server render)', () => {
     vi.unstubAllGlobals()
-  })
-
-  it('round-trips through localStorage', () => {
-    writeShipmentsCompactSort('vessel_name', 'asc')
-    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'vessel_name', sortDir: 'asc' })
+    expect(() => forgetShipmentsCompactSort()).not.toThrow()
+    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'created_at', sortDir: 'desc' })
   })
 })

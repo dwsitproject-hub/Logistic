@@ -32,12 +32,15 @@ import {
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
 import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUniqueness';
 import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
+import { listSortThenByKey, resolveListSortRequest, type ListSortEntry } from '../utils/listSortStack';
 import { wrapTruckingListQueryWithStoExpansion, buildTruckingExpansionKeysCountSql } from '../utils/truckingListStoExpandSql';
 import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
 import { invalidateRegisteredListCaches } from '../utils/listCacheRegistry';
 import { parseOptionalStrictDateRange } from '../utils/strictDateInput';
 import {
   buildTruckingExpansionKeyOrderBy,
+  buildTruckingListOrderTail,
+  isTruckingListSortKey,
   canUseTruckingStoKeyPaging,
 } from '../utils/truckingListStoPaging';
 import { resolveTruckingListSortField, resolveTruckingListSortRowKey } from '../utils/truckingListSort';
@@ -215,6 +218,15 @@ function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
   return JSON.stringify(norm);
 }
 
+/** The request's sort: the click-history stack when `sort` is sent, else the legacy sortKey / sortDir pair. */
+function resolveTruckingListSortRequest(query: unknown) {
+  return resolveListSortRequest(query as { sort?: unknown; sortKey?: unknown; sortDir?: unknown }, {
+    isAllowedKey: isTruckingListSortKey,
+    defaultKey: 'created_at',
+    defaultDirRaw: 'asc',
+  });
+}
+
 function buildTruckingListCacheKey(input: {
   status?: unknown;
   location?: unknown;
@@ -234,6 +246,8 @@ function buildTruckingListCacheKey(input: {
   limit?: number;
   sortKey?: string;
   sortDir?: string;
+  /** Extra keys of a sort stack; absent for a single sort, which keeps every existing cache key unchanged. */
+  thenBy?: ListSortEntry[];
 }): string {
   const norm = {
     status: input.status != null ? String(input.status) : '',
@@ -254,6 +268,7 @@ function buildTruckingListCacheKey(input: {
     limit: input.limit ?? 20,
     sortKey: input.sortKey ?? 'supplier',
     sortDir: input.sortDir ?? 'asc',
+    ...(input.thenBy && input.thenBy.length > 0 ? { thenBy: listSortThenByKey(input.thenBy) } : {}),
   };
   return `${CACHE_VERSION}:${JSON.stringify(norm)}`;
 }
@@ -652,9 +667,10 @@ export function sortTruckingListRows(
   rows: TruckingListRow[],
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
-  options?: { prioritizeSapSto?: boolean },
+  options?: { prioritizeSapSto?: boolean; thenBy?: ReadonlyArray<ListSortEntry> },
 ): TruckingListRow[] {
   const field = resolveTruckingListSortRowKey(sortKey);
+  const thenBy = options?.thenBy ?? [];
   const prioritizeSapSto = options?.prioritizeSapSto === true;
   return [...rows].sort((a, b) => {
     if (prioritizeSapSto) {
@@ -672,6 +688,12 @@ export function sortTruckingListRows(
     }
     const primary = compareSortValues(a[field], b[field], sortDir);
     if (primary !== 0) return primary;
+    // The extra keys of a sort stack, in the same order the SQL puts them: after the primary key, before the tiebreaks.
+    for (const extra of thenBy) {
+      const extraField = resolveTruckingListSortRowKey(extra.key);
+      const cmp = compareSortValues(a[extraField], b[extraField], extra.dir);
+      if (cmp !== 0) return cmp;
+    }
     /*
      * These two tiebreaks have to match the SQL key order
      * (`<field> <dir> NULLS LAST, ts.created_at DESC, ts.id`), because the SQL chooses which rows
@@ -878,8 +900,7 @@ export function buildTruckingListQuery(
   const skipSapJoin =
     options?.skipSapJoin ??
     String((req.query as { skipSapJoin?: string }).skipSapJoin || '').toLowerCase() === 'true';
-  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
-  const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
+  const { sortKey, sortDirRaw, thenBy } = resolveTruckingListSortRequest(req.query);
   const globalSearch =
     typeof (req.query as { search?: string }).search === 'string'
       ? (req.query as { search?: string }).search!.trim()
@@ -1056,6 +1077,7 @@ export function buildTruckingListQuery(
     limit: Number(limit),
     sortKey,
     sortDir: sortDirRaw,
+    thenBy,
   });
 
   const originPlantKey = originGroupPlant ? ':originPlant=1' : '';
@@ -1218,8 +1240,8 @@ export function buildPaginatedListQuery(
   limit: number,
   offset: number,
   stageFilter?: string | null,
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): { text: string; params: unknown[] } {
-  const field = resolveTruckingListSortField(sortKey);
   const baseParams = [...built.innerParams, ...built.outerParams];
   const stageScoped = buildTruckingExpandedStatusFilterWhere(
     'tf.status',
@@ -1234,7 +1256,7 @@ export function buildPaginatedListQuery(
   const expanded = buildTruckingFilteredExpansionSql(built);
   const orderBy = buildListOrderByWithSapStoPriority(
     'tf.sto_number',
-    `${field} ${sortDir} NULLS LAST, created_at DESC, id`,
+    buildTruckingListOrderTail(sortKey, sortDir, thenBy),
     normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined) ?? stageFilter,
   );
   const truckingPageCte = built.usesStoKeyPaging
@@ -1277,8 +1299,8 @@ export function buildTruckingListPageQueryWithoutInlineCount(
   limit: number,
   offset: number,
   stageFilter?: string | null,
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): { text: string; params: unknown[] } {
-  const field = resolveTruckingListSortField(sortKey);
   const baseParams = [...built.innerParams, ...built.outerParams];
   const stageScoped = buildTruckingExpandedStatusFilterWhere(
     'tf.status',
@@ -1293,7 +1315,7 @@ export function buildTruckingListPageQueryWithoutInlineCount(
   const expanded = buildTruckingFilteredExpansionSql(built);
   const orderBy = buildListOrderByWithSapStoPriority(
     'tf.sto_number',
-    `${field} ${sortDir} NULLS LAST, created_at DESC, id`,
+    buildTruckingListOrderTail(sortKey, sortDir, thenBy),
     normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined) ?? stageFilter,
   );
   const truckingPageCte = built.usesStoKeyPaging
@@ -1752,6 +1774,7 @@ async function loadTruckingListPage(
   page: number,
   limit: number,
   stageFilter?: string | null,
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): Promise<{ rows: TruckingListRow[]; total: number }> {
   const cached = PAGE_CACHE.get(built.cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
@@ -1761,7 +1784,7 @@ async function loadTruckingListPage(
 
   const inFlight = PAGE_IN_FLIGHT.get(built.cacheKey);
   if (inFlight) return inFlight;
-  const run = runTruckingListPageQuery(built, sortKey, sortDir, page, limit, stageFilter).finally(
+  const run = runTruckingListPageQuery(built, sortKey, sortDir, page, limit, stageFilter, thenBy).finally(
     () => PAGE_IN_FLIGHT.delete(built.cacheKey),
   );
   PAGE_IN_FLIGHT.set(built.cacheKey, run);
@@ -1775,14 +1798,15 @@ async function runTruckingListPageQuery(
   page: number,
   limit: number,
   stageFilter?: string | null,
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): Promise<{ rows: TruckingListRow[]; total: number }> {
   const liveLoadStartedAt = Date.now();
   const offset = (page - 1) * limit;
   const cachedTotal = getCachedFilteredTotal(built.filterCacheKey);
   const { text, params } =
     cachedTotal != null
-      ? buildTruckingListPageQueryWithoutInlineCount(built, sortKey, sortDir, limit, offset, stageFilter)
-      : buildPaginatedListQuery(built, sortKey, sortDir, limit, offset, stageFilter);
+      ? buildTruckingListPageQueryWithoutInlineCount(built, sortKey, sortDir, limit, offset, stageFilter, thenBy)
+      : buildPaginatedListQuery(built, sortKey, sortDir, limit, offset, stageFilter, thenBy);
   const result = await query(text, params);
 
   let total = cachedTotal ?? 0;
@@ -1808,7 +1832,7 @@ async function runTruckingListPageQuery(
     async () => {
       PAGE_CACHE.delete(built.cacheKey);
       COUNT_CACHE.delete(built.filterCacheKey);
-      await loadTruckingListPage(built, sortKey, sortDir, page, limit, stageFilter);
+      await loadTruckingListPage(built, sortKey, sortDir, page, limit, stageFilter, thenBy);
     },
     Date.now() - liveLoadStartedAt,
   );
@@ -1945,9 +1969,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
   const { page = 1, limit = 20, status } = req.query;
   const summaryOnly =
     String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
-  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
-  const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
-  const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
+  const { sortKey, sortDir, thenBy } = resolveTruckingListSortRequest(req.query);
 
   const stageFilter = typeof status === 'string' ? status : undefined;
   const normalizedStatus = String(status ?? '').trim().toUpperCase();
@@ -2018,7 +2040,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
       ? {
           limit: limitNum,
           offset: (pageNum - 1) * limitNum,
-          orderBySql: buildTruckingExpansionKeyOrderBy(sortKey, sortDir, stageFilter),
+          orderBySql: buildTruckingExpansionKeyOrderBy(sortKey, sortDir, stageFilter, thenBy),
         }
       : undefined,
   };
@@ -2056,8 +2078,8 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
       resolveTruckingUnplannedHybridList,
     } = await import('./truckingUnplannedHybridList.service');
     const ctx = isAllHybrid
-      ? buildTruckingAllHybridContext(req, sortKey, sortDir, { executionBuilt: listBuilt })
-      : buildTruckingUnplannedHybridContext(req, sortKey, sortDir, { executionBuilt: listBuilt });
+      ? buildTruckingAllHybridContext(req, sortKey, sortDir, { executionBuilt: listBuilt, thenBy })
+      : buildTruckingUnplannedHybridContext(req, sortKey, sortDir, { executionBuilt: listBuilt, thenBy });
     const hybrid = await resolveTruckingUnplannedHybridList(req, ctx);
     let summary: TruckingListResponseData['summary'];
     if (includeSummary) {
@@ -2090,6 +2112,8 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
     !isUnplannedHybrid &&
     !isAllHybrid &&
     sortKey === 'supplier' &&
+    // The stage snapshot orders by supplier alone; a stack needs the live ranking to break ties by its other keys.
+    thenBy.length === 0 &&
     !listUsesStoPaging
   ) {
     const dailyFilters = buildPipelineDailyFilterInput(req);
@@ -2109,7 +2133,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
 
   const { rows, total } =
     snapshotServed ??
-    (await loadTruckingListPage(listBuilt, sortKey, sortDir, pageNum, limitNum, stageFilter));
+    (await loadTruckingListPage(listBuilt, sortKey, sortDir, pageNum, limitNum, stageFilter, thenBy));
 
   let summary: TruckingListResponseData['summary'];
   if (includeSummary) {

@@ -85,7 +85,11 @@ describe('snapshot-served page sorts', () => {
 
   it('admits exactly the two sorts the snapshot has columns for', () => {
     expect(src).toContain("if (sortKey === 'supplier' || sortKey === 'created_at') return sortKey;");
-    expect(src).toContain('const snapshotSort = snapshotPageSortField(ctx.sortKey);');
+    expect(src).toContain('const snapshotSort = ctx.thenBy.length === 0 ? snapshotPageSortField(ctx.sortKey) : null;');
+  });
+
+  it('a sort stack never takes the snapshot: it orders by one column and cannot break ties by the others', () => {
+    expect(src).toContain('ctx.thenBy.length === 0 ? snapshotPageSortField');
   });
 
   it('passes the request sort down to the loader rather than assuming one', () => {
@@ -94,7 +98,9 @@ describe('snapshot-served page sorts', () => {
 
   it('a sort outside that set falls through to the live ranking', () => {
     // The live expansion-key branch must still be reachable, not replaced.
-    expect(src).toContain('orderBySql: buildTruckingExpansionKeyOrderBy(ctx.sortKey, ctx.sortDir),');
+    expect(src).toContain(
+      'orderBySql: buildTruckingExpansionKeyOrderBy(ctx.sortKey, ctx.sortDir, undefined, ctx.thenBy),',
+    );
   });
 });
 

@@ -1,5 +1,5 @@
 /**
- * Contract Performance: sort by click history on GET /contracts.
+ * Contracts and Contract Performance: sort by click history on GET /contracts.
  *
  * The columns a stack may hold are the ones the server sorts in SQL. Cycle days, overall status and over/under delivery are
  * derived in Node after up to 10,000 rows are fetched, so they stay a single sort: clicking one replaces the stack, and
@@ -32,7 +32,7 @@ export function isStackableContractsSort(
 }
 
 /** What a header click does in Contract Performance. */
-export function nextContractsPerfSortStack(
+export function nextContractsSortStack(
   stack: ReadonlyArray<SortEntry>,
   columnId: string,
   resolveApiSortKey: (columnId: string) => string | null,

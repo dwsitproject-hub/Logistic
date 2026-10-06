@@ -3,6 +3,7 @@
  */
 
 import { resolveUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
+import type { ListSortEntry } from './listSortStack';
 import { sqlIsContractSapInactiveForOsExpr, SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import {
@@ -74,10 +75,17 @@ const BACKLOG_PAGE_ORDER_ALIAS: Record<string, string> = {
 export function buildTruckingUnplannedBacklogOrderBy(
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): string {
   const field = BACKLOG_PAGE_ORDER_ALIAS[sortKey] || 'contract_date';
   const dir = sortDir === 'ASC' ? 'ASC' : 'DESC';
-  return `${field} ${dir} NULLS LAST, contract_id ASC`;
+  // Extra keys of a sort stack. A backlog row has fewer columns than an execution row; a key it does not carry is
+  // left out here (those rows tie on it) and the merge in Node still compares them on the real value.
+  const extra = (thenBy ?? [])
+    .filter((e) => BACKLOG_PAGE_ORDER_ALIAS[e.key] && BACKLOG_PAGE_ORDER_ALIAS[e.key] !== field)
+    .map((e) => `, ${BACKLOG_PAGE_ORDER_ALIAS[e.key]} ${e.dir === 'ASC' ? 'ASC' : 'DESC'} NULLS LAST`)
+    .join('');
+  return `${field} ${dir} NULLS LAST${extra}, contract_id ASC`;
 }
 
 /**
@@ -336,6 +344,7 @@ export async function buildTruckingUnplannedBacklogPageQuery(
   offset: number,
   sortKey = 'contract_date',
   sortDir: 'ASC' | 'DESC' = 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): Promise<string> {
   const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
@@ -363,7 +372,7 @@ export async function buildTruckingUnplannedBacklogPageQuery(
     kind: 'in_subquery',
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
-  const orderBy = buildTruckingUnplannedBacklogOrderBy(sortKey, sortDir);
+  const orderBy = buildTruckingUnplannedBacklogOrderBy(sortKey, sortDir, thenBy);
   return `
     WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     ${backlogIdsCte},

@@ -145,7 +145,7 @@ import {
   sqlShipmentGroupStatusFloorAgg,
   shipmentEffectiveStatusExpr,
 } from '../utils/shipmentListFilters';
-import { parseShipmentListSort, shipmentListSortUsesEnrichedPath } from '../utils/shipmentListSortSql';
+import { resolveShipmentListSortRequest, shipmentListSortStackUsesEnrichedPath } from '../utils/shipmentListSortSql';
 import {
   SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
   buildRankedStoCtes,
@@ -579,9 +579,13 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       .etcNoAtcDueWithin7d;
     const etaLoadingBucket = normalizeShipmentEtaBucketParam((req.query as any).etaLoading);
     const etaDischargeBucket = normalizeShipmentEtaBucketParam((req.query as any).etaDischarge);
-    const { sortKey: listSortKey, sortDir: listSortDir } = parseShipmentListSort(
-      (req.query as { sortKey?: string }).sortKey,
-      (req.query as { sortDir?: string }).sortDir,
+    // `sort` is the click-history stack: its first entry is the primary key, the rest are `listThenBy`.
+    const {
+      sortKey: listSortKey,
+      sortDir: listSortDir,
+      thenBy: listThenBy,
+    } = resolveShipmentListSortRequest(
+      req.query as { sort?: unknown; sortKey?: unknown; sortDir?: unknown },
     );
     const scopeStatusParam =
       typeof (req.query as any).scopeStatus === 'string'
@@ -601,7 +605,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       !summaryOnly &&
       !outstandingQtyOnly;
     /** Qty/port sorts must enrich before LIMIT or ORDER BY silently becomes created_at. */
-    const skipSapJoin = skipSapJoinRequested && !shipmentListSortUsesEnrichedPath(listSortKey);
+    const skipSapJoin =
+      skipSapJoinRequested && !shipmentListSortStackUsesEnrichedPath(listSortKey, listThenBy);
 
     // Query shipments grouped by STO number or Operation ID:
     // - SAP shipments are grouped by contracts.sto_number
@@ -1168,6 +1173,7 @@ ${vlpLateralJoins}
         unplannedHybrid: isUnplannedHybridList,
         allHybrid: isAllHybridList,
         sortKey: listSortKey,
+        thenBy: listThenBy,
         etcNoAtcDueWithin7d: etcNoAtcDueWithin7dParam,
       });
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
@@ -1177,6 +1183,7 @@ ${vlpLateralJoins}
       shipmentBaseWhereSql,
       listSortKey,
       listSortDir,
+      listThenBy,
     )
       .replace('__STO_PAGE_LIMIT__', String(listLimit))
       .replace('__STO_PAGE_OFFSET__', String(listOffset));
@@ -1230,6 +1237,7 @@ ${vlpLateralJoins}
         viewQuery: viewQueryParam,
         unplannedHybrid: isUnplannedHybridList,
         sortKey: listSortKey,
+        thenBy: listThenBy,
       })
     ) {
       const stageForSnapshot = normalizeShipmentPagePipelineStageParam(
@@ -1582,6 +1590,7 @@ ${vlpLateralJoins}
         etaDischarge: etaDischargeBucket ?? 'ALL',
         sortKey: listSortKey,
         sortDir: listSortDir,
+        thenBy: listThenBy,
       });
 
       /**
@@ -1597,6 +1606,7 @@ ${vlpLateralJoins}
         query: req.query as Record<string, unknown>,
         sortKey: listSortKey,
         sortDir: listSortDir,
+        thenBy: listThenBy,
         page: Number(page),
         limit: Number(limit),
         loadScopePage: async (scopeQuery) => {
@@ -1639,6 +1649,7 @@ ${vlpLateralJoins}
             colFilters,
             sortKey: listSortKey,
             sortDir: listSortDir,
+            thenBy: listThenBy,
           }),
         );
         let hybridSummary: ReturnType<typeof shipmentListSummaryPayload> | undefined;
@@ -1708,6 +1719,7 @@ ${vlpLateralJoins}
             tableStatusFilter: typeof status === 'string' ? status : undefined,
             sortKey: listSortKey,
             sortDir: listSortDir,
+            thenBy: listThenBy,
           },
           contractScope: {
             dateFrom,
@@ -1851,6 +1863,7 @@ ${vlpLateralJoins}
             colFilters,
             sortKey: listSortKey,
             sortDir: listSortDir,
+            thenBy: listThenBy,
             tableStatusFilter: typeof status === 'string' ? status : undefined,
           }),
         );
@@ -1927,6 +1940,7 @@ ${vlpLateralJoins}
             colFilters,
             sortKey: listSortKey,
             sortDir: listSortDir,
+            thenBy: listThenBy,
             tableStatusFilter: typeof status === 'string' ? status : undefined,
           }),
         );
@@ -2016,6 +2030,7 @@ ${vlpLateralJoins}
             useLiveStatusFilteredCount: listUseLiveStatusCount,
             sortKey: listSortKey,
             sortDir: listSortDir,
+            thenBy: listThenBy,
           }),
           loadSummaryBundle(),
         ]);
@@ -2083,6 +2098,7 @@ ${vlpLateralJoins}
         useLiveStatusFilteredCount: listUseLiveStatusCount,
         sortKey: listSortKey,
         sortDir: listSortDir,
+        thenBy: listThenBy,
       });
       /**
        * Snapshot keys can match live total but still miss the page (wrong STO set) â†’
@@ -2115,6 +2131,7 @@ ${vlpLateralJoins}
           useLiveStatusFilteredCount: listUseLiveStatusCount,
           sortKey: listSortKey,
           sortDir: listSortDir,
+          thenBy: listThenBy,
         });
       }
       timingsMs.total = performance.now() - tReq0;

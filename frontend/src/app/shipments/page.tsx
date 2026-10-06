@@ -113,6 +113,9 @@ import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { compareByStack, sortEntryFor, sortPriority, type SortEntry, type SortValue } from '@/lib/sortStack'
+import { nextShipmentsSortStack, shipmentsSortStackParam } from '@/lib/shipmentsSortStack'
 import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
@@ -246,7 +249,7 @@ import {
   shouldApplyOperationalTruncateTooltip,
 } from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
-import { readShipmentsCompactSort, writeShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
+import { DEFAULT_SHIPMENTS_COMPACT_SORT, forgetShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import {
@@ -1362,10 +1365,19 @@ function ShipmentsPageContent() {
   const [collapsedStoGroupKeys, setCollapsedStoGroupKeys] = useState<Set<string>>(() => new Set())
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [dragColId, setDragColId] = useState<string | null>(null)
-  const [sortKey, setSortKey] = useState<string>('created_at')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-  /** Wait for localStorage sort restore so we do not fetch created_at then immediately vessel_name. */
-  const [sortHydrated, setSortHydrated] = useState(false)
+  /**
+   * Sort by click history, newest click first, at most three columns (Supplier, then Product, then Incoterm sorts by
+   * Incoterm, Product, Supplier). The table opens on newest-first and does not remember a sort between visits.
+   * sortKey / sortDir are the PRIMARY entry, so every use below keeps working unchanged.
+   */
+  const defaultSortStack: SortEntry[] = [
+    { key: DEFAULT_SHIPMENTS_COMPACT_SORT.sortKey, dir: DEFAULT_SHIPMENTS_COMPACT_SORT.sortDir },
+  ]
+  const [sortStack, setSortStack] = useState<SortEntry[]>(defaultSortStack)
+  const sortKey = sortStack[0]?.key ?? DEFAULT_SHIPMENTS_COMPACT_SORT.sortKey
+  const sortDir: 'asc' | 'desc' = sortStack[0]?.dir ?? DEFAULT_SHIPMENTS_COMPACT_SORT.sortDir
+  /** The `sort` request parameter: only when more than one column the server can stack is chosen. */
+  const sortStackParam = shipmentsSortStackParam(sortStack)
 
   const globalFilterScope = useMemo(
     () => ({
@@ -1418,8 +1430,8 @@ function ShipmentsPageContent() {
         page,
         sortKey,
         sortDir,
-      })}|etc7:${etcNoAtcDueWithin7dFilter ? '1' : '0'}`,
-    [globalFilterScope, statusFilter, etcNoAtcDueWithin7dFilter, page, sortKey, sortDir],
+      })}|etc7:${etcNoAtcDueWithin7dFilter ? '1' : '0'}|sort:${sortStackParam}`,
+    [globalFilterScope, statusFilter, etcNoAtcDueWithin7dFilter, page, sortKey, sortDir, sortStackParam],
   )
 
   // Desktop table horizontal scroll sync (top + bottom)
@@ -1489,10 +1501,10 @@ function ShipmentsPageContent() {
 
   /** Single consolidated fetch — global scope + pipeline stage + pagination/sort. */
   useEffect(() => {
-    if (!userScopeReady || !sortHydrated) return
+    if (!userScopeReady) return
     fetchShipments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userScopeReady, listQueryKey, sortHydrated])
+  }, [userScopeReady, listQueryKey])
 
   const fetchVesselIdle = useCallback(async () => {
     setVesselIdleLoading(true)
@@ -1801,6 +1813,7 @@ function ShipmentsPageContent() {
     }
     params.append('sortKey', sortKey)
     params.append('sortDir', sortDir)
+    if (sortStackParam) params.append('sort', sortStackParam)
     return params
   }
 
@@ -1846,7 +1859,8 @@ function ShipmentsPageContent() {
         'b2b_flag',
         'contract_ext_no',
       ])
-      const useAccurateQtySort = accurateSortKeys.has(sortKey)
+      // Any key of the stack that needs SAP / qty enrichment makes the whole request take the accurate path.
+      const useAccurateQtySort = sortStack.some((entry) => accurateSortKeys.has(entry.key))
       const params = buildShipmentListSearchParams({
         page: effectivePage,
         limit: pageSize,
@@ -4190,17 +4204,10 @@ function ShipmentsPageContent() {
     }
   }, [columnOrderIds, userViewPrefKey, visibleColumnIds])
 
+  // The table does not remember its sort: clear one stored by an earlier version.
   useEffect(() => {
-    const stored = readShipmentsCompactSort()
-    setSortKey(stored.sortKey)
-    setSortDir(stored.sortDir)
-    setSortHydrated(true)
+    forgetShipmentsCompactSort()
   }, [])
-
-  useEffect(() => {
-    if (!sortHydrated) return
-    writeShipmentsCompactSort(sortKey, sortDir)
-  }, [sortKey, sortDir, sortHydrated])
 
   const toggleColumn = (colId: string) => {
     setVisibleColumnIds(prev => {
@@ -5285,6 +5292,14 @@ function ShipmentsPageContent() {
     const col = compactColumns.find((c) => c.id === sortKey)
     if (!col?.sortable) return prePlannedTableGroups
 
+    if (sortStack.length > 1) {
+      // A stack: every key in order, numbers as numbers and everything else as text.
+      const valueOf = (group: (typeof prePlannedTableGroups)[number], key: string): SortValue => {
+        const v = getPrePlannedGroupSortValue(group, key, getColumnRawValue)
+        return typeof v === 'number' ? { type: 'number', value: v } : { type: 'text', value: String(v ?? '') }
+      }
+      return [...prePlannedTableGroups].sort((a, b) => compareByStack(a, b, sortStack, valueOf))
+    }
     const dirMul = sortDir === 'asc' ? 1 : -1
     return [...prePlannedTableGroups].sort((a, b) => {
       const aVal = getPrePlannedGroupSortValue(a, sortKey, getColumnRawValue)
@@ -5294,7 +5309,7 @@ function ShipmentsPageContent() {
       }
       return String(aVal).localeCompare(String(bVal)) * dirMul
     })
-  }, [prePlannedTableGroups, compactColumns, sortKey, sortDir, getColumnRawValue])
+  }, [prePlannedTableGroups, compactColumns, sortKey, sortDir, sortStack, getColumnRawValue])
 
   const stoGroupedShipments = useMemo(
     () => groupShipmentsBySto(paginatedShipments),
@@ -6372,10 +6387,7 @@ function ShipmentsPageContent() {
 
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
-    const nextDir: 'asc' | 'desc' =
-      sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
-    setSortDir(nextDir)
-    setSortKey(col.id)
+    setSortStack((prev) => nextShipmentsSortStack(prev, col.id))
     setPage(1)
   }
 
@@ -7187,6 +7199,14 @@ function ShipmentsPageContent() {
                       </>
                     ) : null}
                   </p>
+                <SortStackSummary
+                  stack={sortStack}
+                  labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+                  onReset={() => {
+                    setSortStack(defaultSortStack)
+                    setPage(1)
+                  }}
+                />
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {statusFilter === 'UNPLANNED' && selectedManualGroupContractIds.size > 0 ? (
@@ -7486,7 +7506,9 @@ function ShipmentsPageContent() {
                               className="w-10 align-bottom sticky top-0 z-20 bg-gray-50 px-1 py-1.5"
                             />
                           ) : null}                        {visibleColumns.map(col => {
-                          const active = sortKey === col.id
+                          const sortEntry = sortEntryFor(sortStack, col.id)
+                          const active = sortEntry != null
+                          const headerSortPriority = sortStack.length > 1 ? sortPriority(sortStack, col.id) : null
                           const opColClass = operationalTableColumnClass(
                             getOperationalColumnLayout('shipments', col.id),
                           )
@@ -7519,7 +7541,8 @@ function ShipmentsPageContent() {
                                 formulaHelp={col.formulaHelp}
                                 sortable={col.sortable}
                                 activeSort={active}
-                                sortDir={sortDir}
+                                sortDir={sortEntry?.dir ?? sortDir}
+                                sortPriority={headerSortPriority}
                                 onSortClick={() => onSortHeaderClick(col)}
                               />
 

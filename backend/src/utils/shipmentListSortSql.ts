@@ -1,4 +1,5 @@
 import { buildListOrderByWithSapStoPriority } from './listSapStoPrioritySql';
+import { parseListSortStack, type ListSortEntry } from './listSortStack';
 import {
   shipmentListKlipDeliveryKgExpr,
   shipmentListKlipReceiveKgExpr,
@@ -175,8 +176,47 @@ export function parseShipmentListSort(
   return { sortKey, sortDir };
 }
 
+/**
+ * The sort a request asks for: the click-history stack when `sort` is sent (first entry primary, the rest `thenBy`),
+ * else the legacy sortKey / sortDir pair, parsed exactly as before. A key the page cannot order by is dropped from a
+ * stack and falls back to created_at as a single sort always did.
+ */
+export function resolveShipmentListSortRequest(query: {
+  sort?: unknown;
+  sortKey?: unknown;
+  sortDir?: unknown;
+}): { sortKey: string; sortDir: 'ASC' | 'DESC'; thenBy: ListSortEntry[] } {
+  const stack = parseListSortStack(query.sort, isShipmentListSortKey);
+  if (stack.length > 0) {
+    const [primary, ...thenBy] = stack;
+    return { sortKey: primary.key, sortDir: primary.dir, thenBy };
+  }
+  return { ...parseShipmentListSort(query.sortKey, query.sortDir), thenBy: [] };
+}
+
 export function shipmentListSortUsesEnrichedPath(sortKey: string): boolean {
   return SHIPMENT_LIST_ENRICHED_SORT_KEYS.has(sortKey);
+}
+
+/** Keys a sort stack may name: every column the single sort already accepts. */
+export function isShipmentListSortKey(key: string): boolean {
+  return Boolean(
+    SHIPMENT_LIST_SORT_COLUMNS[key] ||
+      SHIPMENT_LIST_ENRICHED_ORDER_COLUMNS[key] ||
+      SHIPMENT_CONTRACT_BACKLOG_ONLY_SORT_KEYS.has(key),
+  );
+}
+
+/**
+ * A stack needs the enriched (SAP / qty) path when ANY of its keys does: the shell proxies for those columns are
+ * KLIP-first and would order by something other than the value the column shows.
+ */
+export function shipmentListSortStackUsesEnrichedPath(
+  sortKey: string,
+  thenBy?: ReadonlyArray<ListSortEntry>,
+): boolean {
+  if (shipmentListSortUsesEnrichedPath(sortKey)) return true;
+  return (thenBy ?? []).some((e) => shipmentListSortUsesEnrichedPath(e.key));
 }
 
 /** SQL ORDER BY key for shipment execution rows (backlog-only keys fall back to created_at). */
@@ -226,22 +266,32 @@ export function hybridListUsesGlobalMergeSort(sortKey: string): boolean {
   return true;
 }
 
+/** The ORDER BY expression of one sort key for shipment execution rows. */
+function executionOrderField(sortKey: string, rowPrefix: string): string {
+  const executionSortKey = shipmentListExecutionSortKey(sortKey);
+  return rowPrefix === 'le'
+    ? resolveEnrichedOrderExpr(executionSortKey)
+    : withRowPrefix(
+        SHIPMENT_LIST_SORT_COLUMNS[executionSortKey] ?? SHIPMENT_LIST_SORT_COLUMNS.created_at,
+        rowPrefix,
+      );
+}
+
 /** ORDER BY clause for shipment execution rows (before LIMIT/OFFSET). */
 export function buildShipmentListPageOrderBy(
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
   tableStatusFilter?: string,
   rowPrefix = 'fs',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): string {
   const executionSortKey = shipmentListExecutionSortKey(sortKey);
-  const field =
-    rowPrefix === 'le'
-      ? resolveEnrichedOrderExpr(executionSortKey)
-      : withRowPrefix(
-          SHIPMENT_LIST_SORT_COLUMNS[executionSortKey] ??
-            SHIPMENT_LIST_SORT_COLUMNS.created_at,
-          rowPrefix,
-        );
+  const field = executionOrderField(sortKey, rowPrefix);
+  // The extra keys of a sort stack: after the primary key, before the created_at / id tiebreakers. Empty for a single
+  // sort, which keeps that ORDER BY byte-for-byte what it was.
+  const thenBySql = (thenBy ?? [])
+    .map((e) => `, ${executionOrderField(e.key, rowPrefix)} ${e.dir} NULLS LAST`)
+    .join('');
   const createdAtExpr = withRowPrefix('fs.created_at', rowPrefix);
   const stoExpr = withRowPrefix('fs.sto_number', rowPrefix);
   /*
@@ -261,7 +311,7 @@ export function buildShipmentListPageOrderBy(
    * same reason; this brings the execution rows in line.
    */
   const idExpr = withRowPrefix('fs.id', rowPrefix);
-  const primaryOrder = `${field} ${sortDir} NULLS LAST, ${createdAtExpr} DESC, ${idExpr} ASC`;
+  const primaryOrder = `${field} ${sortDir} NULLS LAST${thenBySql}, ${createdAtExpr} DESC, ${idExpr} ASC`;
   if (SHIPMENT_LIST_SKIP_STO_PRIORITY_SORT_KEYS.has(executionSortKey)) {
     return primaryOrder;
   }
@@ -273,8 +323,9 @@ export function buildShipmentListEnrichedPageOrderBy(
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
   tableStatusFilter?: string,
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): string {
-  return buildShipmentListPageOrderBy(sortKey, sortDir, tableStatusFilter, 'le');
+  return buildShipmentListPageOrderBy(sortKey, sortDir, tableStatusFilter, 'le', thenBy);
 }
 
 /** SELECT list for list_enriched CTE (resolved qty + sort helpers). */
@@ -351,25 +402,48 @@ function isUnsafeSqlOrderExpr(expr: string): boolean {
   );
 }
 
-const BACKLOG_DEFAULT_ORDER = (sortDir: 'ASC' | 'DESC') =>
-  `c.contract_date ${sortDir} NULLS LAST, c.contract_id ASC`;
+/** ORDER BY expression of one sort key for a contract-backlog row, or null when that key orders nothing there. */
+function backlogOrderField(sortKey: string): string | null {
+  if (sortKey === 'created_at' || sortKey === 'status' || !SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS[sortKey]) {
+    return null;
+  }
+  if (sortKey === 'outstanding_quantity' || sortKey === 'outstanding_qty_planning') {
+    return 'outstanding_quantity';
+  }
+  const field = SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS[sortKey];
+  return isUnsafeSqlOrderExpr(field) ? null : field;
+}
+
+/**
+ * `, <field> <dir> NULLS LAST` for each extra key of a sort stack that orders a backlog row. A key the backlog does not
+ * carry (it tied on it anyway) is left out, and the merge in Node still compares the real values.
+ */
+function backlogThenBySql(
+  thenBy: ReadonlyArray<ListSortEntry> | undefined,
+  resolveField: (key: string) => string | null,
+  primaryField: string | null,
+): string {
+  return (thenBy ?? [])
+    .map((e) => ({ field: resolveField(e.key), dir: e.dir }))
+    .filter((e): e is { field: string; dir: 'ASC' | 'DESC' } => e.field !== null && e.field !== primaryField)
+    .map((e) => `, ${e.field} ${e.dir} NULLS LAST`)
+    .join('');
+}
 
 /** ORDER BY for Unplanned / ALL hybrid contract backlog page queries. */
 export function buildShipmentContractBacklogOrderBy(
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): string {
-  if (sortKey === 'created_at' || sortKey === 'status' || !SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS[sortKey]) {
-    return BACKLOG_DEFAULT_ORDER(sortDir);
+  const field = backlogOrderField(sortKey);
+  if (field === null) {
+    // created_at / status / an unmapped or unsafe key: the default order, with the stack's extra keys before the id.
+    const extra = backlogThenBySql(thenBy, backlogOrderField, 'c.contract_date');
+    return `c.contract_date ${sortDir} NULLS LAST${extra}, c.contract_id ASC`;
   }
-  if (sortKey === 'outstanding_quantity' || sortKey === 'outstanding_qty_planning') {
-    return `outstanding_quantity ${sortDir} NULLS LAST, c.contract_date DESC NULLS LAST, c.contract_id ASC`;
-  }
-  const field = SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS[sortKey];
-  if (isUnsafeSqlOrderExpr(field)) {
-    return BACKLOG_DEFAULT_ORDER(sortDir);
-  }
-  return `${field} ${sortDir} NULLS LAST, c.contract_date DESC NULLS LAST, c.contract_id ASC`;
+  const extra = backlogThenBySql(thenBy, backlogOrderField, field);
+  return `${field} ${sortDir} NULLS LAST${extra}, c.contract_date DESC NULLS LAST, c.contract_id ASC`;
 }
 
 function shipmentListRowSortNumeric(row: Record<string, unknown>, sortKey: string): number | null {
@@ -440,14 +514,13 @@ function shipmentListRowSortString(row: Record<string, unknown>, sortKey: string
   return raw == null ? '' : String(raw).trim().toLowerCase();
 }
 
-/** In-memory sort for merged hybrid pages (execution + contract backlog rows). */
-export function sortShipmentListRows<T extends Record<string, unknown>>(
-  rows: T[],
+/** One sort key's comparison of two merged hybrid rows; 0 means they tie on it and the next key decides. */
+function compareShipmentRowsByKey(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
   sortKey: string,
-  sortDir: 'ASC' | 'DESC',
-): T[] {
-  if (rows.length <= 1) return rows;
-  const dirMul = sortDir === 'ASC' ? 1 : -1;
+  dirMul: number,
+): number {
   const usesDate =
     sortKey === 'contract_date' ||
     sortKey === 'delivery_start_date' ||
@@ -457,28 +530,48 @@ export function sortShipmentListRows<T extends Record<string, unknown>>(
   const usesNumeric =
     shipmentListSortUsesEnrichedPath(sortKey) || sortKey === 'quantity_shipped';
 
+  if (usesDate) {
+    const aDate = shipmentListRowSortDateMs(a, sortKey);
+    const bDate = shipmentListRowSortDateMs(b, sortKey);
+    if (aDate != null && bDate != null) {
+      const diff = (aDate - bDate) * dirMul;
+      if (diff !== 0) return diff;
+    } else if (aDate != null) return -1 * dirMul;
+    else if (bDate != null) return 1 * dirMul;
+  } else if (usesNumeric || shipmentListRowSortNumeric(a, sortKey) != null) {
+    const aNum = shipmentListRowSortNumeric(a, sortKey);
+    const bNum = shipmentListRowSortNumeric(b, sortKey);
+    if (aNum != null && bNum != null) {
+      const diff = (aNum - bNum) * dirMul;
+      if (diff !== 0) return diff;
+    } else if (aNum != null) return -1 * dirMul;
+    else if (bNum != null) return 1 * dirMul;
+  }
+  const aStr = shipmentListRowSortString(a, sortKey);
+  const bStr = shipmentListRowSortString(b, sortKey);
+  const cmp = aStr.localeCompare(bStr, undefined, { numeric: true, sensitivity: 'base' });
+  return cmp !== 0 ? cmp * dirMul : 0;
+}
+
+/** In-memory sort for merged hybrid pages (execution + contract backlog rows). */
+export function sortShipmentListRows<T extends Record<string, unknown>>(
+  rows: T[],
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
+): T[] {
+  if (rows.length <= 1) return rows;
+  const dirMul = sortDir === 'ASC' ? 1 : -1;
+  const extra = thenBy ?? [];
+
   return [...rows].sort((a, b) => {
-    if (usesDate) {
-      const aDate = shipmentListRowSortDateMs(a, sortKey);
-      const bDate = shipmentListRowSortDateMs(b, sortKey);
-      if (aDate != null && bDate != null) {
-        const diff = (aDate - bDate) * dirMul;
-        if (diff !== 0) return diff;
-      } else if (aDate != null) return -1 * dirMul;
-      else if (bDate != null) return 1 * dirMul;
-    } else if (usesNumeric || shipmentListRowSortNumeric(a, sortKey) != null) {
-      const aNum = shipmentListRowSortNumeric(a, sortKey);
-      const bNum = shipmentListRowSortNumeric(b, sortKey);
-      if (aNum != null && bNum != null) {
-        const diff = (aNum - bNum) * dirMul;
-        if (diff !== 0) return diff;
-      } else if (aNum != null) return -1 * dirMul;
-      else if (bNum != null) return 1 * dirMul;
+    const primary = compareShipmentRowsByKey(a, b, sortKey, dirMul);
+    if (primary !== 0) return primary;
+    // The extra keys of a sort stack, each in its own direction, before the created_at fallback.
+    for (const e of extra) {
+      const cmp = compareShipmentRowsByKey(a, b, e.key, e.dir === 'ASC' ? 1 : -1);
+      if (cmp !== 0) return cmp;
     }
-    const aStr = shipmentListRowSortString(a, sortKey);
-    const bStr = shipmentListRowSortString(b, sortKey);
-    const cmp = aStr.localeCompare(bStr, undefined, { numeric: true, sensitivity: 'base' });
-    if (cmp !== 0) return cmp * dirMul;
     const aCreated = String(a.created_at ?? a.contract_date ?? '');
     const bCreated = String(b.created_at ?? b.contract_date ?? '');
     return bCreated.localeCompare(aCreated) * dirMul;
@@ -521,22 +614,23 @@ export const SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS: Record<string, string
   pre_planned_group: 'pre_planned_group_code',
 };
 
-const BACKLOG_OUTER_DEFAULT_ORDER = (sortDir: 'ASC' | 'DESC') =>
-  `contract_date ${sortDir} NULLS LAST, contract_number ASC`;
+/** Outer-order expression of one sort key, or null when that key orders nothing there. */
+function backlogOuterOrderField(sortKey: string): string | null {
+  const field = SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS[sortKey];
+  if (sortKey === 'created_at' || !field || isUnsafeSqlOrderExpr(field)) return null;
+  return field;
+}
 
 export function buildShipmentContractBacklogOuterOrderBy(
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): string {
-  const field =
-    SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS[sortKey] ??
-    SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS.created_at;
-  if (
-    sortKey === 'created_at' ||
-    !SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS[sortKey] ||
-    isUnsafeSqlOrderExpr(field)
-  ) {
-    return BACKLOG_OUTER_DEFAULT_ORDER(sortDir);
+  const field = backlogOuterOrderField(sortKey);
+  if (field === null) {
+    const extra = backlogThenBySql(thenBy, backlogOuterOrderField, 'contract_date');
+    return `contract_date ${sortDir} NULLS LAST${extra}, contract_number ASC`;
   }
-  return `${field} ${sortDir} NULLS LAST, contract_date DESC NULLS LAST, contract_number ASC`;
+  const extra = backlogThenBySql(thenBy, backlogOuterOrderField, field);
+  return `${field} ${sortDir} NULLS LAST${extra}, contract_date DESC NULLS LAST, contract_number ASC`;
 }

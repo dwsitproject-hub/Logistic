@@ -1,4 +1,5 @@
 import type { ColumnFilterPayload } from './contractListFilters';
+import type { ListSortEntry } from './listSortStack';
 import { isExactStoGlobalSearch } from './shipmentListFilters';
 import { sqlShipmentListB2bOriginContractJoins } from './shipmentB2bOriginSql';
 
@@ -21,6 +22,8 @@ export type ShipmentStoPagingFilterInput = {
   allHybrid?: boolean;
   /** List ORDER BY key — paging is only safe when ranked_sto can ORDER BY the same column. */
   sortKey?: string;
+  /** Extra keys of a sort stack: paging is only safe when ranked_sto can ORDER BY every one of them too. */
+  thenBy?: ReadonlyArray<ListSortEntry>;
   /** Pending ATC (Overdue / Due ≤7d) list filter — not safe for pre-group STO paging. */
   etcNoAtcDueWithin7d?: boolean | string;
 };
@@ -46,9 +49,11 @@ export function shipmentStoPagingSortKey(sortKey?: string): string {
   return SHIPMENT_STO_PAGING_SORT_EXPR[key] ? key : 'created_at';
 }
 
-export function canRankStoForListSort(sortKey?: string): boolean {
+export function canRankStoForListSort(sortKey?: string, thenBy?: ReadonlyArray<ListSortEntry>): boolean {
   const key = String(sortKey ?? 'created_at').trim() || 'created_at';
-  return Object.prototype.hasOwnProperty.call(SHIPMENT_STO_PAGING_SORT_EXPR, key);
+  if (!Object.prototype.hasOwnProperty.call(SHIPMENT_STO_PAGING_SORT_EXPR, key)) return false;
+  // A stack stays on the fast pager only when every one of its keys can be ranked here as well.
+  return (thenBy ?? []).every((e) => Object.prototype.hasOwnProperty.call(SHIPMENT_STO_PAGING_SORT_EXPR, e.key));
 }
 
 /**
@@ -74,7 +79,7 @@ function hasBlockingColumnFilters(colFilters?: ColumnFilterPayload): boolean {
  */
 export function canUseShipmentStoKeyPaging(input: ShipmentStoPagingFilterInput): boolean {
   if (input.summaryOnly || input.unplannedHybrid || input.allHybrid || input.stoIsSet) return false;
-  if (!canRankStoForListSort(input.sortKey)) return false;
+  if (!canRankStoForListSort(input.sortKey, input.thenBy)) return false;
   const globalSearchTrim = String(input.globalSearch ?? '').trim();
   if (globalSearchTrim.length >= 2 && !isExactStoGlobalSearch(globalSearchTrim)) return false;
   if (hasBlockingColumnFilters(input.colFilters)) return false;
@@ -130,15 +135,22 @@ export function buildRankedStoCtes(
   coreWhereSql: string,
   sortKey = 'created_at',
   sortDir: 'ASC' | 'DESC' = 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): string {
   const key = shipmentStoPagingSortKey(sortKey);
   const orderExpr = SHIPMENT_STO_PAGING_SORT_EXPR[key] ?? 'MAX(s.created_at)';
   const dir = sortDir === 'ASC' ? 'ASC' : 'DESC';
+  // The extra keys of a sort stack: one more ranked column each, ordered after sort_val and before the `mx` tiebreaker.
+  const extra = (thenBy ?? []).filter((e) => SHIPMENT_STO_PAGING_SORT_EXPR[e.key]);
+  const extraSelect = extra
+    .map((e, i) => `,\n          ${SHIPMENT_STO_PAGING_SORT_EXPR[e.key]} AS sort_val_${i + 2}`)
+    .join('');
+  const extraOrder = extra.map((e, i) => `, sort_val_${i + 2} ${e.dir === 'ASC' ? 'ASC' : 'DESC'} NULLS LAST`).join('');
   return `
       ranked_sto AS (
         SELECT ${stoKeyExpr} AS sto_key,
           MAX(s.created_at) AS mx,
-          ${orderExpr} AS sort_val
+          ${orderExpr} AS sort_val${extraSelect}
         FROM shipments s
         ${sqlShipmentListB2bOriginContractJoins()}
         WHERE 1=1
@@ -152,7 +164,7 @@ export function buildRankedStoCtes(
       ),
       paged_sto AS (
         SELECT sto_key FROM ranked_sto
-        ORDER BY sort_val ${dir} NULLS LAST, mx DESC
+        ORDER BY sort_val ${dir} NULLS LAST${extraOrder}, mx DESC
         LIMIT __STO_PAGE_LIMIT__ OFFSET __STO_PAGE_OFFSET__
       ),${STO_LINK_AGG_CTE_SQL}`;
 }
@@ -194,6 +206,8 @@ export function canUseShipmentStageSnapshotPaging(input: ShipmentStoPagingFilter
   if (!status || status === 'ALL' || status === 'UNPLANNED' || status === 'COMPLETED') return false;
   // Snapshot keys are stored in created_at order; vessel/supplier sorts would page the wrong 20 keys.
   if (shipmentStoPagingSortKey(input.sortKey) !== 'created_at') return false;
+  // A stack breaks ties by other keys, which the snapshot order knows nothing about.
+  if ((input.thenBy ?? []).length > 0) return false;
   return canUseShipmentStoKeyPaging({ ...input, status: 'ALL' });
 }
 

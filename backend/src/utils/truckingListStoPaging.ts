@@ -1,6 +1,8 @@
 import type { ColumnFilterPayload } from './contractListFilters';
 export {
   buildTruckingExpansionKeyOrderBy,
+  buildTruckingListOrderTail,
+  isTruckingListSortKey,
   resolveTruckingExpansionKeySortField,
   resolveTruckingListSortField,
   TRUCKING_EXPANSION_KEY_SORT_FIELD,

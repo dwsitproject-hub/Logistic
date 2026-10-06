@@ -107,7 +107,8 @@ function buildScope(
   const scopeQuery: Record<string, string> = {};
   for (const [k, v] of Object.entries(query)) {
     if (v === undefined || v === null) continue;
-    if (k === 'status' || k === 'page' || k === 'limit' || k === 'sortKey' || k === 'sortDir') continue;
+    // `sort` (the click-history stack) is a sort like sortKey / sortDir: it must not split one scope into one per stack.
+    if (k === 'status' || k === 'page' || k === 'limit' || k === 'sortKey' || k === 'sortDir' || k === 'sort') continue;
     if (k === 'columnFilters') continue;
     scopeQuery[k] = Array.isArray(v) ? JSON.stringify(v) : String(v);
   }
@@ -175,6 +176,8 @@ export interface DeriveInput {
   query: Record<string, unknown>;
   sortKey: string;
   sortDir: 'ASC' | 'DESC';
+  /** Extra keys of a sort stack (empty for a single sort). */
+  thenBy?: ReadonlyArray<{ key: string; dir: 'ASC' | 'DESC' }>;
   page: number;
   limit: number;
   loadScopePage: ScopePageLoader;
@@ -239,7 +242,13 @@ export async function deriveCompactShipmentPage(
   }
 
   const gate = canDeriveShipmentPageInNode(
-    { statusParam: status, colFilters: nodeFilters, sortKey: input.sortKey, sortDir: input.sortDir },
+    {
+      statusParam: status,
+      colFilters: nodeFilters,
+      sortKey: input.sortKey,
+      sortDir: input.sortDir,
+      thenBy: input.thenBy,
+    },
     rows[0],
   );
   if (!gate.ok) return { ok: false, reason: gate.reason };
@@ -249,6 +258,7 @@ export async function deriveCompactShipmentPage(
     colFilters: nodeFilters,
     sortKey: input.sortKey,
     sortDir: input.sortDir,
+    thenBy: input.thenBy,
     page: input.page,
     limit: input.limit,
   });

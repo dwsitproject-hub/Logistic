@@ -44,7 +44,9 @@ export interface ColumnFilterSpec {
 }
 
 /** Sort keys this module can order identically to the SQL, with the value each one reads. */
-const SORTABLE: Readonly<Record<string, { fields: string[]; kind: 'number' | 'date' }>> = {
+type SortSpec = { fields: string[]; kind: 'number' | 'date' };
+
+const SORTABLE: Readonly<Record<string, SortSpec>> = {
   contract_date: { fields: ['contract_date'], kind: 'date' },
   delivery_start: { fields: ['delivery_start_date'], kind: 'date' },
   delivery_start_date: { fields: ['delivery_start_date'], kind: 'date' },
@@ -249,6 +251,7 @@ export function nodeSortRows(
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
   statusParam?: unknown,
+  thenBy?: ReadonlyArray<{ key: string; dir: 'ASC' | 'DESC' }>,
 ): NodeRow[] {
   const spec = SORTABLE[sortKey];
   if (!spec) return rows;
@@ -259,24 +262,38 @@ export function nodeSortRows(
     const t = txt(r.sto_number);
     return t !== '' && t !== '-' ? 0 : 1;
   };
-  const primary = (r: NodeRow): number | string | null => {
-    const v = firstPresent(r, spec.fields);
+  const valueOf = (r: NodeRow, s: SortSpec): number | string | null => {
+    const v = firstPresent(r, s.fields);
     if (v === null) return null;
-    return spec.kind === 'number' ? num(v) : dateKey(v);
+    return s.kind === 'number' ? num(v) : dateKey(v);
   };
+  /** One key's comparison; 0 means a tie, so the next key (or the created_at / id tiebreak) decides. */
+  const compareKey = (a: NodeRow, b: NodeRow, s: SortSpec, d: number): number => {
+    const pa = valueOf(a, s);
+    const pb = valueOf(b, s);
+    const aNull = pa === null || pa === '';
+    const bNull = pb === null || pb === '';
+    // NULLS LAST holds in both directions, so it is decided before the direction is applied.
+    if (aNull !== bNull) return aNull ? 1 : -1;
+    if (!aNull && !bNull && pa !== pb) return ((pa as number | string) < (pb as number | string) ? -1 : 1) * d;
+    return 0;
+  };
+  // The extra keys of a sort stack, in the order the SQL puts them: after the primary key, before the tiebreaks.
+  const extras = (thenBy ?? [])
+    .map((e) => ({ spec: SORTABLE[e.key], dir: e.dir === 'ASC' ? 1 : -1 }))
+    .filter((e): e is { spec: SortSpec; dir: number } => Boolean(e.spec));
 
   return [...rows].sort((a, b) => {
     if (prioritizeSto) {
       const d = stoRank(a) - stoRank(b);
       if (d !== 0) return d;
     }
-    const pa = primary(a);
-    const pb = primary(b);
-    const aNull = pa === null || pa === '';
-    const bNull = pb === null || pb === '';
-    // NULLS LAST holds in both directions, so it is decided before the direction is applied.
-    if (aNull !== bNull) return aNull ? 1 : -1;
-    if (!aNull && !bNull && pa !== pb) return ((pa as number | string) < (pb as number | string) ? -1 : 1) * dir;
+    const byPrimary = compareKey(a, b, spec, dir);
+    if (byPrimary !== 0) return byPrimary;
+    for (const e of extras) {
+      const c = compareKey(a, b, e.spec, e.dir);
+      if (c !== 0) return c;
+    }
 
     const ca = dateTimeKey(a.created_at);
     const cb = dateTimeKey(b.created_at);
@@ -292,6 +309,8 @@ export interface NodeDeriveRequest {
   colFilters?: Record<string, ColumnFilterSpec>;
   sortKey: string;
   sortDir: 'ASC' | 'DESC';
+  /** Extra keys of a sort stack. Every one must be Node-sortable, or the request stays on SQL. */
+  thenBy?: ReadonlyArray<{ key: string; dir: 'ASC' | 'DESC' }>;
 }
 
 /**
@@ -329,6 +348,13 @@ export function canDeriveShipmentPageInNode(
   for (const f of sortSpec.fields) {
     if (!(f in sampleRow)) return { ok: false, reason: `rows carry no ${f} for sorting` };
   }
+  for (const extra of req.thenBy ?? []) {
+    const extraSpec = SORTABLE[extra.key];
+    if (!extraSpec) return { ok: false, reason: `sort key "${extra.key}" of the stack is not Node-sortable` };
+    for (const f of extraSpec.fields) {
+      if (!(f in sampleRow)) return { ok: false, reason: `rows carry no ${f} for sorting` };
+    }
+  }
   if (!('created_at' in sampleRow) || !('id' in sampleRow)) {
     return { ok: false, reason: 'rows carry no created_at/id tie-break' };
   }
@@ -364,7 +390,7 @@ export function deriveShipmentPageInNode(
     nodeFilterByStatus(rows, req.statusParam),
     req.colFilters,
   );
-  const sorted = nodeSortRows(filtered, req.sortKey, req.sortDir, req.statusParam);
+  const sorted = nodeSortRows(filtered, req.sortKey, req.sortDir, req.statusParam, req.thenBy);
   const limit = Math.max(1, req.limit);
   const offset = Math.max(0, (Math.max(1, req.page) - 1) * limit);
   return { rows: sorted.slice(offset, offset + limit), total: sorted.length };

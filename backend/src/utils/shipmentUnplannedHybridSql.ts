@@ -3,6 +3,7 @@
  */
 
 import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
+import type { ListSortEntry } from './listSortStack';
 import {
   sqlIsContractSapCancelledExpr,
   sqlIsContractSapClosedForShipmentBacklogExpr,
@@ -460,18 +461,22 @@ export function sqlSuggestedPrePlannedGroupJoin(contractAlias = 'c'): string {
      AND pg_sugg.status = 'SUGGESTED'`;
 }
 
-export function backlogQueryNeedsSuggestedGroupJoin(sortKey: string): boolean {
-  return sortKey === 'pre_planned_group';
+/** True when any key of the sort (the primary one, or an extra key of a stack) orders by the suggested group. */
+export function backlogQueryNeedsSuggestedGroupJoin(
+  sortKey: string,
+  thenBy?: ReadonlyArray<ListSortEntry>,
+): boolean {
+  return sortKey === 'pre_planned_group' || (thenBy ?? []).some((e) => e.key === 'pre_planned_group');
 }
 
-function sqlUnplannedSuggestedGroupIdExpr(sortKey: string): string {
-  return backlogQueryNeedsSuggestedGroupJoin(sortKey)
+function sqlUnplannedSuggestedGroupIdExpr(sortKey: string, thenBy?: ReadonlyArray<ListSortEntry>): string {
+  return backlogQueryNeedsSuggestedGroupJoin(sortKey, thenBy)
     ? 'pg_sugg.id::text'
     : 'NULL::text';
 }
 
-function sqlUnplannedSuggestedGroupCodeExpr(sortKey: string): string {
-  return backlogQueryNeedsSuggestedGroupJoin(sortKey)
+function sqlUnplannedSuggestedGroupCodeExpr(sortKey: string, thenBy?: ReadonlyArray<ListSortEntry>): string {
+  return backlogQueryNeedsSuggestedGroupJoin(sortKey, thenBy)
     ? 'pg_sugg.group_code'
     : 'NULL::text';
 }
@@ -659,13 +664,13 @@ export async function buildAllHybridContractBacklogCountQuery(
     FROM all_contract_backlog`;
 }
 
-function backlogPageSortNeedsQtyMove(sortKey: string): boolean {
-  return (
-    sortKey === 'outstanding_quantity' ||
-    sortKey === 'outstanding_qty_planning' ||
-    sortKey === 'quantity_delivered' ||
-    sortKey === 'quantity_receive'
-  );
+function backlogPageSortNeedsQtyMove(sortKey: string, thenBy?: ReadonlyArray<ListSortEntry>): boolean {
+  const needs = (key: string) =>
+    key === 'outstanding_quantity' ||
+    key === 'outstanding_qty_planning' ||
+    key === 'quantity_delivered' ||
+    key === 'quantity_receive';
+  return needs(sortKey) || (thenBy ?? []).some((e) => needs(e.key));
 }
 
 export async function buildAllHybridContractBacklogPageQuery(
@@ -675,6 +680,7 @@ export async function buildAllHybridContractBacklogPageQuery(
   offset: number,
   sortKey = 'created_at',
   sortDir: 'ASC' | 'DESC' = 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): Promise<string> {
   const unplannedWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const preplannedWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
@@ -692,13 +698,13 @@ export async function buildAllHybridContractBacklogPageQuery(
   });
   // Already COMPLETED by GR status - there is nothing to promote.
   const grClosedSelect = unplannedContractBacklogRowSelectSql(outstandingExpr, 'COMPLETED');
-  const outerOrder = buildShipmentContractBacklogOuterOrderBy(sortKey, sortDir);
+  const outerOrder = buildShipmentContractBacklogOuterOrderBy(sortKey, sortDir, thenBy);
 
   /**
    * Page ids first (cheap), then qty_move only for those contracts.
    * OS-column sort still needs full qty_move before LIMIT.
    */
-  if (!backlogPageSortNeedsQtyMove(sortKey)) {
+  if (!backlogPageSortNeedsQtyMove(sortKey, thenBy)) {
     return `
     WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     all_contract_candidates AS (
@@ -719,11 +725,11 @@ export async function buildAllHybridContractBacklogPageQuery(
         COALESCE(NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''), '') AS contract_ext_no,
         'UNPLANNED'::text AS status,
         'UNPLANNED'::text AS backlog_status,
-        ${sqlUnplannedSuggestedGroupIdExpr(sortKey)} AS pre_planned_group_id,
-        ${sqlUnplannedSuggestedGroupCodeExpr(sortKey)} AS pre_planned_group_code
+        ${sqlUnplannedSuggestedGroupIdExpr(sortKey, thenBy)} AS pre_planned_group_id,
+        ${sqlUnplannedSuggestedGroupCodeExpr(sortKey, thenBy)} AS pre_planned_group_code
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      ${backlogQueryNeedsSuggestedGroupJoin(sortKey) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
+      ${backlogQueryNeedsSuggestedGroupJoin(sortKey, thenBy) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
       WHERE ${unplannedWhere}
       UNION ALL
       SELECT
@@ -841,11 +847,11 @@ export async function buildAllHybridContractBacklogPageQuery(
     ${qtyMoveCte},
     all_contract_backlog AS (
       SELECT ${unplannedSelect},
-        ${sqlUnplannedSuggestedGroupIdExpr(sortKey)} AS pre_planned_group_id,
-        ${sqlUnplannedSuggestedGroupCodeExpr(sortKey)} AS pre_planned_group_code
+        ${sqlUnplannedSuggestedGroupIdExpr(sortKey, thenBy)} AS pre_planned_group_id,
+        ${sqlUnplannedSuggestedGroupCodeExpr(sortKey, thenBy)} AS pre_planned_group_code
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      ${backlogQueryNeedsSuggestedGroupJoin(sortKey) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
+      ${backlogQueryNeedsSuggestedGroupJoin(sortKey, thenBy) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
       WHERE ${unplannedWhere}
       UNION ALL
       SELECT ${preplannedSelect},
@@ -880,6 +886,7 @@ export async function buildUnplannedContractBacklogPageQuery(
   offset: number,
   sortKey = 'created_at',
   sortDir: 'ASC' | 'DESC' = 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): Promise<string> {
   const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
@@ -887,7 +894,7 @@ export async function buildUnplannedContractBacklogPageQuery(
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
+  const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir, thenBy);
   const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
@@ -903,12 +910,12 @@ export async function buildUnplannedContractBacklogPageQuery(
     ${qtyMoveCte},
     unplanned_contract_backlog AS (
       SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'UNPLANNED')},
-        ${sqlUnplannedSuggestedGroupIdExpr(sortKey)} AS pre_planned_group_id,
-        ${sqlUnplannedSuggestedGroupCodeExpr(sortKey)} AS pre_planned_group_code
+        ${sqlUnplannedSuggestedGroupIdExpr(sortKey, thenBy)} AS pre_planned_group_id,
+        ${sqlUnplannedSuggestedGroupCodeExpr(sortKey, thenBy)} AS pre_planned_group_code
       FROM backlog_contract_ids b
       INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      ${backlogQueryNeedsSuggestedGroupJoin(sortKey) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
+      ${backlogQueryNeedsSuggestedGroupJoin(sortKey, thenBy) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
       WHERE ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
       ORDER BY ${pageOrder}
       LIMIT ${limit} OFFSET ${offset}
@@ -1077,6 +1084,7 @@ export async function buildCompletedContractBacklogPageQuery(
   offset: number,
   sortKey = 'created_at',
   sortDir: 'ASC' | 'DESC' = 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): Promise<string> {
   const backlogWhere = `${completedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
@@ -1084,7 +1092,8 @@ export async function buildCompletedContractBacklogPageQuery(
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
+  // This builder has no suggested-group join, so that key cannot sit in a stack here.
+  const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir, (thenBy ?? []).filter((e) => e.key !== 'pre_planned_group'));
   const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
@@ -1139,11 +1148,12 @@ export async function buildCancelledContractBacklogPageQuery(
   offset: number,
   sortKey = 'created_at',
   sortDir: 'ASC' | 'DESC' = 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): Promise<string> {
   const backlogWhere = `${cancelledContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   /** Cancelled POs contribute 0 OS on Shipments cards (same as Contracts OS gate). */
   const outstandingExpr = '0';
-  const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
+  const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir, (thenBy ?? []).filter((e) => e.key !== 'pre_planned_group'));
   const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id

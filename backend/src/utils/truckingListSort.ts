@@ -5,6 +5,7 @@
  */
 
 import { buildListOrderByWithSapStoPriority } from './listSapStoPrioritySql';
+import type { ListSortEntry } from './listSortStack';
 
 /** Late Indicators — same rules as trucking list column filter / UI badge. */
 export function sqlTruckingLateIndicatorSortExpr(
@@ -72,6 +73,11 @@ const SORT_ALIAS_BY_KEY: Record<string, string> = {
   estimated_km: 'estimated_km',
 };
 
+/** Keys a sort stack may name: the columns the single sort already accepts, plus Late Indicators. */
+export function isTruckingListSortKey(key: string): boolean {
+  return key === 'late_indicator' || Object.prototype.hasOwnProperty.call(SORT_ALIAS_BY_KEY, key);
+}
+
 /**
  * Sort expressions on expansion_keys / ranked_expansion.
  * Prefer columns already selected into trucking_source (ts.*) so OS/qty/ext no work.
@@ -119,10 +125,36 @@ export function resolveTruckingListSortRowKey(sortKey: string): string {
   return SORT_ALIAS_BY_KEY[sortKey] || 'created_at';
 }
 
+/**
+ * `, <field> <dir> NULLS LAST` for each extra key of a sort stack (empty for a single sort, so the single-sort
+ * ORDER BY below is byte-for-byte what it was). They sit between the primary key and the created_at / id tiebreakers:
+ * they only break ties of the keys before them, and the tiebreakers stay last so paging stays deterministic.
+ */
+function thenBySql(
+  thenBy: ReadonlyArray<ListSortEntry> | undefined,
+  resolveField: (key: string) => string,
+): string {
+  if (!thenBy || thenBy.length === 0) return '';
+  return thenBy.map((e) => `, ${resolveField(e.key)} ${e.dir} NULLS LAST`).join('');
+}
+
+/** Tail of the page-query ORDER BY (unprefixed aliases): `<field> <dir> NULLS LAST[, ...], created_at DESC, id`. */
+export function buildTruckingListOrderTail(
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+  thenBy?: ReadonlyArray<ListSortEntry>,
+): string {
+  return `${resolveTruckingListSortField(sortKey)} ${sortDir} NULLS LAST${thenBySql(
+    thenBy,
+    resolveTruckingListSortField,
+  )}, created_at DESC, id`;
+}
+
 export function buildTruckingExpansionKeyOrderBy(
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
   stageFilter?: string | null,
+  thenBy?: ReadonlyArray<ListSortEntry>,
 ): string {
   const field = resolveTruckingExpansionKeySortField(sortKey);
   return buildListOrderByWithSapStoPriority(
@@ -144,7 +176,10 @@ export function buildTruckingExpansionKeyOrderBy(
      * nullable but holds no NULLs, and neither do the snapshot's 15,562 rows - so this costs
      * nothing and removes the one input that could have made the two pages disagree again.
      */
-    `${field} ${sortDir} NULLS LAST, ts.created_at DESC NULLS LAST, ts.id`,
+    `${field} ${sortDir} NULLS LAST${thenBySql(
+      thenBy,
+      resolveTruckingExpansionKeySortField,
+    )}, ts.created_at DESC NULLS LAST, ts.id`,
     stageFilter,
   );
 }

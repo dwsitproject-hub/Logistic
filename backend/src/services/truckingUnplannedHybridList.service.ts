@@ -13,6 +13,7 @@ import { parseColumnFiltersQuery, type ColumnFilterPayload } from '../utils/cont
 import { computeHybridListPageSlices } from '../utils/hybridListPageSlices';
 import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
 import { hybridListUsesGlobalMergeSort } from '../utils/shipmentListSortSql';
+import { listSortThenByKey, type ListSortEntry } from '../utils/listSortStack';
 import {
   buildTruckingExpansionKeysCountSql,
   wrapTruckingListQueryWithStoExpansion,
@@ -49,6 +50,8 @@ export interface TruckingUnplannedHybridContext {
   colFilters: ColumnFilterPayload;
   sortKey: string;
   sortDir: 'ASC' | 'DESC';
+  /** Extra keys of a sort stack (empty for a single sort). They only break ties of sortKey, so the snapshot cannot serve them. */
+  thenBy: ListSortEntry[];
   /** Unplanned = UNPLANNED ops + backlog. All = every visible op + same open-PO backlog. */
   mode: TruckingHybridListMode;
   /**
@@ -316,6 +319,7 @@ async function fetchContractBacklogPage(
     offset,
     ctx.sortKey,
     ctx.sortDir,
+    ctx.thenBy,
   );
   const result = await query(text, params);
   return result.rows as TruckingListRow[];
@@ -364,7 +368,8 @@ async function fetchExecutionPage(
    * buildTruckingExpansionKeyOrderBy for what it was doing instead, and note that the live path
    * was the broken one, not this.
    */
-  const snapshotSort = snapshotPageSortField(ctx.sortKey);
+  // The snapshot orders by one column. A stack has to break ties by its other keys, so it takes the live ranking.
+  const snapshotSort = ctx.thenBy.length === 0 ? snapshotPageSortField(ctx.sortKey) : null;
   const snapshotScope = truckingHybridSnapshotScope(ctx);
   const snapshotKeys =
     ctx.mode === 'all' &&
@@ -404,7 +409,7 @@ async function fetchExecutionPage(
           expansionPaging: {
             limit,
             offset,
-            orderBySql: buildTruckingExpansionKeyOrderBy(ctx.sortKey, ctx.sortDir),
+            orderBySql: buildTruckingExpansionKeyOrderBy(ctx.sortKey, ctx.sortDir, undefined, ctx.thenBy),
           },
         }
       : ctx.executionBuilt;
@@ -415,6 +420,7 @@ async function fetchExecutionPage(
     limit,
     offset,
     truckingHybridExecutionStageFilter(ctx.mode),
+    ctx.thenBy,
   );
   const result = await query(text, params);
   return result.rows.map((row) => {
@@ -437,7 +443,7 @@ export async function resolveTruckingUnplannedHybridList(
     String((req.query as { hydrateOnly?: string }).hydrateOnly || '').toLowerCase() === 'true';
   const breakdown = await countTruckingUnplannedHybridBreakdown(ctx);
   const { executionRows } = breakdown;
-  const { sortKey, sortDir } = ctx;
+  const { sortKey, sortDir, thenBy } = ctx;
 
   /**
    * No backlog rows in scope means no backlog page query.
@@ -481,6 +487,7 @@ export async function resolveTruckingUnplannedHybridList(
       [...executionPage, ...contractPage],
       sortKey,
       sortDir,
+      { thenBy },
     ).slice(offset, offset + limitNum);
   } else {
     const slices = computeHybridListPageSlices({
@@ -538,10 +545,11 @@ function withHybridCacheKey(
   suffix: string,
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
+  thenBy: ReadonlyArray<ListSortEntry> = [],
 ): TruckingListBuiltQuery {
   return {
     ...built,
-    cacheKey: `${built.cacheKey}:${suffix}:sap=${built.skipSapJoin ? 0 : 1}:sk=${sortKey}:${sortDir}`,
+    cacheKey: `${built.cacheKey}:${suffix}:sap=${built.skipSapJoin ? 0 : 1}:sk=${sortKey}:${sortDir}${listSortThenByKey(thenBy)}`,
   };
 }
 
@@ -550,8 +558,9 @@ function buildTruckingHybridContext(
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
   mode: TruckingHybridListMode,
-  options?: { executionBuilt?: TruckingListBuiltQuery },
+  options?: { executionBuilt?: TruckingListBuiltQuery; thenBy?: ListSortEntry[] },
 ): TruckingUnplannedHybridContext {
+  const thenBy = options?.thenBy ?? [];
   const { dateFrom, dateTo, contract, plant } = req.query;
   const globalSearch =
     typeof (req.query as { search?: string }).search === 'string'
@@ -565,12 +574,13 @@ function buildTruckingHybridContext(
   const suffix = mode === 'all' ? 'all-hybrid' : 'unplanned-hybrid';
 
   return {
-    executionBuilt: withHybridCacheKey(executionBuilt, suffix, sortKey, sortDir),
+    executionBuilt: withHybridCacheKey(executionBuilt, suffix, sortKey, sortDir, thenBy),
     contractScope: { dateFrom, dateTo, contract, plants },
     globalSearch,
     colFilters,
     sortKey,
     sortDir,
+    thenBy,
     mode,
     // Plants are allowed: the stage snapshot carries region_site (migration 164). Everything
     // else this predicate refuses - Source, Late Indicator, location, status - is a filter the
@@ -586,7 +596,7 @@ export function buildTruckingUnplannedHybridContext(
   req: AuthRequest,
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
-  options?: { executionBuilt?: TruckingListBuiltQuery },
+  options?: { executionBuilt?: TruckingListBuiltQuery; thenBy?: ListSortEntry[] },
 ): TruckingUnplannedHybridContext {
   return buildTruckingHybridContext(req, sortKey, sortDir, 'unplanned', options);
 }
@@ -595,7 +605,7 @@ export function buildTruckingAllHybridContext(
   req: AuthRequest,
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
-  options?: { executionBuilt?: TruckingListBuiltQuery },
+  options?: { executionBuilt?: TruckingListBuiltQuery; thenBy?: ListSortEntry[] },
 ): TruckingUnplannedHybridContext {
   return buildTruckingHybridContext(req, sortKey, sortDir, 'all', options);
 }

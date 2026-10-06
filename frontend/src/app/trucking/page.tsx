@@ -60,6 +60,16 @@ import {
 } from '@/lib/sapImportInFlight'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import {
+  clickSortStack,
+  compareByStack,
+  serializeSortStack,
+  sortEntryFor,
+  sortPriority,
+  type SortEntry,
+  type SortValue,
+} from '@/lib/sortStack'
 import {
   compareSapStoListRowPriority,
   shouldPrioritizeSapStoRows,
@@ -1760,8 +1770,17 @@ function TruckingPageContent() {
    * the table happened to be sorted by. It now pins its own order, leaving the table free to
    * default to something a viewer actually wants to see first.
    */
-  const [sortKey, setSortKey] = useState<string>('created_at')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  /**
+   * Sort by click history, newest click first, at most three columns (Supplier, then Product, then Incoterm sorts by
+   * Incoterm, Product, Supplier). Every sortable column here is one the server orders by, so any of them may stack.
+   * sortKey / sortDir are the PRIMARY entry, so every use below keeps working unchanged.
+   */
+  const defaultSortStack: SortEntry[] = [{ key: 'created_at', dir: 'desc' }]
+  const [sortStack, setSortStack] = useState<SortEntry[]>(defaultSortStack)
+  const sortKey = sortStack[0]?.key ?? 'created_at'
+  const sortDir: 'asc' | 'desc' = sortStack[0]?.dir ?? 'desc'
+  /** The `sort` request parameter: only when more than one column is stacked. */
+  const sortStackParam = sortStack.length > 1 ? serializeSortStack(sortStack) : ''
 
   const buildTruckingListSearchParams = useCallback(
     (opts?: {
@@ -1783,6 +1802,8 @@ function TruckingPageContent() {
       params.append('page', String(opts?.page ?? page))
       params.append('sortKey', opts?.sortOverride?.key ?? sortKey)
       params.append('sortDir', opts?.sortOverride?.dir ?? sortDir)
+      // A pinned order (an export) is a single sort; the stack only describes the table as the user left it.
+      if (sortStackParam && !opts?.sortOverride) params.append('sort', sortStackParam)
       if (!opts?.omitStatus && statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
@@ -1837,6 +1858,7 @@ function TruckingPageContent() {
       pageSize,
       sortKey,
       sortDir,
+      sortStackParam,
       statusFilter,
       loadingLocationFilter,
       unloadingLocationFilter,
@@ -2033,7 +2055,7 @@ function TruckingPageContent() {
     if (!userScopeReady) return
     fetchTruckingOperations()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userScopeReady, page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, selectedGroupPlants, selectedIncoterms, selectedProducts, selectedSuppliers, dateFrom, dateTo, searchTerm, columnFilters])
+  }, [userScopeReady, page, statusFilter, loadingLocationFilter, unloadingLocationFilter, searchParams, sortKey, sortDir, sortStackParam, selectedGroupPlants, selectedIncoterms, selectedProducts, selectedSuppliers, dateFrom, dateTo, searchTerm, columnFilters])
 
   useEffect(() => {
     let cancelled = false
@@ -3697,6 +3719,18 @@ function TruckingPageContent() {
     if (!prioritizeSapSto) return filteredOperations
 
     const dirMul = sortDir === 'asc' ? 1 : -1
+    if (sortStack.length > 1) {
+      // A stack: the same SAP-STO priority first, then every key of the stack in order.
+      const valueOf = (row: (typeof filteredOperations)[number], key: string): SortValue => {
+        const column = compactColumns.find((c) => c.id === key)
+        const v = column?.sortable ? column.getSortValue?.(row) : undefined
+        return typeof v === 'number' ? { type: 'number', value: v } : { type: 'text', value: String(v ?? '') }
+      }
+      return [...filteredOperations].sort((a, b) => {
+        const pri = compareSapStoListRowPriority(a, b)
+        return pri !== 0 ? pri : compareByStack(a, b, sortStack, valueOf)
+      })
+    }
     return [...filteredOperations].sort((a, b) => {
       const pri = compareSapStoListRowPriority(a, b)
       if (pri !== 0) return pri
@@ -3709,17 +3743,14 @@ function TruckingPageContent() {
         dirMul
       )
     })
-  }, [filteredOperations, statusFilter, compactColumns, sortKey, sortDir])
+  }, [filteredOperations, statusFilter, compactColumns, sortKey, sortDir, sortStack])
 
   const section3TableLoading =
     tableScopeLoading || (listFetching && truckingOperations.length === 0)
 
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
-    const nextDir: 'asc' | 'desc' =
-      sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
-    setSortDir(nextDir)
-    setSortKey(col.id)
+    setSortStack((prev) => clickSortStack(prev, col.id))
     setPage(1)
     fetchTruckingOperations(1)
   }
@@ -4862,6 +4893,14 @@ function TruckingPageContent() {
                 </>
               ) : null}
             </p>
+            <SortStackSummary
+              stack={sortStack}
+              labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+              onReset={() => {
+                setSortStack(defaultSortStack)
+                setPage(1)
+              }}
+            />
           </CardHeader>
           <CardContent>
             {showCreateForm ? (
@@ -4928,7 +4967,9 @@ function TruckingPageContent() {
                       <thead>
                       <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
                         {visibleColumns.map(col => {
-                          const active = sortKey === col.id
+                          const sortEntry = sortEntryFor(sortStack, col.id)
+                          const active = sortEntry != null
+                          const headerSortPriority = sortStack.length > 1 ? sortPriority(sortStack, col.id) : null
                           const opColClass = operationalTableColumnClass(
                             getOperationalColumnLayout('trucking', col.id),
                           )
@@ -4961,7 +5002,8 @@ function TruckingPageContent() {
                                 formulaHelp={col.formulaHelp}
                                 sortable={col.sortable}
                                 activeSort={active}
-                                sortDir={sortDir}
+                                sortDir={sortEntry?.dir ?? sortDir}
+                                sortPriority={headerSortPriority}
                                 onSortClick={() => onSortHeaderClick(col)}
                               />
 

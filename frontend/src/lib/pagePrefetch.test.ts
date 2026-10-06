@@ -36,13 +36,15 @@ describe('buildPagePrefetchRequests /shipments', () => {
     expect(requests[0].cacheKey).not.toContain('summaryOnly')
   })
 
-  it('uses the persisted compact sort so hover cache matches the first paint', () => {
+  it('always asks for the default sort, so hover cache matches the first paint (the table forgets its sort)', () => {
+    // a sort stored by an earlier version must neither be requested nor survive
     window.localStorage.setItem(
       SHIPMENTS_COMPACT_SORT_STORAGE_KEY,
       JSON.stringify({ key: 'vessel_name', dir: 'asc' }),
     )
     const requests = buildPagePrefetchRequests('/shipments')
-    expect(requests[0].cacheKey).toContain('sortKey=vessel_name')
-    expect(requests[0].cacheKey).toContain('sortDir=asc')
+    expect(requests[0].cacheKey).toContain('sortKey=created_at')
+    expect(requests[0].cacheKey).toContain('sortDir=desc')
+    expect(window.localStorage.getItem(SHIPMENTS_COMPACT_SORT_STORAGE_KEY)).toBeNull()
   })
 })

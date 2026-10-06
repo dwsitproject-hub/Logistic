@@ -30,8 +30,9 @@ import {
   buildShipmentListEnrichedPageOrderBy,
   buildShipmentListEnrichedCteBody,
   buildShipmentListPageOrderBy,
-  shipmentListSortUsesEnrichedPath,
+  shipmentListSortStackUsesEnrichedPath,
 } from '../utils/shipmentListSortSql';
+import { listSortThenByKey, type ListSortEntry } from '../utils/listSortStack';
 import {
   mergeShipmentVesselFromSapRow,
   queueShipmentVesselSapBackfill,
@@ -114,6 +115,8 @@ export interface ShipmentListQueryContext {
   useLiveStatusFilteredCount?: boolean;
   sortKey?: string;
   sortDir?: 'ASC' | 'DESC';
+  /** Extra keys of a sort stack (absent or empty for a single sort). */
+  thenBy?: ListSortEntry[];
 }
 
 export interface ShipmentListResponseData {
@@ -207,6 +210,7 @@ export function buildShipmentListFilterCacheKey(input: {
   etcNoAtcDueWithin7d?: string;
   sortKey?: string;
   sortDir?: string;
+  thenBy?: ListSortEntry[];
 }): string {
   return buildShipmentListCacheKey({
     ...input,
@@ -241,6 +245,8 @@ export function buildShipmentListCacheKey(input: {
   etcNoAtcDueWithin7d?: string;
   sortKey?: string;
   sortDir?: string;
+  /** Absent for a single sort, which keeps every existing cache key unchanged. */
+  thenBy?: ListSortEntry[];
 }): string {
   const norm = {
     vessel: input.vessel != null ? String(input.vessel) : '',
@@ -267,6 +273,7 @@ export function buildShipmentListCacheKey(input: {
     etcNoAtcDueWithin7d: input.etcNoAtcDueWithin7d != null ? String(input.etcNoAtcDueWithin7d) : '',
     sortKey: input.sortKey != null ? String(input.sortKey) : 'created_at',
     sortDir: input.sortDir != null ? String(input.sortDir) : 'DESC',
+    ...(input.thenBy && input.thenBy.length > 0 ? { thenBy: listSortThenByKey(input.thenBy) } : {}),
   };
   return `${CACHE_VERSION}:${JSON.stringify(norm)}`;
 }
@@ -277,16 +284,16 @@ export function buildShipmentListCacheKey(input: {
  * ORDER BY falls back to created_at (or a KLIP proxy) and the table looks unsorted.
  */
 function shouldUseEnrichedSortPath(ctx: ShipmentListQueryContext): boolean {
-  return shipmentListSortUsesEnrichedPath(ctx.sortKey ?? 'created_at');
+  return shipmentListSortStackUsesEnrichedPath(ctx.sortKey ?? 'created_at', ctx.thenBy);
 }
 
 function resolvePageOrderBy(ctx: ShipmentListQueryContext): string {
   const sortKey = ctx.sortKey ?? 'created_at';
   const sortDir = ctx.sortDir ?? 'DESC';
   if (shouldUseEnrichedSortPath(ctx)) {
-    return buildShipmentListEnrichedPageOrderBy(sortKey, sortDir, ctx.tableStatusFilter);
+    return buildShipmentListEnrichedPageOrderBy(sortKey, sortDir, ctx.tableStatusFilter, ctx.thenBy);
   }
-  return buildShipmentListPageOrderBy(sortKey, sortDir, ctx.tableStatusFilter);
+  return buildShipmentListPageOrderBy(sortKey, sortDir, ctx.tableStatusFilter, 'fs', ctx.thenBy);
 }
 
 async function buildShipmentListPageCore(

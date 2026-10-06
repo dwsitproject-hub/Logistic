@@ -3,7 +3,7 @@ import {
   CONTRACTS_NODE_SORT_COLUMN_IDS,
   contractsSortStackParam,
   isStackableContractsSort,
-  nextContractsPerfSortStack,
+  nextContractsSortStack,
 } from './contractsSortStack'
 import type { SortEntry } from './sortStack'
 
@@ -20,7 +20,7 @@ const API = new Set([
 ])
 const resolve = (id: string) => (API.has(id) ? id : null)
 
-const click = (stack: SortEntry[], id: string) => nextContractsPerfSortStack(stack, id, resolve)
+const click = (stack: SortEntry[], id: string) => nextContractsSortStack(stack, id, resolve)
 
 describe('stackable columns', () => {
   it('SQL columns stack; the six Node columns and columns the server cannot sort do not', () => {
@@ -42,7 +42,7 @@ describe('stackable columns', () => {
   })
 })
 
-describe('nextContractsPerfSortStack', () => {
+describe('nextContractsSortStack', () => {
   it('Supplier, then Product, then Incoterm sorts by Incoterm, then Product, then Supplier', () => {
     let stack: SortEntry[] = [{ key: 'outstanding_qty_mt', dir: 'desc' }]
     for (const id of ['supplier', 'product', 'incoterm']) stack = click(stack, id)

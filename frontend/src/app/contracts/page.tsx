@@ -21,7 +21,7 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
-import { contractsSortStackParam, nextContractsPerfSortStack } from '@/lib/contractsSortStack'
+import { contractsSortStackParam, nextContractsSortStack } from '@/lib/contractsSortStack'
 import { sortEntryFor, sortPriority, type SortEntry } from '@/lib/sortStack'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -1053,24 +1053,20 @@ function ContractsPageContent() {
   }, [])
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   /**
-   * Sort by click history, newest click first. Contract Performance may hold up to three SQL columns (Supplier, then
-   * Product, then Incoterm sorts by Incoterm, Product, Supplier); everywhere else - the Contracts page, and any column
-   * the server derives in Node - it is a single entry, which is exactly the sortKey + sortDir this page always had.
-   * sortKey / sortDir stay as the PRIMARY entry so every use below keeps working unchanged.
+   * Sort by click history, newest click first, on both Contracts and Contract Performance. It may hold up to three SQL
+   * columns (Supplier, then Product, then Incoterm sorts by Incoterm, Product, Supplier); a column the server derives in
+   * Node is a single entry, which is exactly the sortKey + sortDir this page always had.
+   * sortKey / sortDir are the PRIMARY entry, so every use below keeps working unchanged.
    */
   const [sortStack, setSortStack] = useState<SortEntry[]>([{ key: 'contract_date', dir: 'desc' }])
   const sortKey = sortStack[0]?.key ?? 'contract_date'
   const sortDir: 'asc' | 'desc' = sortStack[0]?.dir ?? 'desc'
-  const setSortKey = useCallback(
-    (key: string) => setSortStack((prev) => [{ key, dir: prev[0]?.dir ?? 'desc' }]),
-    [],
-  )
-  const setSortDir = useCallback(
-    (dir: 'asc' | 'desc') => setSortStack((prev) => [{ key: prev[0]?.key ?? 'contract_date', dir }]),
-    [],
-  )
+  /** What the page opens on, and what Reset returns to. */
+  const defaultSortStack: SortEntry[] = isContractPerformance
+    ? [{ key: 'outstanding_qty_mt', dir: 'desc' }]
+    : [{ key: 'contract_date', dir: 'desc' }]
   /** The `sort` request parameter: only when more than one SQL column is stacked. */
-  const sortStackParam = isContractPerformance ? contractsSortStackParam(sortStack, resolveApiSortKey) : ''
+  const sortStackParam = contractsSortStackParam(sortStack, resolveApiSortKey)
   // Contract Performance "Download Table" — exports every filtered row (all pages) + all columns to .xlsx.
   const [downloadingTable, setDownloadingTable] = useState(false)
 
@@ -3362,23 +3358,15 @@ function ContractsPageContent() {
           )
         }
       }
-      if (isContractPerformance) {
-        /*
-         * Contract Performance opens on its default and does not remember the last sort. A remembered one came back on
-         * every visit - including a cycle-days sort, which takes the slow 10,000-row path - and now that a sort can be
-         * a stack of columns, a stale stack would make the table look as if it had changed by itself. Visible columns
-         * and their order are still remembered. The old stored value is removed.
-         */
-        setSortStack([{ key: 'outstanding_qty_mt', dir: 'desc' }])
-        localStorage.removeItem(sortStorageKey)
-      } else {
-        const rawSort = localStorage.getItem(sortStorageKey)
-        if (rawSort) {
-          const s = JSON.parse(rawSort) as { key?: string; dir?: 'asc' | 'desc' }
-          if (s?.key) setSortKey(s.key)
-          if (s?.dir) setSortDir(s.dir)
-        }
-      }
+      /*
+       * Both pages open on their default sort and do not remember the last one (every list page opens on its default:
+       * one backend cache key for everybody, and the startup warmers only warm that key). A remembered sort also came
+       * back on every visit - on Contract Performance including a cycle-days sort, which takes the slow 10,000-row
+       * path - and a stale stack would make the table look as if it had changed by itself. Visible columns and their
+       * order are still remembered. The old stored value is removed.
+       */
+      setSortStack(defaultSortStack)
+      localStorage.removeItem(sortStorageKey)
     } catch {
       // ignore
     }
@@ -3428,19 +3416,16 @@ function ContractsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Persist columns/sort
+  // Persist columns (the sort is deliberately not persisted - see the restore effect)
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
       localStorage.setItem(columnStorageKey, JSON.stringify(Array.from(visibleColumnIds)))
       if (columnOrderIds.length > 0) localStorage.setItem(columnOrderStorageKey, JSON.stringify(columnOrderIds))
-      if (!isContractPerformance) {
-        localStorage.setItem(sortStorageKey, JSON.stringify({ key: sortKey, dir: sortDir }))
-      }
     } catch {
       // ignore
     }
-  }, [columnOrderIds, columnStorageKey, columnOrderStorageKey, isContractPerformance, sortKey, sortDir, sortStorageKey, visibleColumnIds])
+  }, [columnOrderIds, columnStorageKey, columnOrderStorageKey, visibleColumnIds])
 
   // Persist per-user view (debounced, best-effort): visible columns + column order.
   useEffect(() => {
@@ -3724,12 +3709,7 @@ function ContractsPageContent() {
 
   const onSortHeaderClick = (col: CompactColumn) => {
     if (!col.sortable) return
-    if (isContractPerformance) {
-      setSortStack((prev) => nextContractsPerfSortStack(prev, col.id, resolveApiSortKey))
-    } else {
-      const nextDir: 'asc' | 'desc' = sortKey === col.id ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc'
-      setSortStack([{ key: col.id, dir: nextDir }])
-    }
+    setSortStack((prev) => nextContractsSortStack(prev, col.id, resolveApiSortKey))
     setCurrentPage(1)
   }
 
@@ -4596,16 +4576,14 @@ function ContractsPageContent() {
                       </span>
                     </p>
                   )}
-                  {isContractPerformance ? (
-                    <SortStackSummary
-                      stack={sortStack}
-                      labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
-                      onReset={() => {
-                        setSortStack([{ key: 'outstanding_qty_mt', dir: 'desc' }])
-                        setCurrentPage(1)
-                      }}
-                    />
-                  ) : null}
+                  <SortStackSummary
+                    stack={sortStack}
+                    labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+                    onReset={() => {
+                      setSortStack(defaultSortStack)
+                      setCurrentPage(1)
+                    }}
+                  />
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -4852,8 +4830,7 @@ function ContractsPageContent() {
                           const sortEntry = sortEntryFor(sortStack, col.id)
                           const activeSort = sortEntry != null
                           const headerSortDir = sortEntry?.dir ?? sortDir
-                          const headerSortPriority =
-                            isContractPerformance && sortStack.length > 1 ? sortPriority(sortStack, col.id) : null
+                          const headerSortPriority = sortStack.length > 1 ? sortPriority(sortStack, col.id) : null
                           const filterActive = isColumnFilterActive(col.id)
                           const filterType = getFilterTypeForColumn(col.id)
                           const current = columnFilters[col.id]
