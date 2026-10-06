@@ -653,9 +653,6 @@ const SapImportDashboard: React.FC = () => {
                         <div className="font-medium">
                           {new Date(imp.import_timestamp).toLocaleString()}
                         </div>
-                        <div className="text-xs text-gray-500">
-                          {imp.import_date}
-                        </div>
                       </td>
                       <td className="p-3">
                         <div className="font-medium" title={imp.file_name || undefined}>
