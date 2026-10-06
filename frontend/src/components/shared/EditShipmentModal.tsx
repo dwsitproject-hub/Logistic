@@ -66,12 +66,8 @@ import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { resolveKlipPortInputValue, resolveKlipPortNameFromRow, resolveSapPortNameFromRow } from '@/lib/loadingPortDisplay'
 import { hasVesselPortsQuantityUserEdits, quantityKgValuesEqual } from '@/lib/vesselPortsQuantityEdits'
-import {
-  DECIMAL_DOT_HINT,
-  blockCommaDecimalKeyDown,
-  parseDecimalDotInput,
-  sanitizeDecimalDotInput,
-} from '@/lib/decimalDotInput'
+import { DECIMAL_DOT_HINT } from '@/lib/decimalDotInput'
+import { DecimalDotInput } from '@/components/shared/DecimalDotInput'
 import {
   seedKlipQtyFromShipmentHeader,
   sapContractDetailQtyToKg,
@@ -495,26 +491,14 @@ function MtQtyInput({
     )
   }
 
-  const mtDisplay = valueKg === null ? '' : String(valueKg / 1000)
   return (
     <div className="text-right">
       <div className="relative w-full min-w-[5.5rem]">
-        <Input
-          type="text"
-          inputMode="decimal"
-          autoComplete="off"
-          value={mtDisplay}
-          onKeyDown={blockCommaDecimalKeyDown}
-          onChange={(e) => {
-            const raw = e.target.value
-            if (raw === '') {
-              onChange(0)
-              return
-            }
-            if (sanitizeDecimalDotInput(raw) === null) return
-            const mt = parseDecimalDotInput(raw)
-            onChange(mt === null ? 0 : mt * 1000)
-          }}
+        {/* A cleared cell is stored as 0 here, so emptyAs is 0. */}
+        <DecimalDotInput
+          value={valueKg === null ? null : valueKg / 1000}
+          emptyAs={0}
+          onValueChange={(mt) => onChange(mt === null ? 0 : mt * 1000)}
           className={`h-7 px-2 py-1 pr-9 text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}
         />
         <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-normal text-gray-500">
@@ -553,21 +537,9 @@ function MetricDecimalInput({
 }) {
   return (
     <div className="relative w-full">
-      <Input
-        type="text"
-        inputMode="decimal"
-        autoComplete="off"
-        value={value === null ? '' : String(value)}
-        onKeyDown={blockCommaDecimalKeyDown}
-        onChange={(e) => {
-          const raw = e.target.value
-          if (raw === '') {
-            onChange(null)
-            return
-          }
-          if (sanitizeDecimalDotInput(raw) === null) return
-          onChange(parseDecimalDotInput(raw))
-        }}
+      <DecimalDotInput
+        value={value}
+        onValueChange={onChange}
         className={`h-9 text-right ${unit ? 'pr-12' : ''}`}
       />
       {unit && (
@@ -2004,19 +1976,11 @@ export function EditShipmentModal({
   const updateQualityField = (
     portKey: string,
     fieldKey: keyof ShipmentQualityFields,
-    raw: string,
+    nextValue: number | null,
   ) => {
     setQualityEditsByPortKey((prev) => {
       const baseline = originalQualityByPortKey[portKey] ?? emptyShipmentQualityFields()
       const current = prev[portKey] ?? baseline
-      const trimmed = raw.trim()
-      let nextValue: number | null
-      if (!trimmed) {
-        nextValue = null
-      } else {
-        const parsed = parseFloat(trimmed.replace(/,/g, ''))
-        nextValue = Number.isFinite(parsed) ? parsed : current[fieldKey]
-      }
       return {
         ...prev,
         [portKey]: { ...current, [fieldKey]: nextValue },
@@ -3272,13 +3236,10 @@ export function EditShipmentModal({
                             }
                             editing={qualityIsEditing && canEditAtaQuality}
                             editControl={
-                              <Input
-                                type="text"
-                                inputMode="decimal"
-                                value={klipVal != null ? String(klipVal) : ''}
-                                onChange={(e) =>
-                                  updateQualityField(qualityPortKey, fieldKey, e.target.value)
-                                }
+                              <DecimalDotInput
+                                value={klipVal ?? null}
+                                onValueChange={(n) => updateQualityField(qualityPortKey, fieldKey, n)}
+                                title={DECIMAL_DOT_HINT}
                                 className="h-8 text-xs"
                               />
                             }
@@ -3320,17 +3281,10 @@ export function EditShipmentModal({
                           }
                           editing={qualityIsEditing && canEditAtaQuality}
                           editControl={
-                            <Input
-                              type="text"
-                              inputMode="decimal"
-                              value={klipVal != null ? String(klipVal) : ''}
-                              onChange={(e) =>
-                                updateQualityField(
-                                  DISCHARGE_QUALITY_PORT_KEY,
-                                  fieldKey,
-                                  e.target.value,
-                                )
-                              }
+                            <DecimalDotInput
+                              value={klipVal ?? null}
+                              onValueChange={(n) => updateQualityField(DISCHARGE_QUALITY_PORT_KEY, fieldKey, n)}
+                              title={DECIMAL_DOT_HINT}
                               className="h-8 text-xs"
                             />
                           }

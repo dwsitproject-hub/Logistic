@@ -1,7 +1,6 @@
 'use client'
 
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   Table,
   TableBody,
@@ -12,12 +11,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatQtyMtFromKg } from '@/lib/utils'
-import {
-  DECIMAL_DOT_HINT,
-  blockCommaDecimalKeyDown,
-  parseDecimalDotInput,
-  sanitizeDecimalDotInput,
-} from '@/lib/decimalDotInput'
+import { DECIMAL_DOT_HINT } from '@/lib/decimalDotInput'
+import { DecimalDotInput } from '@/components/shared/DecimalDotInput'
 import {
   VESSEL_MODAL_COMPACT_TD,
   VESSEL_MODAL_COMPACT_TH,
@@ -80,26 +75,12 @@ function MtQtyInput({
   disabled?: boolean
   onChange: (kg: number | null) => void
 }) {
-  const mtDisplay = valueKg === null ? '' : String(valueKg / 1000)
   return (
     <div className="relative w-full min-w-[6.5rem]">
-      <Input
-        type="text"
-        inputMode="decimal"
-        autoComplete="off"
+      <DecimalDotInput
         disabled={disabled}
-        value={mtDisplay}
-        onKeyDown={blockCommaDecimalKeyDown}
-        onChange={(e) => {
-          const raw = e.target.value
-          if (raw === '') {
-            onChange(null)
-            return
-          }
-          if (sanitizeDecimalDotInput(raw) === null) return
-          const mt = parseDecimalDotInput(raw)
-          onChange(mt === null ? null : mt * 1000)
-        }}
+        value={valueKg === null ? null : valueKg / 1000}
+        onValueChange={(mt) => onChange(mt === null ? null : mt * 1000)}
         title={DECIMAL_DOT_HINT}
         className={`h-8 text-xs pr-10 text-right tabular-nums ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
       />
