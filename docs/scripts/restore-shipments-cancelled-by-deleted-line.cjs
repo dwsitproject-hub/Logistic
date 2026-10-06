@@ -110,8 +110,15 @@ const dist = (p) => require(path.join(process.cwd(), 'dist', p));
     }
   }
   if (apply && restored.length > 0) {
+    // Fire-and-forget: it SCHEDULES the Contract Performance snapshot refresh and the oil-loss stale flag, which still need this
+    // connection. Closing the pool straight away made both fail, so wait for them.
     invalidateAfterShipmentWrite(restored);
-    console.log(`\nrestored ${restored.length} shipment(s); list caches cleared`);
+    await new Promise((resolve) => setTimeout(resolve, 12000));
+    console.log(`\nrestored ${restored.length} shipment(s); snapshots refreshed`);
+    console.log(
+      'NOTE: the running backend keeps its own in-memory list caches (about an hour). They are not cleared from here - they expire ' +
+        'on their own, or clear on the next shipment save in the app.',
+    );
   } else if (!apply) {
     console.log('\ndry run - nothing written. Add --apply to restore.');
   }
