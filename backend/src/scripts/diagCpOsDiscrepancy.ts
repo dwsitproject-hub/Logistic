@@ -112,7 +112,7 @@ async function main(): Promise<void> {
     const tableOs = Number(t.outstanding_quantity ?? t.outstanding_qty_mt ?? 0);
     const c = cards.get(po);
     tableSum += tableOs;
-    if (c && c.effective === 'OPEN') cardSum += Number(c.os_card_mt) * 1000;
+    if (c && (c.effective === 'OPEN' || c.effective === 'ACTIVE')) cardSum += Number(c.os_card_mt) * 1000;
     console.log(
       [
         po,
