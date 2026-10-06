@@ -53,6 +53,20 @@ export const SAP_MASTER_V2_UAT_FIELD_MAPPING: Record<string, string> = {
   'delete sto status': 'delete_sto_status',
 };
 
+/** True when Delete PO Status alone is non-blank (L, S, or other). The PO-level half of hasSapDeleteFlag. */
+export function hasSapDeletePoFlag(parsedData: {
+  contract?: Record<string, unknown> | null;
+  shipment?: Record<string, unknown> | null;
+  raw?: Record<string, unknown> | null;
+}): boolean {
+  for (const src of [parsedData.contract, parsedData.shipment, parsedData.raw]) {
+    if (!src) continue;
+    const po = src.delete_po_status ?? src['Delete PO Status'] ?? src['delete po status'];
+    if (po != null && String(po).trim() !== '') return true;
+  }
+  return false;
+}
+
 /** True when Delete PO Status or Delete STO Status is non-blank (L, S, or other). */
 export function hasSapDeleteFlag(parsedData: {
   contract?: Record<string, unknown> | null;

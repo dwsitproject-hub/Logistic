@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import pool from '../database/connection';
 import logger from '../utils/logger';
+import { markSupersededDeletedPoLines } from '../utils/sapDeletedPoLines';
 import {
   SAP_MASTER_V2_UAT_FIELD_MAPPING,
   applySapMasterV2RawFieldAliases,
@@ -78,6 +79,8 @@ interface RowImportContext {
   stoKey: string;
   /** SHA-256 of parsedData; null when poNumber is missing (row will fail validation anyway). */
   contentHash: string | null;
+  /** A deleted line of a PO that also has a line that is not deleted: set aside, see utils/sapDeletedPoLines.ts. */
+  supersededDeletedPoLine?: boolean;
 }
 
 /** Per-chunk accumulator, aggregated across all parallel workers once every chunk finishes. */
@@ -818,6 +821,19 @@ export class SapMasterV2ImportService {
       contexts.push({ rowIndex: i, row, parsedData, rowIdentity, contractNumber, poNumber, stoKey, contentHash: null });
     }
 
+    // A PO with a deleted line and an open line is open: set the deleted lines aside BEFORE anything sums or hashes them.
+    const setAside = markSupersededDeletedPoLines(contexts);
+    if (setAside > 0) {
+      logger.info('SAP import: deleted PO lines set aside because the PO has a line that is not deleted', {
+        lines: setAside,
+        pos: [
+          ...new Set(
+            contexts.filter((c) => c.supersededDeletedPoLine).map((c) => `${c.contractNumber ?? '-'}/${c.poNumber}`),
+          ),
+        ].slice(0, 20),
+      });
+    }
+
     // Same-file split-STO rows: when 2+ rows share the exact same PO+STO (one STO's cargo
     // reported across multiple lines, e.g. partial deliveries), sum their STO/trucking quantity
     // fields into every row of the group. This must run before hashing below, and before the
@@ -863,6 +879,8 @@ export class SapMasterV2ImportService {
     const groups = new Map<string, RowImportContext[]>();
     for (const ctx of contexts) {
       if (!ctx.poNumber) continue;
+      // A deleted line set aside must not add its quantity to the open line it shares a PO + STO with.
+      if (ctx.supersededDeletedPoLine) continue;
       const key = this.processedDataKey(ctx.poNumber, ctx.stoKey);
       const group = groups.get(key);
       if (group) {
@@ -1204,6 +1222,17 @@ export class SapMasterV2ImportService {
 
           if (!poNumber) {
             throw new Error('Row skipped: PO number is required');
+          }
+
+          if (ctx.supersededDeletedPoLine) {
+            // Not stored, not distributed: storing it would overwrite the open line that shares its PO + STO, and
+            // distributing it would cancel the contract's shipments and trucking operations.
+            await client.query(`UPDATE sap_raw_data SET status = 'skipped' WHERE id = $1`, [rawDataId]);
+            await client.query(`RELEASE SAVEPOINT ${savepointName}`);
+            chunkResult.skippedRecords++;
+            if (rowIdentity) chunkResult.successIdentities.push(rowIdentity);
+            await flushProgress();
+            continue;
           }
 
           const existing = existingProcessedMap.get(this.processedDataKey(poNumber, stoKey));
