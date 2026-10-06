@@ -110,11 +110,35 @@ const dist = (p) => require(path.join(process.cwd(), 'dist', p));
     }
   }
   if (apply && restored.length > 0) {
-    // Fire-and-forget: it SCHEDULES the Contract Performance snapshot refresh and the oil-loss stale flag, which still need this
-    // connection. Closing the pool straight away made both fail, so wait for them.
+    // Fire-and-forget: it SCHEDULES the snapshot refreshes (Contract Performance, oil-loss stale flag and - the slow one - the
+    // pipeline daily summary, a ~50 s trucking rebuild), and all of them still need this connection. A fixed wait closed the pool
+    // mid-rebuild, so poll the three stale flags instead and close only once they are all clear (or after 5 minutes).
     invalidateAfterShipmentWrite(restored);
-    await new Promise((resolve) => setTimeout(resolve, 12000));
-    console.log(`\nrestored ${restored.length} shipment(s); snapshots refreshed`);
+    const staleNow = async () => {
+      const r = await pool.query(
+        `SELECT (SELECT COUNT(*) FROM pipeline_summary_refresh_meta WHERE is_stale) +
+                (SELECT COUNT(*) FROM contract_performance_snapshot_meta WHERE is_stale) +
+                (SELECT COUNT(*) FROM oil_loss_snapshot_meta WHERE is_stale) AS n`,
+      );
+      return Number(r.rows[0].n);
+    };
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    await sleep(4000); // the stale flags are set asynchronously right after the call above
+    const deadline = Date.now() + 300000;
+    let clearPolls = 0;
+    let remaining = await staleNow();
+    while (Date.now() < deadline && clearPolls < 2) {
+      clearPolls = remaining === 0 ? clearPolls + 1 : 0;
+      if (clearPolls < 2) {
+        await sleep(3000);
+        remaining = await staleNow();
+      }
+    }
+    console.log(
+      remaining === 0
+        ? `\nrestored ${restored.length} shipment(s); snapshots refreshed`
+        : `\nrestored ${restored.length} shipment(s); ${remaining} snapshot flag(s) still stale after 5 min - they rebuild on the next refresh`,
+    );
     console.log(
       'NOTE: the running backend keeps its own in-memory list caches (about an hour). They are not cleared from here - they expire ' +
         'on their own, or clear on the next shipment save in the app.',
