@@ -56,7 +56,10 @@ import {
   sqlQtyMoveJoinIncotermDelivery,
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
-import { sqlLastAtaVesselCompleteDischargeForContract } from '../utils/contractsListCycleSql';
+import {
+  sqlContractEveryStoDischargedExpr,
+  sqlLastAtaVesselCompleteDischargeForContract,
+} from '../utils/contractsListCycleSql';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
 import { filterContractUpdatesForRole } from '../utils/contractUpdateFields';
 import {
@@ -502,6 +505,31 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     `;
 
     const statusNorm = typeof status === 'string' ? status.trim() : '';
+    /*
+     * Contract Performance only (it is the one caller that sends requireRegionSite): a contract that has effectively
+     * finished - OS inside the zero band, or its ATC at discharge filled - belongs to Close even while SAP's GR PO still says
+     * Open. The cards (late-performance) already count it that way, so without this the Open tab's table listed those
+     * contracts and the OS the cards had moved to Close (2,500 MT on production, TANJUNG PURA / CPO / FOB).
+     *
+     * Not applied to the plain Contracts page, which keeps its own Open/Close behaviour.
+     */
+    const cpEffectivelyDoneSql =
+      String((req.query as any).requireRegionSite || 'false') === 'true'
+        ? sqlContractEffectivelyDoneExpr({
+            outstandingKgExpr: `(${sqlContractOutstandingSignedExpr({
+              contractQtyExpr: 'base.quantity_ordered',
+              incotermExpr: 'base.incoterm',
+              receiveExpr: 'base.quantity_receive',
+              deliveryExpr: 'base.quantity_delivery',
+            })})`,
+            // base is one row per contract_id; its newest contracts row is the one the cycle fields use too.
+            atcExpr: sqlLastAtaVesselCompleteDischargeForContract(
+              '(SELECT c_done.id FROM contracts c_done WHERE c_done.contract_id = base.contract_id ORDER BY c_done.created_at DESC LIMIT 1)',
+            ),
+            stoCountExpr: 'base.sto_count',
+            everyStoDischargedExpr: sqlContractEveryStoDischargedExpr('base.contract_id', 'base.sto_count'),
+          })
+        : undefined;
     if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
       if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
         queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
@@ -511,11 +539,13 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           // with no STO in SAP yet), not tied to whether any SAP row exists at all. Keeps the
           // Contract Performance drilldown card total aligned with this View table's OS sum.
           'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+          cpEffectivelyDoneSql,
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
           'base.import_status',
           'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+          cpEffectivelyDoneSql,
         )}`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
