@@ -1062,9 +1062,10 @@ function ContractsPageContent() {
   const sortKey = sortStack[0]?.key ?? 'contract_date'
   const sortDir: 'asc' | 'desc' = sortStack[0]?.dir ?? 'desc'
   /** What the page opens on, and what Reset returns to. */
-  const defaultSortStack: SortEntry[] = isContractPerformance
-    ? [{ key: 'outstanding_qty_mt', dir: 'desc' }]
-    : [{ key: 'contract_date', dir: 'desc' }]
+  const defaultSortStack: SortEntry[] = [{ key: 'contract_date', dir: 'desc' }]
+  // Both pages open on the newest contract first. Contract Performance used to open on the largest outstanding quantity; the
+  // backend breaks ties on contract_date, then contract_id DESC, so the order is deterministic. The Outstanding column is still
+  // sortable for anyone who wants the biggest gap on top.
   /** The `sort` request parameter: only when more than one SQL column is stacked. */
   const sortStackParam = contractsSortStackParam(sortStack, resolveApiSortKey)
   // Contract Performance "Download Table" — exports every filtered row (all pages) + all columns to .xlsx.

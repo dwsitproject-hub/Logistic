@@ -225,6 +225,9 @@ function mergePoOptionMetadata(base: ShipmentPoOption, enriched: ShipmentPoOptio
       delivery_end_date: coalescePoField(baseData.delivery_end_date, enrichedData.delivery_end_date),
       // Prefer a real transport_mode when STO prefill omitted it
       transport_mode: coalescePoField(baseData.transport_mode, enrichedData.transport_mode),
+      // A stub built from a list row can carry null ports; `...baseData` above would then hide the SAP ports the enrich call returned.
+      port_of_loading: coalescePoField(baseData.port_of_loading, enrichedData.port_of_loading),
+      port_of_discharge: coalescePoField(baseData.port_of_discharge, enrichedData.port_of_discharge),
       plant_code: plantCode,
     },
   }

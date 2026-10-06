@@ -2821,8 +2821,12 @@ function ShipmentsPageContent() {
         contract_ext_no: shipment.contract_ext_no,
         delivery_start_date: shipment.delivery_start_date,
         delivery_end_date: shipment.delivery_end_date,
-        port_of_loading: shipment.port_of_loading,
-        port_of_discharge: shipment.port_of_discharge,
+        // A backlog row has no shipment, so port_of_loading / port_of_discharge are NULL on it; the PO's SAP ports travel in
+        // sap_loading_ports / sap_discharge_ports. Add New Shipment shows them as "(from SAP)" and, opened from this row, never
+        // calls the validate endpoint, so reading the two NULL columns left both fields empty. The list's own resolvers give
+        // the same ports the table row shows.
+        port_of_loading: resolveShipmentListLoadingPorts(shipment) || null,
+        port_of_discharge: resolveShipmentListDischargePorts(shipment) || null,
       },
     }
   }

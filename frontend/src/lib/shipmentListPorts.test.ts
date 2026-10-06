@@ -26,6 +26,18 @@ describe('shipmentListPorts', () => {
     ).toBe('Port A, Port B')
   })
 
+  it('a contract-backlog row (no shipment: port columns NULL) reads the SAP ports - what Add New Shipment is prefilled with', () => {
+    const backlogRow = {
+      is_contract_sap_closed: false,
+      port_of_loading: null,
+      port_of_discharge: null,
+      sap_loading_ports: 'PKS PAGUN/PARBA',
+      sap_discharge_ports: 'EUP EDIBLE OIL TJ.PURA',
+    }
+    expect(resolveShipmentListLoadingPorts(backlogRow)).toBe('PKS PAGUN/PARBA')
+    expect(resolveShipmentListDischargePorts(backlogRow)).toBe('EUP EDIBLE OIL TJ.PURA')
+  })
+
   it('Open: falls back to SAP when KLIP empty', () => {
     expect(
       resolveShipmentListLoadingPorts({
