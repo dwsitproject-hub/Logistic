@@ -131,7 +131,29 @@ export function classifySapAutoImportRun(
   };
 }
 
+/**
+ * Close the history rows of runs that can no longer be running. A run whose process never came back (the lock watchdog released
+ * it) kept its row at 'running' forever, so the history claimed a sync was still in progress hours after a newer one had finished.
+ * Anything 'running' for longer than the lock limit is hung or lost; say so.
+ */
+async function failOrphanRuns(): Promise<void> {
+  try {
+    await query(
+      `UPDATE sap_auto_import_runs
+          SET finished_at = NOW(),
+              outcome = 'failed',
+              detail = COALESCE(detail, 'The run never reported back (more than ' || $1::int || ' minutes). It was hung or the backend restarted; check the import it started.')
+        WHERE outcome = 'running'
+          AND started_at < NOW() - ($1::int * INTERVAL '1 minute')`,
+      [Math.round(RUN_LOCK_MAX_MS / 60000)],
+    );
+  } catch (error) {
+    logger.error('Could not close orphaned SAP auto-import runs', { error });
+  }
+}
+
 async function recordRunStart(trigger: SapAutoImportTrigger, startedBy: string | null): Promise<string | null> {
+  await failOrphanRuns();
   try {
     const res = await query(
       `INSERT INTO sap_auto_import_runs (trigger_source, started_by) VALUES ($1, $2) RETURNING id::text`,
