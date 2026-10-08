@@ -99,7 +99,18 @@ function show(title, rows, fmt, limit = 60) {
     }
 
     if (pushDhm) {
+      // The server loads the DHM settings saved in the Integrations menu (database) at boot and they win over .env. This is a separate
+      // process, so without this it talks to DHM with the raw .env values - which can be stale or different - and every call fails.
+      await dist('integrations/settingsStore').loadIntegrationSettings();
       const catalog = dist('dhm/catalog');
+      try {
+        await catalog.fetchDhmCatalog(true);
+      } catch (e) {
+        console.error(`
+DHM is not reachable with the saved settings (${e && e.message ? e.message : e}). Nothing was pushed - check the DHM settings in the Integrations menu.`);
+        process.exitCode = 1; // the finally below still releases the client and closes the pool
+        return;
+      }
       const enumValues = await catalog.getDhmVesselTypeEnumValues();
       const tugValue = (enumValues || []).find((v) => /tug/i.test(String(v)));
       console.log(`\nDHM Vessel_Type values on the Hub: ${enumValues ? enumValues.join(', ') : '(catalog not readable)'}`);
