@@ -104,13 +104,11 @@ export function EditVesselModal({
         alert('Vessel Name is required')
         return
       }
-      if (mode === 'create' && !vesselCode) {
-        alert('Vessel Code (SAP) is required for new vessels')
-        return
-      }
       const payload = {
         // KLIP issues vessel_code_klip. Sending it as vessel_code would overwrite the stored code.
-        ...(mode === 'create' ? { vessel_code: vesselCode } : {}),
+        // Optional on create: without it the vessel is saved as provisional and the SAP import fills the code in when it brings the
+        // same vessel name. An empty field must not be sent as an empty code.
+        ...(mode === 'create' && vesselCode ? { vessel_code: vesselCode } : {}),
         vessel_name: vesselName.toUpperCase(),
         vessel_capacity_mt: form.vessel_capacity_mt,
         vessel_owner: form.vessel_owner ? String(form.vessel_owner).toUpperCase() : null,
@@ -208,14 +206,21 @@ export function EditVesselModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Code (SAP)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Vessel Code (SAP){mode === 'create' ? <span className="ml-1 font-normal text-gray-500">(optional)</span> : null}
+              </label>
               <Input
                 value={mode === 'edit' ? form.vessel_codes_sap || form.vessel_code || '' : form.vessel_code_input ?? ''}
-                placeholder={mode === 'edit' ? '-' : ''}
+                placeholder={mode === 'edit' ? '-' : 'Leave empty if not known yet'}
                 onChange={(e) => handleChange('vessel_code_input', e.target.value.toUpperCase())}
                 readOnly={mode === 'edit'}
                 disabled={readOnly || mode === 'edit'}
               />
+              {mode === 'create' ? (
+                <p className="mt-1 text-xs text-gray-500">
+                  Filled in automatically when a SAP import brings a vessel with the same name.
+                </p>
+              ) : null}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Code (DHM)</label>

@@ -50,8 +50,10 @@ export function toDhmVesselPayload(
   };
   if (options?.code) payload.code = options.code;
 
+  // A vessel KLIP created without a SAP code carries a provisional "TMP-..." placeholder in vessel_code. That is KLIP's own bookkeeping,
+  // not a code SAP issued, so it is never sent to DHM as the SAP code (DHM would keep it, and show it as the vessel's SAP code).
   const sapCode = String(row.vessel_code ?? '').trim();
-  if (sapCode) payload.Vessel_Code_SAP = sapCode;
+  if (sapCode && !/^TMP-/i.test(sapCode)) payload.Vessel_Code_SAP = sapCode;
 
   if (row.vessel_capacity_mt != null && Number.isFinite(Number(row.vessel_capacity_mt))) {
     payload.Vessel_Capacity_MT = Number(row.vessel_capacity_mt);

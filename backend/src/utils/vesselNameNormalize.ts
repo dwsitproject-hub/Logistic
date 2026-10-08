@@ -84,6 +84,17 @@ export function isMissingVesselCode(code: unknown): boolean {
   return upper === '#N/A' || upper === 'N/A';
 }
 
+/**
+ * The SAP vessel code to store as a vessel's OFFICIAL code, or null when there is none to give: blank, "N/A" / "#N/A", or one of KLIP's
+ * own provisional "TMP-..." placeholders (never typed in as if SAP had issued it). A vessel without an official code is created
+ * PROVISIONAL, and the SAP import fills the code in when it brings the same vessel name (resolveMasterVessel, step 3).
+ */
+export function officialVesselCodeOrNull(raw: unknown): string | null {
+  const code = uppercaseText(raw);
+  if (!code || isMissingVesselCode(code) || code.startsWith('TMP-')) return null;
+  return code;
+}
+
 export function uppercaseText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   const s = String(value).trim();

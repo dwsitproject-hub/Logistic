@@ -6,7 +6,7 @@ import {
   displayVesselCode,
   mapMasterVesselForApi,
 } from '../utils/masterVesselCodeResolve';
-import { uppercaseText, normalizeVesselName } from '../utils/vesselNameNormalize';
+import { officialVesselCodeOrNull, uppercaseText, normalizeVesselName } from '../utils/vesselNameNormalize';
 import { importMasterVesselJovinFromBuffer } from '../services/masterVesselJovinImport.service';
 import { resolveMasterVessel } from '../services/resolveMasterVessel.service';
 import {
@@ -165,12 +165,14 @@ export const getMasterVesselFilterOptions = async (_req: AuthRequest, res: Respo
 export const createMasterVessel = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const body = req.body as Record<string, unknown>;
-    const vessel_code = uppercaseText(body.vessel_code);
+    // The SAP vessel code is optional. Without one the vessel is created PROVISIONAL (a TMP- placeholder code that is never shown as a
+    // SAP code), and the SAP import promotes it to OFFICIAL when it brings the same vessel name together with a code.
+    const vessel_code = officialVesselCodeOrNull(body.vessel_code);
     const vessel_name = uppercaseText(body.vessel_name);
-    if (!vessel_code || !vessel_name) {
+    if (!vessel_name) {
       res.status(400).json({
         success: false,
-        error: { message: 'Vessel Code and Vessel Name are required' },
+        error: { message: 'Vessel Name is required' },
       });
       return;
     }
@@ -187,7 +189,7 @@ export const createMasterVessel = async (req: AuthRequest, res: Response): Promi
       terms: normalizeTerms(body.terms),
       source: 'manual',
       updateAttributes: true,
-      code_status: 'OFFICIAL',
+      code_status: vessel_code ? 'OFFICIAL' : 'PROVISIONAL',
     });
 
     if (!resolved) {
