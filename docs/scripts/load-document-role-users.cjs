@@ -16,6 +16,21 @@
  *  - Every Region/Plant is checked against the list the Users page offers (live SAP discharge destinations). An apply stops if
  *    one is not on that list, unless --allow-unknown-regions.
  *  - All inserts happen in one transaction: all accounts, or none.
+ *
+ * Giving the accounts a first password (optional; people can also sign in through Hub SSO, which needs none)
+ *
+ *   --report-unchanged        read only: who in the file still has no password of their own
+ *   --set-initial-password    sets ONE temporary password from the INITIAL_PASSWORD environment variable, and marks the account to
+ *                             change it at first login. Dry run unless --apply. The password is never written in this file or the
+ *                             repository and never printed. Pass it without leaving it in the shell history:
+ *
+ *       read -s -p "Initial password: " INITIAL_PASSWORD; echo
+ *       cd /opt/klip && git show origin/main:docs/scripts/load-document-role-users.cjs \
+ *         | docker exec -i -e INITIAL_PASSWORD="$INITIAL_PASSWORD" klip-backend node - --set-initial-password --apply
+ *
+ *   Only accounts whose password nobody has set yet are touched (last_password_change is empty): a person who already changed
+ *   theirs, or an admin who reset it by hand, is left alone. An account that never signs in locally keeps that shared password
+ *   until it is changed, so use --report-unchanged afterwards and reset or deactivate the ones that stay unchanged.
  */
 const path = require('path');
 const crypto = require('crypto');
@@ -329,6 +344,53 @@ const USERS = [
   const allowUnknownRegions = process.argv.includes('--allow-unknown-regions');
   const pool = dist('database/connection').default;
   const bcrypt = require('bcryptjs');
+
+  // ---- first password for the accounts in the file (see the header) ----------------------------------------------------------
+  if (process.argv.includes('--set-initial-password') || process.argv.includes('--report-unchanged')) {
+    const reportOnly = !process.argv.includes('--set-initial-password');
+    const password = process.env.INITIAL_PASSWORD || '';
+    if (!reportOnly && password.length < 8) {
+      console.error('Set INITIAL_PASSWORD (at least 8 characters) in the environment - see the header of this script.');
+      await pool.end();
+      process.exit(1);
+    }
+    const found = await pool.query(
+      `SELECT id::text AS id, LOWER(email) AS email, is_active, is_first_login, last_password_change
+         FROM users WHERE LOWER(email) = ANY($1::text[])`,
+      [USERS.map((u) => u.email)],
+    );
+    const byEmail = new Map(found.rows.map((r) => [r.email, r]));
+    const missing = USERS.filter((u) => !byEmail.has(u.email));
+    const changed = found.rows.filter((r) => r.last_password_change != null);
+    const inactive = found.rows.filter((r) => r.last_password_change == null && !r.is_active);
+    const targets = found.rows.filter((r) => r.last_password_change == null && r.is_active);
+    console.log(`${USERS.length} account(s) in the file: ${found.rows.length} exist, ${missing.length} do not.`);
+    console.log(`  own password already set (changed or reset by an admin): ${changed.length}${changed.length ? ' - ' + changed.map((r) => r.email).join(', ') : ''}`);
+    console.log(`  no password of their own yet: ${targets.length + inactive.length}${inactive.length ? ` (${inactive.length} inactive, skipped)` : ''}`);
+    if (reportOnly || !apply) {
+      if (reportOnly) {
+        for (const r of targets) console.log(`    still unchanged  ${r.email}`);
+      } else {
+        console.log(`\nDry run - ${targets.length} account(s) would get the temporary password and be marked to change it at first login. Add --apply to do it.`);
+      }
+      await pool.end();
+      return;
+    }
+    let updated = 0;
+    for (const r of targets) {
+      const hash = await bcrypt.hash(password, 10);
+      // last_password_change stays empty on purpose: it is what tells "nobody has set a password here yet" apart afterwards
+      const res = await pool.query(
+        `UPDATE users SET password_hash = $1, is_first_login = true, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2::uuid AND last_password_change IS NULL AND is_active = true`,
+        [hash, r.id],
+      );
+      updated += res.rowCount ?? 0;
+    }
+    console.log(`\nSet the temporary password on ${updated} account(s); each must change it at first login.`);
+    await pool.end();
+    return;
+  }
   const { REGION_SITE_FILTER_OPTIONS_SQL, filterRegionSiteOptionValues } = dist('utils/regionSiteSql');
   const { canonicalizeUserRegionSites } = dist('utils/userRegionSite');
 
