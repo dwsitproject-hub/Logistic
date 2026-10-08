@@ -77,6 +77,7 @@ interface Role {
   role_name: string
   display_name: string
   description: string
+  uses_region_scope?: boolean
 }
 
 export default function UsersPage() {
@@ -115,7 +116,11 @@ export default function UsersPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [showResetPassword, setShowResetPassword] = useState(false)
   const showTransportType = formData.role === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(formData.level)
-  const showPlant = ['LOGISTICS', 'TRADING'].includes(formData.role)
+  // Region/Plant follows the role's own flag (roles.uses_region_scope, set on the Roles page); Product stays LOGISTICS / TRADING only.
+  const showRegion =
+    roles.find((role) => role.role_name === formData.role)?.uses_region_scope ??
+    ['LOGISTICS', 'TRADING'].includes(formData.role)
+  const showProducts = ['LOGISTICS', 'TRADING'].includes(formData.role)
 
   useEffect(() => {
     // Check if user is admin
@@ -180,8 +185,8 @@ export default function UsersPage() {
     try {
       await api.post('/users', {
         ...formData,
-        plants: showPlant ? formData.plants : [],
-        products: showPlant ? formData.products : [],
+        plants: showRegion ? formData.plants : [],
+        products: showProducts ? formData.products : [],
       })
       setSuccess('User created successfully')
       setShowAddModal(false)
@@ -206,8 +211,8 @@ export default function UsersPage() {
         role: formData.role,
         level: formData.level,
         transport_type: showTransportType ? formData.transport_type : null,
-        plants: showPlant ? formData.plants : [],
-        products: showPlant ? formData.products : [],
+        plants: showRegion ? formData.plants : [],
+        products: showProducts ? formData.products : [],
         phone: formData.phone,
         department: formData.department,
         is_active: selectedUser.is_active,
@@ -680,7 +685,7 @@ export default function UsersPage() {
                   </div>
                 </div>
 
-                <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
+                <div className={showRegion ? '' : 'opacity-50 pointer-events-none'}>
                   <SearchableMultiSelect
                     label="Region/Plant"
                     options={plantOptions}
@@ -692,7 +697,7 @@ export default function UsersPage() {
                   />
                 </div>
 
-                <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
+                <div className={showProducts ? '' : 'opacity-50 pointer-events-none'}>
                   <SearchableMultiSelect
                     label="Product"
                     options={productOptions}
@@ -849,7 +854,7 @@ export default function UsersPage() {
                   </div>
                 </div>
 
-                <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
+                <div className={showRegion ? '' : 'opacity-50 pointer-events-none'}>
                   <SearchableMultiSelect
                     label="Region/Plant"
                     options={plantOptions}
@@ -861,7 +866,7 @@ export default function UsersPage() {
                   />
                 </div>
 
-                <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
+                <div className={showProducts ? '' : 'opacity-50 pointer-events-none'}>
                   <SearchableMultiSelect
                     label="Product"
                     options={productOptions}

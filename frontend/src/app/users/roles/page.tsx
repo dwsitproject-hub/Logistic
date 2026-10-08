@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -14,15 +16,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Shield, ArrowLeft, Save, CheckCircle, AlertCircle } from 'lucide-react'
+import { Shield, ArrowLeft, Save, CheckCircle, AlertCircle, Plus } from 'lucide-react'
 import api from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { deriveRoleCode, isValidRoleCode } from '@/lib/roleCode'
 
 interface Role {
   id: string
   role_name: string
   display_name: string
   description: string
+  uses_region_scope?: boolean
 }
 
 interface Permission {
@@ -103,6 +107,12 @@ export default function RolesPage() {
   const [selectedTransportType, setSelectedTransportType] = useState<string>('all')
   const [permissionsLoading, setPermissionsLoading] = useState(false)
   const fetchRequestIdRef = useRef(0)
+  const [showAddRole, setShowAddRole] = useState(false)
+  const [newRoleName, setNewRoleName] = useState('')
+  const [newRoleDescription, setNewRoleDescription] = useState('')
+  const [newRoleRegionScope, setNewRoleRegionScope] = useState(false)
+  const [creatingRole, setCreatingRole] = useState(false)
+  const newRoleCode = deriveRoleCode(newRoleName)
 
   const sortedRoles = sortRolesForEditor(roles)
   const selectedRoleFromList = sortedRoles.find((role) => role.id === selectedRoleId) ?? null
@@ -137,14 +147,15 @@ export default function RolesPage() {
     void fetchRolePermissions(selectedRoleId, requestId)
   }, [selectedRoleId, selectedLevel, selectedTransportType, selectedRoleFromList?.id])
 
-  const fetchRoles = async () => {
+  const fetchRoles = async (selectId?: string) => {
     try {
       const response = await api.get('/roles')
       const rolesData = sortRolesForEditor(response.data.data)
       setRoles(rolesData)
       
       if (rolesData.length > 0) {
-        const defaultRole = rolesData.find((role: Role) => role.role_name !== 'ADMIN') ?? rolesData[0]
+        const preferred = selectId ? rolesData.find((role: Role) => role.id === selectId) : undefined
+        const defaultRole = preferred ?? rolesData.find((role: Role) => role.role_name !== 'ADMIN') ?? rolesData[0]
         setSelectedRoleId(defaultRole.id)
       }
     } catch (err) {
@@ -152,6 +163,37 @@ export default function RolesPage() {
       setError('Failed to load roles')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleCreateRole = async () => {
+    const displayName = newRoleName.trim()
+    if (!displayName || !isValidRoleCode(newRoleCode)) {
+      setError('Enter a role name that contains letters.')
+      return
+    }
+    setCreatingRole(true)
+    setError('')
+    setSuccess('')
+    try {
+      const response = await api.post('/roles', {
+        role_name: newRoleCode,
+        display_name: displayName,
+        description: newRoleDescription.trim() || null,
+        uses_region_scope: newRoleRegionScope,
+      })
+      await fetchRoles(response.data?.data?.id)
+      setSuccess(
+        `Role "${displayName}" created. It cannot open any page yet - tick the pages it may use below, then press Save Changes.`,
+      )
+      setNewRoleName('')
+      setNewRoleDescription('')
+      setNewRoleRegionScope(false)
+      setShowAddRole(false)
+    } catch (err: any) {
+      setError(err?.response?.data?.error?.message || 'Failed to create role')
+    } finally {
+      setCreatingRole(false)
     }
   }
 
@@ -334,7 +376,66 @@ export default function RolesPage() {
               Configure what each role can view, edit, and access in the system
             </p>
           </div>
+          <Button onClick={() => setShowAddRole((open) => !open)} variant={showAddRole ? 'outline' : 'default'}>
+            <Plus className="h-4 w-4 mr-2" />
+            {showAddRole ? 'Close' : 'Add Role'}
+          </Button>
         </div>
+
+        {showAddRole && (
+          <Card>
+            <CardHeader>
+              <CardTitle>New role</CardTitle>
+              <CardDescription>
+                A new role starts with no access. After creating it, choose the pages it may open and save. The code cannot
+                be changed later.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="new_role_name">Role name *</Label>
+                  <Input
+                    id="new_role_name"
+                    value={newRoleName}
+                    onChange={(e) => setNewRoleName(e.target.value)}
+                    placeholder="e.g. AR UPSTREAM"
+                    maxLength={100}
+                  />
+                  <p className="text-xs text-gray-500">
+                    Code: <span className="font-mono">{newRoleCode || '-'}</span>
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new_role_description">Description</Label>
+                  <Input
+                    id="new_role_description"
+                    value={newRoleDescription}
+                    onChange={(e) => setNewRoleDescription(e.target.value)}
+                    placeholder="What this role is for"
+                  />
+                </div>
+              </div>
+              <label className="flex items-start gap-2 text-sm cursor-pointer">
+                <Checkbox
+                  checked={newRoleRegionScope}
+                  onCheckedChange={(checked) => setNewRoleRegionScope(checked === true)}
+                />
+                <span>
+                  Users of this role can be given a Region/Plant
+                  <span className="block text-xs text-gray-500">
+                    It becomes their default filter on the pages they open. They can still clear it.
+                  </span>
+                </span>
+              </label>
+              <div className="flex justify-end">
+                <Button onClick={() => void handleCreateRole()} disabled={creatingRole || !isValidRoleCode(newRoleCode)}>
+                  {creatingRole ? 'Creating...' : 'Create role'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Alerts */}
         {error && (

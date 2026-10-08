@@ -10,7 +10,6 @@ import {
   changePassword,
 } from '../controllers/user.controller';
 import { body } from 'express-validator';
-import { USER_ROLES } from '../utils/userRoles';
 
 const router = express.Router();
 
@@ -37,7 +36,8 @@ router.post(
     body('email').isEmail(),
     body('password').isLength({ min: 6 }),
     body('full_name').notEmpty(),
-    body('role').isIn([...USER_ROLES]),
+    // Whether the role exists and is active is checked against the roles table in the controller.
+    body('role').matches(/^[A-Z][A-Z_]*$/),
     body('level').optional({ nullable: true }).isIn(['Dept Head', 'Section Head', 'Staff', 'Admin']),
     body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'ALL', 'MIX', 'sea', 'land', 'all', 'mix']),
     body('plants').optional({ nullable: true }).isArray(),
@@ -53,7 +53,7 @@ router.put(
   authorize('ADMIN'),
   [
     body('email').optional().isEmail(),
-    body('role').optional().isIn([...USER_ROLES]),
+    body('role').optional().matches(/^[A-Z][A-Z_]*$/),
     body('level').optional({ nullable: true }).isIn(['Dept Head', 'Section Head', 'Staff', 'Admin']),
     body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'ALL', 'MIX', 'sea', 'land', 'all', 'mix']),
     body('plants').optional({ nullable: true }).isArray(),

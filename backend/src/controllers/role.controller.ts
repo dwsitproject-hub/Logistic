@@ -20,7 +20,7 @@ function buildLateralMatchSql(levelParam: string, transportParam: string): strin
 export const getAllRoles = async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await query(
-      `SELECT id, role_name, display_name, description, is_active, created_at, updated_at
+      `SELECT id, role_name, display_name, description, is_active, uses_region_scope, created_at, updated_at
        FROM roles 
        ORDER BY role_name`
     );
@@ -53,7 +53,7 @@ export const getRoleById = async (req: AuthRequest, res: Response): Promise<void
     const { level, transportType } = scope;
 
     const roleResult = await query(
-      `SELECT id, role_name, display_name, description, is_active, created_at, updated_at
+      `SELECT id, role_name, display_name, description, is_active, uses_region_scope, created_at, updated_at
        FROM roles 
        WHERE id = $1`,
       [id]
@@ -298,6 +298,7 @@ export const updateRolePermissions = async (req: AuthRequest, res: Response): Pr
 export const createRole = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { role_name, display_name, description } = req.body;
+    const usesRegionScope = req.body.uses_region_scope === true;
 
     // Validate role_name format (uppercase, no spaces)
     if (!/^[A-Z_]+$/.test(role_name)) {
@@ -321,10 +322,10 @@ export const createRole = async (req: AuthRequest, res: Response): Promise<void>
 
     // Create role
     const result = await query(
-      `INSERT INTO roles (role_name, display_name, description)
-       VALUES ($1, $2, $3)
-       RETURNING id, role_name, display_name, description, is_active, created_at`,
-      [role_name, display_name, description]
+      `INSERT INTO roles (role_name, display_name, description, uses_region_scope)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, role_name, display_name, description, is_active, uses_region_scope, created_at`,
+      [role_name, String(display_name).trim(), description, usesRegionScope]
     );
 
     logger.info(`Role created by ${req.user?.username}: ${role_name}`);
@@ -347,6 +348,7 @@ export const updateRole = async (req: AuthRequest, res: Response): Promise<void>
   try {
     const { id } = req.params;
     const { display_name, description, is_active } = req.body;
+    const usesRegionScope = typeof req.body.uses_region_scope === 'boolean' ? req.body.uses_region_scope : null;
 
     // Check if role exists
     const existingRole = await query('SELECT * FROM roles WHERE id = $1', [id]);
@@ -365,10 +367,11 @@ export const updateRole = async (req: AuthRequest, res: Response): Promise<void>
        SET display_name = COALESCE($1, display_name),
            description = COALESCE($2, description),
            is_active = COALESCE($3, is_active),
+           uses_region_scope = COALESCE($5, uses_region_scope),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $4
-       RETURNING id, role_name, display_name, description, is_active, updated_at`,
-      [display_name, description, is_active, id]
+       RETURNING id, role_name, display_name, description, is_active, uses_region_scope, updated_at`,
+      [display_name, description, is_active, id, usesRegionScope]
     );
 
     logger.info(`Role updated by ${req.user?.username}: ${existingRole.rows[0].role_name}`);

@@ -6,7 +6,7 @@ import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
 import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
 import { canonicalizeUserRegionSites } from '../utils/userRegionSite';
-import { isValidUserRole } from '../utils/userRoles';
+import { findAssignableRole } from '../services/roleAssignment.service';
 
 type UserAssociations = {
   groupPlantsByUser: Map<string, string[]>;
@@ -285,7 +285,8 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
       }
     }
 
-    if (!isValidUserRole(role)) {
+    const assignedRole = await findAssignableRole(client, role);
+    if (!assignedRole) {
       res.status(400).json({
         success: false,
         error: { message: 'Invalid role' },
@@ -306,7 +307,8 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    const scopedPlants = ['LOGISTICS', 'TRADING'].includes(normRole) ? (plants ?? []) : [];
+    // Region/Plant follows the role's own flag (roles.uses_region_scope); product scope stays LOGISTICS / TRADING only.
+    const scopedPlants = assignedRole.usesRegionScope ? (plants ?? []) : [];
     const scopedProducts = ['LOGISTICS', 'TRADING'].includes(normRole) ? (products ?? []) : [];
     const password_hash = await bcrypt.hash(password, 10);
 
@@ -407,7 +409,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       : null;
 
     if (role) {
-      if (!isValidUserRole(role)) {
+      if (!(await findAssignableRole(client, role))) {
         res.status(400).json({
           success: false,
           error: { message: 'Invalid role' },
@@ -417,6 +419,11 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const nextRole = String(role || existingUser.rows[0].role || '').toUpperCase();
+    // The flag of the role the user ends up with (an unchanged role may have been deactivated since: keep its scope rule).
+    const nextRoleRow = await client.query('SELECT uses_region_scope FROM roles WHERE role_name = $1', [
+      role || existingUser.rows[0].role,
+    ]);
+    const nextRoleUsesRegionScope = Boolean(nextRoleRow.rows[0]?.uses_region_scope);
     const nextLevel = String(level ?? existingUser.rows[0].level ?? '').trim();
     const validLevels = ['Dept Head', 'Section Head', 'Staff', 'Admin'];
     if (level != null && level !== '' && !validLevels.includes(String(level))) {
@@ -459,9 +466,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const shouldSyncAssociations = plants !== undefined || products !== undefined;
-    const scopedPlants = ['LOGISTICS', 'TRADING'].includes(nextRole)
-      ? (plants ?? [])
-      : [];
+    const scopedPlants = nextRoleUsesRegionScope ? (plants ?? []) : [];
     const scopedProducts = ['LOGISTICS', 'TRADING'].includes(nextRole)
       ? (products ?? [])
       : [];
