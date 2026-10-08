@@ -4,6 +4,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { SQL_SAP_IMPORT_IN_FLIGHT_EXISTS } from '../utils/sapImportInFlightSql';
 import { sendEmail } from './email.service';
+import { failStaleSapImports } from './sapImportRecovery.service';
 import { frontendUrl } from './sessionAuth.service';
 import { SapMasterV2ImportService } from './sapMasterV2Import.service';
 import {
@@ -53,7 +54,133 @@ export interface SapFolderAutoImportRunResult {
   emailSent: boolean;
 }
 
+export type SapAutoImportTrigger = 'cron' | 'manual';
+
+export type SapAutoImportRunOutcome =
+  | 'imported'
+  | 'no_new_file'
+  | 'skipped_in_flight'
+  | 'already_running'
+  | 'source_missing'
+  | 'failed';
+
+/** What a run saw, beyond its result: the file it chose and whether the folder was there at all. */
+export interface SapAutoImportRunTrace {
+  newestFile?: string;
+  newestFileMtimeMs?: number;
+  sourceMissing?: boolean;
+}
+
 let runLock = false;
+let runLockSince = 0;
+
+/**
+ * A run that has held the lock this long is hung (a stalled read on the network share never returns), not slow: the whole
+ * import takes minutes. Without a limit one hung run left `runLock` set until the backend restarted, and every later run -
+ * the cron and the Sync button - answered "already running" and did nothing.
+ */
+const RUN_LOCK_MAX_MS = 45 * 60 * 1000;
+
+/** Reading and hashing a workbook across the share must not wait forever either. */
+const HASH_TIMEOUT_MS = 10 * 60 * 1000;
+
+function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not finish within ${Math.round(ms / 60000)} minutes`)), ms);
+  });
+  return Promise.race([work, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/** One word and one sentence for a finished run - what the Sync button and the status line show. */
+export function classifySapAutoImportRun(
+  result: SapFolderAutoImportRunResult,
+  trace: SapAutoImportRunTrace,
+): { outcome: SapAutoImportRunOutcome; detail: string } {
+  if (result.skipReason === 'already_running') {
+    return { outcome: 'already_running', detail: 'Another run of this job is still in progress.' };
+  }
+  if (result.skipReason === 'in_flight') {
+    return {
+      outcome: 'skipped_in_flight',
+      detail: 'An SAP import is still running (status processing / pending), so the job did not start.',
+    };
+  }
+  if (trace.sourceMissing) {
+    return {
+      outcome: 'source_missing',
+      detail: 'The source folder does not exist inside the backend container (is the share mounted?).',
+    };
+  }
+  const failed = result.files.find((f) => f.status === 'failed');
+  if (result.filesProcessed > 0) {
+    const names = result.files.filter((f) => f.status === 'completed').map((f) => f.fileName);
+    return { outcome: 'imported', detail: `Imported ${names.join(', ')}.` };
+  }
+  if (failed) {
+    return { outcome: 'failed', detail: `${failed.fileName}: ${failed.errorMessage ?? 'import failed'}` };
+  }
+  if (result.filesScanned === 0) {
+    return { outcome: 'no_new_file', detail: 'The Original folder holds no Excel files.' };
+  }
+  return {
+    outcome: 'no_new_file',
+    detail: `The newest file${trace.newestFile ? ` (${trace.newestFile})` : ''} was already imported - same content as an earlier run.`,
+  };
+}
+
+async function recordRunStart(trigger: SapAutoImportTrigger, startedBy: string | null): Promise<string | null> {
+  try {
+    const res = await query(
+      `INSERT INTO sap_auto_import_runs (trigger_source, started_by) VALUES ($1, $2) RETURNING id::text`,
+      [trigger, startedBy],
+    );
+    return (res.rows[0] as { id: string } | undefined)?.id ?? null;
+  } catch (error) {
+    logger.error('Could not record the start of an SAP auto-import run', { error });
+    return null;
+  }
+}
+
+async function recordRunFinish(
+  runId: string | null,
+  outcome: SapAutoImportRunOutcome,
+  detail: string,
+  result: SapFolderAutoImportRunResult | null,
+  trace: SapAutoImportRunTrace,
+): Promise<void> {
+  if (!runId) return;
+  try {
+    await query(
+      `UPDATE sap_auto_import_runs
+          SET finished_at = NOW(),
+              outcome = $2,
+              detail = $3,
+              newest_file = $4,
+              newest_file_mtime = CASE WHEN $5::double precision IS NULL THEN NULL ELSE to_timestamp($5::double precision / 1000.0) END,
+              files_scanned = $6,
+              files_processed = $7,
+              files_skipped = $8,
+              import_id = $9::uuid
+        WHERE id = $1::uuid`,
+      [
+        runId,
+        outcome,
+        detail,
+        trace.newestFile ?? null,
+        trace.newestFileMtimeMs ?? null,
+        result?.filesScanned ?? null,
+        result?.filesProcessed ?? null,
+        result?.filesSkippedChecksum ?? null,
+        result?.files.find((f) => f.importId)?.importId ?? null,
+      ],
+    );
+  } catch (error) {
+    logger.error('Could not record the end of an SAP auto-import run', { runId, error });
+  }
+}
 
 export function isSapAutoImportEnabled(): boolean {
   return String(process.env.SAP_AUTO_IMPORT_ENABLED || 'false').toLowerCase() === 'true';
@@ -252,10 +379,18 @@ async function identitiesFromFailures(importId: string): Promise<SapAutoImportId
  * Scan Original/, import new Excel files sequentially via MASTER v2, write Success/Failed
  * workbooks, and email ADMIN. Original files are never moved or deleted.
  */
-export async function runSapFolderAutoImport(
-  options: { notify?: boolean } = {},
+async function runSapFolderAutoImportCore(
+  options: { notify?: boolean; latestOnly?: boolean },
+  trace: SapAutoImportRunTrace,
 ): Promise<SapFolderAutoImportRunResult> {
   const notify = options.notify !== false;
+
+  if (runLock && Date.now() - runLockSince > RUN_LOCK_MAX_MS) {
+    logger.error('SAP folder auto-import: releasing a run lock held for too long (the earlier run is hung)', {
+      heldMinutes: Math.round((Date.now() - runLockSince) / 60000),
+    });
+    runLock = false;
+  }
 
   if (runLock) {
     logger.warn('SAP folder auto-import already running; skipping overlapping request');
@@ -271,8 +406,10 @@ export async function runSapFolderAutoImport(
   }
 
   runLock = true;
+  runLockSince = Date.now();
   try {
     const folders = ensureSapAutoImportFolders();
+    trace.sourceMissing = !folders.originalExists;
     if (!folders.originalExists) {
       /*
        * Distinguish "the folder is not there" from "the folder is empty". Both used to surface as
@@ -303,7 +440,12 @@ export async function runSapFolderAutoImport(
       const stat = fs.statSync(filePath);
       return { fileName, filePath, fileSize: stat.size, mtimeMs: stat.mtimeMs };
     });
-    const candidates = sapAutoImportProcessesAllFiles() ? stated : pickLatestOriginalFile(stated);
+    // `latestOnly` (the Sync button) ignores SAP_AUTO_IMPORT_ALL_FILES: a hand-started sync imports the newest file or nothing.
+    const candidates =
+      sapAutoImportProcessesAllFiles() && !options.latestOnly ? stated : pickLatestOriginalFile(stated);
+    const newestStated = pickLatestOriginalFile(stated)[0];
+    trace.newestFile = newestStated?.fileName;
+    trace.newestFileMtimeMs = newestStated?.mtimeMs;
     if (candidates.length < stated.length) {
       logger.info('SAP folder auto-import taking the latest file only', {
         chosen: candidates[0]?.fileName,
@@ -316,11 +458,14 @@ export async function runSapFolderAutoImport(
     for (const candidate of candidates) {
       hashed.push({
         fileName: candidate.fileName,
-        sha256: await sha256File(candidate.filePath),
+        sha256: await withTimeout(sha256File(candidate.filePath), HASH_TIMEOUT_MS, `Reading ${candidate.fileName}`),
         fileSize: candidate.fileSize,
         filePath: candidate.filePath,
       });
     }
+
+    // A row a restart left in 'processing' would otherwise block this run (and every later one) with no limit.
+    await failStaleSapImports();
 
     if (await sapImportInFlight()) {
       logger.warn('SAP folder auto-import skipped: another import is in flight');
@@ -489,6 +634,26 @@ export async function runSapFolderAutoImport(
   }
 }
 
+/**
+ * Scan Original/, import the newest file if it is new, and leave a row in sap_auto_import_runs saying what happened - the cron and
+ * the Sync button both come through here.
+ */
+export async function runSapFolderAutoImport(
+  options: { notify?: boolean; latestOnly?: boolean; trigger?: SapAutoImportTrigger; startedBy?: string | null } = {},
+): Promise<SapFolderAutoImportRunResult> {
+  const trace: SapAutoImportRunTrace = {};
+  const runId = await recordRunStart(options.trigger ?? 'manual', options.startedBy ?? null);
+  try {
+    const result = await runSapFolderAutoImportCore({ notify: options.notify, latestOnly: options.latestOnly }, trace);
+    const { outcome, detail } = classifySapAutoImportRun(result, trace);
+    await recordRunFinish(runId, outcome, detail, result, trace);
+    return result;
+  } catch (error) {
+    await recordRunFinish(runId, 'failed', error instanceof Error ? error.message : String(error), null, trace);
+    throw error;
+  }
+}
+
 /** Daily cron entry — no-op when disabled. Never throws. */
 export async function runSapFolderAutoImportJob(): Promise<SapFolderAutoImportRunResult | null> {
   if (!isSapAutoImportEnabled()) {
@@ -496,7 +661,7 @@ export async function runSapFolderAutoImportJob(): Promise<SapFolderAutoImportRu
     return null;
   }
   try {
-    const result = await runSapFolderAutoImport({ notify: true });
+    const result = await runSapFolderAutoImport({ notify: true, trigger: 'cron' });
     logger.info('SAP folder auto-import job finished', {
       skipReason: result.skipReason,
       filesScanned: result.filesScanned,
@@ -509,6 +674,52 @@ export async function runSapFolderAutoImportJob(): Promise<SapFolderAutoImportRu
     logger.error('SAP folder auto-import job failed', { error });
     return null;
   }
+}
+
+/** True while a run holds the lock (a lock held past RUN_LOCK_MAX_MS is hung, and does not count). */
+export function isSapFolderAutoImportRunning(): boolean {
+  return runLock && Date.now() - runLockSince <= RUN_LOCK_MAX_MS;
+}
+
+/**
+ * The Sync button: the same run as the cron, started by hand as a backup for when the schedule did not pull a file.
+ *
+ * Returns at once and lets the run finish in the background - an import takes minutes, longer than a proxy keeps a request
+ * open. The page polls the status endpoint. No email: the person who pressed the button is looking at the result.
+ */
+export function startSapFolderSyncInBackground(startedBy: string | null): { started: boolean } {
+  if (isSapFolderAutoImportRunning()) return { started: false };
+  void runSapFolderAutoImport({ notify: false, latestOnly: true, trigger: 'manual', startedBy }).catch((error) => {
+    logger.error('SAP folder Sync run failed', { error });
+  });
+  return { started: true };
+}
+
+export interface SapAutoImportRunRow {
+  id: string;
+  trigger_source: string;
+  started_at: string;
+  finished_at: string | null;
+  outcome: string;
+  detail: string | null;
+  newest_file: string | null;
+  newest_file_mtime: string | null;
+  files_scanned: number | null;
+  files_processed: number | null;
+  files_skipped: number | null;
+  import_id: string | null;
+}
+
+export async function listRecentSapAutoImportRuns(limit = 5): Promise<SapAutoImportRunRow[]> {
+  const result = await query(
+    `SELECT id::text, trigger_source, started_at, finished_at, outcome, detail, newest_file, newest_file_mtime,
+            files_scanned, files_processed, files_skipped, import_id::text
+       FROM sap_auto_import_runs
+      ORDER BY started_at DESC
+      LIMIT $1`,
+    [Math.max(1, Math.min(20, limit))],
+  );
+  return result.rows as SapAutoImportRunRow[];
 }
 
 export function failedWorkbookAbsolutePath(requestedFile: string): string | null {

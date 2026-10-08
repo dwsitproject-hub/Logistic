@@ -72,6 +72,15 @@ export class SchedulerService {
    * Success / Failed subfolder, resolved case-insensitively (see sapAutoImportPaths).
    */
   private static startSapFolderAutoImportCron(): void {
+    /*
+     * An import still 'processing' when this process starts cannot be running: imports run inside this process, and it has just
+     * started. Mark it failed now instead of leaving it to block the daily run and the Daily Planning / WB uploads. Runs whether
+     * or not the cron is enabled - manual uploads are blocked by the same row.
+     */
+    void import('./sapImportRecovery.service').then(({ failStaleSapImports }) =>
+      failStaleSapImports({ olderThanMinutes: 10, reason: 'Import interrupted by a backend restart. Upload the file again.' }),
+    );
+
     if (String(process.env.SAP_AUTO_IMPORT_ENABLED || 'false').toLowerCase() !== 'true') {
       logger.info('SAP folder auto-import cron is disabled (SAP_AUTO_IMPORT_ENABLED is not true)');
       return;

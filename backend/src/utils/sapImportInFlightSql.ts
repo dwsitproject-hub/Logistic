@@ -3,6 +3,13 @@ export const SAP_IMPORT_IN_FLIGHT_STATUSES = ['processing', 'pending'] as const;
 
 export type SapImportInFlightStatus = (typeof SAP_IMPORT_IN_FLIGHT_STATUSES)[number];
 
+/**
+ * An import still 'processing' / 'pending' this long after it started is a row a restart left behind, not a running import (a
+ * normal one takes minutes). Without a limit one such row made every later scheduler run - and every Daily Planning / WB upload -
+ * refuse to start, silently and for good: only opening the SAP Import History page ever cleaned it up.
+ */
+export const SAP_IMPORT_STALE_AFTER_MINUTES = 180;
+
 /** Latest in-flight import row with live progress counters (see sapMasterV2.controller getAllImports). */
 export const SQL_ACTIVE_SAP_IMPORT = `
   SELECT
@@ -15,6 +22,7 @@ export const SQL_ACTIVE_SAP_IMPORT = `
     COALESCE(i.failed_records, 0)::int AS failed_records
   FROM sap_data_imports i
   WHERE i.status IN ('processing', 'pending')
+    AND COALESCE(i.import_timestamp, NOW()) > NOW() - INTERVAL '${SAP_IMPORT_STALE_AFTER_MINUTES} minutes'
   ORDER BY i.import_timestamp DESC NULLS LAST
   LIMIT 1`;
 
@@ -23,6 +31,7 @@ export const SQL_SAP_IMPORT_IN_FLIGHT_EXISTS = `
   SELECT 1
   FROM sap_data_imports
   WHERE status IN ('processing', 'pending')
+    AND COALESCE(import_timestamp, NOW()) > NOW() - INTERVAL '${SAP_IMPORT_STALE_AFTER_MINUTES} minutes'
   LIMIT 1`;
 
 export function isSapImportInFlightStatus(status: string | null | undefined): boolean {

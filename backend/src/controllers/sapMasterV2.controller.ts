@@ -472,6 +472,40 @@ export const cancelMasterV2Import = async (req: Request, res: Response): Promise
 };
 
 /**
+ * Sync button: start the Original-folder job now, in the background. 202 when it started, 409 when one is already running.
+ * Progress and the result come from getSapFolderSyncStatus.
+ */
+export const startSapFolderSync = async (req: Request, res: Response): Promise<void> => {
+  const { startSapFolderSyncInBackground } = await import('../services/sapFolderAutoImport.service');
+  const userId = (req as Request & { user?: { id?: string } }).user?.id ?? null;
+  const { started } = startSapFolderSyncInBackground(userId);
+  if (!started) {
+    res.status(409).json({
+      success: false,
+      error: { message: 'A sync is already running. Wait for it to finish.' },
+    });
+    return;
+  }
+  res.status(202).json({ success: true, data: { started: true } });
+};
+
+/** Latest runs of the folder job (cron and Sync), whether one is running now, and how the cron is set. */
+export const getSapFolderSyncStatus = async (_req: Request, res: Response): Promise<void> => {
+  const { isSapFolderAutoImportRunning, isSapAutoImportEnabled, listRecentSapAutoImportRuns } = await import(
+    '../services/sapFolderAutoImport.service'
+  );
+  res.json({
+    success: true,
+    data: {
+      running: isSapFolderAutoImportRunning(),
+      cronEnabled: isSapAutoImportEnabled(),
+      cron: process.env.SAP_AUTO_IMPORT_CRON || '0 6 * * *',
+      runs: await listRecentSapAutoImportRuns(5),
+    },
+  });
+};
+
+/**
  * ADMIN: run the Synology Original-folder MASTER v2 job immediately (UAT / catch-up).
  */
 export const runSapFolderAutoImport = async (_req: Request, res: Response): Promise<void> => {

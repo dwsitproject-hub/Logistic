@@ -96,6 +96,20 @@ router.post(
   catchAsync(sapMasterV2Controller.runSapFolderAutoImport),
 );
 
+router.post(
+  '/auto-import/sync',
+  authenticateToken,
+  authorizeSapImportsUpload,
+  catchAsync(sapMasterV2Controller.startSapFolderSync),
+);
+
+router.get(
+  '/auto-import/status',
+  authenticateToken,
+  authorizeSapImportsView,
+  catchAsync(sapMasterV2Controller.getSapFolderSyncStatus),
+);
+
 router.get(
   '/auto-import/failed-file',
   authenticateToken,

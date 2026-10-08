@@ -12,6 +12,7 @@ import {
   type BulkUploadStatusResult,
 } from '@/components/BulkUploadStatusModal';
 import { SapImportDetailModal } from '@/components/SapImportDetailModal';
+import SapFolderSyncControl from '@/components/SapFolderSyncControl';
 import api from '../lib/api';
 import { canCreatePermission, usePermissions } from '@/components/PermissionsContext';
 import {
@@ -492,6 +493,8 @@ const SapImportDashboard: React.FC = () => {
                 Monitor and manage SAP MASTER v2 data imports
               </CardDescription>
             </div>
+            <div className="flex items-start">
+            <SapFolderSyncControl canSync={canUploadSap} onTick={() => void loadImports(true)} />
             {canUploadSap ? (
               <Button
                 size="sm"
@@ -517,6 +520,7 @@ const SapImportDashboard: React.FC = () => {
                 View only — you do not have permission to upload SAP files.
               </p>
             )}
+            </div>
           </div>
         </CardHeader>
       </Card>
