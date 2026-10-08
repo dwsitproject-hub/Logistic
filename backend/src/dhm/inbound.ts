@@ -1,7 +1,8 @@
 import { dhmRequest } from './client';
+import { getDhmVesselTypeEnumValues } from './catalog';
 import { dhmRecordCode } from './mapper';
 import type { DhmInboundResult, DhmRecord, KlipVesselForDhm } from './types';
-import { toDhmVesselPayload } from './mapper';
+import { isTugVesselType, toDhmVesselPayload } from './mapper';
 
 function asRecord(value: unknown): DhmRecord | null {
   if (!value || typeof value !== 'object') return null;
@@ -106,10 +107,11 @@ export async function putInbound(
 }
 
 export async function postVesselInbound(row: KlipVesselForDhm): Promise<DhmInboundResult> {
+  const vesselTypeEnum = isTugVesselType(row.vessel_type) ? await getDhmVesselTypeEnumValues() : null;
   const { status, data } = await dhmRequest({
     method: 'POST',
     url: '/v1/inbound/vessel',
-    data: toDhmVesselPayload(row),
+    data: toDhmVesselPayload(row, { vesselTypeEnum }),
     headers: { 'Content-Type': 'application/json' },
   });
   return parseInboundBody(status, data);
@@ -117,10 +119,11 @@ export async function postVesselInbound(row: KlipVesselForDhm): Promise<DhmInbou
 
 export async function putVesselInbound(dhmCode: string, row: KlipVesselForDhm): Promise<DhmInboundResult> {
   const code = String(dhmCode).trim();
+  const vesselTypeEnum = isTugVesselType(row.vessel_type) ? await getDhmVesselTypeEnumValues() : null;
   const { status, data } = await dhmRequest({
     method: 'PUT',
     url: `/v1/inbound/vessel/${encodeURIComponent(code)}`,
-    data: toDhmVesselPayload(row, { code }),
+    data: toDhmVesselPayload(row, { code, vesselTypeEnum }),
     headers: { 'Content-Type': 'application/json' },
   });
   return parseInboundBody(status, data);

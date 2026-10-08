@@ -35,7 +35,7 @@ export interface MasterVesselFormData {
 }
 
 const TERMS_OPTIONS = ['T/C', 'V/C', 'CIF'] as const
-const VESSEL_TYPE_OPTIONS = ['BARGE', 'TANKER', 'SPOB'] as const
+const VESSEL_TYPE_OPTIONS = ['BARGE', 'TANKER', 'SPOB', 'TUG BOAT'] as const
 const LAMBUNG_OPTIONS = ['DHDB', 'SHSB', 'SHDB'] as const
 
 export interface EditVesselModalProps {

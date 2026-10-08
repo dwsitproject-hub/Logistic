@@ -29,7 +29,7 @@ export function parseMultiQueryParam(raw: unknown): string[] {
   return [...new Set(values)];
 }
 
-export const MASTER_VESSEL_TYPE_OPTIONS = ['BARGE', 'TANKER', 'SPOB'] as const;
+export const MASTER_VESSEL_TYPE_OPTIONS = ['BARGE', 'TANKER', 'SPOB', 'TUG BOAT'] as const;
 export const MASTER_VESSEL_LAMBUNG_OPTIONS = ['DHDB', 'SHSB', 'SHDB'] as const;
 export const MASTER_VESSEL_TERMS_OPTIONS = ['T/C', 'V/C', 'CIF'] as const;
 

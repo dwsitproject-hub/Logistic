@@ -34,7 +34,7 @@ const VESSELS_PER_PAGE = 20
 
 const EMPTY_FILTER_OPTIONS: MasterVesselFilterOptions = {
   owners: [],
-  vesselTypes: ['BARGE', 'TANKER', 'SPOB'],
+  vesselTypes: ['BARGE', 'TANKER', 'SPOB', 'TUG BOAT'],
   lambungTypes: ['DHDB', 'SHSB', 'SHDB'],
   terms: ['T/C', 'V/C', 'CIF'],
 }

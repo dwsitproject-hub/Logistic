@@ -12,6 +12,23 @@ const VESSEL_TYPE_FROM_DHM: Record<string, string> = {
   SPOB: 'SPOB',
 };
 
+/** KLIP "TUG BOAT" (also written TUGBOAT / TUG). DHM has no fixed spelling for it, so it is matched against the Hub's own enum. */
+export function isTugVesselType(value: unknown): boolean {
+  return /^TUG[\s-]*(BOAT)?$/i.test(String(value ?? '').trim());
+}
+
+/**
+ * The Vessel_Type value to send for a KLIP vessel type.
+ * barge / tanker / SPOB use the fixed table. A tug is sent as the Hub's own spelling when its enum has a value that names a tug, and
+ * otherwise NOT sent at all (the vessel is still pushed, name and the rest): an enum value the Hub does not list would reject the push.
+ */
+export function pickDhmVesselType(klipType: unknown, hubEnumValues?: readonly string[] | null): string | undefined {
+  const fixed = mapLookup(VESSEL_TYPE_TO_DHM, klipType);
+  if (fixed) return fixed;
+  if (!isTugVesselType(klipType)) return undefined;
+  return hubEnumValues?.find((v) => /tug/i.test(String(v)));
+}
+
 const LAMBUNG_TO_DHM: Record<string, string> = {
   DHDB: 'Double hull Double Bottom',
   SHSB: 'Single hull Single Bottom',
@@ -43,7 +60,7 @@ function mapLookup(table: Record<string, string>, value: unknown): string | unde
 /** Hub keys only — unknown keys are rejected by DHM. */
 export function toDhmVesselPayload(
   row: KlipVesselForDhm,
-  options?: { code?: string },
+  options?: { code?: string; vesselTypeEnum?: readonly string[] | null },
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     Vessel_Name: String(row.vessel_name ?? '').trim(),
@@ -61,7 +78,7 @@ export function toDhmVesselPayload(
 
   if (row.heating != null) payload.Heater = Boolean(row.heating);
 
-  const vesselType = mapLookup(VESSEL_TYPE_TO_DHM, row.vessel_type);
+  const vesselType = pickDhmVesselType(row.vessel_type, options?.vesselTypeEnum);
   if (vesselType) payload.Vessel_Type = vesselType;
 
   const lambung = mapLookup(LAMBUNG_TO_DHM, row.lambung_type);
@@ -93,7 +110,8 @@ export function fromDhmVesselData(data: Record<string, unknown> | null | undefin
       d.Vessel_Code_SAP != null ? String(d.Vessel_Code_SAP).trim() || null : null,
     vessel_capacity_mt: capN != null && Number.isFinite(capN) ? capN : null,
     heating: typeof d.Heater === 'boolean' ? d.Heater : null,
-    vessel_type: mapLookup(VESSEL_TYPE_FROM_DHM, d.Vessel_Type) ?? null,
+    vessel_type:
+      mapLookup(VESSEL_TYPE_FROM_DHM, d.Vessel_Type) ?? (/tug/i.test(String(d.Vessel_Type ?? '')) ? 'TUG BOAT' : null),
     lambung_type: mapLookup(LAMBUNG_FROM_DHM, d.Type_lambung) ?? null,
     terms: mapLookup(TERMS_FROM_DHM, d.Type_Charter) ?? null,
   };
