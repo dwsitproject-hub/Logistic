@@ -11,10 +11,12 @@
  *   ... | docker exec -i klip-backend node - --apply            # 2. load into master_vessels / vessel_pairs (one transaction)
  *   ... | docker exec -i klip-backend node - --push-dhm         # 3. push the vessels in this file to DHM (after step 2)
  *   ... | docker exec -i klip-backend node - --apply --push-dhm # 2 and 3 together
+ *   add --rename-existing to 2 to give the vessels that are ALREADY in the master the clean name of the sheet (the dry run lists which)
  *
  * Rules it follows
  *  - A vessel whose base name already exists in the master is REUSED: only its empty fields are filled (owner, capacity, type, heating,
- *    lambung, charter, role); nothing is overwritten. A tug and a barge that share a base name once TB./BG. is stripped are reported as a
+ *    lambung, charter, role); nothing is overwritten - its NAME is changed only with --rename-existing.
+ *  - The same vessel written twice in the file (HADI I / HADI 1) is loaded once; both spellings point at the same master row. A tug and a barge that share a base name once TB./BG. is stripped are reported as a
  *    conflict and skipped, never merged.
  *  - A SAP code is attached only when no other vessel holds it. A held code is reported and left where it is.
  *  - A vessel with no code becomes PROVISIONAL (TMP- placeholder); the SAP import promotes it when it brings the same name with a code.
@@ -30,6 +32,7 @@ const DATA = __DATA__;
 const argv = process.argv.slice(2);
 const apply = argv.includes('--apply');
 const pushDhm = argv.includes('--push-dhm');
+const renameExisting = argv.includes('--rename-existing');
 
 function show(title, rows, fmt, limit = 60) {
   if (rows.length === 0) return;
@@ -58,10 +61,13 @@ function show(title, rows, fmt, limit = 60) {
     const plans = await svc.planVesselLoad(client, DATA);
     const by = (a) => plans.filter((p) => p.decision.action === a);
     console.log(`File: ${DATA.vessels.length} vessels (${DATA.vessels.filter((v) => v.role === 'TB').length} TB, ${DATA.vessels.filter((v) => v.role === 'BG').length} BG), ${DATA.pairs.length} pairs`);
-    console.log(`Plan: ${by('create').length} to create, ${by('exists').length} already in the master (reused, empty fields filled), ${by('conflict').length} conflicts (skipped)`);
+    console.log(`Plan: ${by('create').length} to create, ${by('exists').length} already in the master (reused, empty fields filled), ${by('duplicate').length} duplicate spellings in the file (same vessel), ${by('conflict').length} conflicts (skipped)`);
 
     show('CONFLICTS - skipped, decide by hand', by('conflict'), (p) => `${p.vessel.role} ${p.vessel.name}: ${p.decision.reasons.join('; ')}`);
     const skipped = plans.flatMap((p) => p.decision.skippedCodes.map((s) => ({ p, ...s })));
+    show('DUPLICATE spellings in the file (loaded once)', by('duplicate'), (p) => `${p.vessel.role} ${p.vessel.name} = ${p.decision.duplicateOf}`);
+    const renames = svc.plannedRenames(plans);
+    show(renameExisting ? 'NAMES that will be changed to the clean name' : 'NAMES that --rename-existing would change to the clean name', renames, (r) => `${r.from}  ->  ${r.to}`, 30);
     show('SAP CODES left where they are (another vessel already holds them)', skipped, (s) => `${s.code} -> held by "${s.heldBy}", not given to ${s.p.vessel.name}`);
     show('Already in the master', by('exists'), (p) => `${p.vessel.role} ${p.vessel.name} = ${p.decision.existing.vessel_name} [${p.decision.existing.vessel_code}, ${p.decision.existing.code_status}${p.decision.existing.vessel_role ? ', ' + p.decision.existing.vessel_role : ''}]`, 25);
     console.log(`\nWith a SAP code: ${plans.filter((p) => p.decision.codes.length > 0).length} vessels; provisional (no code): ${plans.filter((p) => p.decision.codes.length === 0 && p.decision.action === 'create').length}`);
@@ -76,14 +82,14 @@ function show(title, rows, fmt, limit = 60) {
       await client.query('BEGIN');
       let result;
       try {
-        result = await svc.applyVesselLoad(client, DATA, plans);
+        result = await svc.applyVesselLoad(client, DATA, plans, { renameExisting });
         await client.query('COMMIT');
       } catch (e) {
         await client.query('ROLLBACK');
         throw e;
       }
       ids = result.ids;
-      console.log(`\nLOADED: ${result.created} created, ${result.reused} reused, ${result.conflicts} conflicts skipped, ${result.failed.length} failed.`);
+      console.log(`\nLOADED: ${result.created} created, ${result.reused} reused${renameExisting ? ` (${result.renamed} renamed)` : ''}, ${result.duplicates} duplicate spellings, ${result.conflicts} conflicts skipped, ${result.failed.length} failed.`);
       console.log(`Pairs: ${result.pairsCreated} created, ${result.pairsUpdated} updated, ${result.pairsSkipped.length} skipped.`);
       show('FAILED vessels', result.failed, (f) => `${f.name}: ${f.error}`);
       show('Pairs skipped', result.pairsSkipped, (s) => `${s.pairCode}: ${s.reason}`);

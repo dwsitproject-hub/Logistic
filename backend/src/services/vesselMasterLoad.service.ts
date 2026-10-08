@@ -10,6 +10,8 @@ import { resolveMasterVessel } from './resolveMasterVessel.service';
  *   create    - no master vessel has this normalised name yet
  *   exists    - one has, and it is compatible (same role or none, not a tug-vs-barge clash): it is reused and only its EMPTY fields are
  *               filled in, so an existing owner / capacity / type is never overwritten
+ *   duplicate - the same vessel written twice in the file (TB. HADI I / TB. HADI 1: the master reads the roman numeral as the digit): the
+ *               first spelling is loaded and the second is mapped to the same master row
  *   conflict  - one has, but it is the other role, or a barge where this is a tug (a tug and a barge can share a base name once the
  *               TB./BG. prefix is stripped): skipped and reported, never merged
  * and a SAP code is only attached when no OTHER vessel already holds it: resolveMasterVessel would otherwise take the vessel that owns the
@@ -61,8 +63,10 @@ export interface ExistingMaster {
 export type CodeOwners = Map<string, string>; // UPPER(code) -> normalised name of the vessel holding it
 
 export interface VesselDecision {
-  action: 'create' | 'exists' | 'conflict';
+  action: 'create' | 'exists' | 'conflict' | 'duplicate';
   existing?: ExistingMaster;
+  /** duplicate only: the spelling earlier in the file that this one is the same vessel as. */
+  duplicateOf?: string;
   codes: string[];
   skippedCodes: Array<{ code: string; heldBy: string }>;
   reasons: string[];
@@ -148,15 +152,48 @@ export async function planVesselLoad(client: Pick<PoolClient, 'query'>, data: Lo
   const owners: CodeOwners = new Map();
   for (const row of ownerRows.rows as Array<{ code: string; norm: string }>) owners.set(row.code, row.norm);
 
-  return data.vessels.map((vessel) => ({
-    vessel,
-    decision: decideVessel(vessel, byNorm.get(vesselNormName(vessel.name)) ?? [], owners),
-  }));
+  const firstInFile = new Map<string, LoadVessel>();
+  return data.vessels.map((vessel) => {
+    const norm = vesselNormName(vessel.name);
+    const earlier = firstInFile.get(norm);
+    if (!earlier) {
+      firstInFile.set(norm, vessel);
+      return { vessel, decision: decideVessel(vessel, byNorm.get(norm) ?? [], owners) };
+    }
+    // the file itself holds this base name already: planned against the database alone, both would read "create" and the second would
+    // silently land on the first one's row
+    if (earlier.role !== vessel.role) {
+      return {
+        vessel,
+        decision: {
+          action: 'conflict' as const,
+          codes: [],
+          skippedCodes: [],
+          reasons: [`nama dasar sama dengan ${earlier.role} ${earlier.name} di file yang sama (satu tugboat dan satu tongkang)`],
+        },
+      };
+    }
+    return { vessel, decision: { action: 'duplicate' as const, duplicateOf: earlier.name, codes: [], skippedCodes: [], reasons: [] } };
+  });
+}
+
+/** An existing master vessel whose stored name differs from the clean one: what --rename-existing would change. */
+export function plannedRenames(plans: VesselPlan[]): Array<{ from: string; to: string }> {
+  const out: Array<{ from: string; to: string }> = [];
+  for (const { vessel, decision } of plans) {
+    const to = uppercaseText(vessel.name);
+    if (decision.action === 'exists' && decision.existing && to && decision.existing.vessel_name !== to) {
+      out.push({ from: decision.existing.vessel_name, to });
+    }
+  }
+  return out;
 }
 
 export interface LoadResult {
   created: number;
   reused: number;
+  duplicates: number;
+  renamed: number;
   conflicts: number;
   failed: Array<{ name: string; error: string }>;
   pairsCreated: number;
@@ -179,13 +216,28 @@ const FILL_GAPS_SQL = `
   WHERE id = $1`;
 
 /** Writes inside the caller's transaction. Each vessel and each pair gets its own SAVEPOINT, so one bad row is reported, not fatal. */
-export async function applyVesselLoad(client: PoolClient, data: LoadData, plans: VesselPlan[]): Promise<LoadResult> {
-  const result: LoadResult = { created: 0, reused: 0, conflicts: 0, failed: [], pairsCreated: 0, pairsUpdated: 0, pairsSkipped: [], ids: new Map() };
+export async function applyVesselLoad(
+  client: PoolClient,
+  data: LoadData,
+  plans: VesselPlan[],
+  options: { renameExisting?: boolean } = {},
+): Promise<LoadResult> {
+  const result: LoadResult = { created: 0, reused: 0, duplicates: 0, renamed: 0, conflicts: 0, failed: [], pairsCreated: 0, pairsUpdated: 0, pairsSkipped: [], ids: new Map() };
   const idKey = (role: string, name: string) => `${role}|${vesselNormName(name)}`;
 
   for (const { vessel, decision } of plans) {
     if (decision.action === 'conflict') {
       result.conflicts += 1;
+      continue;
+    }
+    if (decision.action === 'duplicate') {
+      const firstId = result.ids.get(idKey(vessel.role, decision.duplicateOf!));
+      if (firstId) {
+        result.ids.set(idKey(vessel.role, vessel.name), firstId);
+        result.duplicates += 1;
+      } else {
+        result.failed.push({ name: vessel.name, error: `${decision.duplicateOf} (the same vessel earlier in the file) was not loaded` });
+      }
       continue;
     }
     const sp = `sp_vload_${Math.random().toString(36).slice(2, 10)}`;
@@ -225,6 +277,14 @@ export async function applyVesselLoad(client: PoolClient, data: LoadData, plans:
       await client.query(FILL_GAPS_SQL, [
         id, vessel.role, attrs.vessel_owner, attrs.vessel_capacity_mt, attrs.vessel_type, attrs.heating, attrs.lambung_type, attrs.terms,
       ]);
+      if (options.renameExisting && decision.action === 'exists') {
+        // the master keeps matching by the normalised name (unchanged by construction); only the displayed name becomes the clean one
+        const renamed = await client.query(
+          `UPDATE master_vessels SET vessel_name = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND vessel_name IS DISTINCT FROM $2`,
+          [id, uppercaseText(vessel.name)],
+        );
+        result.renamed += renamed.rowCount ?? 0;
+      }
       await client.query(`RELEASE SAVEPOINT ${sp}`);
       result.ids.set(idKey(vessel.role, vessel.name), id);
     } catch (error) {

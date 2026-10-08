@@ -3,6 +3,8 @@ import type { PoolClient } from 'pg';
 import {
   applyVesselLoad,
   decideVessel,
+  planVesselLoad,
+  plannedRenames,
   sapNameKey,
   vesselNormName,
   type ExistingMaster,
@@ -108,5 +110,62 @@ describe('applyVesselLoad', () => {
     expect(out.pairsCreated).toBe(0);
     expect(out.pairsSkipped[0]).toMatchObject({ pairCode: 'TBG-001' });
     expect(out.pairsSkipped[0].reason).toMatch(/TB belum ada/);
+  });
+});
+
+/** A client for planVesselLoad: no vessel and no code exists yet. */
+const nothingExistsClient = { query: async () => ({ rows: [] }) } as unknown as PoolClient;
+
+describe('planVesselLoad: the file against itself', () => {
+  it('reads a roman numeral and its digit as the same vessel (HADI I / HADI 1) and loads it once', async () => {
+    const data: LoadData = { vessels: [tb({ name: 'TB. HADI I' }), tb({ name: 'TB. HADI 1' })], pairs: [] };
+    const plans = await planVesselLoad(nothingExistsClient, data);
+    expect(plans.map((p) => p.decision.action)).toEqual(['create', 'duplicate']);
+    expect(plans[1].decision.duplicateOf).toBe('TB. HADI I');
+  });
+
+  it('refuses a tug and a barge of the same file that share a base name, instead of letting the second land on the first row', async () => {
+    const data: LoadData = { vessels: [tb({ name: 'TB. AS MARINA 12' }), bg({ name: 'BG. AS MARINA 12' })], pairs: [] };
+    const plans = await planVesselLoad(nothingExistsClient, data);
+    expect(plans.map((p) => p.decision.action)).toEqual(['create', 'conflict']);
+    expect(plans[1].decision.reasons.join(' ')).toMatch(/file yang sama/);
+  });
+
+  it('maps both spellings of a duplicate to the same master row, and counts it once as created', async () => {
+    const { client } = emptyDbClient();
+    const data: LoadData = {
+      vessels: [tb({ name: 'TB. HADI I' }), tb({ name: 'TB. HADI 1' }), bg()],
+      pairs: [
+        { pairCode: 'TBG-A', tb: 'TB. HADI I', bg: 'BG. SOLID 10', sapNames: [] },
+        { pairCode: 'TBG-B', tb: 'TB. HADI 1', bg: 'BG. SOLID 10', sapNames: [] },
+      ],
+    };
+    const plans = await planVesselLoad(nothingExistsClient, data);
+    const out = await applyVesselLoad(client, data, plans);
+    expect(out).toMatchObject({ created: 2, duplicates: 1, failed: [] });
+    expect(out.ids.get('TB|' + vesselNormName('TB. HADI I'))).toBe(out.ids.get('TB|' + vesselNormName('TB. HADI 1')));
+  });
+});
+
+describe('renaming the vessels that are already in the master', () => {
+  const messy = master({ vessel_name: 'BG.BOSS 3', normalized_vessel_name: 'BOSS 3' });
+  const plan = (): VesselPlan => ({ vessel: bg({ name: 'BG. BOSS 3' }), decision: decideVessel(bg({ name: 'BG. BOSS 3' }), [messy], new Map()) });
+
+  it('lists the stored names that differ from the clean one', () => {
+    expect(plannedRenames([plan()])).toEqual([{ from: 'BG.BOSS 3', to: 'BG. BOSS 3' }]);
+    const same: VesselPlan = { vessel: bg(), decision: decideVessel(bg(), [master()], new Map()) };
+    expect(plannedRenames([same])).toEqual([]);
+  });
+
+  it('changes only the name, and only when asked', async () => {
+    const off = emptyDbClient();
+    await applyVesselLoad(off.client, { vessels: [plan().vessel], pairs: [] }, [plan()]);
+    expect(off.calls.some((c) => /SET vessel_name = \$2/.test(c.sql))).toBe(false);
+
+    const on = emptyDbClient();
+    await applyVesselLoad(on.client, { vessels: [plan().vessel], pairs: [] }, [plan()], { renameExisting: true });
+    const rename = on.calls.find((c) => /SET vessel_name = \$2/.test(c.sql))!;
+    expect(rename.sql).not.toMatch(/normalized_vessel_name/); // matching key untouched
+    expect(rename.params).toEqual(['m1', 'BG. BOSS 3']);
   });
 });
