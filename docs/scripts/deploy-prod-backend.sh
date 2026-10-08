@@ -178,6 +178,41 @@ if [[ "${DEPLOY_FORCE:-}" != "1" ]]; then
   [[ "${CONFIRM,,}" == "$ROLE" ]] || die "aborted - nothing deployed"
 fi
 
+# The share is a bind mount: when its host path cannot be read, Docker refuses to start the container at all ("error while creating
+# mount source path ... mkdir: file exists") and the WHOLE API is down, for a feature that only the daily SAP import uses. Look
+# before building, not after the old container has been replaced. Two causes so far, both on this host:
+#   - a Docker network took the office LAN's subnet (172.30.0.0/16), so the route to the NAS goes through a br-* bridge;
+#   - the CIFS mount of the share is dead or stale.
+step "SAP share (route to the NAS, and the host path the backend mounts)"
+SHARE_PATH="$(grep -E '^KLIP_SAP_IMPORT_MOUNT=' .env | tail -n 1 | cut -d= -f2- \
+  | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//" || true)"
+SHARE_PATH="${SHARE_PATH:-/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT}"
+NAS_IP="${SAP_NAS_IP:-172.30.1.94}"
+ROUTE_LINE="$(ip route get "$NAS_IP" 2>/dev/null | head -n 1 || true)"
+ROUTE_DEV="$(printf '%s' "$ROUTE_LINE" | sed -n 's/.* dev \([^ ]*\).*/\1/p')"
+printf '  route to NAS %s : %s\n' "$NAS_IP" "${ROUTE_LINE:-(ip route get gave nothing)}"
+printf '  share path        : %s\n' "$SHARE_PATH"
+SHARE_PROBLEM=""
+if [[ "$ROUTE_DEV" == br-* || "$ROUTE_DEV" == docker* ]]; then
+  SHARE_PROBLEM="the route to the NAS ($NAS_IP) goes through the Docker bridge $ROUTE_DEV: some Docker network on this host took the office LAN's subnet (172.30.0.0/16). Name it: docker network inspect ${ROUTE_DEV#br-} --format '{{.Name}} containers={{len .Containers}}'. It may belong to ANOTHER application on this host - do not remove a network that has containers attached. A host route for the NAS alone wins over the bridge's /16 and touches nothing else: ip route add $NAS_IP/32 via <default gateway> dev <eth device>"
+elif ! timeout 10 ls "$SHARE_PATH" >/dev/null 2>&1; then
+  SHARE_PROBLEM="cannot read $SHARE_PATH on this host (dead or stale mount, or it timed out). Check: mount | grep synology"
+fi
+WITHOUT_SHARE=0
+if [[ -n "$SHARE_PROBLEM" ]]; then
+  if [[ "${DEPLOY_WITHOUT_SHARE:-}" == "1" ]]; then
+    printf '  WARNING: %s\n' "$SHARE_PROBLEM"
+    printf '  DEPLOY_WITHOUT_SHARE=1: deploying WITHOUT the share overlay. The API will start; the daily SAP import and the Sync button cannot read the folder until the share is fixed and this script is run again without the override.\n'
+    COMPOSE=(docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml)
+    WITHOUT_SHARE=1
+  else
+    die "$SHARE_PROBLEM
+  Nothing was changed. Without a readable share the backend cannot start at all. Fix it, or deploy without the daily SAP import: DEPLOY_WITHOUT_SHARE=1 bash docs/scripts/deploy-prod-backend.sh"
+  fi
+else
+  printf '  the share is readable and the route is not through a Docker bridge\n'
+fi
+
 IMAGE_BEFORE="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null || echo none)"
 
 step "pulling"
@@ -200,9 +235,12 @@ else
 fi
 
 step "waiting for the container to finish starting"
+# "Database connected successfully" is also printed by the migration step, which runs BEFORE the server starts, so waiting on it let
+# the checks below run before the scheduler had registered its crons (a false "[FAIL] SAP auto-import cron registered", 2026-10-08).
+# The scheduler line comes last in start-up.
 for _ in $(seq 1 60); do
   if "${COMPOSE[@]}" logs --tail=400 "$SERVICE" 2>/dev/null \
-      | grep -qE "Database connected successfully|Listening on"; then
+      | grep -qE "Scheduler service initialized|Failed to initialize scheduler service"; then
     break
   fi
   sleep 3
@@ -217,11 +255,15 @@ logs() { "${COMPOSE[@]}" logs --tail=800 "$SERVICE" 2>/dev/null; }
 if docker exec "$CONTAINER" true >/dev/null 2>&1; then ok "container is running"; else bad "container is running"; fi
 
 if logs | grep -qiE 'migration.*(failed|error)'; then bad "no migration errors this boot"; else ok "no migration errors this boot"; fi
-if logs | grep -qi 'SAP folder auto-import cron scheduled'; then ok "SAP auto-import cron registered"; else bad "SAP auto-import cron registered"; fi
-if docker exec "$CONTAINER" sh -c 'ls "/mnt/sap-import/ORIGINAL" >/dev/null 2>&1'; then
-  ok "SAP share mounted and readable"
+if [[ "$WITHOUT_SHARE" == "1" ]]; then
+  printf '  [SKIP] SAP auto-import cron and share: deployed without the share overlay (DEPLOY_WITHOUT_SHARE=1)\n'
 else
-  bad "SAP share mounted and readable (check KLIP_SAP_IMPORT_MOUNT points at a path that exists)"
+  if logs | grep -qi 'SAP folder auto-import cron scheduled'; then ok "SAP auto-import cron registered"; else bad "SAP auto-import cron registered"; fi
+  if docker exec "$CONTAINER" sh -c 'ls "/mnt/sap-import/ORIGINAL" >/dev/null 2>&1'; then
+    ok "SAP share mounted and readable"
+  else
+    bad "SAP share mounted and readable (check KLIP_SAP_IMPORT_MOUNT points at a path that exists)"
+  fi
 fi
 
 # docker-compose.backend.yml reads the key from env_file ONLY; a ${...:-} line would substitute an

@@ -4,6 +4,24 @@ import {
   buildSapAutoImportEmailSubject,
 } from './sapAutoImportEmail.template';
 
+describe('sapAutoImportEmail.template: unreadable share', () => {
+  const input = { kind: 'source_missing' as const, frontendUrl: 'https://klip.example', sourcePath: '/mnt/sap-import/ORIGINAL' };
+
+  it('does not read like a quiet morning', () => {
+    const subject = buildSapAutoImportEmailSubject(input);
+    expect(subject).toMatch(/cannot be read/i);
+    expect(subject).toMatch(/nothing was imported/i);
+    expect(subject).not.toMatch(/no new files/i);
+  });
+
+  it('names the folder and the two likely causes, and points at Sync', () => {
+    const html = buildSapAutoImportEmailHtml(input);
+    expect(html).toContain('/mnt/sap-import/ORIGINAL');
+    expect(html).toContain('172.30.1.94');
+    expect(html).toMatch(/Sync/);
+  });
+});
+
 describe('sapAutoImportEmail.template', () => {
   it('uses a short subject when no new files were found', () => {
     expect(

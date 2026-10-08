@@ -328,10 +328,15 @@ export function sapAutoImportProcessesAllFiles(): boolean {
   return String(process.env.SAP_AUTO_IMPORT_ALL_FILES || 'false').toLowerCase() === 'true';
 }
 
-async function sendRunEmail(kind: SapAutoImportEmailKind, files: SapAutoImportEmailFile[], filesSkippedChecksum = 0): Promise<boolean> {
+async function sendRunEmail(
+  kind: SapAutoImportEmailKind,
+  files: SapAutoImportEmailFile[],
+  filesSkippedChecksum = 0,
+  sourcePath?: string,
+): Promise<boolean> {
   const recipients = await findSapAutoImportAdminRecipients();
   const appUrl = frontendUrl();
-  const input = { kind, frontendUrl: appUrl, files, filesSkippedChecksum };
+  const input = { kind, frontendUrl: appUrl, files, filesSkippedChecksum, sourcePath };
   return sendEmail({
     to: recipients,
     subject: buildSapAutoImportEmailSubject(input),
@@ -420,6 +425,20 @@ async function runSapFolderAutoImportCore(
         root: folders.root,
         hint: 'Check SAP_AUTO_IMPORT_ROOT and that the share is mounted into the container',
       });
+      /*
+       * Say so, and stop. Carrying on read an unreadable folder as an empty one and ended in the "no new files" email - the same
+       * words as a quiet morning - so a share that had been dead since the evening before (2026-10-07: a Docker network took the
+       * office LAN's subnet and the route to the NAS) went unnoticed until someone asked why a fresh file was not imported.
+       */
+      const emailSent = notify ? await sendRunEmail('source_missing', [], 0, folders.original) : false;
+      return {
+        ran: true,
+        filesScanned: 0,
+        filesProcessed: 0,
+        filesSkippedChecksum: 0,
+        files: [],
+        emailSent,
+      };
     }
     const fileNames = listOriginalExcelFiles(folders.original);
     /*

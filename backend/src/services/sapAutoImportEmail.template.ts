@@ -20,13 +20,15 @@ export interface SapAutoImportEmailFile {
   errorLogSnippet?: string[];
 }
 
-export type SapAutoImportEmailKind = 'skipped_in_flight' | 'no_new_files' | 'run_summary';
+export type SapAutoImportEmailKind = 'skipped_in_flight' | 'no_new_files' | 'run_summary' | 'source_missing';
 
 export interface SapAutoImportEmailInput {
   kind: SapAutoImportEmailKind;
   frontendUrl: string;
   files?: SapAutoImportEmailFile[];
   filesSkippedChecksum?: number;
+  /** source_missing only: the folder the job looked for inside the backend container. */
+  sourcePath?: string;
 }
 
 export function buildSapAutoImportEmailSubject(input: SapAutoImportEmailInput): string {
@@ -35,6 +37,10 @@ export function buildSapAutoImportEmailSubject(input: SapAutoImportEmailInput): 
   }
   if (input.kind === 'no_new_files') {
     return 'KLIP SAP Auto Import: no new files';
+  }
+  if (input.kind === 'source_missing') {
+    // Not "no new files": nothing was looked at. The two used to read the same, which hid a dead share for half a day.
+    return 'KLIP SAP Auto Import: the SAP share cannot be read - nothing was imported';
   }
   const files = input.files ?? [];
   const failedRows = files.reduce((sum, f) => sum + (f.failedRecords ?? 0), 0);
@@ -95,6 +101,17 @@ export function buildSapAutoImportEmailHtml(input: SapAutoImportEmailInput): str
         <h2 style="margin:0 0 12px;">SAP auto-import skipped</h2>
         <p>The 07:00 scheduler did not start because another SAP import is already running (processing or pending).</p>
         <p>Drop files stay in <code>Klip/SAP Data/Original</code> and will be picked up on the next run (or after you start a manual run).</p>
+        <p><a href="${escapeHtml(`${frontendUrl}/sap-imports`)}">Open SAP Data → Import History</a></p>
+      </div>`;
+  }
+
+  if (input.kind === 'source_missing') {
+    return `
+      <div style="font-family:Arial,sans-serif;color:#111827;max-width:640px;">
+        <h2 style="margin:0 0 12px;color:#991b1b;">SAP auto-import could not read the share</h2>
+        <p>The scheduler ran, but the source folder${input.sourcePath ? ` <code>${escapeHtml(input.sourcePath)}</code>` : ''} is not readable inside the backend container, so <strong>no file was looked at and nothing was imported</strong>. This is not a quiet morning.</p>
+        <p>Likely causes: the route from the server to the Synology is broken (for example a Docker network took the office LAN subnet 172.30.0.0/16), or the share mount on the host is dead. On the backend host: <code>ip route get 172.30.1.94</code> should not go through a <code>br-</code> device, and <code>ls /mnt/synology-apps</code> should list the share.</p>
+        <p>Once the share is readable, open SAP Data and press <strong>Sync</strong> to import the newest file without waiting for the next schedule.</p>
         <p><a href="${escapeHtml(`${frontendUrl}/sap-imports`)}">Open SAP Data → Import History</a></p>
       </div>`;
   }
