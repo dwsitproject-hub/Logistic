@@ -77,9 +77,12 @@ export class SchedulerService {
      * started. Mark it failed now instead of leaving it to block the daily run and the Daily Planning / WB uploads. Runs whether
      * or not the cron is enabled - manual uploads are blocked by the same row.
      */
+    // 1 minute, not 10: on 2026-10-08 the backend was killed (container memory cap) and restarted within minutes of an import
+    // starting, so a 10-minute limit left the dead import 'processing' - and the page counting elapsed time - until it was cancelled.
     void import('./sapImportRecovery.service').then(({ failStaleSapImports }) =>
-      failStaleSapImports({ olderThanMinutes: 10, reason: 'Import interrupted by a backend restart. Upload the file again.' }),
+      failStaleSapImports({ olderThanMinutes: 1, reason: 'Import interrupted by a backend restart. Upload the file again.' }),
     );
+    void import('./sapFolderAutoImport.service').then(({ closeRunsInterruptedByRestart }) => closeRunsInterruptedByRestart());
 
     if (String(process.env.SAP_AUTO_IMPORT_ENABLED || 'false').toLowerCase() !== 'true') {
       logger.info('SAP folder auto-import cron is disabled (SAP_AUTO_IMPORT_ENABLED is not true)');

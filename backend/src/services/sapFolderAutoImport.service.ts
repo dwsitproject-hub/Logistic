@@ -152,6 +152,25 @@ async function failOrphanRuns(): Promise<void> {
   }
 }
 
+/**
+ * At backend start: every run still 'running' belongs to the process that just died (imports run inside this process), so it is
+ * closed at once, with no age limit. 2026-10-08: the container was killed and restarted 11 times in four minutes while an import ran;
+ * its history row and the import itself stayed 'running' / 'processing' for 30 minutes, and the page kept counting elapsed time.
+ */
+export async function closeRunsInterruptedByRestart(): Promise<void> {
+  try {
+    await query(
+      `UPDATE sap_auto_import_runs
+          SET finished_at = NOW(),
+              outcome = 'failed',
+              detail = 'Interrupted: the backend restarted while this run was in progress. Press Sync to run it again.'
+        WHERE outcome = 'running'`,
+    );
+  } catch (error) {
+    logger.error('Could not close SAP auto-import runs interrupted by a restart', { error });
+  }
+}
+
 async function recordRunStart(trigger: SapAutoImportTrigger, startedBy: string | null): Promise<string | null> {
   await failOrphanRuns();
   try {
