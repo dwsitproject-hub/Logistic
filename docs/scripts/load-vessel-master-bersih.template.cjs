@@ -63,8 +63,12 @@ function show(title, rows, fmt, limit = 60) {
     console.log(`File: ${DATA.vessels.length} vessels (${DATA.vessels.filter((v) => v.role === 'TB').length} TB, ${DATA.vessels.filter((v) => v.role === 'BG').length} BG), ${DATA.pairs.length} pairs`);
     console.log(`Plan: ${by('create').length} to create, ${by('exists').length} already in the master (reused, empty fields filled), ${by('duplicate').length} duplicate spellings in the file (same vessel), ${by('conflict').length} conflicts (skipped)`);
 
+    if (by('create').length <= 40) show('TO CREATE', by('create'), (p) => `${p.vessel.role} ${p.vessel.name}${p.decision.codes.length ? '  [' + p.decision.codes.join(', ') + ']' : ''}`);
     show('CONFLICTS - skipped, decide by hand', by('conflict'), (p) => `${p.vessel.role} ${p.vessel.name}: ${p.decision.reasons.join('; ')}`);
     const skipped = plans.flatMap((p) => p.decision.skippedCodes.map((s) => ({ p, ...s })));
+    const twinned = plans.filter((p) => p.decision.twins && p.decision.twins.length > 0);
+    show('POSSIBLE TWINS in the master (same vessel, other spelling - merge with merge-master-vessel.cjs)', twinned, (p) =>
+      `${p.vessel.role} ${p.vessel.name} [${p.decision.existing.vessel_code}]  ~  ${p.decision.twins.map((t) => `"${t.vessel_name}" [${t.vessel_code}]`).join(', ')}`);
     show('DUPLICATE spellings in the file (loaded once)', by('duplicate'), (p) => `${p.vessel.role} ${p.vessel.name} = ${p.decision.duplicateOf}`);
     const renames = svc.plannedRenames(plans);
     show(renameExisting ? 'NAMES that will be changed to the clean name' : 'NAMES that --rename-existing would change to the clean name', renames, (r) => `${r.from}  ->  ${r.to}`, 30);

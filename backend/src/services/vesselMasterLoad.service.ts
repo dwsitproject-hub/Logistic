@@ -60,6 +60,18 @@ export interface ExistingMaster {
   code_status: string | null;
 }
 
+/**
+ * The same vessel spelled with different spaces or leading zeros: "TOLLANDAK II" and "TOL LANDAK II", "OV - 01" and "OV-1". The master
+ * does not read those as one vessel (its normalised names differ), DHM does, and a load that trusts the master alone creates a twin.
+ * Letters and digits only, and zeros stripped from the front of a number.
+ */
+export function looseVesselKey(normalizedName: string): string {
+  return String(normalizedName ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .replace(/(?<=\D|^)0+(?=\d)/g, '');
+}
+
 export type CodeOwners = Map<string, string>; // UPPER(code) -> normalised name of the vessel holding it
 
 export interface VesselDecision {
@@ -67,6 +79,8 @@ export interface VesselDecision {
   existing?: ExistingMaster;
   /** duplicate only: the spelling earlier in the file that this one is the same vessel as. */
   duplicateOf?: string;
+  /** Other master rows that look like the same vessel spelled differently (exists: reported, not acted on). */
+  twins?: ExistingMaster[];
   codes: string[];
   skippedCodes: Array<{ code: string; heldBy: string }>;
   reasons: string[];
@@ -152,8 +166,18 @@ export async function planVesselLoad(client: Pick<PoolClient, 'query'>, data: Lo
   const owners: CodeOwners = new Map();
   for (const row of ownerRows.rows as Array<{ code: string; norm: string }>) owners.set(row.code, row.norm);
 
+  const allRows = await client.query(
+    `SELECT id::text, vessel_code, vessel_name, normalized_vessel_name, vessel_role, vessel_type, code_status FROM master_vessels`,
+  );
+  const byLoose = new Map<string, ExistingMaster[]>();
+  for (const row of allRows.rows as ExistingMaster[]) {
+    const k = looseVesselKey(row.normalized_vessel_name);
+    if (!k) continue;
+    byLoose.set(k, [...(byLoose.get(k) ?? []), row]);
+  }
+
   const firstInFile = new Map<string, LoadVessel>();
-  return data.vessels.map((vessel) => {
+  const planned = data.vessels.map((vessel) => {
     const norm = vesselNormName(vessel.name);
     const earlier = firstInFile.get(norm);
     if (!earlier) {
@@ -174,6 +198,31 @@ export async function planVesselLoad(client: Pick<PoolClient, 'query'>, data: Lo
       };
     }
     return { vessel, decision: { action: 'duplicate' as const, duplicateOf: earlier.name, codes: [], skippedCodes: [], reasons: [] } };
+  });
+
+  // a vessel the master does not know by this name, but does know under a spelling that differs only in spaces or leading zeros, is
+  // probably the same vessel: creating it would leave two master rows for one ship (DHM, which compares more loosely, then refuses to
+  // link the second). Report it instead, and let the sheet use the spelling the master already has.
+  return planned.map((plan) => {
+    const { vessel, decision } = plan;
+    if (decision.action === 'conflict' || decision.action === 'duplicate') return plan;
+    const norm = vesselNormName(vessel.name);
+    const twins = (byLoose.get(looseVesselKey(norm)) ?? []).filter(
+      (row) => row.normalized_vessel_name !== norm && row.id !== decision.existing?.id,
+    );
+    if (twins.length === 0) return plan;
+    if (decision.action === 'create') {
+      const list = twins.map((t) => `"${t.vessel_name}" [${t.vessel_code}${t.vessel_role ? ', ' + t.vessel_role : ''}]`).join(', ');
+      return {
+        vessel,
+        decision: {
+          ...decision,
+          action: 'conflict' as const,
+          reasons: [`ejaan mirip dengan kapal yang sudah ada: ${list}; kalau itu kapal yang sama, tulis ejaan itu di kolom Nama final`],
+        },
+      };
+    }
+    return { vessel, decision: { ...decision, twins } };
   });
 }
 

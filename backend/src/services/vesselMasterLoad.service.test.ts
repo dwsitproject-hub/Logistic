@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import {
   applyVesselLoad,
   decideVessel,
+  looseVesselKey,
   planVesselLoad,
   plannedRenames,
   sapNameKey,
@@ -167,5 +168,40 @@ describe('renaming the vessels that are already in the master', () => {
     const rename = on.calls.find((c) => /SET vessel_name = \$2/.test(c.sql))!;
     expect(rename.sql).not.toMatch(/normalized_vessel_name/); // matching key untouched
     expect(rename.params).toEqual(['m1', 'BG. BOSS 3']);
+  });
+});
+
+describe('the same vessel under another spelling (what DHM caught on SIT)', () => {
+  const dhmKnown = master({
+    id: 'dhm1', vessel_code: 'VSL-2455', vessel_name: 'TB. TOL LANDAK II', normalized_vessel_name: 'TOL LANDAK 2', vessel_type: null,
+  });
+  /** a client that knows exactly these master rows (the exact-name query gets the matching ones, the full list gets all) */
+  const knows = (rows: ExistingMaster[]) =>
+    ({
+      query: async (sql: string, params: unknown[] = []) => {
+        if (/master_vessel_code_aliases/i.test(sql)) return { rows: [] };
+        if (/normalized_vessel_name = ANY/i.test(sql)) return { rows: rows.filter((r) => (params[0] as string[]).includes(r.normalized_vessel_name)) };
+        return { rows };
+      },
+    }) as unknown as PoolClient;
+
+  it('reads spaces and leading zeros as no difference', () => {
+    expect(looseVesselKey(vesselNormName('TB. TOLLANDAK II'))).toBe(looseVesselKey(vesselNormName('TB. TOL LANDAK II')));
+    expect(looseVesselKey(vesselNormName('BG. OV - 01'))).toBe(looseVesselKey(vesselNormName('BG. OV-1')));
+    expect(looseVesselKey('LUMINOR 10')).not.toBe(looseVesselKey('LUMINOR 1'));
+    expect(looseVesselKey('AS MARINA 9')).not.toBe(looseVesselKey('AS MARINA 90'));
+  });
+
+  it('does not create a twin of a vessel the master already has under another spelling: it reports it', async () => {
+    const plans = await planVesselLoad(knows([dhmKnown]), { vessels: [tb({ name: 'TB. TOLLANDAK II' })], pairs: [] });
+    expect(plans[0].decision.action).toBe('conflict');
+    expect(plans[0].decision.reasons.join(' ')).toMatch(/TOL LANDAK II/);
+  });
+
+  it('keeps loading a vessel that exists exactly, and lists the other spelling as a possible twin', async () => {
+    const ours = master({ id: 'ours', vessel_name: 'TB. TOLLANDAK II', normalized_vessel_name: 'TOLLANDAK 2', vessel_code: 'MLANDAK2', vessel_type: null });
+    const plans = await planVesselLoad(knows([ours, dhmKnown]), { vessels: [tb({ name: 'TB. TOLLANDAK II' })], pairs: [] });
+    expect(plans[0].decision.action).toBe('exists');
+    expect(plans[0].decision.twins?.map((t) => t.vessel_name)).toEqual(['TB. TOL LANDAK II']);
   });
 });
