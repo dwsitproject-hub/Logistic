@@ -34,14 +34,15 @@ const load = (m) => require(path.join(DIST, m));
 
 const connection = load('database/connection');
 const { runShippingPerformance, invalidateShippingPerformanceRowCache } = load('services/shippingPerformance.service');
-const { parseLatePerformanceFilters, loadLatePerformanceRows } = load('services/latePerformance.service');
+const { parseLatePerformanceFilters, loadLatePerformanceRows, rowMatchesContractPerfStatusFilter } = load('services/latePerformance.service');
 const { isShipmentPageSeaIncoterm } = load('utils/shipmentIncotermScope');
 const { shippingPerfOutstandingQtyKgForAggregate } = load('utils/shippingPerformanceOutstandingAgg');
 
-const PRODUCT = (process.argv[2] || '').trim().toUpperCase();
-const SITE = (process.argv[3] || '').trim().toUpperCase();
-const DATE_FROM = (process.argv[4] || new Date().getFullYear() + '-01-01').trim();
-const DATE_TO = (process.argv[5] || new Date().toISOString().slice(0, 10)).trim();
+const POS = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const PRODUCT = (POS[0] || '').trim().toUpperCase();
+const SITE = (POS[1] || '').trim().toUpperCase();
+const DATE_FROM = (POS[2] || new Date().getFullYear() + '-01-01').trim();
+const DATE_TO = (POS[3] || new Date().toISOString().slice(0, 10)).trim();
 const TOLERANCE_KG = 1000;
 
 const up = (v) => String(v === null || v === undefined ? '' : v).trim().toUpperCase();
@@ -89,7 +90,13 @@ const contractsOf = (row) =>
 
   // ---- Contract Performance, through its own entry point ------------------------------------
   const cpFilters = parseLatePerformanceFilters({ query: { dateFrom: DATE_FROM, dateTo: DATE_TO } }, 'rows');
-  const cpRows = (await loadLatePerformanceRows(cpFilters)).filter(inScope).filter((r) => isShipmentPageSeaIncoterm(r.incoterm));
+  // OPEN contracts only (--all-status keeps closed and cancelled ones): the row set holds both, and a short-closed contract keeps a positive
+  // outstanding_quantity, which is what put 156,747 MT of closed/cancelled contracts into the first reading of this gap.
+  const ALL_STATUS = process.argv.includes('--all-status');
+  const cpRows = (await loadLatePerformanceRows(cpFilters))
+    .filter(inScope)
+    .filter((r) => isShipmentPageSeaIncoterm(r.incoterm))
+    .filter((r) => ALL_STATUS || rowMatchesContractPerfStatusFilter(r, 'Open'));
   const cp = new Map();
   for (const r of cpRows) {
     const kg = Number(r.outstanding_quantity) || 0;

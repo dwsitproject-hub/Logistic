@@ -42,6 +42,7 @@ const {
 const {
   parseLatePerformanceFilters,
   loadLatePerformanceRows,
+  rowMatchesContractPerfStatusFilter,
 } = load('services/latePerformance.service');
 const {
   sqlBacklogRemainingOsJoinExpr,
@@ -114,9 +115,17 @@ const TOLERANCE_KG = 1000;
      * ignored check is worse than none - so the scopes are matched here with the page's own
      * predicate rather than a list written out again.
      */
+    /*
+     * OPEN contracts only. loadLatePerformanceRows returns Open AND Close rows in one set (the page splits them afterwards, see
+     * rowMatchesContractPerfStatusFilter), and a closed or cancelled contract keeps a positive outstanding_quantity whenever it was
+     * short-closed. Shipping Performance's "On Going" is by definition the running ones, so summing the closed rows too put 156,747 MT of
+     * "DRIFT" on SIT that diag-invariant2-gap.cjs traced to closed/cancelled contracts alone (class C and D were both 0). The
+     * Contract Performance Open card applies the same predicate.
+     */
     const cpRows = (await loadLatePerformanceRows(cpFilters))
       .filter(inScope)
-      .filter((r) => isShipmentPageSeaIncoterm(r.incoterm));
+      .filter((r) => isShipmentPageSeaIncoterm(r.incoterm))
+      .filter((r) => rowMatchesContractPerfStatusFilter(r, 'Open'));
     cpKg = cpRows.reduce((a, r) => a + (Number(r.outstanding_quantity) || 0), 0);
   } catch (err) {
     console.log('   Contract Performance could not be read: ' + String(err.message).slice(0, 140));
@@ -172,7 +181,7 @@ const TOLERANCE_KG = 1000;
   console.log('');
   console.log('OUTSTANDING, same scope, page by page:');
   line('Shipping Performance (On Going)', spKg);
-  line('Contract Performance (sea incoterms)', cpKg);
+  line('Contract Performance (sea, Open)', cpKg);
   line('Shipments', null, '<- read it off the page, see INVARIANT 3');
 
   console.log('');
