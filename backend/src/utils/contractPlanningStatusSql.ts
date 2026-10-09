@@ -264,3 +264,32 @@ export function sqlRepresentativeTruckingStatusExpr(contractAlias = 'c'): string
     LIMIT 1
   )`;
 }
+
+/**
+ * The value of the Shipment Status / Trucking Status columns for one list row (alias `base`, after the base CTE).
+ *
+ * The representative expressions above read real shipment / trucking rows, so a contract with none of them came out NULL and the column
+ * read a dash - including under Planning Status = Unplanned, where "nothing scheduled" IS the answer the filter just selected. The
+ * filter's own definition of Unplanned is "no live plan, or no row at all" (sqlContractHasNoShipmentExpr / sqlContractTruckingUnplannedExpr),
+ * so a contract that is still running and moves by that mode with no row now reads UNPLANNED in the column of its mode:
+ *
+ *   Shipment Status  sea incoterms (CIF, FOB, CFR, CNF)   -> UNPLANNED when there is no shipment row
+ *   Trucking Status  every other incoterm                 -> UNPLANNED when there is no trucking row
+ *
+ * The other mode's column stays empty: a LAND contract has no shipment and a SEA contract no truck, which is not missing data.
+ * A finished contract (sqlContractFinishedExpr) stays empty too - Planning Status does not describe it, and "Unplanned" would claim
+ * cargo that already moved was never scheduled. A real row always wins; only an absent one is filled.
+ */
+export function sqlShipmentStatusColumnExpr(alias = 'base'): string {
+  return `COALESCE(
+    NULLIF(TRIM(${alias}.shipment_status), ''),
+    CASE WHEN ${sqlIsSeaContract(alias)} AND NOT (${sqlContractFinishedExpr({ alias })}) THEN 'UNPLANNED' END
+  )`;
+}
+
+export function sqlTruckingStatusColumnExpr(alias = 'base'): string {
+  return `COALESCE(
+    NULLIF(TRIM(${alias}.trucking_status), ''),
+    CASE WHEN NOT (${sqlIsSeaContract(alias)}) AND NOT (${sqlContractFinishedExpr({ alias })}) THEN 'UNPLANNED' END
+  )`;
+}

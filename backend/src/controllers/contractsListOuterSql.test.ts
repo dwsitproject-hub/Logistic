@@ -28,10 +28,12 @@ describe('buildContractsListOuterSql', () => {
   it('carries the representative Shipment / Trucking Status the base computes, in both projections', () => {
     for (const compact of [true, false]) {
       const sql = buildContractsListOuterSql(false, { compact });
-      expect(sql).toContain('base.shipment_status');
-      expect(sql).toContain('base.trucking_status');
+      expect(sql).toContain('AS shipment_status');
+      expect(sql).toContain('AS trucking_status');
+      expect(sql).toContain("NULLIF(TRIM(base.shipment_status), '')");
+      expect(sql).toContain("NULLIF(TRIM(base.trucking_status), '')");
     }
-    expect(buildContractsListOuterSql(true, { compact: true })).toContain('base.trucking_status');
+    expect(buildContractsListOuterSql(true, { compact: true })).toContain('AS trucking_status');
   });
 
   it('outstanding uses incoterm Quantity Delivery, not vessel-first quantity_delivery_sap', () => {

@@ -1,6 +1,7 @@
 import { sqlContractOutstandingSignedExpr, sqlSapGrPoStatusFromJson } from '../utils/sapIncotermMetrics';
 import { buildContractsListOuterCycleFieldSelectSql } from '../utils/contractsListCycleSql';
 import { sqlContractImportStatusIsCancelledExpr } from '../utils/contractDeliveryStatus';
+import { sqlShipmentStatusColumnExpr, sqlTruckingStatusColumnExpr } from '../utils/contractPlanningStatusSql';
 
 const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingSignedExpr({
   contractQtyExpr: 'base.quantity_ordered',
@@ -114,8 +115,8 @@ ${listTotal}        base.contract_id,
           NULLIF(TRIM(base.b2b_child_gr_sto_status), '')
         ) AS gr_sto_status,
         base.import_status,
-        base.shipment_status,
-        base.trucking_status,
+        ${sqlShipmentStatusColumnExpr('base')} AS shipment_status,
+        ${sqlTruckingStatusColumnExpr('base')} AS trucking_status,
         base.sap_presence,
         base.sap_withdrawn_reason,${paymentBlock}
         (SELECT COUNT(*)::int FROM remarks r WHERE r.related_entity_type = 'CONTRACT' AND r.related_entity_id = base.id) AS remarks_count,
