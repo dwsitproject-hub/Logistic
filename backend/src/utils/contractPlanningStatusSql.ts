@@ -100,15 +100,20 @@ export function sqlContractHasNoShipmentExpr(contractAlias = 'c'): string {
 /** SQL: a trucking operation that is under way. Trucking never reports PLANNED - it goes straight
  *  to IN_PROGRESS, which is the state the Trucking page itself labels as planned. */
 /**
- * LAND: planned means an operation that is still running - active for matching, and not completed.
+ * LAND: planned means an operation that is still running - active for matching, not completed, and NOT itself UNPLANNED.
  * Same reasoning as the sea side; a finished haul does not plan what is still outstanding.
+ *
+ * The UNPLANNED exclusion is what keeps this in step with sqlContractTruckingUnplannedExpr's own description ("an operation that says
+ * UNPLANNED, and no operation at all"). Without it an operation whose status IS Unplanned counted as a plan, because it is active and not
+ * completed: Contract Performance with Planning Status = Planned listed contracts whose Trucking Status column read UNPLANNED. A truck
+ * leaves UNPLANNED only once a realization date exists (see truckingStatusDisplay), so UNPLANNED is exactly "nothing scheduled".
  */
 export function sqlContractHasPlannedTruckingExpr(contractAlias = 'c'): string {
   return `EXISTS (
     SELECT 1 FROM trucking_operations t_pl
     WHERE t_pl.contract_id = ${contractAlias}.id
       AND ${sqlTruckingOpIsActiveForMatchingSql('t_pl')}
-      AND UPPER(TRIM(COALESCE(t_pl.status, ''))) <> 'COMPLETED'
+      AND UPPER(TRIM(COALESCE(t_pl.status, ''))) NOT IN ('COMPLETED', 'UNPLANNED')
   )`;
 }
 
