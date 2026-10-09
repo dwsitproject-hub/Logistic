@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState, type DragEvent, type ReactNode } from 'react'
-import { X, Upload, Eye, Download, Loader2 } from 'lucide-react'
+import { X, Upload, Eye, Download, Loader2, Trash2 } from 'lucide-react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -97,11 +97,19 @@ async function messageFromPdfBlob(blob: Blob): Promise<string | null> {
 type Props = {
   row: CommercialDocumentRow | null
   canModifyDocuments?: boolean
+  /** Delete is its own permission (data.commercial_documents can_delete), granted per level in Roles. */
+  canDeleteDocuments?: boolean
   onClose: () => void
   onSaved: () => void
 }
 
-export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose, onSaved }: Props) {
+export function DocumentCheckingModal({
+  row,
+  canModifyDocuments = true,
+  canDeleteDocuments = false,
+  onClose,
+  onSaved,
+}: Props) {
   const [files, setFiles] = useState<CommercialDocumentFileRecord[]>([])
   const [history, setHistory] = useState<CommercialDocumentHistoryEntry[]>([])
   const [b2bParties, setB2bParties] = useState<B2bParty[]>([])
@@ -111,6 +119,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false)
   const [settlementUploadOpen, setSettlementUploadOpen] = useState(false)
   const [settlementDroppedFile, setSettlementDroppedFile] = useState<File | null>(null)
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null)
   const [dragOverType, setDragOverType] = useState<CommercialDocumentType | null>(null)
   const [uploadError, setUploadError] = useState<{ type: CommercialDocumentType; message: string } | null>(
     null,
@@ -309,6 +318,33 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
     window.URL.revokeObjectURL(url)
   }
 
+  const deleteFile = async (
+    file: CommercialDocumentFileRecord,
+    type: CommercialDocumentType,
+    versionLabel: string,
+  ) => {
+    if (!canDeleteDocuments || deletingFileId) return
+    const confirmed = window.confirm(
+      `Delete "${versionLabel} > ${file.file_name}"?\n\nThe document leaves this contract and the deletion is recorded in History.`,
+    )
+    if (!confirmed) return
+    setDeletingFileId(file.id)
+    setUploadError(null)
+    try {
+      await api.delete(`/commercial-documents/file/${file.id}`)
+      if (pdfPreview?.fileId === file.id) closePdfPreview()
+      await loadModalData()
+      onSaved()
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
+        'Delete failed. Please try again.'
+      setUploadError({ type, message })
+    } finally {
+      setDeletingFileId(null)
+    }
+  }
+
   if (!row) return null
 
   return (
@@ -486,6 +522,24 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                                         >
                                           <Download className="h-3.5 w-3.5" />
                                         </Button>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-7 px-2 text-red-600 hover:bg-red-50 hover:text-red-700 disabled:text-gray-300"
+                                          disabled={!canDeleteDocuments || deletingFileId !== null}
+                                          onClick={() => void deleteFile(file, type, documentVersionLabel(type, idx))}
+                                          title={
+                                            canDeleteDocuments
+                                              ? 'Delete'
+                                              : 'Only a Dept Head (or a role granted Delete) can delete documents'
+                                          }
+                                        >
+                                          {deletingFileId === file.id ? (
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                          ) : (
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          )}
+                                        </Button>
                                       </div>
                                     </li>
                                   ))}
@@ -592,7 +646,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                         ) : (
                           history.map((h) => (
                             <tr key={h.id} className="border-b last:border-0">
-                              <td className="px-3 py-2">{h.action_type === 'ADD' ? 'Add' : 'Edit'}</td>
+                              <td className="px-3 py-2">{h.action_type === 'ADD' ? 'Add' : h.action_type === 'DELETE' ? 'Delete' : 'Edit'}</td>
                               <td className="px-3 py-2">
                                 {commercialDocumentTypeLabel(h.document_type)}
                               </td>

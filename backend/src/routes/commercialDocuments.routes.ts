@@ -1,7 +1,8 @@
 import express from 'express';
-import { authenticateToken } from '../middleware/auth';
+import { authenticateToken, authorizePermission } from '../middleware/auth';
 import {
   commercialDocumentUpload,
+  deleteCommercialDocument,
   downloadCommercialDocument,
   downloadTandaTerima,
   getCommercialDocumentFiles,
@@ -35,6 +36,12 @@ router.get('/settlement-invoice/:poNumber', authenticateToken, getSettlementInvo
 router.put('/settlement-invoice', authenticateToken, upsertSettlementInvoiceSummary);
 router.get('/file/:id/view', authenticateToken, viewCommercialDocument);
 router.get('/file/:id/download', authenticateToken, downloadCommercialDocument);
+router.delete(
+  '/file/:id',
+  authenticateToken,
+  authorizePermission('data.commercial_documents', 'can_delete'),
+  deleteCommercialDocument,
+);
 router.post('/tanda-terima/download', authenticateToken, downloadTandaTerima);
 
 export default router;

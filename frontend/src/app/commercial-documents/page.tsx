@@ -5,8 +5,10 @@ import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import {
   canCreatePermission,
+  canDeletePermission,
   canEditPermission,
   canViewPermission,
+  isAdminRole,
   usePermissions,
 } from '@/components/PermissionsContext'
 import api from '@/lib/api'
@@ -125,6 +127,9 @@ function CommercialDocumentsPageContent() {
     canEditPermission(perms, COMMERCIAL_DOCUMENTS_PAGE_PERMISSION) ||
     canCreatePermission(perms, COMMERCIAL_DOCUMENTS_DATA_PERMISSION) ||
     canEditPermission(perms, COMMERCIAL_DOCUMENTS_DATA_PERMISSION)
+  // Same rule the API enforces: ADMIN, or can_delete on data.commercial_documents for the user's role and level.
+  const canDeleteDocuments =
+    isAdminRole(perms.userRole) || canDeletePermission(perms, COMMERCIAL_DOCUMENTS_DATA_PERMISSION)
 
   useEffect(() => {
     if (perms.loaded && !canViewPage) {
@@ -1099,6 +1104,7 @@ function CommercialDocumentsPageContent() {
       <DocumentCheckingModal
         row={modalRow}
         canModifyDocuments={canModifyDocuments}
+        canDeleteDocuments={canDeleteDocuments}
         onClose={() => setModalRow(null)}
         onSaved={() => {
           // Uploads change both the rows and the card counts; drop the cached responses first.

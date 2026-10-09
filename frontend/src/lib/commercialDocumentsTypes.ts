@@ -121,7 +121,7 @@ export type CommercialDocumentHistoryEntry = {
   po_number?: string | null
   document_type: string
   document_type_label?: string
-  action_type: 'ADD' | 'EDIT'
+  action_type: 'ADD' | 'EDIT' | 'DELETE'
   file_name: string | null
   user_name: string | null
   created_at: string

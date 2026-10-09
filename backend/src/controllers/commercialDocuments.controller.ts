@@ -395,18 +395,22 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       existingFileCount = (await loadExistingFileRows(poNumber, documentType)).length;
     }
 
-    const storedName = buildCommercialDocumentStoredName({
-      buyerName,
-      documentType,
-      referenceNumber: poNumber || 'UNKNOWN',
-      originalName: file.originalname,
-      existingFileCount,
-    });
-
+    // The version suffix follows the number of files on the record, so deleting an earlier version frees a number that a later version still
+    // holds on disk (3 versions, delete the first: the next upload would be "(3)" again). Walk up to the first name no file has.
     const uploadDir = path.dirname(file.path);
-    const finalAbsPath = path.join(uploadDir, storedName);
-    if (finalAbsPath !== file.path) {
-      if (fs.existsSync(finalAbsPath)) {
+    let storedName = '';
+    let finalAbsPath = '';
+    for (let bump = 0; bump < 50; bump += 1) {
+      storedName = buildCommercialDocumentStoredName({
+        buyerName,
+        documentType,
+        referenceNumber: poNumber || 'UNKNOWN',
+        originalName: file.originalname,
+        existingFileCount: existingFileCount + bump,
+      });
+      finalAbsPath = path.join(uploadDir, storedName);
+      if (finalAbsPath === file.path || !fs.existsSync(finalAbsPath)) break;
+      if (bump === 49) {
         try {
           fs.unlinkSync(file.path);
         } catch {
@@ -414,6 +418,8 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
         }
         return res.status(409).json({ success: false, error: { message: 'File name collision; please retry' } });
       }
+    }
+    if (finalAbsPath !== file.path) {
       fs.renameSync(file.path, finalAbsPath);
     }
 
@@ -480,6 +486,42 @@ export const viewCommercialDocument = (req: AuthRequest, res: Response) =>
 
 export const downloadCommercialDocument = (req: AuthRequest, res: Response) =>
   streamCommercialFile(req, res, 'attachment');
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Remove one uploaded document version (route: data.commercial_documents can_delete, so a role scoped to Dept Head decides who may).
+ * The row goes and a DELETE entry joins the history in one statement. The file stays in the upload store: history keeps its path, so a
+ * wrong delete can be recovered by hand, and its stored name is never reused (see the name walk in uploadCommercialDocument).
+ */
+export const deleteCommercialDocument = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!UUID_RE.test(id)) {
+      return res.status(400).json({ success: false, error: { message: 'Invalid document id' } });
+    }
+    const userId = req.user?.id ?? null;
+    const userName = req.user?.username || req.user?.email || 'Unknown';
+    const result = await query(
+      `WITH removed AS (
+         DELETE FROM commercial_document_files WHERE id = $1::uuid
+         RETURNING contract_ext_no, po_number, document_type, file_path, file_name
+       )
+       INSERT INTO commercial_document_history
+         (contract_ext_no, po_number, document_type, action_type, file_path, file_name, user_id, user_name)
+       SELECT contract_ext_no, po_number, document_type, 'DELETE', file_path, file_name, $2::uuid, $3 FROM removed
+       RETURNING document_type, file_name`,
+      [id, userId, userName],
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { message: 'Document not found' } });
+    }
+    return res.json({ success: true, message: 'Document deleted', data: result.rows[0] });
+  } catch (err) {
+    logger.error('deleteCommercialDocument error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to delete document' } });
+  }
+};
 
 function parseIsoSendDate(value: unknown): string | null {
   const raw = String(value ?? '').trim();
