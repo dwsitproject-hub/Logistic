@@ -94,7 +94,7 @@ import {
   type ContractPerfDrilldownFilters,
   type ContractPerfHotspot,
   type LatePerfApiTreeNode,
-  CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
+  contractPerfProductOptions,
   CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
   EMPTY_CONTRACT_PERF_DRILLDOWN,
   buildContractPerfTableFetchScope,
@@ -1268,12 +1268,7 @@ function ContractsPageContent() {
   }, [authReady, isContractPerformance, filterOptionsRequestKey])
 
   const narrowedProductOptions = useMemo(
-    () =>
-      narrowFilterOptions(
-        CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
-        availableFilterValues?.products,
-        contractPerfSelectedProducts,
-      ),
+    () => contractPerfProductOptions(availableFilterValues?.products, contractPerfSelectedProducts),
     [availableFilterValues, contractPerfSelectedProducts],
   )
   const narrowedSourceOptions = useMemo(

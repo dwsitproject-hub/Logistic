@@ -1145,3 +1145,32 @@ describe('mapUserProductsToContractPerfOptions', () => {
     ])
   })
 })
+
+describe('contractPerfProductOptions', () => {
+  it('offers every product the table has, not only the four fixed labels', async () => {
+    const { contractPerfProductOptions } = await import('./contractPerformanceFilters')
+    expect(contractPerfProductOptions(['CPO', 'UCO', 'RPO', 'SHELL PALM', 'POME'], [])).toEqual([
+      'CPO',
+      'POME',
+      'RPO',
+      'Shell Palm',
+      'UCO',
+    ])
+  })
+
+  it('uses the fixed spelling when a value matches one, so a saved selection still compares equal', async () => {
+    const { contractPerfProductOptions } = await import('./contractPerformanceFilters')
+    const options = contractPerfProductOptions(['SHELL PALM', 'shell palm'], ['Shell Palm'])
+    expect(options).toEqual(['Shell Palm'])
+  })
+
+  it('keeps a picked product that the narrowed list no longer holds, so it can be unticked', async () => {
+    const { contractPerfProductOptions } = await import('./contractPerformanceFilters')
+    expect(contractPerfProductOptions(['CPO'], ['UCO'])).toEqual(['CPO', 'UCO'])
+  })
+
+  it('shows the four fixed labels until the API has answered', async () => {
+    const { contractPerfProductOptions } = await import('./contractPerformanceFilters')
+    expect(contractPerfProductOptions(null, [])).toEqual(['CPO', 'PK', 'POME', 'Shell Palm'])
+  })
+})

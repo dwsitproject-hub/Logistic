@@ -37,6 +37,34 @@ export const CONTRACT_PERF_PRODUCT_MULTI_OPTIONS = [
   'Shell Palm',
 ] as const
 
+/**
+ * The Product dropdown of Contract Performance: every product the table has, as the API reports it, plus whatever is picked.
+ *
+ * It used to be the four labels in CONTRACT_PERF_PRODUCT_MULTI_OPTIONS narrowed by the API's list, so a product outside those four (UCO,
+ * RPO, ...) could never be offered however many contracts it had - "only three products" when the table held many more. The API list
+ * is the source of truth now; the four labels stay as the spelling to use when a value matches one (Shell Palm, not SHELL PALM), so a
+ * saved selection and the option still compare equal. Until the API answers, the four labels are shown rather than an empty menu.
+ * Matching is on the trimmed upper-case value, the same shape the list endpoint filters on.
+ */
+export function contractPerfProductOptions(
+  available: readonly string[] | null | undefined,
+  selected: readonly string[],
+): string[] {
+  if (!available) return [...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]
+  const out: string[] = []
+  const seen = new Set<string>()
+  const add = (value: unknown) => {
+    const text = String(value ?? '').trim()
+    const key = text.toUpperCase()
+    if (!text || seen.has(key)) return
+    seen.add(key)
+    out.push(CONTRACT_PERF_PRODUCT_MULTI_OPTIONS.find((o) => o.toUpperCase() === key) ?? text)
+  }
+  available.forEach(add)
+  selected.forEach(add)
+  return out.sort((a, b) => a.localeCompare(b))
+}
+
 /** Map auth/role product assignments onto Contract/Shipping Performance multi-select labels. */
 export function mapUserProductsToContractPerfOptions(products: string[]): string[] {
   const matched: string[] = []
