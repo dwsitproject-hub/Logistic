@@ -209,14 +209,14 @@ export function MasterVesselTable({
                         const rendered = col.render(row)
                         const cellText = col.getCellText(row)
                         const tooltip =
-                          useTruncate && cellText !== '-' ? cellText : null
+                          useTruncate && cellText !== '-' ? cellText.toUpperCase() : null
                         return (
                           <td
                             key={col.id}
                             className={cn(
                               COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
                               opColClass,
-                              'align-middle',
+                              'align-middle uppercase',
                               CONTRACT_PERF_TABLE_CELL_PAD,
                               VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                               stripe,

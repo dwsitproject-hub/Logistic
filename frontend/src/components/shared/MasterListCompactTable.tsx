@@ -246,13 +246,13 @@ export function MasterListCompactTable<T>({
                     <tr key={getRowId(row)} className={stripe}>
                       {columns.map((col) => {
                         const text = col.getText(row)
-                        const tooltip = text && text !== '-' ? text : null
+                        const tooltip = text && text !== '-' ? text.toUpperCase() : null
                         return (
                           <td
                             key={col.id}
                             className={cn(
                               COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
-                              'align-middle',
+                              'align-middle uppercase',
                               CONTRACT_PERF_TABLE_CELL_PAD,
                               masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                               col.id === 'dhm_status' && 'klip-op-col--token',
