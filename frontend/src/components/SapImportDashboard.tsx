@@ -494,6 +494,7 @@ const SapImportDashboard: React.FC = () => {
               </CardDescription>
             </div>
             <div className="flex items-start gap-3">
+            <SapFolderSyncControl canSync={canUploadSap} onTick={() => void loadImports(true)} />
             {canUploadSap ? (
               <Button size="sm" onClick={handleStartImport} disabled={importing}>
                 {importing ? (
@@ -513,7 +514,6 @@ const SapImportDashboard: React.FC = () => {
                 View only — you do not have permission to upload SAP files.
               </p>
             )}
-            <SapFolderSyncControl canSync={canUploadSap} onTick={() => void loadImports(true)} />
             </div>
           </div>
         </CardHeader>
