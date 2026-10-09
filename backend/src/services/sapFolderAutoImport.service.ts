@@ -426,7 +426,7 @@ async function identitiesFromFailures(importId: string): Promise<SapAutoImportId
  * workbooks, and email ADMIN. Original files are never moved or deleted.
  */
 async function runSapFolderAutoImportCore(
-  options: { notify?: boolean; latestOnly?: boolean },
+  options: { notify?: boolean; latestOnly?: boolean; startedBy?: string | null },
   trace: SapAutoImportRunTrace,
 ): Promise<SapFolderAutoImportRunResult> {
   const notify = options.notify !== false;
@@ -587,6 +587,7 @@ async function runSapFolderAutoImportCore(
         const importResult = await SapMasterV2ImportService.importMasterV2File(meta.filePath, {
           source: 'scheduler',
           fileName: meta.fileName,
+          importedBy: options.startedBy ?? null,
         });
 
         const successRows = importResult.successIdentities ?? [];
@@ -704,7 +705,10 @@ export async function runSapFolderAutoImport(
   const trace: SapAutoImportRunTrace = {};
   const runId = await recordRunStart(options.trigger ?? 'manual', options.startedBy ?? null);
   try {
-    const result = await runSapFolderAutoImportCore({ notify: options.notify, latestOnly: options.latestOnly }, trace);
+    const result = await runSapFolderAutoImportCore(
+      { notify: options.notify, latestOnly: options.latestOnly, startedBy: options.startedBy ?? null },
+      trace,
+    );
     const { outcome, detail } = classifySapAutoImportRun(result, trace);
     await recordRunFinish(runId, outcome, detail, result, trace);
     return result;

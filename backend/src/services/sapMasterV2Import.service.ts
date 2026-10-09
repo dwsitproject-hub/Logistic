@@ -49,6 +49,8 @@ export interface QueueMasterV2FileImportOptions {
   fileSha256?: string;
   /** Original uploaded file name (basename), shown on the SAP Data import history. */
   fileName?: string;
+  /** users.id of the person who started the import; shown as "Imported By". Omitted for scheduled runs. */
+  importedBy?: string | null;
 }
 
 export interface ImportMasterV2FileOptions {
@@ -57,6 +59,8 @@ export interface ImportMasterV2FileOptions {
   fileSha256?: string;
   /** Original uploaded file name (basename), shown on the SAP Data import history. */
   fileName?: string;
+  /** users.id of the person who started the import; shown as "Imported By". Omitted for scheduled runs. */
+  importedBy?: string | null;
 }
 
 /** Result of looking up a prior completed import by file hash (manual-upload short-circuit). */
@@ -674,15 +678,16 @@ export class SapMasterV2ImportService {
     source: SapImportSource = 'manual',
     fileSha256: string | null = null,
     fileName: string | null = null,
+    importedBy: string | null = null,
   ): Promise<string> {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       const importResult = await client.query(
-        `INSERT INTO sap_data_imports (import_date, status, total_records, source, file_sha256, file_name)
-         VALUES (CURRENT_DATE, 'processing', $1, $2, $3, $4)
+        `INSERT INTO sap_data_imports (import_date, status, total_records, source, file_sha256, file_name, imported_by)
+         VALUES (CURRENT_DATE, 'processing', $1, $2, $3, $4, $5::uuid)
          RETURNING id`,
-        [totalRecords, source === 'scheduler' ? 'scheduler' : 'manual', fileSha256, fileName],
+        [totalRecords, source === 'scheduler' ? 'scheduler' : 'manual', fileSha256, fileName, importedBy],
       );
       await client.query('COMMIT');
       return importResult.rows[0].id as string;
@@ -744,6 +749,7 @@ export class SapMasterV2ImportService {
       source,
       options.fileSha256 ?? null,
       this.sanitizeImportFileName(options.fileName ?? filePath),
+      options.importedBy ?? null,
     );
 
     setImmediate(() => {
@@ -783,6 +789,7 @@ export class SapMasterV2ImportService {
       source,
       options.fileSha256 ?? null,
       this.sanitizeImportFileName(options.fileName ?? filePath),
+      options.importedBy ?? null,
     );
     return this.processMasterV2Import(importId, validDataRows, fieldMetadata);
   }

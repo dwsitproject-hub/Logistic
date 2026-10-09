@@ -85,6 +85,8 @@ interface SapImport {
   failed_records: number;
   source?: string;
   file_name?: string | null;
+  /** Who started it: the user's full name, or null for scheduled runs and imports made before the column existed. */
+  imported_by_name?: string | null;
 }
 
 /** History display: "CPO 3 Sep 2026.xlsx" → "CPO 3 Sep 2026". */
@@ -632,6 +634,7 @@ const SapImportDashboard: React.FC = () => {
                   <th className="text-left p-3">File Name</th>
                   <th className="text-left p-3">Status</th>
                   <th className="text-left p-3">Source</th>
+                  <th className="text-left p-3">Imported By</th>
                   <th className="text-right p-3">Total Records</th>
                   <th className="text-right p-3">Processed</th>
                   <th className="text-right p-3">Failed</th>
@@ -663,6 +666,7 @@ const SapImportDashboard: React.FC = () => {
                           {imp.source === 'scheduler' ? 'Scheduler' : 'Manual'}
                         </Badge>
                       </td>
+                      <td className="p-3">{imp.imported_by_name || (imp.source === 'scheduler' ? 'Scheduler' : '—')}</td>
                       <td className="p-3 text-right">{imp.total_records.toLocaleString()}</td>
                       <td className="p-3 text-right text-green-600 font-medium">
                         {imp.processed_records.toLocaleString()}

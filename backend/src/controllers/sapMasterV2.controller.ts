@@ -28,7 +28,9 @@ export const importMasterV2 = async (req: Request, res: Response): Promise<void>
     
     logger.info('Starting SAP MASTER v2 import', { filePath });
     
-    const result = await SapMasterV2ImportService.importMasterV2File(filePath);
+    const result = await SapMasterV2ImportService.importMasterV2File(filePath, {
+      importedBy: (req as Request & { user?: { id?: string } }).user?.id ?? null,
+    });
     
     res.json({
       success: true,
@@ -280,8 +282,10 @@ export const getAllImports = async (_req: Request, res: Response): Promise<void>
            ELSE COALESCE(rc.failed, 0)
          END::int AS failed_records,
          COALESCE(i.source, 'manual') AS source,
-         i.file_name
+         i.file_name,
+         COALESCE(NULLIF(BTRIM(u.full_name), ''), u.username) AS imported_by_name
        FROM sap_data_imports i
+       LEFT JOIN users u ON u.id = i.imported_by
        LEFT JOIN LATERAL (
          SELECT
            COUNT(*) FILTER (WHERE status IN ('processed', 'skipped')) AS processed,
@@ -401,6 +405,7 @@ export const importMasterV2Upload = async (req: Request, res: Response): Promise
     const queued = await SapMasterV2ImportService.queueMasterV2FileImport(filePath, {
       fileSha256,
       fileName: req.file.originalname,
+      importedBy: (req as Request & { user?: { id?: string } }).user?.id ?? null,
     });
 
     res.status(202).json({
