@@ -2232,7 +2232,6 @@ export function EditShipmentModal({
                       : formatVesselCodeDisplay(sapVesselCode)
                   }
                   format="text"
-                  compact
                   showKlipBadge={hasKlipSapMismatch(
                     formatVesselCodeDisplay(vesselMeta.vessel_code) === '-'
                       ? ''
@@ -2276,7 +2275,6 @@ export function EditShipmentModal({
                     shipmentInfo,
                   )}
                   format="text"
-                  compact
                 />
               </div>
 
