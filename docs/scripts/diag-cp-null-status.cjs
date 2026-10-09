@@ -10,7 +10,10 @@
  * shipments / trucking. Needs no deploy: it calls the code ALREADY inside the running backend image (dist/).
  *
  *   cd /opt/klip && git fetch origin SIT --quiet && git show origin/SIT:docs/scripts/diag-cp-null-status.cjs \
- *     | docker exec -i klip-backend node - [--from=2026-01-01] [--contract=1004031065]
+ *     | docker exec -i klip-backend node - [--from=2026-01-01] [--contract=<contract number or PO>]
+ *
+ * With --contract it also dumps that contract's raw rows: every contracts row behind the table line, the shipments and trucking rows
+ * that point at each of them, and what the representative-status expressions return.
  *
  * Nothing is written.
  */
@@ -40,7 +43,7 @@ const arg = (name, fallback) => {
                 MAX(${sqlRepresentativeTruckingStatusExpr('c')}) AS trucking_status
          FROM contracts c
          WHERE c.contract_date >= $1::date
-           AND ($2::text IS NULL OR c.contract_id = $2)
+           AND ($2::text IS NULL OR c.contract_id = $2 OR TRIM(c.po_number::text) = $2)
          GROUP BY c.contract_id`,
         [from, only],
       )
