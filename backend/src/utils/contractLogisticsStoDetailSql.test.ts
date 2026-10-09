@@ -6,6 +6,7 @@ import {
   sqlSapQtyDeliveredAnyFromSpd,
   sqlSapQtyDeliveredForStoKeyExpr,
   sqlSapQtyDeliveredKgFromSpd,
+  sqlSapQtyDeliveredKgScaledFromSpd,
   sqlSapQtyReceiveForStoKeyExpr,
   sqlSapStoKeyMatchExpr,
   sqlSapStoQtyForContractPoExpr,
@@ -40,11 +41,21 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(expr).not.toMatch(/COALESCE\(\s*NULLIF\(\s*\([^)]*Quantity Delivery Trucking/);
   });
 
-  it('normalizes MT-scale SAP delivery to kg', () => {
+  it('scales only the vessel arm of SAP delivery: a trucking delivery of 0.43% of the contract is kg, not MT', () => {
     const expr = sqlSapQtyDeliveredKgFromSpd('spd2', 'c.quantity_ordered', 'c.incoterm');
+    expect(expr).toContain('c.incoterm');
+    expect(expr).toContain('quantity_ordered');
+    // The trucking arm (the first WHEN ... THEN, which covers FRC) carries no 1% rule; the vessel arms do.
+    const truckingWhen = expr.slice(expr.indexOf('WHEN'), expr.indexOf('WHEN', expr.indexOf('WHEN') + 4));
+    expect(truckingWhen).toContain("'FRC'");
+    expect(truckingWhen).not.toContain('* 1000');
+    expect(expr).toContain('* 1000');
+  });
+
+  it('keeps the older all-arms scaling for the scoped Oil Loss pair, which scales Receive the same way', () => {
+    const expr = sqlSapQtyDeliveredKgScaledFromSpd('spd2', 'c.quantity_ordered', 'c.incoterm');
     expect(expr).toContain('* 1000');
     expect(expr).toContain('quantity_ordered');
-    expect(expr).toContain('c.incoterm');
   });
 
   it('builds SAP STO qty by PO without falling back to contract quantity_ordered', () => {

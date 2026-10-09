@@ -303,7 +303,36 @@ export function sqlSapQtyDeliveredAnyFromData(
   return sqlIncotermQuantityDeliveryCase(inc, trucking, vessel);
 }
 
+/**
+ * SAP delivered qty (kg) for the STO rows of Contract Details.
+ *
+ * Only the VESSEL arm is scaled by sqlNormalizeSapStoQtyToKgSql (a value at most 1% of the contract quantity is read as MT). The
+ * TRUCKING arm is kg as SAP sends it and must not be: contract 1624000086 (FRC, 40,000 MT) has a real 171,580 kg delivery, which is
+ * 0.43% of the contract, so the blanket rule multiplied it by 1000 and the STO table showed 171,580 MT beside a correct Receive Qty
+ * and a correct Delivery Quantity box. Any partial trucking delivery of a large contract hit the same rule. The shipment list paths
+ * already read this value raw (sqlSapQtyDeliveredAnyFromSpd), which is the convention this now matches for trucking.
+ */
 export function sqlSapQtyDeliveredKgFromSpd(
+  spdAlias: string,
+  contractQtyExpr: string,
+  incotermExpr?: string | null,
+): string {
+  const inc =
+    incotermExpr && String(incotermExpr).trim()
+      ? String(incotermExpr).trim()
+      : sqlSapIncotermFromJsonb(`${spdAlias}.data`);
+  return sqlIncotermQuantityDeliveryCase(
+    inc,
+    sqlSapQtyTruckingFromSpd(spdAlias),
+    sqlNormalizeSapStoQtyToKgSql(sqlSapQtyVesselFromSpd(spdAlias), contractQtyExpr),
+  );
+}
+
+/**
+ * The older rule, scaling every arm: kept for sqlStoScopedDeliveredKgSql, whose Receive counterpart
+ * (sqlStoScopedReceiveKgSql) scales the same way. Changing one without the other would skew Oil Loss, which compares them.
+ */
+export function sqlSapQtyDeliveredKgScaledFromSpd(
   spdAlias: string,
   contractQtyExpr: string,
   incotermExpr?: string | null,
@@ -370,7 +399,7 @@ export function sqlStoScopedDeliveredKgSql(opts: StoScopedQtySqlOpts): string {
     )`;
   return sqlLatestStoScopedQtySql(
     opts,
-    sqlSapQtyDeliveredKgFromSpd('spd', opts.contractQtyExpr, incoterm),
+    sqlSapQtyDeliveredKgScaledFromSpd('spd', opts.contractQtyExpr, incoterm),
   );
 }
 
