@@ -258,6 +258,8 @@ const MASTER_VESSEL_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayo
   terms: 'short',
   dhm_status: 'token',
   klip_transaction: 'token',
+  pair_code: 'token',
+  pair_partner_name: 'truncate',
 }
 
 export function getOperationalColumnLayout(

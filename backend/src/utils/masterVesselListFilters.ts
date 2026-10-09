@@ -32,6 +32,48 @@ export const MASTER_VESSEL_USED_IDS_CTE = `used_vessels AS (
   WHERE r.id IS NOT NULL
 )`;
 
+/**
+ * The tug/barge pair a vessel is in NOW, one row per vessel, for the Pair ID column.
+ *
+ * A vessel can sit in several vessel_pairs rows (a barge pulled by another tug later), and the workbook only knows the pairs of its
+ * day, so the pair is chosen by the latest SAP usage, not by pair_code: each pair's SAP names (vessel_pair_sap_names) are matched
+ * against the vessel names shipments carry, and the pair whose name appeared on the newest contract wins. A pair with no match
+ * falls back to the contract date the workbook recorded. Same letters-and-digits-only key as sapNameKey in vesselMasterLoad.service.
+ *
+ * A pair SAP started sending after the workbook is not in vessel_pairs, so it cannot win here until it is registered.
+ *
+ * Starts a WITH list of its own: use `WITH ${MASTER_VESSEL_PAIR_CTE}` (list query only), then LEFT JOIN vessel_pair_latest.
+ */
+export const MASTER_VESSEL_PAIR_CTE = `pair_use AS (
+  SELECT n.pair_id, MAX(u.last_date) AS last_used
+  FROM vessel_pair_sap_names n
+  INNER JOIN (
+    SELECT regexp_replace(upper(s.vessel_name), '[^A-Z0-9]', '', 'g') AS k,
+           MAX(COALESCE(c.contract_date, s.created_at::date)) AS last_date
+    FROM shipments s
+    LEFT JOIN contracts c ON c.id = s.contract_id
+    WHERE NULLIF(trim(s.vessel_name), '') IS NOT NULL
+    GROUP BY 1
+  ) u ON u.k = n.normalized_sap_name
+  GROUP BY n.pair_id
+),
+vessel_pair_latest AS (
+  SELECT DISTINCT ON (side.vessel_id)
+         side.vessel_id,
+         p.pair_code,
+         pm.vessel_name AS pair_partner_name,
+         COALESCE(pu.last_used, p.last_contract_date) AS pair_last_used
+  FROM (
+    SELECT id AS pair_id, tb_master_vessel_id AS vessel_id, bg_master_vessel_id AS partner_id FROM vessel_pairs
+    UNION ALL
+    SELECT id, bg_master_vessel_id, tb_master_vessel_id FROM vessel_pairs
+  ) side
+  INNER JOIN vessel_pairs p ON p.id = side.pair_id
+  INNER JOIN master_vessels pm ON pm.id = side.partner_id
+  LEFT JOIN pair_use pu ON pu.pair_id = p.id
+  ORDER BY side.vessel_id, COALESCE(pu.last_used, p.last_contract_date) DESC NULLS LAST, p.pair_code
+)`;
+
 /** True when the vessel has at least one shipment. Needs MASTER_VESSEL_USED_IDS_CTE in the same query. */
 export const MASTER_VESSEL_KLIP_TRANSACTION_SQL = `EXISTS (SELECT 1 FROM used_vessels u WHERE u.id = master_vessels.id)`;
 
@@ -166,6 +208,9 @@ export const MASTER_VESSEL_SORT_COLUMNS: Record<string, string> = {
   terms: 'terms',
   dhm_status: `(dhm_id IS NOT NULL OR NULLIF(BTRIM(dhm_code), '') IS NOT NULL)`,
   klip_transaction: MASTER_VESSEL_KLIP_TRANSACTION_SQL,
+  // vessel_pair_latest is joined in the list query only (the count query has no sort).
+  pair_code: 'vessel_pair_latest.pair_code',
+  pair_partner_name: 'vessel_pair_latest.pair_partner_name',
 };
 
 export function buildMasterVesselOrderBy(sortKey?: string, sortDir?: string): string {

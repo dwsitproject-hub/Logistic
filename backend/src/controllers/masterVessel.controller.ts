@@ -14,6 +14,7 @@ import {
   buildMasterVesselOrderBy,
   MASTER_VESSEL_KLIP_TRANSACTION_SQL,
   MASTER_VESSEL_LAMBUNG_OPTIONS,
+  MASTER_VESSEL_PAIR_CTE,
   MASTER_VESSEL_SAP_CODES_SQL,
   MASTER_VESSEL_TERMS_OPTIONS,
   MASTER_VESSEL_TYPE_OPTIONS,
@@ -64,13 +65,17 @@ export const listMasterVessels = async (req: AuthRequest, res: Response): Promis
     const orderBy = buildMasterVesselOrderBy(filters.sortKey, filters.sortDir);
 
     const listSql = `
-      WITH ${MASTER_VESSEL_USED_IDS_CTE}
-      SELECT id, vessel_code, vessel_code_klip, vessel_name, vessel_capacity_mt, vessel_owner,
+      WITH ${MASTER_VESSEL_USED_IDS_CTE},
+      ${MASTER_VESSEL_PAIR_CTE}
+      SELECT master_vessels.id, vessel_code, vessel_code_klip, vessel_name, vessel_capacity_mt, vessel_owner,
              vessel_owner_group, vessel_type, sap_vendor_code, code_status, year_of_creation,
-             heating, lambung_type, terms, dhm_id, dhm_code, created_at, updated_at,
+             heating, lambung_type, terms, dhm_id, dhm_code,
+             master_vessels.created_at, master_vessels.updated_at,
              ${MASTER_VESSEL_SAP_CODES_SQL} AS vessel_codes_sap,
-             ${MASTER_VESSEL_KLIP_TRANSACTION_SQL} AS klip_transaction
+             ${MASTER_VESSEL_KLIP_TRANSACTION_SQL} AS klip_transaction,
+             vessel_pair_latest.pair_code, vessel_pair_latest.pair_partner_name, vessel_pair_latest.pair_last_used
       FROM master_vessels
+      LEFT JOIN vessel_pair_latest ON vessel_pair_latest.vessel_id = master_vessels.id
       ${where}
       ${orderBy}
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}

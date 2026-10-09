@@ -22,6 +22,8 @@ export type MasterVesselColumnId =
   | 'terms'
   | 'dhm_status'
   | 'klip_transaction'
+  | 'pair_code'
+  | 'pair_partner_name'
 
 export type MasterVesselRow = MasterVesselFormData & { id: string }
 
@@ -71,6 +73,10 @@ export function getMasterVesselCellText(colId: MasterVesselColumnId, row: Master
       return masterVesselDhmStatusLabel(row)
     case 'klip_transaction':
       return row.klip_transaction ? 'Yes' : 'No'
+    case 'pair_code':
+      return row.pair_code || '-'
+    case 'pair_partner_name':
+      return row.pair_partner_name || '-'
     default:
       return '-'
   }
@@ -92,6 +98,8 @@ const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
   terms: 104,
   dhm_status: 108,
   klip_transaction: 120,
+  pair_code: 104,
+  pair_partner_name: 176,
 }
 
 export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 112
@@ -191,6 +199,19 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
     label: 'Klip Transaction',
     getCellText: (row) => getMasterVesselCellText('klip_transaction', row),
     render: (row) => masterVesselCell(<KlipTransactionBadge value={row.klip_transaction} />),
+  },
+  {
+    // The pair SAP used most recently, not a fixed assignment: a barge can change tug.
+    id: 'pair_code',
+    label: 'Pair ID',
+    getCellText: (row) => getMasterVesselCellText('pair_code', row),
+    render: (row) => masterVesselCell(getMasterVesselCellText('pair_code', row)),
+  },
+  {
+    id: 'pair_partner_name',
+    label: 'Paired With',
+    getCellText: (row) => getMasterVesselCellText('pair_partner_name', row),
+    render: (row) => masterVesselCell(getMasterVesselCellText('pair_partner_name', row)),
   },
 ]
 

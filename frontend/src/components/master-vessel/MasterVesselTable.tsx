@@ -47,7 +47,7 @@ export interface MasterVesselTableProps {
   onColumnDrop: (columnId: MasterVesselColumnId) => void
 }
 
-const VESSEL_HUG_COLUMN_IDS = new Set(['vessel_code', 'vessel_codes_sap', 'dhm_code', 'dhm_status', 'klip_transaction'])
+const VESSEL_HUG_COLUMN_IDS = new Set(['vessel_code', 'vessel_codes_sap', 'dhm_code', 'dhm_status', 'klip_transaction', 'pair_code'])
 
 export function MasterVesselTable({
   items,

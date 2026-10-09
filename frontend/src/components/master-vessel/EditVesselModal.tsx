@@ -34,6 +34,10 @@ export interface MasterVesselFormData {
   vessel_codes_sap?: string | null
   /** True when at least one shipment (SAP import or Add New Shipment) uses this vessel. Read-only: derived by the list query. */
   klip_transaction?: boolean | null
+  /** The tug/barge pair this vessel is in now (latest SAP usage). Read-only: derived by the list query. */
+  pair_code?: string | null
+  pair_partner_name?: string | null
+  pair_last_used?: string | null
 }
 
 const TERMS_OPTIONS = ['T/C', 'V/C', 'CIF'] as const
