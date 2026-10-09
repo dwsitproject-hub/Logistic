@@ -1278,7 +1278,7 @@ const DATA = {
   },
   {
    "role": "BG",
-   "name": "BG. OV - 01",
+   "name": "BG. OV-1",
    "codes": [],
    "owner": null,
    "capacity": null,
@@ -3503,7 +3503,7 @@ const DATA = {
   {
    "pairCode": "TBG-061",
    "tb": "TB. CITRA MAKMUR 235",
-   "bg": "BG. OV - 01",
+   "bg": "BG. OV-1",
    "firstContractDate": null,
    "lastContractDate": null,
    "sapRows2026": null,
