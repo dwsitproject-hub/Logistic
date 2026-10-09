@@ -80,6 +80,46 @@ const arg = (name, fallback) => {
       }
     }
 
+    if (only) {
+      for (const r of rows) {
+        console.log('\n' + '='.repeat(90));
+        console.log(`Table line: contract ${r.contract_id}  mode=${r.transport_mode}  incoterm=${r.incoterm}  status=${r.status}`);
+        console.log(`  representative shipment status = ${r.shipment_status ?? 'NULL'}   trucking status = ${r.trucking_status ?? 'NULL'}`);
+        const crows = (
+          await pool.query(
+            `SELECT c.id, c.po_number, c.sto_number, c.created_at,
+                    (SELECT COUNT(*) FROM shipments s WHERE s.contract_id = c.id) AS shipments,
+                    (SELECT COUNT(*) FROM trucking_operations t WHERE t.contract_id = c.id) AS trucking
+             FROM contracts c WHERE c.contract_id = $1 ORDER BY c.created_at DESC`,
+            [r.contract_id],
+          )
+        ).rows;
+        console.log(`  contracts rows behind this line: ${crows.length}`);
+        crows.forEach((c) =>
+          console.log(`    ${c.id}  po=${c.po_number}  sto=${c.sto_number || '-'}  shipments=${c.shipments}  trucking=${c.trucking}`),
+        );
+        const tr = (
+          await pool.query(
+            `SELECT t.operation_id, t.status, c.contract_id AS contract_number
+             FROM trucking_operations t JOIN contracts c ON c.id = t.contract_id
+             WHERE c.contract_id = $1 ORDER BY t.updated_at DESC LIMIT 10`,
+            [r.contract_id],
+          )
+        ).rows;
+        console.log(`  trucking_operations (${tr.length}):`);
+        tr.forEach((t) => console.log(`    ${t.operation_id}  status=${t.status}`));
+        const sh = (
+          await pool.query(
+            `SELECT s.id, s.status FROM shipments s JOIN contracts c ON c.id = s.contract_id
+             WHERE c.contract_id = $1 ORDER BY s.updated_at DESC LIMIT 10`,
+            [r.contract_id],
+          )
+        ).rows;
+        console.log(`  shipments (${sh.length}):`);
+        sh.forEach((x) => console.log(`    ${x.id}  status=${x.status}`));
+      }
+    }
+
     console.log('\nBy transport mode:');
     for (const [mode, counts] of Object.entries(tally)) {
       console.log(`  ${mode}`);
