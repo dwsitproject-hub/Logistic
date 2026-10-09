@@ -2694,7 +2694,7 @@ const DATA = {
   },
   {
    "role": "BG",
-   "name": "BG. GOLDTRANS 3002",
+   "name": "BG. GOLD TRANS 3002",
    "codes": [],
    "owner": "DUTA RARA BORNEO LINE PT.",
    "capacity": null,
@@ -4407,7 +4407,7 @@ const DATA = {
   {
    "pairCode": "TBG-137",
    "tb": "TB. TRANSPOWER 245",
-   "bg": "BG. GOLDTRANS 3002",
+   "bg": "BG. GOLD TRANS 3002",
    "firstContractDate": null,
    "lastContractDate": null,
    "sapRows2026": null,
