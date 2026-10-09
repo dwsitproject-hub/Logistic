@@ -107,15 +107,14 @@ const SapFolderSyncControl: React.FC<{ canSync: boolean; onTick: () => void }> =
   const lastText = last ? describeSapFolderRun(last) : null;
 
   return (
-    <div className="ml-4 flex flex-col items-end gap-1 max-w-md">
+    <div className="flex flex-col items-end gap-1 max-w-md">
       {canSync && (
         <Button
           size="sm"
-          variant="outline"
           onClick={() => void handleSync()}
           disabled={syncing || status?.running === true}
           title="Pull the newest file from the SAP share now. Only the newest file is imported, and only if KLIP does not have it yet."
-          className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
+          className="bg-green-600 text-white hover:bg-green-700"
         >
           {syncing || status?.running ? (
             <>

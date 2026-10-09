@@ -493,16 +493,9 @@ const SapImportDashboard: React.FC = () => {
                 Monitor and manage SAP MASTER v2 data imports
               </CardDescription>
             </div>
-            <div className="flex items-start">
-            <SapFolderSyncControl canSync={canUploadSap} onTick={() => void loadImports(true)} />
+            <div className="flex items-start gap-3">
             {canUploadSap ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleStartImport}
-                disabled={importing}
-                className="ml-4 border-indigo-600 text-indigo-700 hover:bg-indigo-50"
-              >
+              <Button size="sm" onClick={handleStartImport} disabled={importing}>
                 {importing ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -516,10 +509,11 @@ const SapImportDashboard: React.FC = () => {
                 )}
               </Button>
             ) : (
-              <p className="ml-4 text-sm text-muted-foreground max-w-xs text-right">
+              <p className="text-sm text-muted-foreground max-w-xs text-right">
                 View only — you do not have permission to upload SAP files.
               </p>
             )}
+            <SapFolderSyncControl canSync={canUploadSap} onTick={() => void loadImports(true)} />
             </div>
           </div>
         </CardHeader>
