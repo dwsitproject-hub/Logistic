@@ -25,6 +25,15 @@ describe('buildContractsListOuterSql', () => {
     expect(sql).toContain('remarks_count');
   });
 
+  it('carries the representative Shipment / Trucking Status the base computes, in both projections', () => {
+    for (const compact of [true, false]) {
+      const sql = buildContractsListOuterSql(false, { compact });
+      expect(sql).toContain('base.shipment_status');
+      expect(sql).toContain('base.trucking_status');
+    }
+    expect(buildContractsListOuterSql(true, { compact: true })).toContain('base.trucking_status');
+  });
+
   it('outstanding uses incoterm Quantity Delivery, not vessel-first quantity_delivery_sap', () => {
     const sql = buildContractsListOuterSql(false, { compact: true });
     expect(sql).toContain("IN ('LCO', 'FOB') THEN base.quantity_delivery");

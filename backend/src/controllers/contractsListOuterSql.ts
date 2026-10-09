@@ -49,6 +49,12 @@ const CONTRACTS_LIST_PAYMENT_SAP_ONLY_PROJECTION = `
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date Deviation (Days) DP Date - Due Date'), '')) AS dp_date_deviation_raw,
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date Deviation (Days) Payoff Date - Due Date'), '')) AS payoff_date_deviation_raw,`;
 
+/*
+ * The row projection is an explicit list. shipment_status and trucking_status are computed in the base CTE
+ * (sqlRepresentativeShipmentStatusExpr / sqlRepresentativeTruckingStatusExpr) for the Contract Performance table's two status columns, but
+ * were missing here, so they never reached the page: both columns read a dash for every contract while the SQL held a status.
+ * A column the base computes and this list omits is dropped silently - add it here too.
+ */
 function buildContractsListRowProjection(options: ContractsListOuterSqlOptions = {}): string {
   const listTotal = options.includeListTotal ? '        base.__list_total,\n' : '';
   const paymentBlock = options.compact
@@ -108,6 +114,8 @@ ${listTotal}        base.contract_id,
           NULLIF(TRIM(base.b2b_child_gr_sto_status), '')
         ) AS gr_sto_status,
         base.import_status,
+        base.shipment_status,
+        base.trucking_status,
         base.sap_presence,
         base.sap_withdrawn_reason,${paymentBlock}
         (SELECT COUNT(*)::int FROM remarks r WHERE r.related_entity_type = 'CONTRACT' AND r.related_entity_id = base.id) AS remarks_count,

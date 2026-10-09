@@ -34,6 +34,8 @@ import {
   PLANNING_STATUS_OPTIONS,
   planningStatusBadgeClass,
 } from '@/lib/planningStatus'
+import { formatShipmentStatusLabel } from '@/lib/shipmentStatusDisplay'
+import { formatTruckingStatusLabel } from '@/lib/truckingStatusDisplay'
 import {
   contextPerformanceClass,
   formatAvgDays,
@@ -2936,7 +2938,7 @@ function ContractsPageContent() {
       getSortValue: (c) => String(c.shipment_status || ''),
       render: (c) =>
         c.shipment_status ? (
-          <Badge className={planningStatusBadgeClass(c.shipment_status)}>{c.shipment_status}</Badge>
+          <Badge className={planningStatusBadgeClass(c.shipment_status)}>{formatShipmentStatusLabel(c.shipment_status)}</Badge>
         ) : (
           <span className="text-sm text-gray-400">—</span>
         ),
@@ -2949,7 +2951,7 @@ function ContractsPageContent() {
       getSortValue: (c) => String(c.trucking_status || ''),
       render: (c) =>
         c.trucking_status ? (
-          <Badge className={planningStatusBadgeClass(c.trucking_status)}>{c.trucking_status}</Badge>
+          <Badge className={planningStatusBadgeClass(c.trucking_status)}>{formatTruckingStatusLabel(c.trucking_status)}</Badge>
         ) : (
           <span className="text-sm text-gray-400">—</span>
         ),
