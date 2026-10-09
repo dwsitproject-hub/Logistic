@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildMasterVesselListWhere,
   buildMasterVesselOrderBy,
+  MASTER_VESSEL_USED_IDS_CTE,
   parseMasterVesselListQuery,
   parseMultiQueryParam,
 } from './masterVesselListFilters';
@@ -60,6 +61,21 @@ describe('masterVesselListFilters', () => {
     const sql = buildMasterVesselOrderBy('dhm_status', 'desc');
     expect(sql).toContain('dhm_id IS NOT NULL');
     expect(sql).toContain('DESC');
+  });
+
+  it('klipTransaction: Yes keeps used vessels, No keeps unused, both or neither is no filter', () => {
+    expect(buildMasterVesselListWhere({ klipTransaction: ['yes'] }).where).toContain('AND EXISTS (SELECT 1 FROM used_vessels');
+    expect(buildMasterVesselListWhere({ klipTransaction: ['no'] }).where).toContain('AND NOT EXISTS (SELECT 1 FROM used_vessels');
+    expect(buildMasterVesselListWhere({ klipTransaction: ['yes', 'no'] }).where).not.toContain('used_vessels');
+    expect(buildMasterVesselListWhere({}).where).not.toContain('used_vessels');
+    expect(parseMasterVesselListQuery({ klipTransaction: 'yes' }).klipTransaction).toEqual(['yes']);
+  });
+
+  it('the used-vessels CTE resolves shipments the way the rest of KLIP does and drops NULL ids', () => {
+    expect(MASTER_VESSEL_USED_IDS_CTE).toContain('master_vessel_code_aliases');
+    expect(MASTER_VESSEL_USED_IDS_CTE).toContain('normalize_vessel_name');
+    expect(MASTER_VESSEL_USED_IDS_CTE).toContain('r.id IS NOT NULL');
+    expect(buildMasterVesselOrderBy('klip_transaction', 'desc')).toContain('FROM used_vessels');
   });
 
   it('parseMasterVesselListQuery maps sort params', () => {

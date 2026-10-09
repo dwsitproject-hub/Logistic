@@ -1,4 +1,5 @@
 import { sqlExcludeDhmDeleted, wantsExcludeDhmDeleted } from './dhmDeletedFilter';
+import { sqlResolveMasterVesselIdFromShipment } from './masterVesselCanonicalSql';
 
 /**
  * SAP codes for one vessel, newest-first by primary then code. A vessel can hold several - SAP
@@ -12,6 +13,27 @@ export const MASTER_VESSEL_SAP_CODES_SQL = `(
   WHERE a.master_vessel_id = master_vessels.id
     AND a.namespace = 'SAP'
 )`;
+
+/**
+ * Master vessel ids that at least one shipment resolves to. Shipments are where both SAP imports and Add New Shipment land, and
+ * sqlResolveMasterVesselIdFromShipment is the same resolution the rest of KLIP uses (stored id, then SAP code alias, then code,
+ * then normalised name), so "has a KLIP transaction" agrees with where the vessel actually shows up. It runs over the distinct
+ * (id, code, name) triples, not every shipment row, because the resolution is a correlated lookup.
+ *
+ * A query that uses it must start with `WITH ${MASTER_VESSEL_USED_IDS_CTE}`; the NULL filter is there because
+ * `x IN (subquery with a NULL)` is NULL, not false, when nothing matches.
+ */
+export const MASTER_VESSEL_USED_IDS_CTE = `used_vessels AS (
+  SELECT r.id
+  FROM (
+    SELECT DISTINCT ${sqlResolveMasterVesselIdFromShipment('sv')} AS id
+    FROM (SELECT DISTINCT master_vessel_id, vessel_code, vessel_name FROM shipments) sv
+  ) r
+  WHERE r.id IS NOT NULL
+)`;
+
+/** True when the vessel has at least one shipment. Needs MASTER_VESSEL_USED_IDS_CTE in the same query. */
+export const MASTER_VESSEL_KLIP_TRANSACTION_SQL = `EXISTS (SELECT 1 FROM used_vessels u WHERE u.id = master_vessels.id)`;
 
 /** Parse repeated or comma-separated query params into string[]. */
 export function parseMultiQueryParam(raw: unknown): string[] {
@@ -40,6 +62,8 @@ export type MasterVesselListFilterParams = {
   heating?: string[];
   lambungTypes?: string[];
   terms?: string[];
+  /** 'yes' / 'no' (a vessel with / without a shipment). Both or neither = no filter. The query must carry MASTER_VESSEL_USED_IDS_CTE. */
+  klipTransaction?: string[];
   /** Pickers only: leave out vessels deleted in DHM. The Master Vessel table does not set it. */
   excludeDhmDeleted?: boolean;
 };
@@ -112,6 +136,14 @@ export function buildMasterVesselListWhere(
     }
   }
 
+  if (filters.klipTransaction && filters.klipTransaction.length > 0) {
+    const normalized = filters.klipTransaction.map((v) => v.toLowerCase());
+    const wantsYes = normalized.includes('yes') || normalized.includes('true');
+    const wantsNo = normalized.includes('no') || normalized.includes('false');
+    if (wantsYes && !wantsNo) where += ` AND ${MASTER_VESSEL_KLIP_TRANSACTION_SQL}`;
+    if (wantsNo && !wantsYes) where += ` AND NOT ${MASTER_VESSEL_KLIP_TRANSACTION_SQL}`;
+  }
+
   return { where, params };
 }
 
@@ -133,6 +165,7 @@ export const MASTER_VESSEL_SORT_COLUMNS: Record<string, string> = {
   lambung_type: 'lambung_type',
   terms: 'terms',
   dhm_status: `(dhm_id IS NOT NULL OR NULLIF(BTRIM(dhm_code), '') IS NOT NULL)`,
+  klip_transaction: MASTER_VESSEL_KLIP_TRANSACTION_SQL,
 };
 
 export function buildMasterVesselOrderBy(sortKey?: string, sortDir?: string): string {
@@ -163,6 +196,7 @@ export function parseMasterVesselListQuery(query: Record<string, unknown>): Mast
     heating: parseMultiQueryParam(query.heating),
     lambungTypes: parseMultiQueryParam(query.lambungTypes),
     terms: parseMultiQueryParam(query.terms),
+    klipTransaction: parseMultiQueryParam(query.klipTransaction),
     excludeDhmDeleted: wantsExcludeDhmDeleted(query.excludeDeleted),
     sortKey,
     sortDir,

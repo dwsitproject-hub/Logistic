@@ -12,10 +12,12 @@ import { resolveMasterVessel } from '../services/resolveMasterVessel.service';
 import {
   buildMasterVesselListWhere,
   buildMasterVesselOrderBy,
+  MASTER_VESSEL_KLIP_TRANSACTION_SQL,
   MASTER_VESSEL_LAMBUNG_OPTIONS,
   MASTER_VESSEL_SAP_CODES_SQL,
   MASTER_VESSEL_TERMS_OPTIONS,
   MASTER_VESSEL_TYPE_OPTIONS,
+  MASTER_VESSEL_USED_IDS_CTE,
   parseMasterVesselListQuery,
 } from '../utils/masterVesselListFilters';
 import { attachDhmPushState, pushMasterVesselToDhm } from '../dhm';
@@ -62,16 +64,19 @@ export const listMasterVessels = async (req: AuthRequest, res: Response): Promis
     const orderBy = buildMasterVesselOrderBy(filters.sortKey, filters.sortDir);
 
     const listSql = `
+      WITH ${MASTER_VESSEL_USED_IDS_CTE}
       SELECT id, vessel_code, vessel_code_klip, vessel_name, vessel_capacity_mt, vessel_owner,
              vessel_owner_group, vessel_type, sap_vendor_code, code_status, year_of_creation,
              heating, lambung_type, terms, dhm_id, dhm_code, created_at, updated_at,
-             ${MASTER_VESSEL_SAP_CODES_SQL} AS vessel_codes_sap
+             ${MASTER_VESSEL_SAP_CODES_SQL} AS vessel_codes_sap,
+             ${MASTER_VESSEL_KLIP_TRANSACTION_SQL} AS klip_transaction
       FROM master_vessels
       ${where}
       ${orderBy}
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
     const countSql = `
+      WITH ${MASTER_VESSEL_USED_IDS_CTE}
       SELECT COUNT(*) AS count
       FROM master_vessels
       ${where}

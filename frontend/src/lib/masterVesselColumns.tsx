@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { DhmStatusBadge } from '@/components/shared/DhmStatusBadge'
 import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
+import { KlipTransactionBadge } from '@/components/master-vessel/KlipTransactionBadge'
 import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import type { MasterVesselFormData } from '@/components/master-vessel/EditVesselModal'
 import { masterVesselDhmStatusLabel } from '@/lib/masterVesselDhmStatus'
@@ -20,6 +21,7 @@ export type MasterVesselColumnId =
   | 'lambung_type'
   | 'terms'
   | 'dhm_status'
+  | 'klip_transaction'
 
 export type MasterVesselRow = MasterVesselFormData & { id: string }
 
@@ -67,6 +69,8 @@ export function getMasterVesselCellText(colId: MasterVesselColumnId, row: Master
       return row.terms || '-'
     case 'dhm_status':
       return masterVesselDhmStatusLabel(row)
+    case 'klip_transaction':
+      return row.klip_transaction ? 'Yes' : 'No'
     default:
       return '-'
   }
@@ -87,6 +91,7 @@ const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
   lambung_type: 104,
   terms: 104,
   dhm_status: 108,
+  klip_transaction: 120,
 }
 
 export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 112
@@ -180,6 +185,12 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
     label: 'DHM Status',
     getCellText: (row) => getMasterVesselCellText('dhm_status', row),
     render: (row) => masterVesselCell(<DhmStatusBadge row={row} />),
+  },
+  {
+    id: 'klip_transaction',
+    label: 'Klip Transaction',
+    getCellText: (row) => getMasterVesselCellText('klip_transaction', row),
+    render: (row) => masterVesselCell(<KlipTransactionBadge value={row.klip_transaction} />),
   },
 ]
 

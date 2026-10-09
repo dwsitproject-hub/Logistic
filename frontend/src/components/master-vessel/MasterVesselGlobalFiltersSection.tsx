@@ -35,6 +35,8 @@ export interface MasterVesselGlobalFiltersSectionProps {
   onLambungTypesChange: (values: string[]) => void
   selectedTerms: string[]
   onTermsChange: (values: string[]) => void
+  selectedKlipTransaction: string[]
+  onKlipTransactionChange: (values: string[]) => void
   hasActiveFilters: boolean
   onClearFilters: () => void
   action?: ReactNode
@@ -42,6 +44,7 @@ export interface MasterVesselGlobalFiltersSectionProps {
 
 const HEATING_FILTER_OPTIONS = ['Yes', 'No', '(Blank)'] as const
 const TERMS_FILTER_OPTIONS = ['T/C', 'V/C', 'CIF', '(Blank)'] as const
+const KLIP_TRANSACTION_FILTER_OPTIONS = ['Yes', 'No'] as const
 
 export function MasterVesselGlobalFiltersSection({
   searchDraft,
@@ -60,6 +63,8 @@ export function MasterVesselGlobalFiltersSection({
   onLambungTypesChange,
   selectedTerms,
   onTermsChange,
+  selectedKlipTransaction,
+  onKlipTransactionChange,
   hasActiveFilters,
   onClearFilters,
   action,
@@ -82,6 +87,7 @@ export function MasterVesselGlobalFiltersSection({
         ...selectionChips('Heating', selectedHeating, onHeatingChange),
         ...selectionChips('Lambung type', selectedLambungTypes, onLambungTypesChange),
         ...selectionChips('Term', selectedTerms, onTermsChange),
+        ...selectionChips('Klip transaction', selectedKlipTransaction, onKlipTransactionChange),
       ]}
     >
       <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
@@ -153,6 +159,16 @@ export function MasterVesselGlobalFiltersSection({
           onChange={onTermsChange}
           placeholder="All"
           emptyMessage="No terms"
+        />
+        <SearchableMultiSelect
+          className="min-w-[7.5rem] flex-1"
+          labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+          label="Klip Transaction"
+          options={[...KLIP_TRANSACTION_FILTER_OPTIONS]}
+          selected={selectedKlipTransaction}
+          onChange={onKlipTransactionChange}
+          placeholder="All"
+          emptyMessage="No options"
         />
         {action}
       </div>

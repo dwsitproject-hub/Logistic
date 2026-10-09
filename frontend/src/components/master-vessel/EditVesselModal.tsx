@@ -32,6 +32,8 @@ export interface MasterVesselFormData {
   vessel_code_klip?: string | null
   /** Every SAP code mapped to this vessel, comma separated. Read-only: SAP issues them. */
   vessel_codes_sap?: string | null
+  /** True when at least one shipment (SAP import or Add New Shipment) uses this vessel. Read-only: derived by the list query. */
+  klip_transaction?: boolean | null
 }
 
 const TERMS_OPTIONS = ['T/C', 'V/C', 'CIF'] as const

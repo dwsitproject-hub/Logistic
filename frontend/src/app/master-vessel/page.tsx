@@ -56,6 +56,7 @@ export default function MasterVesselPage() {
   const [selectedHeating, setSelectedHeating] = useState<string[]>([])
   const [selectedLambungTypes, setSelectedLambungTypes] = useState<string[]>([])
   const [selectedTerms, setSelectedTerms] = useState<string[]>([])
+  const [selectedKlipTransaction, setSelectedKlipTransaction] = useState<string[]>([])
 
   const [modalOpen, setModalOpen] = useState(false)
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
@@ -72,7 +73,8 @@ export default function MasterVesselPage() {
       selectedVesselTypes.length > 0 ||
       selectedHeating.length > 0 ||
       selectedLambungTypes.length > 0 ||
-      selectedTerms.length > 0,
+      selectedTerms.length > 0 ||
+      selectedKlipTransaction.length > 0,
     [
       searchTerm,
       selectedOwners,
@@ -80,6 +82,7 @@ export default function MasterVesselPage() {
       selectedHeating,
       selectedLambungTypes,
       selectedTerms,
+      selectedKlipTransaction,
     ],
   )
 
@@ -97,6 +100,7 @@ export default function MasterVesselPage() {
         if (selectedHeating.length) params.heating = heatingFilterToApi(selectedHeating)
         if (selectedLambungTypes.length) params.lambungTypes = selectedLambungTypes
         if (selectedTerms.length) params.terms = termsFilterToApi(selectedTerms)
+        if (selectedKlipTransaction.length) params.klipTransaction = heatingFilterToApi(selectedKlipTransaction)
         params.sortKey = sortKey
         params.sortDir = sortDir
 
@@ -120,6 +124,7 @@ export default function MasterVesselPage() {
       selectedHeating,
       selectedLambungTypes,
       selectedTerms,
+      selectedKlipTransaction,
       sortKey,
       sortDir,
     ],
@@ -164,6 +169,7 @@ export default function MasterVesselPage() {
     selectedHeating,
     selectedLambungTypes,
     selectedTerms,
+    selectedKlipTransaction,
     sortKey,
     sortDir,
     fetchVessels,
@@ -193,6 +199,7 @@ export default function MasterVesselPage() {
     setSelectedHeating([])
     setSelectedLambungTypes([])
     setSelectedTerms([])
+    setSelectedKlipTransaction([])
   }
 
   const openNew = () => {
@@ -285,6 +292,8 @@ export default function MasterVesselPage() {
           onLambungTypesChange={setSelectedLambungTypes}
           selectedTerms={selectedTerms}
           onTermsChange={setSelectedTerms}
+          selectedKlipTransaction={selectedKlipTransaction}
+          onKlipTransactionChange={setSelectedKlipTransaction}
           hasActiveFilters={hasActiveFilters}
           onClearFilters={clearFilters}
           action={
