@@ -15,6 +15,7 @@ import {
   MASTER_VESSEL_KLIP_TRANSACTION_SQL,
   MASTER_VESSEL_LAMBUNG_OPTIONS,
   MASTER_VESSEL_PAIR_CTE,
+  MASTER_VESSEL_PAIR_USE_CTE,
   MASTER_VESSEL_SAP_CODES_SQL,
   MASTER_VESSEL_TERMS_OPTIONS,
   MASTER_VESSEL_TYPE_OPTIONS,
@@ -65,7 +66,8 @@ export const listMasterVessels = async (req: AuthRequest, res: Response): Promis
     const orderBy = buildMasterVesselOrderBy(filters.sortKey, filters.sortDir);
 
     const listSql = `
-      WITH ${MASTER_VESSEL_USED_IDS_CTE},
+      WITH ${MASTER_VESSEL_PAIR_USE_CTE},
+      ${MASTER_VESSEL_USED_IDS_CTE},
       ${MASTER_VESSEL_PAIR_CTE}
       SELECT master_vessels.id, vessel_code, vessel_code_klip, vessel_name, vessel_capacity_mt, vessel_owner,
              vessel_owner_group, vessel_type, sap_vendor_code, code_status, year_of_creation,
@@ -81,7 +83,8 @@ export const listMasterVessels = async (req: AuthRequest, res: Response): Promis
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
     const countSql = `
-      WITH ${MASTER_VESSEL_USED_IDS_CTE}
+      WITH ${MASTER_VESSEL_PAIR_USE_CTE},
+      ${MASTER_VESSEL_USED_IDS_CTE}
       SELECT COUNT(*) AS count
       FROM master_vessels
       ${where}

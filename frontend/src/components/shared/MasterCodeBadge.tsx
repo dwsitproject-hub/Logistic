@@ -1,14 +1,15 @@
 import type { ReactNode } from 'react'
 
-export type MasterCodeKind = 'klip' | 'dhm' | 'sap'
+export type MasterCodeKind = 'klip' | 'dhm' | 'sap' | 'pair'
 
 const TONE: Record<MasterCodeKind, string> = {
   dhm: 'border-red-200 bg-red-50 text-red-600',
   klip: 'border-blue-200 bg-blue-50 text-blue-700',
   sap: 'border-slate-200 bg-slate-100 text-slate-500',
+  pair: 'border-green-200 bg-green-50 text-green-700',
 }
 
-/** One-line code chip. DHM red, KLIP blue, SAP gray. Empty stays a plain dash. */
+/** One-line code chip. DHM red, KLIP blue, SAP gray, tug/barge pair green. Empty stays a plain dash. */
 export function MasterCodeBadge({
   kind,
   value,

@@ -3,6 +3,7 @@ import {
   buildMasterVesselListWhere,
   buildMasterVesselOrderBy,
   MASTER_VESSEL_PAIR_CTE,
+  MASTER_VESSEL_PAIR_USE_CTE,
   MASTER_VESSEL_USED_IDS_CTE,
   parseMasterVesselListQuery,
   parseMultiQueryParam,
@@ -79,13 +80,19 @@ describe('masterVesselListFilters', () => {
     expect(buildMasterVesselOrderBy('klip_transaction', 'desc')).toContain('FROM used_vessels');
   });
 
-  it('the pair CTE picks the pair with the newest SAP usage, falls back to the workbook date, and sorts by the pair columns', () => {
-    expect(MASTER_VESSEL_PAIR_CTE).toContain('vessel_pair_sap_names');
-    expect(MASTER_VESSEL_PAIR_CTE).toContain("regexp_replace(upper(s.vessel_name), '[^A-Z0-9]', '', 'g')");
+  it('the pair CTEs score a pair by the newest SAP usage, fall back to the workbook date, and sort by the pair columns', () => {
+    expect(MASTER_VESSEL_PAIR_USE_CTE).toContain('vessel_pair_sap_names');
+    expect(MASTER_VESSEL_PAIR_USE_CTE).toContain("regexp_replace(upper(s.vessel_name), '[^A-Z0-9]', '', 'g')");
     expect(MASTER_VESSEL_PAIR_CTE).toContain('DISTINCT ON (side.vessel_id)');
     expect(MASTER_VESSEL_PAIR_CTE).toContain('COALESCE(pu.last_used, p.last_contract_date) DESC NULLS LAST');
     expect(buildMasterVesselOrderBy('pair_code', 'asc')).toContain('vessel_pair_latest.pair_code ASC');
     expect(buildMasterVesselOrderBy('pair_partner_name', 'asc')).toContain('vessel_pair_latest.pair_partner_name');
+  });
+
+  it('both the tug and the barge of a pair a shipment names count as used, not only the one the shipment resolves to', () => {
+    expect(MASTER_VESSEL_USED_IDS_CTE).toContain('FROM pair_use pu');
+    expect(MASTER_VESSEL_USED_IDS_CTE).toContain('p.tb_master_vessel_id');
+    expect(MASTER_VESSEL_USED_IDS_CTE).toContain('p.bg_master_vessel_id');
   });
 
   it('parseMasterVesselListQuery maps sort params', () => {

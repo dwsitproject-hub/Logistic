@@ -39,6 +39,14 @@ function masterVesselCell(value: ReactNode): ReactNode {
   return <span className="text-sm">{value}</span>
 }
 
+/** 2500.00 -> "2,500"; 2500.5 -> "2,500.5". The API returns the NUMERIC column as a string, so the zeros come from the database. */
+export function formatVesselCapacity(value: unknown): string {
+  if (value == null || String(value).trim() === '') return '-'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return String(value)
+  return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
 export function getMasterVesselCellText(colId: MasterVesselColumnId, row: MasterVesselRow): string {
   switch (colId) {
     case 'vessel_code':
@@ -52,7 +60,7 @@ export function getMasterVesselCellText(colId: MasterVesselColumnId, row: Master
     case 'vessel_name':
       return row.vessel_name || '-'
     case 'vessel_capacity_mt':
-      return row.vessel_capacity_mt != null ? String(row.vessel_capacity_mt) : '-'
+      return formatVesselCapacity(row.vessel_capacity_mt)
     case 'vessel_owner':
       return row.vessel_owner || '-'
     case 'vessel_owner_group':
@@ -205,7 +213,7 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
     id: 'pair_code',
     label: 'Pair ID',
     getCellText: (row) => getMasterVesselCellText('pair_code', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('pair_code', row)),
+    render: (row) => <MasterCodeBadge kind="pair" value={getMasterVesselCellText('pair_code', row)} />,
   },
   {
     id: 'pair_partner_name',

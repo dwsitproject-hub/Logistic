@@ -15,12 +15,35 @@ export const MASTER_VESSEL_SAP_CODES_SQL = `(
 )`;
 
 /**
+ * Per pair, the newest contract date of a shipment whose vessel name is one of the pair's SAP names (vessel_pair_sap_names), with the
+ * same letters-and-digits key as sapNameKey in vesselMasterLoad.service. A pair that no shipment names is absent. It is the first entry of
+ * the WITH list of both the list and the count query, because MASTER_VESSEL_USED_IDS_CTE and MASTER_VESSEL_PAIR_CTE read it.
+ */
+export const MASTER_VESSEL_PAIR_USE_CTE = `pair_use AS (
+  SELECT n.pair_id, MAX(u.last_date) AS last_used
+  FROM vessel_pair_sap_names n
+  INNER JOIN (
+    SELECT regexp_replace(upper(s.vessel_name), '[^A-Z0-9]', '', 'g') AS k,
+           MAX(COALESCE(c.contract_date, s.created_at::date)) AS last_date
+    FROM shipments s
+    LEFT JOIN contracts c ON c.id = s.contract_id
+    WHERE NULLIF(trim(s.vessel_name), '') IS NOT NULL
+    GROUP BY 1
+  ) u ON u.k = n.normalized_sap_name
+  GROUP BY n.pair_id
+)`;
+
+/**
  * Master vessel ids that at least one shipment resolves to. Shipments are where both SAP imports and Add New Shipment land, and
  * sqlResolveMasterVesselIdFromShipment is the same resolution the rest of KLIP uses (stored id, then SAP code alias, then code,
  * then normalised name), so "has a KLIP transaction" agrees with where the vessel actually shows up. It runs over the distinct
  * (id, code, name) triples, not every shipment row, because the resolution is a correlated lookup.
  *
- * A query that uses it must start with `WITH ${MASTER_VESSEL_USED_IDS_CTE}`; the NULL filter is there because
+ * Both halves of a pair count. A shipment carries ONE master_vessel_id, and SAP sends a tug and a barge as one combined name under one code,
+ * so the shipment resolved to only one of them and its partner read "No" although it sailed on the same shipments. Every vessel of a pair
+ * that a shipment names (MASTER_VESSEL_PAIR_USE_CTE) is therefore used, whichever side the shipment's own id points at.
+ *
+ * A query that uses it must start with `WITH ${MASTER_VESSEL_PAIR_USE_CTE}, ${MASTER_VESSEL_USED_IDS_CTE}`; the NULL filter is there because
  * `x IN (subquery with a NULL)` is NULL, not false, when nothing matches.
  */
 export const MASTER_VESSEL_USED_IDS_CTE = `used_vessels AS (
@@ -30,6 +53,11 @@ export const MASTER_VESSEL_USED_IDS_CTE = `used_vessels AS (
     FROM (SELECT DISTINCT master_vessel_id, vessel_code, vessel_name FROM shipments) sv
   ) r
   WHERE r.id IS NOT NULL
+  UNION
+  SELECT v.vessel_id
+  FROM pair_use pu
+  INNER JOIN vessel_pairs p ON p.id = pu.pair_id
+  CROSS JOIN LATERAL (VALUES (p.tb_master_vessel_id), (p.bg_master_vessel_id)) AS v(vessel_id)
 )`;
 
 /**
@@ -42,22 +70,9 @@ export const MASTER_VESSEL_USED_IDS_CTE = `used_vessels AS (
  *
  * A pair SAP started sending after the workbook is not in vessel_pairs, so it cannot win here until it is registered.
  *
- * Starts a WITH list of its own: use `WITH ${MASTER_VESSEL_PAIR_CTE}` (list query only), then LEFT JOIN vessel_pair_latest.
+ * List query only, after MASTER_VESSEL_PAIR_USE_CTE in the WITH list; then LEFT JOIN vessel_pair_latest.
  */
-export const MASTER_VESSEL_PAIR_CTE = `pair_use AS (
-  SELECT n.pair_id, MAX(u.last_date) AS last_used
-  FROM vessel_pair_sap_names n
-  INNER JOIN (
-    SELECT regexp_replace(upper(s.vessel_name), '[^A-Z0-9]', '', 'g') AS k,
-           MAX(COALESCE(c.contract_date, s.created_at::date)) AS last_date
-    FROM shipments s
-    LEFT JOIN contracts c ON c.id = s.contract_id
-    WHERE NULLIF(trim(s.vessel_name), '') IS NOT NULL
-    GROUP BY 1
-  ) u ON u.k = n.normalized_sap_name
-  GROUP BY n.pair_id
-),
-vessel_pair_latest AS (
+export const MASTER_VESSEL_PAIR_CTE = `vessel_pair_latest AS (
   SELECT DISTINCT ON (side.vessel_id)
          side.vessel_id,
          p.pair_code,
@@ -74,7 +89,7 @@ vessel_pair_latest AS (
   ORDER BY side.vessel_id, COALESCE(pu.last_used, p.last_contract_date) DESC NULLS LAST, p.pair_code
 )`;
 
-/** True when the vessel has at least one shipment. Needs MASTER_VESSEL_USED_IDS_CTE in the same query. */
+/** True when the vessel, or the pair it is in, is on at least one shipment. Needs MASTER_VESSEL_USED_IDS_CTE in the same query. */
 export const MASTER_VESSEL_KLIP_TRANSACTION_SQL = `EXISTS (SELECT 1 FROM used_vessels u WHERE u.id = master_vessels.id)`;
 
 /** Parse repeated or comma-separated query params into string[]. */
