@@ -45,9 +45,9 @@ echo "source: ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 OUT_DIR="${KLIP_DUMP_DIR:-/opt/klip/backups}"
 mkdir -p "$OUT_DIR"
 
-# pg_dump must not be OLDER than the server, so the client comes from a pinned image rather than
+# pg_dump must not be OLDER than the server (production is PostgreSQL 18.4; 16 refused with "server version mismatch"), so the client comes from a pinned image rather than
 # whatever happens to be installed on the host.
-PG_IMAGE="${KLIP_PG_IMAGE:-postgres:16}"
+PG_IMAGE="${KLIP_PG_IMAGE:-postgres:18}"
 run_pg() { docker run --rm -e PGPASSWORD -v "${OUT_DIR}:/out" "$PG_IMAGE" "$@"; }
 
 if [ "$MODE" = "sizes" ]; then
