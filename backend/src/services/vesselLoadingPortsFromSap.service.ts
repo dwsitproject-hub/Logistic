@@ -3,6 +3,7 @@ import { getClient, query } from '../database/connection';
 import logger from '../utils/logger';
 import { isGenericKlipPortPlaceholder } from '../utils/portPlaceholder';
 import { sapStoNumberKeyExpr } from '../utils/shipmentStoTypeSql';
+import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 
 type SapPortRow = Record<string, unknown>;
 
@@ -154,7 +155,8 @@ export async function resolveSapLoadingPortNameMapForShipment(
   shipmentUuid: string,
   preferredSto?: string | null,
 ): Promise<SapLoadingPortNameMap> {
-  const stoRows = await resolveAllSapParsedDataForSto(shipmentUuid, preferredSto);
+  let stoRows = await resolveAllSapParsedDataForSto(shipmentUuid, preferredSto);
+  if (stoRows.length === 0) stoRows = await resolveSapParsedDataForGroupContracts(shipmentUuid);
   const bySequence = new Map<number, string>();
   const allLoadingNames: string[] = [];
   let discharge: string | null = null;
@@ -554,6 +556,38 @@ async function resolveAllSapParsedDataForSto(
        spd.contract_number ASC NULLS LAST,
        spd.updated_at DESC NULLS LAST`,
     [shipmentId, preferred || null],
+  );
+  return result.rows
+    .map((row) => row.data)
+    .filter((data): data is Record<string, unknown> => Boolean(data) && typeof data === 'object')
+    .map((data) => ({ data }));
+}
+
+/**
+ * SAP rows of the shipment group's CONTRACTS, newest first - for a shipment no SAP STO row points at.
+ *
+ * resolveAllSapParsedDataForSto matches on the STO / operation key, which a shipment made in KLIP (Add New Shipment on
+ * unplanned POs, operation OP-...) does not have yet: SAP still carries the PO, with its loading and discharge port, but on
+ * rows with no STO. The modal then had no SAP port to compare against and badged a port that was prefilled FROM SAP as
+ * KLIP. Add New Shipment prefills from the same rows (newest SAP row of the contract), so this reads the same place.
+ *
+ * Only a fallback: a shipment with SAP STO rows keeps resolving exactly as before.
+ */
+async function resolveSapParsedDataForGroupContracts(
+  shipmentId: string,
+): Promise<Array<{ data: Record<string, unknown> }>> {
+  const groupShipmentIds = await resolveStoGroupShipmentIds(shipmentId);
+  const result = await query(
+    `SELECT spd.data
+     FROM sap_processed_data spd
+     WHERE spd.contract_number IN (
+       SELECT TRIM(c.contract_id)
+       FROM shipments s
+       INNER JOIN contracts c ON c.id = s.contract_id
+       WHERE s.id = ANY($1::uuid[])
+     )
+     ORDER BY spd.contract_number ASC NULLS LAST, spd.updated_at DESC NULLS LAST`,
+    [groupShipmentIds],
   );
   return result.rows
     .map((row) => row.data)
