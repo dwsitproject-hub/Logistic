@@ -6,12 +6,14 @@ export type VesselPortsQuantityRow = {
   sto_qty?: number | null
   quantity_delivered?: number | null
   quantity_receive?: number | null
+  /** Planned quantity of this PO on the shipment (kg). A plan is not a delivery: it does not reduce OS. */
+  quantity_shipment_plan?: number | null
   locked_from_sap?: boolean
 }
 
 export type VesselPortsQuantityEdits = Record<
   string,
-  { quantity_delivered?: number | null; quantity_receive?: number | null }
+  { quantity_delivered?: number | null; quantity_receive?: number | null; quantity_shipment_plan?: number | null }
 >
 
 /** Compare quantity fields stored as kg in API rows. */
@@ -26,7 +28,7 @@ export function quantityKgValuesEqual(a: unknown, b: unknown): boolean {
 function resolveEffectiveQtyKg(
   row: VesselPortsQuantityRow,
   edits: VesselPortsQuantityEdits,
-  field: 'quantity_delivered' | 'quantity_receive',
+  field: 'quantity_delivered' | 'quantity_receive' | 'quantity_shipment_plan',
 ): number | null {
   const edited = edits[row.rowKey]?.[field]
   if (edited !== undefined) {
@@ -49,6 +51,8 @@ export function buildPoKlipQtySaveRows(
   poNumber: string | null
   quantityDeliveredKlipKg: number | null
   quantityReceiveKlipKg: number | null
+  /** Present only on a row whose Shipment Plan Qty the user changed. */
+  quantityShipmentPlanKg?: number | null
 }> {
   return rows
     .map((row) => {
@@ -62,7 +66,10 @@ export function buildPoKlipQtySaveRows(
       const receiveChanged =
         edit.quantity_receive !== undefined
         && !quantityKgValuesEqual(edit.quantity_receive, row.quantity_receive)
-      if (!deliveredChanged && !receiveChanged) return null
+      const planChanged =
+        edit.quantity_shipment_plan !== undefined
+        && !quantityKgValuesEqual(edit.quantity_shipment_plan, row.quantity_shipment_plan)
+      if (!deliveredChanged && !receiveChanged && !planChanged) return null
       return {
         contractNumber,
         poNumber: row.po_number != null && String(row.po_number).trim() !== ''
@@ -74,6 +81,9 @@ export function buildPoKlipQtySaveRows(
         quantityReceiveKlipKg: receiveChanged
           ? resolveEffectiveQtyKg(row, edits, 'quantity_receive')
           : null,
+        ...(planChanged
+          ? { quantityShipmentPlanKg: resolveEffectiveQtyKg(row, edits, 'quantity_shipment_plan') ?? 0 }
+          : {}),
       }
     })
     .filter((r): r is NonNullable<typeof r> => r != null)
@@ -89,6 +99,27 @@ export function hasVesselPortsQuantityFieldEdits(
     const row = rows.find((r) => r.rowKey === rowKey)
     if (!row) continue
     if (edit[field] !== undefined && !quantityKgValuesEqual(edit[field], row[field])) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * True when the user changed a Shipment Plan Qty. Kept apart from hasVesselPortsQuantityUserEdits on purpose: that one drives the Delivered / Receive
+ * sums and status logic of the save, which a plan (not a delivery) must not touch.
+ */
+export function hasShipmentPlanQtyEdits(
+  rows: VesselPortsQuantityRow[],
+  edits: VesselPortsQuantityEdits,
+): boolean {
+  for (const [rowKey, edit] of Object.entries(edits)) {
+    const row = rows.find((r) => r.rowKey === rowKey)
+    if (!row) continue
+    if (
+      edit.quantity_shipment_plan !== undefined
+      && !quantityKgValuesEqual(edit.quantity_shipment_plan, row.quantity_shipment_plan)
+    ) {
       return true
     }
   }

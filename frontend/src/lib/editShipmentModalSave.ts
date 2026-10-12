@@ -10,6 +10,7 @@ import {
 import type { VesselPortsQuantityEdits, VesselPortsQuantityRow } from '@/lib/vesselPortsQuantityEdits'
 import {
   hasVesselPortsQuantityUserEdits,
+  hasShipmentPlanQtyEdits,
   hasVesselPortsQuantityFieldEdits,
   quantityKgValuesEqual,
   buildPoKlipQtySaveRows,
@@ -236,6 +237,8 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
 
   const sums = sumVesselPortsQuantityEdits(input.qtyRows, input.qtyEdits)
   const qtyUserEdited = hasVesselPortsQuantityUserEdits(input.qtyRows, input.qtyEdits)
+  // A Shipment Plan Qty edit is saved with the per-PO qty rows but must not switch on the Delivered / Receive handling below.
+  const planUserEdited = hasShipmentPlanQtyEdits(input.qtyRows, input.qtyEdits)
   const receiveUserEdited = hasVesselPortsQuantityFieldEdits(
     input.qtyRows,
     input.qtyEdits,
@@ -313,11 +316,11 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
     }
   }
 
-  if (qtyUserEdited) {
+  if (qtyUserEdited || planUserEdited) {
     const klipRows = buildPoKlipQtySaveRows(input.qtyRows, input.qtyEdits)
     const klipRes = await api.put(`/shipments/${input.shipmentId}/po-klip-qty`, { rows: klipRows })
     if (!klipRes.data?.success) {
-      throw new Error(klipRes.data?.error?.message || 'Failed to save Delivered / Received Qty (KLIP)')
+      throw new Error(klipRes.data?.error?.message || 'Failed to save Delivered / Received / Shipment Plan Qty')
     }
   }
 

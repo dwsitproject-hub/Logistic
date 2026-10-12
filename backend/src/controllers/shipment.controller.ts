@@ -2809,7 +2809,7 @@ export const getShipmentEditContext = async (req: AuthRequest, res: Response) =>
   }
 };
 
-/** Batch save Delivered/Received Qty (KLIP) per PO on Edit Shipment modal. */
+/** Batch save Delivered/Received Qty (KLIP) and Shipment Plan Qty per PO on Edit Shipment modal. */
 export const batchSaveShipmentPoKlipQtyHandler = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -2825,6 +2825,7 @@ export const batchSaveShipmentPoKlipQtyHandler = async (req: AuthRequest, res: R
     const rows = rawRows.map((row: Record<string, unknown>) => {
       const deliveredRaw = row.quantityDeliveredKlipKg ?? row.quantity_delivered_klip_kg ?? row.quantity_delivered;
       const receiveRaw = row.quantityReceiveKlipKg ?? row.quantity_receive_klip_kg ?? row.quantity_receive;
+      const planRaw = row.quantityShipmentPlanKg ?? row.quantity_shipment_plan_kg ?? row.quantity_shipment_plan;
       return {
         contractNumber: String(row.contractNumber ?? row.contract_number ?? '').trim(),
         poNumber: row.poNumber ?? row.po_number ?? null,
@@ -2836,6 +2837,10 @@ export const batchSaveShipmentPoKlipQtyHandler = async (req: AuthRequest, res: R
           receiveRaw === null || receiveRaw === undefined || receiveRaw === ''
             ? null
             : Number(receiveRaw),
+        quantityShipmentPlanKg:
+          planRaw === null || planRaw === undefined || planRaw === ''
+            ? null
+            : Number(planRaw),
       };
     });
 
@@ -2856,7 +2861,7 @@ export const batchSaveShipmentPoKlipQtyHandler = async (req: AuthRequest, res: R
 
     return res.json({
       success: true,
-      message: 'Delivered / Received Qty (KLIP) saved successfully',
+      message: 'Delivered / Received / Shipment Plan Qty saved successfully',
     });
   } catch (error) {
     logger.error('Batch save shipment PO KLIP qty error:', error);

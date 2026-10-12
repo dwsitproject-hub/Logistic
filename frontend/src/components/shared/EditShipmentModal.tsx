@@ -65,7 +65,7 @@ import api from '@/lib/api'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { resolveKlipPortInputValue, resolveKlipPortNameFromRow, resolveSapPortNameFromRow } from '@/lib/loadingPortDisplay'
-import { hasVesselPortsQuantityUserEdits, quantityKgValuesEqual } from '@/lib/vesselPortsQuantityEdits'
+import { hasShipmentPlanQtyEdits, hasVesselPortsQuantityUserEdits, quantityKgValuesEqual } from '@/lib/vesselPortsQuantityEdits'
 import { DECIMAL_DOT_HINT } from '@/lib/decimalDotInput'
 import { DecimalDotInput } from '@/components/shared/DecimalDotInput'
 import {
@@ -919,6 +919,7 @@ export function EditShipmentModal({
         contract_qty: d.contract_qty,
         quantity_delivered: d.quantity_delivered_klip,
         quantity_receive: d.quantity_receive_klip,
+        quantity_shipment_plan: d.quantity_shipment_plan,
       })),
     [detailRows],
   )
@@ -937,13 +938,17 @@ export function EditShipmentModal({
       sapDelivered += row.quantity_delivered_sap ?? 0
       sapReceive += row.quantity_receive_sap ?? 0
       osQty += row.outstanding_qty_actual ?? 0
-      if (row.quantity_shipment_plan != null) {
-        shipmentPlan += row.quantity_shipment_plan
+      // the plan as edited on screen, so the Grand Total follows what the user types
+      const planKg = qtyEdits[row.rowKey]?.quantity_shipment_plan !== undefined
+        ? qtyEdits[row.rowKey]?.quantity_shipment_plan
+        : row.quantity_shipment_plan
+      if (planKg != null) {
+        shipmentPlan += planKg
         hasShipmentPlan = true
       }
     }
     return { contractQty, sapDelivered, sapReceive, osQty, shipmentPlan: hasShipmentPlan ? shipmentPlan : null }
-  }, [detailRows])
+  }, [detailRows, qtyEdits])
 
   const qtyTotals = useMemo(
     () => sumVesselPortsQuantityEdits(qtyTableRows, qtyEdits),
@@ -1028,6 +1033,10 @@ export function EditShipmentModal({
     () => hasVesselPortsQuantityUserEdits(qtyTableRows, qtyEdits),
     [qtyTableRows, qtyEdits],
   )
+  const hasPlanQtyEdits = useMemo(
+    () => hasShipmentPlanQtyEdits(qtyTableRows, qtyEdits),
+    [qtyTableRows, qtyEdits],
+  )
 
   const hasEtaEdits = useMemo(
     () =>
@@ -1071,7 +1080,8 @@ export function EditShipmentModal({
     !quantityKgValuesEqual(sfalQty, originalSfalQty) || !quantityKgValuesEqual(sfbdQty, originalSfbdQty)
   const hasLimitedEdits = hasAtaEdits || hasQualityEdits || hasSfalSfbdEdits
 
-  const requiresEditRemark = hasEtaEdits || hasQtyEdits || hasAtaEdits || hasQualityEdits || hasSfalSfbdEdits
+  const requiresEditRemark =
+    hasEtaEdits || hasQtyEdits || hasPlanQtyEdits || hasAtaEdits || hasQualityEdits || hasSfalSfbdEdits
   const editRemarkMissing = requiresEditRemark && !editRemark.trim()
   const showSaveButton = canModifyCoreSections || (canEditAtaQuality && hasLimitedEdits)
   const showRemarkField =
@@ -1672,7 +1682,7 @@ export function EditShipmentModal({
 
   const resolveRowQty = (
     row: VesselPortsQuantityRow,
-    field: 'quantity_delivered' | 'quantity_receive',
+    field: 'quantity_delivered' | 'quantity_receive' | 'quantity_shipment_plan',
   ): number | null => {
     const edited = qtyEdits[row.rowKey]?.[field]
     if (edited !== undefined) return edited
@@ -2481,7 +2491,7 @@ export function EditShipmentModal({
                           </span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Planned quantity entered when the shipment was added. Read-only; does not reduce OS Qty.">
+                          <span title="Planned quantity of this PO on the shipment. Editable; a plan is not a delivery, so it does not reduce OS Qty.">
                             Qty Shipment Plan
                           </span>
                         </TableHead>
@@ -2534,7 +2544,20 @@ export function EditShipmentModal({
                               <MtQtyReadOnly valueKg={row.outstanding_qty_actual} />
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              <MtQtyReadOnly valueKg={row.quantity_shipment_plan} />
+                              {readOnly ? (
+                                <MtQtyReadOnly valueKg={resolveRowQty(qtyRow, 'quantity_shipment_plan')} />
+                              ) : (
+                                <MtQtyInput
+                                  valueKg={resolveRowQty(qtyRow, 'quantity_shipment_plan')}
+                                  disabled={!canModifyCoreSections}
+                                  onChange={(kg) =>
+                                    setQtyEdits((p) => ({
+                                      ...p,
+                                      [row.rowKey]: { ...p[row.rowKey], quantity_shipment_plan: kg },
+                                    }))
+                                  }
+                                />
+                              )}
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {readOnly ? (

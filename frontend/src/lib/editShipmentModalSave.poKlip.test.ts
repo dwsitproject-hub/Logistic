@@ -179,6 +179,75 @@ describe('saveEditShipmentChanges po-klip-qty', () => {
     expect(klipPuts).toHaveLength(0)
   })
 
+  it('saves a Shipment Plan Qty edit through /po-klip-qty without touching Delivered / Receive', async () => {
+    await saveEditShipmentChanges(
+      baseInput({
+        qtyRows: [
+          {
+            rowKey: 'a',
+            contract_ext_no: '1004030778',
+            po_number: '1001030778',
+            quantity_delivered: 100_000,
+            quantity_receive: 90_000,
+            quantity_shipment_plan: 250_000,
+          },
+        ],
+        qtyEdits: { a: { quantity_shipment_plan: 300_000 } },
+        originalDeliveredKg: 100_000,
+        originalReceiveKg: 90_000,
+      }),
+    )
+
+    const klipPuts = putMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && String(c[0]).includes('/po-klip-qty'),
+    )
+    expect(klipPuts).toHaveLength(1)
+    expect(klipPuts[0][1]).toEqual({
+      rows: [
+        {
+          contractNumber: '1004030778',
+          poNumber: '1001030778',
+          quantityDeliveredKlipKg: null,
+          quantityReceiveKlipKg: null,
+          quantityShipmentPlanKg: 300_000,
+        },
+      ],
+    })
+
+    // a plan is not a delivery: the shipment row itself carries no delivered / receive qty
+    const shipmentPuts = putMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && /\/shipments\/[^/]+$/.test(String(c[0])),
+    )
+    for (const call of shipmentPuts) {
+      const body = call[1] as Record<string, unknown>
+      expect(body.quantity_delivered).toBeUndefined()
+      expect(body.actual_vessel_qty_receive).toBeUndefined()
+      expect(body.quantity_shipment_plan).toBeUndefined()
+    }
+  })
+
+  it('sends no per-PO qty request when nothing in the qty grid changed', async () => {
+    await saveEditShipmentChanges(
+      baseInput({
+        qtyRows: [
+          {
+            rowKey: 'a',
+            contract_ext_no: '1004030778',
+            po_number: '1001030778',
+            quantity_delivered: 100_000,
+            quantity_receive: 90_000,
+            quantity_shipment_plan: 250_000,
+          },
+        ],
+        qtyEdits: { a: { quantity_shipment_plan: 250_000 } },
+      }),
+    )
+    const klipPuts = putMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && String(c[0]).includes('/po-klip-qty'),
+    )
+    expect(klipPuts).toHaveLength(0)
+  })
+
   it('does not persist shortage when auto-computed value matches original', async () => {
     await saveEditShipmentChanges(
       baseInput({ autoPersistShortageMt: -3.5, originalShortage: -3.5 }),

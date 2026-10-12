@@ -488,6 +488,8 @@ export interface PoKlipQtyRow {
   poNumber?: string | null;
   quantityDeliveredKlipKg: number | null;
   quantityReceiveKlipKg: number | null;
+  /** Planned quantity (kg) for this PO on the shipment: sets shipments.quantity_shipment_plan only. A plan is not a delivery, so it does not reduce OS. */
+  quantityShipmentPlanKg?: number | null;
 }
 
 export type BatchSavePoKlipResult =
@@ -560,7 +562,18 @@ export async function batchSaveShipmentPoKlipQty(args: {
         message: `Invalid Received Qty (KLIP) for ${contractNumber}`,
       };
     }
-    if (delivered == null && receive == null) continue;
+    const plan =
+      row.quantityShipmentPlanKg == null || row.quantityShipmentPlanKg === undefined
+        ? null
+        : Number(row.quantityShipmentPlanKg);
+    if (plan != null && (!Number.isFinite(plan) || plan < 0)) {
+      return {
+        ok: false,
+        status: 400,
+        message: `Invalid Shipment Plan Qty for ${contractNumber}`,
+      };
+    }
+    if (delivered == null && receive == null && plan == null) continue;
 
     const siblingId = await findSiblingShipmentIdForContract(
       context.lookup_key,
@@ -587,8 +600,13 @@ export async function batchSaveShipmentPoKlipQty(args: {
       paramIndex++;
     }
     if (receive != null) {
-      sets.push(`actual_vessel_qty_receive = $${paramIndex}::numeric`);
+      sets.push(`actual_vessel_qty_receive = ${paramIndex}::numeric`);
       values.push(receive);
+      paramIndex++;
+    }
+    if (plan != null) {
+      sets.push(`quantity_shipment_plan = ${paramIndex}::numeric`);
+      values.push(plan);
       paramIndex++;
     }
     sets.push('updated_at = CURRENT_TIMESTAMP');
