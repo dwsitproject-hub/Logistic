@@ -18,7 +18,7 @@ export function canonicalProductName(value: unknown): string {
   return PRODUCT_ALIASES[text.toUpperCase()] ?? text
 }
 
-/** Same product, whichever spelling either side uses. */
+/** Same product, whichever spelling either side uses (case does not matter: SHELL PALM and Shell Palm are one). */
 export function sameProduct(a: unknown, b: unknown): boolean {
-  return canonicalProductName(a) === canonicalProductName(b)
+  return canonicalProductName(a).toUpperCase() === canonicalProductName(b).toUpperCase()
 }

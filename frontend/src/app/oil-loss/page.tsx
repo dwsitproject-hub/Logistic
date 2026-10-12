@@ -43,6 +43,7 @@ import {
   applyOilLossGlobalFilters,
   buildOilLossPeriodOptions,
   OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS,
+  oilLossProductOptions,
   OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT,
   OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS,
   oilLossGlobalTransportLabel,
@@ -1699,6 +1700,30 @@ export default function OilLossPage() {
     dateTo,
   ])
 
+  /** The rows every filter but Product leaves in, so picking a product never hides the others from the list. */
+  const productListRows = useMemo(
+    () =>
+      applyOilLossGlobalFilters({
+        rows,
+        period: globalPeriod,
+        transport: globalTransport,
+        selectedProducts: [],
+        selectedGroupPlants,
+        dateFrom,
+        dateTo,
+      }),
+    [rows, globalPeriod, globalTransport, selectedGroupPlants, dateFrom, dateTo],
+  )
+  const productDropdownOptions = useMemo(
+    () =>
+      oilLossProductOptions(
+        productListRows,
+        selectedProducts,
+        availableProducts.length > 0 ? availableProducts : OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS,
+      ),
+    [productListRows, selectedProducts, availableProducts],
+  )
+
   const periodSummary = useMemo(() => {
     if (!userScopeReady) return null
     return buildOilLossSummaryForDateRange(globallyFilteredRows, dateFrom, dateTo)
@@ -2022,7 +2047,7 @@ export default function OilLossPage() {
             <SearchableMultiSelect
               label="Product"
               labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={[...OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS]}
+              options={productDropdownOptions}
               selected={selectedProducts}
               onChange={handleProductsChange}
               placeholder="All"

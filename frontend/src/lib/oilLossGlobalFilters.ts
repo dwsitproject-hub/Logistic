@@ -1,4 +1,4 @@
-import { sameProduct } from '@/lib/productAlias'
+import { canonicalProductName, sameProduct } from '@/lib/productAlias'
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import {
   matchesOilLossModeFilter,
@@ -33,6 +33,34 @@ export const OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT: OilLossGlobalTransportFilter = '
 export const OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS = ['CPO', 'PK', 'POME', 'SHELL PALM'] as const
 
 export type OilLossGlobalProductMultiOption = (typeof OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS)[number]
+
+/**
+ * The Product dropdown of Oil Loss: every product the rows have, plus whatever is picked.
+ *
+ * It was OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS verbatim, so a product outside those four (UCO, RPO, RBDPS, ...) could never be offered however
+ * many contracts it had. The rows are the source of truth, as on Contract and Shipping Performance. POME and WASTE OIL (POME) are one option
+ * (lib/productAlias.ts). A picked value goes in first so it keeps its own spelling and stays checked; the rest keep the spelling the rows have.
+ * With no rows and nothing picked (still loading) the fallback list is shown rather than an empty menu.
+ */
+export function oilLossProductOptions(
+  rows: readonly { product?: unknown }[],
+  selected: readonly string[],
+  fallback: readonly string[] = OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS,
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const add = (value: unknown) => {
+    const text = canonicalProductName(value)
+    const key = text.toUpperCase()
+    if (!text || seen.has(key)) return
+    seen.add(key)
+    out.push(text)
+  }
+  selected.forEach(add)
+  rows.forEach((row) => add(row.product))
+  if (out.length === 0) return [...fallback]
+  return out.sort((a, b) => a.localeCompare(b))
+}
 
 const MONTH_NAMES = [
   'January',

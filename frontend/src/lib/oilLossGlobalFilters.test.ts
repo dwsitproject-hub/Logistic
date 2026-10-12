@@ -4,6 +4,7 @@ import {
   buildOilLossPeriodOptions,
   matchesOilLossGlobalProductsMultiFilter,
   matchesOilLossGlobalTransportFilter,
+  oilLossProductOptions,
   resolveOilLossPeriodDateRange,
 } from '@/lib/oilLossGlobalFilters'
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
@@ -156,5 +157,33 @@ describe('oilLossGlobalFilters', () => {
     const cfrRow = row({ transport_mode: 'LAND', incoterm: 'CFR' })
     expect(matchesOilLossGlobalTransportFilter(cfrRow, 'Vessel')).toBe(true)
     expect(matchesOilLossGlobalTransportFilter(cfrRow, 'Truck')).toBe(false)
+  })
+})
+
+describe('oilLossProductOptions', () => {
+  const rows = ['CPO', 'PK', 'POME', 'WASTE OIL (POME)', 'SHELL PALM', 'UCO', 'RPO', 'RBDPS', 'UCO', '', null].map((product) => ({ product }))
+
+  it('offers every product the rows have, not only CPO / PK / POME / SHELL PALM', () => {
+    expect(oilLossProductOptions(rows, [])).toEqual(['CPO', 'PK', 'POME', 'RBDPS', 'RPO', 'SHELL PALM', 'UCO'])
+  })
+
+  it('merges POME and WASTE OIL (POME) into one option', () => {
+    expect(oilLossProductOptions([{ product: 'WASTE OIL (POME)' }, { product: 'POME' }], [])).toEqual(['POME'])
+  })
+
+  it('keeps a picked product listed and checked in its own spelling, even when no row has it', () => {
+    expect(oilLossProductOptions([{ product: 'CPO' }], ['Shell Palm'])).toEqual(['CPO', 'Shell Palm'])
+    expect(oilLossProductOptions([{ product: 'SHELL PALM' }], ['Shell Palm'])).toEqual(['Shell Palm'])
+  })
+
+  it('shows the fallback list until there are rows or a selection', () => {
+    expect(oilLossProductOptions([], [])).toEqual(['CPO', 'PK', 'POME', 'SHELL PALM'])
+    expect(oilLossProductOptions([], [], ['CPO', 'UCO'])).toEqual(['CPO', 'UCO'])
+  })
+
+  it('the POME option matches POME and WASTE OIL (POME) rows, and a saved Shell Palm selection matches SHELL PALM rows', () => {
+    expect(matchesOilLossGlobalProductsMultiFilter(row({ product: 'WASTE OIL (POME)' }), ['POME'])).toBe(true)
+    expect(matchesOilLossGlobalProductsMultiFilter(row({ product: 'SHELL PALM' }), ['Shell Palm'])).toBe(true)
+    expect(matchesOilLossGlobalProductsMultiFilter(row({ product: 'UCO' }), ['CPO'])).toBe(false)
   })
 })

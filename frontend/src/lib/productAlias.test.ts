@@ -8,6 +8,11 @@ describe('productAlias', () => {
     expect(sameProduct('POME', 'WASTE OIL (POME)')).toBe(true)
   })
 
+  it('ignores case, so a saved Shell Palm selection still matches SHELL PALM rows', () => {
+    expect(sameProduct('Shell Palm', 'SHELL PALM')).toBe(true)
+    expect(sameProduct('cpo', 'CPO')).toBe(true)
+  })
+
   it('does not merge other materials', () => {
     expect(sameProduct('POME', 'RPOME')).toBe(false)
     expect(sameProduct('POME', 'WASTE OIL (PFAD)')).toBe(false)
