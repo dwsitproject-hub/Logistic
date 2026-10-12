@@ -46,7 +46,14 @@ if (!userArg || !po) {
     const r = await origQuery.call(this, text, params);
     try {
       for (const row of r.rows || []) {
-        if (row && Object.prototype.hasOwnProperty.call(row, 'effective_status') && JSON.stringify(row).includes(po)) rawRows.push(row);
+        // a COPY: normalizeShipmentListRows rewrites status and deletes effective_status on the very objects returned here, so keeping the reference showed the rewritten row
+        if (row && JSON.stringify(row).includes(po)) {
+          rawRows.push({
+            sqlHead: String(text).replace(/\s+/g, ' ').trim().slice(0, 90),
+            hasEffective: Object.prototype.hasOwnProperty.call(row, 'effective_status'),
+            row: JSON.parse(JSON.stringify(row)),
+          });
+        }
       }
     } catch (e) {
       /* capture is best effort */
@@ -238,16 +245,17 @@ if (!userArg || !po) {
       const shown = (payload && payload.data && payload.data.shipments) || [];
       const shownRow = shown.find((r) => JSON.stringify(r).includes(po));
       console.log(`  status=${st.padEnd(10)} raw SQL rows captured: ${rawRows.length}   status shown to the page: ${shownRow ? shownRow.status : '-'}`);
-      rawRows.slice(0, 2).forEach((r) =>
+      rawRows.slice(0, 4).forEach((c) =>
         console.log('     ' + JSON.stringify({
-          effective_status: r.effective_status,
-          status_column: r.status,
-          is_contract_os_within_band: r.is_contract_os_within_band,
-          is_contract_sap_closed: r.is_contract_sap_closed,
-          atc: r.ata_vessel_complete_discharge,
-          group_status_floor: r.group_status_floor,
-          row_kind: r.row_kind,
-          contracts: r.contract_numbers,
+          sql: c.sqlHead,
+          has_effective_status_key: c.hasEffective,
+          effective_status: c.row.effective_status,
+          status_column: c.row.status,
+          is_contract_os_within_band: c.row.is_contract_os_within_band,
+          is_contract_sap_closed: c.row.is_contract_sap_closed,
+          atc: c.row.ata_vessel_complete_discharge,
+          group_status_floor: c.row.group_status_floor,
+          row_kind: c.row.row_kind,
         })),
       );
     }
