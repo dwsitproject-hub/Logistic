@@ -19,6 +19,10 @@ import {
   SHIPMENT_GROUPING_TEMPLATE_ROW_LIMIT,
 } from './shipmentPreplannedGroupingTemplateSql';
 
+const VESSEL_COL = SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Vessel');
+const PLAN_COL = SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Shipment Plan Qty (MT)');
+const ETA_COL = SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Arr. @ LP');
+
 function selected(
   over: Partial<ParsedShipmentGroupingRow> & Pick<ParsedShipmentGroupingRow, 'excelRowNumber' | 'group'>,
 ): ParsedShipmentGroupingRow {
@@ -29,7 +33,7 @@ function selected(
     incoterm: '',
     outstandingQtyMt: null,
     vessel: '',
-    qtyDeliveryMt: null,
+    shipmentPlanQtyMt: null,
     etas: emptyGroupingEtas(),
     ...over,
   };
@@ -38,21 +42,26 @@ function selected(
 describe('shipmentPreplannedGroupingUpload parse', () => {
   it('does not use WILMAR examples or contract number columns', () => {
     expect(SHIPMENT_GROUPING_INSTRUCTION).not.toMatch(/WILMAR/i);
-    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Contract Ext No');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Contract No');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('PO Number');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Vessel');
-    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Qty Delivery (MT)');
-    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Qty Delivery (MT)')).toBe(
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Shipment Plan Qty (MT)');
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Qty Delivery (MT)');
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Shipment Plan Qty (MT)')).toBe(
       SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Vessel') + 1,
+    );
+    // Contract Ext No sits right after PO Number
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Contract Ext No')).toBe(
+      SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('PO Number') + 1,
     );
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Arr. @ LP');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Charter Type');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Loading Port');
     expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Preplanned/);
     expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Planned/);
-    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Qty Delivery \(MT\) opsional/);
-    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Qty Delivery \(Klip\)/);
+    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Shipment Plan Qty \(MT\) opsional/);
+    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/tidak mengurangi OS/);
+    expect(SHIPMENT_GROUPING_INSTRUCTION).not.toMatch(/Qty Delivery/);
   });
 
   it('skips rows without Y even if Group is leftover', () => {
@@ -105,37 +114,57 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
     row[0] = 'Y';
     row[1] = 'A';
     row[7] = '1001';
-    row[12] = 'GIAT ARMADA 02';
-    row[13] = '1500';
-    row[14] = '2026-07-01';
+    row[VESSEL_COL] = 'GIAT ARMADA 02';
+    row[PLAN_COL] = '1500';
+    row[ETA_COL] = '2026-07-01';
     const parsed = parseShipmentGroupingMatrix([headers, row]);
     expect(parsed.selectedRows[0]?.vessel).toBe('GIAT ARMADA 02');
-    expect(parsed.selectedRows[0]?.qtyDeliveryMt).toBe(1500);
+    expect(parsed.selectedRows[0]?.shipmentPlanQtyMt).toBe(1500);
     expect(parsed.selectedRows[0]?.etas.eta_arrival).toBe('2026-07-01');
   });
 
-  it('treats Qty Delivery as optional and rejects invalid numbers', () => {
+  it('treats Shipment Plan Qty as optional and rejects invalid numbers', () => {
     const headers = [...SHIPMENT_GROUPING_TEMPLATE_HEADERS];
     const okRow = headers.map(() => '');
     okRow[0] = 'Y';
     okRow[1] = 'A';
     okRow[7] = '1001';
-    okRow[12] = 'GIAT ARMADA 02';
+    okRow[VESSEL_COL] = 'GIAT ARMADA 02';
     const parsedOk = parseShipmentGroupingMatrix([headers, okRow]);
-    expect(parsedOk.selectedRows[0]?.qtyDeliveryMt).toBeNull();
+    expect(parsedOk.selectedRows[0]?.shipmentPlanQtyMt).toBeNull();
 
     const zeroRow = [...okRow];
     zeroRow[7] = '1003';
-    zeroRow[13] = '0';
+    zeroRow[PLAN_COL] = '0';
     const parsedZero = parseShipmentGroupingMatrix([headers, zeroRow]);
-    expect(parsedZero.selectedRows[0]?.qtyDeliveryMt).toBeNull();
+    expect(parsedZero.selectedRows[0]?.shipmentPlanQtyMt).toBeNull();
 
     const badRow = [...okRow];
     badRow[7] = '1002';
-    badRow[13] = 'abc';
+    badRow[PLAN_COL] = 'abc';
     const parsedBad = parseShipmentGroupingMatrix([headers, badRow]);
     expect(parsedBad.selectedRows).toHaveLength(0);
-    expect(parsedBad.issues[0]?.reason).toMatch(/Qty Delivery/i);
+    expect(parsedBad.issues[0]?.reason).toMatch(/Shipment Plan Qty/i);
+  });
+
+  it('writes Contract Ext No in the cell right after PO Number and leaves Shipment Plan Qty empty to fill in', () => {
+    const buf = buildShipmentGroupingTemplateXlsxBuffer([
+      {
+        id: '1', supplier: 'A', plant_site: 'BONTANG', product: 'CPO', incoterm: 'CIF', buyer: 'KPN',
+        po_number: '1001', contract_ext_no: 'EXT-7788', contract_date: '2026-01-02',
+        contract_qty_kg: 5_000_000, outstanding_qty_kg: 1_200_500,
+      },
+    ]);
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[SHIPMENT_GROUPING_SHEET_NAME]!, { header: 1, defval: '' }) as unknown[][];
+    const headers = rows[1] as string[];
+    const data = rows[2] as unknown[];
+    const po = headers.indexOf('PO Number');
+    expect(headers[po + 1]).toBe('Contract Ext No');
+    expect(data[po]).toBe('1001');
+    expect(data[po + 1]).toBe('EXT-7788');
+    expect(headers).not.toContain('Qty Delivery (MT)');
+    expect(data[headers.indexOf('Shipment Plan Qty (MT)')]).toBe('');
   });
 
   it('writes Contract Qty (MT) and OS Qty (MT) as numeric cells so the columns can be summed', () => {
@@ -185,7 +214,8 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
     const xml = Buffer.from(entry?.content as Uint8Array).toString('utf8');
     expect(xml).toContain('type="list"');
     expect(xml).toContain(`<formula1>${SHIPMENT_GROUPING_VESSEL_LIST_NAME}</formula1>`);
-    expect(xml).toMatch(/sqref="M3:M\d+"/);
+    // the Vessel column letter follows the header order (Contract Ext No pushed it from M to N)
+    expect(xml).toMatch(/sqref="N3:N\d+"/);
     expect(xml.indexOf('<dataValidations')).toBeLessThan(xml.indexOf('<ignoredErrors'));
     const wbXmlPath =
       cfb.FullPaths.find((p) => p.replace(/\\/g, '/').includes('xl/workbook.xml')) ?? '';
@@ -199,7 +229,7 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
       defval: '',
     }) as unknown[][];
     expect(help.flat().join(' ')).toMatch(/sheet Master Vessel/);
-    expect(help.flat().join(' ')).toMatch(/Qty Delivery \(MT\)/);
+    expect(help.flat().join(' ')).toMatch(/Shipment Plan Qty \(MT\)/);
   });
 });
 
@@ -262,7 +292,9 @@ describe('buildShipmentGroupingTemplateQuery', () => {
     expect(sql).toContain(`LIMIT ${SHIPMENT_GROUPING_TEMPLATE_ROW_LIMIT + 1}`);
     expect(sql).toContain('l.discharge_destination');
     expect(sql).toContain('b2b_ending_child_snapshot');
-    expect(sql).not.toContain('AS contract_ext_no');
+    // Contract Ext No comes from the same latest-SPD snapshot column as the rest - no sap_processed_data jsonb read
+    expect(sql).toContain('AS contract_ext_no');
+    expect(sql).toContain('l.contract_ext_no_raw');
     expect(sql).not.toContain('AS contract_number');
   });
 

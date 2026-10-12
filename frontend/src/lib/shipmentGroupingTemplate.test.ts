@@ -52,8 +52,13 @@ describe('shipmentGroupingTemplate', () => {
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS[0]).toBe('Select')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS[1]).toBe('Group')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Vessel')
-    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Qty Delivery (MT)')).toBe(
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Shipment Plan Qty (MT)')).toBe(
       SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Vessel') + 1,
+    )
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Qty Delivery (MT)')
+    // Contract Ext No sits right after PO Number
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Contract Ext No')).toBe(
+      SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('PO Number') + 1,
     )
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Arr. @ LP')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Done Disch')
@@ -61,7 +66,6 @@ describe('shipmentGroupingTemplate', () => {
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Loading Port')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Discharge Port')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Plan Qty (MT)')
-    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Contract Ext No')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Contract No')
     expect(SHIPMENT_GROUPING_INSTRUCTION).not.toMatch(/WILMAR/i)
     expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/contoh 1 atau A/)
@@ -110,6 +114,7 @@ describe('shipmentGroupingTemplate', () => {
         incoterm: 'CIF',
         buyer: 'KPN',
         poNumber: '1001',
+        contractExtNo: 'EXT-7788',
         contractDate: '2026-03-15',
         contractQtyKg: 2500000,
         outstandingQtyKg: 1200500,
@@ -120,13 +125,14 @@ describe('shipmentGroupingTemplate', () => {
     expect(data[0]).toBe('')
     expect(data[1]).toBe('')
     expect(data[7]).toBe('1001')
+    expect(data[8]).toBe('EXT-7788')
     // Contract Qty (MT) / OS Qty (MT) are numbers so they can be summed
-    expect(data[9]).toBe(2500)
-    expect(data[10]).toBe(1200.5)
-    expect(data[11]).toBe('Unplanned')
-    expect(data[12]).toBe('')
+    expect(data[10]).toBe(2500)
+    expect(data[11]).toBe(1200.5)
+    expect(data[12]).toBe('Unplanned')
     expect(data[13]).toBe('')
     expect(data[14]).toBe('')
+    expect(data[15]).toBe('')
     expect(data).toHaveLength(SHIPMENT_GROUPING_TEMPLATE_HEADERS.length)
   })
 
@@ -235,7 +241,7 @@ describe('shipmentGroupingTemplate', () => {
     expect(text).toMatch(/contoh: 1, A, B/)
     expect(text).toMatch(/Preplanned/)
     expect(text).toMatch(/Planned/)
-    expect(text).toMatch(/Qty Delivery \(MT\)/)
+    expect(text).toMatch(/Shipment Plan Qty \(MT\)/)
     expect(text).toMatch(/otomatis/)
   })
 })

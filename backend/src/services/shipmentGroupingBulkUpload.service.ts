@@ -276,7 +276,8 @@ export async function applyShipmentGroupingBulkUpload(
     const missingContract: string[] = [];
     const dischargeNames = new Set<string>();
     const etaByContract: CreateShipmentEtaByContract = {};
-    const quantityDeliveredByContract: Record<string, number> = {};
+    // Shipment Plan Qty: sets shipments.quantity_shipment_plan only. A plan is not a delivery, so it does not reduce OS (same as Add New Shipment).
+    const quantityShipmentPlanByContract: Record<string, number> = {};
     let firstLoadingPort = '';
     const contractQtyAssigned: Record<string, string> = {};
     const contractNumbers: string[] = [];
@@ -318,8 +319,8 @@ export async function applyShipmentGroupingBulkUpload(
         const assignmentKey = po ? `${contractNumber}::${po}` : contractNumber;
         contractQtyAssigned[assignmentKey] = String(qtyMt);
       }
-      if (match.row.qtyDeliveryMt != null && Number.isFinite(match.row.qtyDeliveryMt) && match.row.qtyDeliveryMt > 0) {
-        quantityDeliveredByContract[contractNumber] = match.row.qtyDeliveryMt * 1000;
+      if (match.row.shipmentPlanQtyMt != null && Number.isFinite(match.row.shipmentPlanQtyMt) && match.row.shipmentPlanQtyMt > 0) {
+        quantityShipmentPlanByContract[contractNumber] = match.row.shipmentPlanQtyMt * 1000;
       }
     }
 
@@ -374,8 +375,8 @@ export async function applyShipmentGroupingBulkUpload(
         portOfLoading: firstLoadingPort || null,
         portOfDischarge: dischargePort || null,
         etaByContract,
-        quantityDeliveredByContract:
-          Object.keys(quantityDeliveredByContract).length > 0 ? quantityDeliveredByContract : null,
+        quantityShipmentPlanByContract:
+          Object.keys(quantityShipmentPlanByContract).length > 0 ? quantityShipmentPlanByContract : null,
         userId,
       });
       const totalOsMt = clusterMatches.reduce((sum, m) => sum + qtyMtForMatch(m, eligibleById.get(m.contractId)), 0);

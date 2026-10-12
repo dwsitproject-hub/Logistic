@@ -216,6 +216,7 @@ export async function buildShipmentGroupingTemplateQuery(
       c.incoterm,
       c.buyer,
       NULLIF(TRIM(c.po_number::text), '') AS po_number,
+      (${sqlGroupingTemplateContractExtExpr()}) AS contract_ext_no,
       c.contract_date,
       c.quantity_ordered AS contract_qty_kg,
       (${outstandingExpr})::numeric AS outstanding_qty_kg
@@ -254,6 +255,7 @@ export interface GroupingTemplateDbRow {
   incoterm: string | null;
   buyer: string | null;
   po_number: string | null;
+  contract_ext_no: string | null;
   contract_date: string | Date | null;
   contract_qty_kg: number | string | null;
   outstanding_qty_kg: number | string | null;
