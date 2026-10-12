@@ -80,9 +80,11 @@ const show = (title, rows) => {
 
     const raw = await pool.query(
       `SELECT r.import_id, r.row_number, r.created_at,
-              (SELECT jsonb_object_agg(k, v)
-                 FROM jsonb_each_text(r.data) AS e(k, v)
-                WHERE k ILIKE '%product%' OR k ILIKE '%material%') AS product_like_fields
+              CASE WHEN jsonb_typeof(r.data) = 'object' THEN
+                (SELECT jsonb_object_agg(k, v)
+                   FROM jsonb_each_text(r.data) AS e(k, v)
+                  WHERE k ILIKE '%product%' OR k ILIKE '%material%')
+              ELSE to_jsonb(left(r.data::text, 300)) END AS product_like_fields
          FROM sap_raw_data r
         WHERE r.data::text LIKE '%' || $1 || '%'
         ORDER BY r.created_at DESC
