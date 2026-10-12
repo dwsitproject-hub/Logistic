@@ -6,6 +6,7 @@ import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { stitchControlClass, useStitchFields } from '@/components/shared/stitchField'
 import { isBlankFilterOption, sortFilterOptionsWithSelectedFirst } from '@/lib/globalScopeFilters'
+import { computeMultiSelectMenuBox, establishesFixedContainingBlock } from '@/lib/multiSelectMenuPlacement'
 
 // Searchable multi-select dropdown (type to filter, multiple selection with OR).
 // Copied from Dashboard to keep Plant/Site and Incoterm UX consistent.
@@ -52,6 +53,12 @@ export function SearchableMultiSelect({
     width: number
     listMaxHeight: number
   } | null>(null)
+  /**
+   * Where the menu is portaled. document.body normally; the surrounding dialog when the trigger sits in one. A Radix Dialog traps focus,
+   * so a search box outside it is pulled back out of focus as soon as it gets it and typing never arrives (clicks still worked, so
+   * only Search looked broken). See lib/multiSelectMenuPlacement.ts.
+   */
+  const [menuHost, setMenuHost] = useState<HTMLElement | null>(null)
 
   const orderedOptions = useMemo(() => {
     const withoutBlank = options.filter((option) => !isBlankFilterOption(option))
@@ -79,23 +86,24 @@ export function SearchableMultiSelect({
       return
     }
     const place = () => {
-      const trigger = containerRef.current?.getBoundingClientRect()
-      if (!trigger) return
-      const margin = 8
-      const spaceBelow = window.innerHeight - trigger.bottom - margin
-      const spaceAbove = trigger.top - margin
-      const openBelow = spaceBelow >= 220 || spaceBelow >= spaceAbove
-      const available = Math.max(160, openBelow ? spaceBelow : spaceAbove)
-      const listMaxHeight = Math.max(120, available - 96)
-      const top = openBelow
-        ? trigger.bottom + 4
-        : Math.max(margin, trigger.top - (listMaxHeight + 96) - 4)
-      setMenuBox({
-        top,
-        left: Math.max(margin, trigger.left),
-        width: Math.max(trigger.width, 220),
-        listMaxHeight,
-      })
+      const triggerEl = containerRef.current
+      const trigger = triggerEl?.getBoundingClientRect()
+      if (!triggerEl || !trigger) return
+      const dialog = triggerEl.closest<HTMLElement>('[role="dialog"]')
+      setMenuHost(dialog)
+      // Only a transformed dialog (Radix centres it with one) re-bases `position: fixed`; a plain one measures from the viewport.
+      const rebasing = dialog != null && establishesFixedContainingBlock(window.getComputedStyle(dialog))
+      const dialogRect = rebasing ? dialog.getBoundingClientRect() : null
+      setMenuBox(
+        computeMultiSelectMenuBox({
+          trigger,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          containingBlock:
+            dialog && dialogRect
+              ? { ...dialogRect, borderLeft: dialog.clientLeft, borderTop: dialog.clientTop }
+              : null,
+        }),
+      )
     }
     place()
     const onScroll = (event: Event) => {
@@ -218,7 +226,7 @@ export function SearchableMultiSelect({
             >
               {menuBody}
             </div>,
-            document.body,
+            menuHost ?? document.body,
           )
         : null}
     </div>
