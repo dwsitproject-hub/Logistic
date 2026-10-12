@@ -2570,7 +2570,7 @@ export function AddNewShipmentModal({
                             <TableHead className={COMPACT_TH}>Supplier / Product</TableHead>
                             <TableHead className={`${COMPACT_TH} text-right`}>Contract Qty</TableHead>
                             <TableHead className={`${COMPACT_TH} text-right`}>OS Qty</TableHead>
-                            <TableHead className={`${COMPACT_TH} text-right`}><span title="Planned quantity for this PO. Saved on its own and read-only afterwards; it does not reduce OS Qty.">Qty Shipment Plan</span></TableHead>
+                            <TableHead className={`${COMPACT_TH} text-right`}><span title="Planned quantity for this PO. Saved on its own and editable later in Edit Shipment; it does not reduce OS Qty.">Shipment Plan Qty</span></TableHead>
                             <TableHead className={COMPACT_TH}>Del. Start</TableHead>
                             <TableHead className={COMPACT_TH}>Del. End</TableHead>
                             {!isEditMode && <TableHead className={`${COMPACT_TH} w-8`} />}
@@ -2687,7 +2687,7 @@ export function AddNewShipmentModal({
                         </TableBody>
                       </Table>
                     </div>
-                    <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT} Optional. Qty Shipment Plan is a plan: it is saved separately and does not reduce OS Qty.</p>
+                    <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT} Optional. Shipment Plan Qty is a plan: it is saved separately and does not reduce OS Qty.</p>
                   </div>
                 )}
               </div>

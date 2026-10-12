@@ -577,7 +577,7 @@ type ShipmentDetailRow = {
   quantity_delivered_sap: number | null
   /** SAP STO-scoped receive (read-only in PO table). */
   quantity_receive_sap: number | null
-  /** Qty Shipment Plan entered at Add New Shipment (read-only; a plan, not a delivery). */
+  /** Shipment Plan Qty entered at Add New Shipment, editable here (a plan, not a delivery). */
   quantity_shipment_plan: number | null
   /** KLIP delivered seed (editable without SLD/SDD). */
   quantity_delivered_klip: number | null
@@ -2499,7 +2499,7 @@ export function EditShipmentModal({
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
                           <span title="Planned quantity of this PO on the shipment. Editable; a plan is not a delivery, so it does not reduce OS Qty.">
-                            Qty Shipment Plan
+                            Shipment Plan Qty
                           </span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>

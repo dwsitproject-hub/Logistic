@@ -4576,9 +4576,9 @@ function ShipmentsPageContent() {
     },
     {
       id: 'quantity_shipment_plan',
-      label: 'Qty Shipment Plan',
-      // The plan entered at Add New Shipment, summed over the STO's POs. Read-only here; a plan is not a delivery, so it is
-      // not part of Delivery Qty or OS Qty.
+      label: 'Shipment Plan Qty',
+      // The plan entered at Add New Shipment (editable later in Edit Shipment), summed over the STO's POs; a plan is not a
+      // delivery, so it is not part of Delivery Qty or OS Qty.
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => shipmentListShipmentPlanKg(s) ?? 0,
