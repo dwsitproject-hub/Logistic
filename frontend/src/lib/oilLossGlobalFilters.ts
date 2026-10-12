@@ -1,3 +1,4 @@
+import { sameProduct } from '@/lib/productAlias'
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import {
   matchesOilLossModeFilter,
@@ -130,8 +131,8 @@ export function matchesOilLossGlobalProductsMultiFilter(
   selectedProducts: readonly string[],
 ): boolean {
   if (selectedProducts.length === 0) return true
-  const rowProduct = String(row.product ?? '').trim()
-  return selectedProducts.some((product) => rowProduct === product)
+  // sameProduct, not ===: the POME option has to match WASTE OIL (POME) rows too (lib/productAlias.ts)
+  return selectedProducts.some((product) => sameProduct(row.product, product))
 }
 
 /** @deprecated Single product tab — use matchesOilLossGlobalProductsMultiFilter */
@@ -140,7 +141,7 @@ export function matchesOilLossGlobalProductFilter(
   filter: OilLossGlobalProductFilter,
 ): boolean {
   if (filter === 'All') return true
-  return String(row.product ?? '').trim() === filter
+  return sameProduct(row.product, filter)
 }
 
 export type ApplyOilLossGlobalFiltersInput = {

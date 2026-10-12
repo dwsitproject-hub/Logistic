@@ -53,6 +53,7 @@ import {
 } from '../utils/operationId';
 import { mergeContractRecords, mergeDuplicateContractsByPo } from './contractMerge.service';
 import { normalizePoNumber, shipmentPoSapIdKey } from '../utils/contractPoIdentity';
+import { canonicalProductName } from '../utils/productAlias';
 
 export interface DistributionResult {
   contractId?: string;
@@ -771,7 +772,7 @@ export class SapDataDistributionService {
       contractData.supplier,
       contractData.buyer || contractData.group || 'Unknown',
       this.parseDate(contractData.contract_date),
-      contractData.product,
+      canonicalProductName(contractData.product),
       poNumber,
       contractData.incoterm,
       contractData.sea_land || contractData.transport_mode,

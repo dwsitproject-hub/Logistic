@@ -1,5 +1,6 @@
 import pool from '../database/connection';
 import logger from '../utils/logger';
+import { canonicalProductName } from '../utils/productAlias';
 import { FinanceMaterializedViewService } from './financeMaterializedView.service';
 
 export interface SapDataRow {
@@ -219,10 +220,12 @@ export class SapImportService {
         || null;
 
       // Extract product name
-      const product = row['Product\r\n(material desc)']
+      const productRaw = row['Product\r\n(material desc)']
         || row['Product']
         || row['product']
         || null;
+      // POME / WASTE OIL (POME) -> one product (utils/productAlias.ts)
+      const product = canonicalProductName(productRaw);
 
       // Extract PO number
       const poNumber = row['PO No.']

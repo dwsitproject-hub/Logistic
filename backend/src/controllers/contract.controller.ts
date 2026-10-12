@@ -1,4 +1,5 @@
 import { canonicalIncoterm } from '../utils/incotermAlias';
+import { canonicalProductName } from '../utils/productAlias';
 import { Response } from 'express';
 import { query } from '../database/connection';
 import {
@@ -3345,7 +3346,7 @@ export const createContract = async (req: AuthRequest, res: Response) => {
         contract_id,
         buyer,
         supplier,
-        product,
+        canonicalProductName(product),
         quantity_ordered,
         unit,
         canonicalIncoterm(incoterm),

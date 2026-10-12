@@ -1,4 +1,5 @@
 import { canonicalIncoterm } from '../utils/incotermAlias';
+import { canonicalProductName } from '../utils/productAlias';
 import * as XLSX from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -2160,6 +2161,14 @@ export class SapMasterV2ImportService {
      */
     if (parsed.contract.incoterm !== undefined) {
       parsed.contract.incoterm = canonicalIncoterm(parsed.contract.incoterm);
+    }
+
+    /*
+     * POME / WASTE OIL (POME) -> one product (utils/productAlias.ts). Only the parsed value: parsed.raw keeps
+     * exactly what SAP sent, which is what the SAP-vs-KLIP comparisons and diag scripts read.
+     */
+    if (parsed.contract.product !== undefined) {
+      parsed.contract.product = canonicalProductName(parsed.contract.product);
     }
 
     return parsed;

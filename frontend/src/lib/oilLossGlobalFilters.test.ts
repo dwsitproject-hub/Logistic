@@ -28,6 +28,12 @@ describe('oilLossGlobalFilters', () => {
     expect(matchesOilLossGlobalProductsMultiFilter(row({ product: 'POME' }), ['CPO', 'PK'])).toBe(false)
   })
 
+  it('the POME option matches POME and WASTE OIL (POME) rows alike, and nothing else that merely contains POME', () => {
+    expect(matchesOilLossGlobalProductsMultiFilter(row({ product: 'POME' }), ['POME'])).toBe(true)
+    expect(matchesOilLossGlobalProductsMultiFilter(row({ product: 'WASTE OIL (POME)' }), ['POME'])).toBe(true)
+    expect(matchesOilLossGlobalProductsMultiFilter(row({ product: 'RPOME' }), ['POME'])).toBe(false)
+  })
+
   it('empty product selection matches all products', () => {
     expect(matchesOilLossGlobalProductsMultiFilter(row({ product: 'POME' }), [])).toBe(true)
   })
