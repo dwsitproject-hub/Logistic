@@ -37,6 +37,22 @@ if (!userArg || !po) {
   const pool = dist('database/connection').default;
   const { fetchUserScopeAssociations } = dist('services/userAssociations.service');
   const { getShipments } = dist('controllers/shipment.controller');
+  // Capture the RAW rows the list SQL returns (before normalizeShipmentListRows rewrites status): effective_status is what the SQL computed for the row,
+  // next to the columns it is computed from. The controllers read connection.query at call time, so wrapping it here is enough.
+  const connection = dist('database/connection');
+  const rawRows = [];
+  const origQuery = connection.query;
+  connection.query = async function wrapped(text, params) {
+    const r = await origQuery.call(this, text, params);
+    try {
+      for (const row of r.rows || []) {
+        if (row && Object.prototype.hasOwnProperty.call(row, 'effective_status') && JSON.stringify(row).includes(po)) rawRows.push(row);
+      }
+    } catch (e) {
+      /* capture is best effort */
+    }
+    return r;
+  };
   try {
     const u = (
       await pool.query(
@@ -209,6 +225,33 @@ if (!userArg || !po) {
     } catch (e) {
       console.log('\nOS-within-band check failed: ' + (e && e.message ? e.message : e));
     }
+    console.log('\nRAW SQL rows for the PO (what the list query returned BEFORE Node rewrote status), per card:');
+    for (const st of ['ALL', 'COMPLETED', 'PLANNED']) {
+      rawRows.length = 0;
+      const params = { page: '1', limit: '50', compact: 'true', includeSummary: 'false', skipSapJoin: 'true', search: po };
+      if (st !== 'ALL') params.status = st;
+      if (from) params.dateFrom = from;
+      if (to) params.dateTo = to;
+      let payload = null;
+      const res = { status() { return this; }, json(p) { payload = p; return this; }, setHeader() { return this; }, send(p) { payload = p; return this; } };
+      await getShipments({ query: params, params: {}, body: {}, headers: {}, user: { id: user.id, role: user.role } }, res);
+      const shown = (payload && payload.data && payload.data.shipments) || [];
+      const shownRow = shown.find((r) => JSON.stringify(r).includes(po));
+      console.log(`  status=${st.padEnd(10)} raw SQL rows captured: ${rawRows.length}   status shown to the page: ${shownRow ? shownRow.status : '-'}`);
+      rawRows.slice(0, 2).forEach((r) =>
+        console.log('     ' + JSON.stringify({
+          effective_status: r.effective_status,
+          status_column: r.status,
+          is_contract_os_within_band: r.is_contract_os_within_band,
+          is_contract_sap_closed: r.is_contract_sap_closed,
+          atc: r.ata_vessel_complete_discharge,
+          group_status_floor: r.group_status_floor,
+          row_kind: r.row_kind,
+          contracts: r.contract_numbers,
+        })),
+      );
+    }
+
     console.log('\nthe same cards on the full list path (skipSapJoin=false):');
     for (const st of ['ALL', 'PLANNED', 'COMPLETED']) {
       const params = { page: '1', limit: '50', compact: 'true', includeSummary: 'false', skipSapJoin: 'false', search: po };
