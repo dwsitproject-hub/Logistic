@@ -2,19 +2,20 @@
  * READ-ONLY: why does a contract / PO show on the Shipments page for Admin but not for a Staff user?
  *
  *   cd /opt/klip && git fetch origin SIT --quiet && git show origin/SIT:docs/scripts/diag-shipments-user-scope.cjs \
- *     | docker exec -i klip-backend node - --user=<username or email> --po=1011003250 [--from=2026-01-01 --to=2026-10-12]
+ *     | docker exec -i klip-backend node - --user=<username or email> --po=1011003250 [--from=2026-01-01 --to=2026-12-31]
  *
  * The list endpoint does not look at who is asking. What differs between two people is the DEFAULT SCOPE the page puts on a Staff user - the Region/Plant and the
  * Products assigned on the Users page - sent as `plant=` and a `product` column filter. So this calls the real route handler (getShipments, mock req/res, the way
- * diag-four-page-os.cjs does) with the same parameters the page builds, five ways:
+ * diag-four-page-os.cjs does) with the parameters the page builds. The page sends skipSapJoin=true (the fast list path), so every search scenario is run with
+ * skipSapJoin false AND true:
  *
  *   A  the user's own scope (Region/Plant AND Product), searching the PO   <- what that user sees
  *   B  no scope at all, searching the PO                                   <- what Admin sees
  *   C  only the user's Region/Plant
  *   D  only the user's Product
- *   E  the user's own scope, no search                                     <- how many rows the user gets
  *
- * and prints whether the PO is in each, with the contract's own product and Region/Site next to the user's. Nothing is written.
+ * Then WITHOUT a search, 20 rows a page like the table, it reads page after page and says on which page the PO sits for the user's scope (E) and for no scope (F).
+ * Nothing is written. The handler also starts its usual background vessel backfill, which can log warnings after the answer; they are not part of this check.
  */
 const path = require('path');
 const dist = (p) => require(path.join(process.cwd(), 'dist', p));
@@ -69,8 +70,15 @@ if (!userArg || !po) {
       console.log(`  ${r.contract_id}  po=${r.po_number}  product=${JSON.stringify(r.product)}  incoterm=${r.incoterm}  region(SAP discharge)=${JSON.stringify(r.discharge_destination)}  status=${r.status}  shipments=${r.shipments}`),
     );
 
-    const run = async (label, { plants, products, search }) => {
-      const params = { page: '1', limit: '200', compact: 'true' };
+    const run = async (label, opts) => {
+      const { plants, products, search, skipSapJoin = false, page = 1, limit = 200, quiet = false } = opts;
+      const params = {
+        page: String(page),
+        limit: String(limit),
+        compact: 'true',
+        includeSummary: 'false',
+        skipSapJoin: skipSapJoin ? 'true' : 'false',
+      };
       if (from) params.dateFrom = from;
       if (to) params.dateTo = to;
       if (search) params.search = po;
@@ -89,29 +97,57 @@ if (!userArg || !po) {
       await getShipments({ query: params, params: {}, body: {}, headers: {}, user: { id: user.id, role: user.role } }, res);
       const rows = (payload && payload.data && payload.data.shipments) || [];
       const total = payload && payload.data && payload.data.pagination ? payload.data.pagination.total : rows.length;
-      const hit = rows.filter((r) => JSON.stringify(r).includes(po));
-      console.log(`  ${label.padEnd(44)} HTTP ${code}  rows=${String(total).padStart(5)}  PO present: ${hit.length > 0 ? 'YES' : 'no'}`);
-      return hit.length > 0;
+      const found = rows.some((r) => JSON.stringify(r).includes(po));
+      if (!quiet) console.log(`  ${label.padEnd(52)} HTTP ${code}  rows=${String(total).padStart(5)}  PO present: ${found ? 'YES' : 'no'}`);
+      return { found, total, count: rows.length };
     };
 
-    console.log('\nscenarios (search = the PO unless noted):');
-    const A = await run('A  user scope (Region/Plant + Product)', { plants: scope.group_plants, products: scope.products, search: true });
-    const B = await run('B  no scope (what Admin sees)', { search: true });
-    const C = await run('C  only the Region/Plant', { plants: scope.group_plants, search: true });
-    const D = await run('D  only the Product', { products: scope.products, search: true });
-    await run('E  user scope, no search', { plants: scope.group_plants, products: scope.products, search: false });
+    console.log('\nsearch scenarios (search = the PO). The page sends skipSapJoin=true, so each runs both ways:');
+    const scoped = { plants: scope.group_plants, products: scope.products };
+    const f = {};
+    for (const skip of [false, true]) {
+      const tag = skip ? ' [skipSapJoin=true, as the page]' : ' [skipSapJoin=false]';
+      f['A' + skip] = (await run('A  user scope' + tag, { ...scoped, search: true, skipSapJoin: skip })).found;
+      f['B' + skip] = (await run('B  no scope (Admin)' + tag, { search: true, skipSapJoin: skip })).found;
+      f['C' + skip] = (await run('C  only Region/Plant' + tag, { plants: scope.group_plants, search: true, skipSapJoin: skip })).found;
+      f['D' + skip] = (await run('D  only Product' + tag, { products: scope.products, search: true, skipSapJoin: skip })).found;
+    }
+
+    const locate = async (label, opts) => {
+      for (let p = 1; p <= 80; p += 1) {
+        const r = await run(label, { ...opts, search: false, skipSapJoin: true, page: p, limit: 20, quiet: true });
+        if (r.found) {
+          console.log(`  ${label.padEnd(30)} PO is on page ${p} of ${Math.ceil(r.total / 20)} (${r.total} rows)`);
+          return p;
+        }
+        if (r.count < 20) {
+          console.log(`  ${label.padEnd(30)} PO is NOT in any of the ${r.total} rows (${p} pages read)`);
+          return null;
+        }
+      }
+      console.log(`  ${label.padEnd(30)} PO not found in the first 80 pages`);
+      return null;
+    };
+    console.log('\nwithout a search, 20 rows a page, skipSapJoin=true (what scrolling the table shows):');
+    const posUser = await locate('E  user scope', scoped);
+    const posAll = await locate('F  no scope (Admin)', {});
 
     console.log('\nreading:');
-    if (A) console.log('  The user\'s own scope DOES list the PO through the endpoint - the cause is on the page side (filters changed on screen, a stale tab, the status or date filter).');
-    else if (B && !C && D) console.log('  Hidden by the Region/Plant assignment: the contract\'s Region/Site is not in the user\'s list above.');
-    else if (B && C && !D) console.log('  Hidden by the Product assignment: the contract\'s product is not in the user\'s list above.');
-    else if (B && !C && !D) console.log('  Hidden by BOTH assignments.');
-    else if (B && C && D) console.log('  Each filter alone keeps the PO but the two together drop it - a bug in how the filters combine; send this output.');
-    else console.log('  Not even the unscoped search finds it with these date parameters - widen --from/--to.');
+    if (f.Atrue && f.Btrue) console.log("  With the page's own parameters the PO is returned for the user and for Admin when searched; E/F say where it sits without a search.");
+    else if (!f.Atrue && f.Btrue && f.Ctrue && !f.Dtrue) console.log("  Hidden by the Product assignment (the user's products are listed at the top).");
+    else if (!f.Atrue && f.Btrue && !f.Ctrue && f.Dtrue) console.log('  Hidden by the Region/Plant assignment.');
+    else if (!f.Atrue && f.Btrue && !f.Ctrue && !f.Dtrue) console.log('  Hidden by BOTH assignments.');
+    else if (!f.Atrue && f.Btrue && f.Ctrue && f.Dtrue) console.log('  Each filter alone keeps the PO but the two together drop it - a bug in how the filters combine; send this output.');
+    else if (!f.Atrue && !f.Btrue) console.log('  Not even the unscoped search finds it with these parameters - widen --from/--to.');
+    if (f.Afalse !== f.Atrue || f.Bfalse !== f.Btrue) console.log('  NOTE: the answer DIFFERS between skipSapJoin=false and true - the fast list path treats this row differently.');
+    if (posUser && posAll && posUser !== posAll) console.log(`  Without a search the PO sits on page ${posUser} for the user and page ${posAll} for Admin: the scope moves where it is, it does not remove it.`);
+    if (!posUser && posAll) console.log("  Without a search the PO is in Admin's rows but NOT in the user's: the user's scope removes it from the table.");
   } catch (error) {
     console.error('Failed:', error && error.message ? error.message : error);
     process.exitCode = 1;
   } finally {
+    // let the handler's fire-and-forget vessel backfill drain before the pool closes, or it logs a stream of closed-pool errors
+    await new Promise((r) => setTimeout(r, 4000));
     await pool.end();
   }
 })();
