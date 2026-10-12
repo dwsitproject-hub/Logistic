@@ -1352,7 +1352,7 @@ ${vlpLateralJoins}
       toolbarOuterParams,
       skipSapJoin: true,
       filterCacheKey: shipmentListFilterCacheKey,
-      contractScope: { dateFrom, dateTo, contract, plants },
+      contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
       globalSearch,
       colFilters,
     });
@@ -1360,21 +1360,21 @@ ${vlpLateralJoins}
       countUnplannedHybridBreakdown(section1UnplannedHybridCtx);
     const loadSection1PreplannedBreakdown = () =>
       countPreplannedContracts({
-        contractScope: { dateFrom, dateTo, contract, plants },
+        contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
         globalSearch,
         colFilters,
         cacheKey: `${shipmentListFilterCacheKey}:preplanned-breakdown`,
       });
     const loadSection1CompletedBreakdown = () =>
       countCompletedContractBacklog({
-        contractScope: { dateFrom, dateTo, contract, plants },
+        contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
         globalSearch,
         colFilters,
         cacheKey: `${shipmentListFilterCacheKey}:completed-backlog`,
       });
     const loadSection1CancelledBreakdown = () =>
       countCancelledContractBacklog({
-        contractScope: { dateFrom, dateTo, contract, plants },
+        contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
         globalSearch,
         colFilters,
         cacheKey: `${shipmentListFilterCacheKey}:cancelled-backlog`,
@@ -1646,6 +1646,7 @@ ${vlpLateralJoins}
               dateTo,
               contract,
               plants,
+              sourceType: sourceTypeParam,
             },
             globalSearch,
             colFilters,
@@ -1728,6 +1729,7 @@ ${vlpLateralJoins}
             dateTo,
             contract,
             plants,
+            sourceType: sourceTypeParam,
           },
           globalSearch,
           colFilters,
@@ -1788,7 +1790,7 @@ ${vlpLateralJoins}
 
       if (isPreplannedListRequest(status)) {
         const preplanned = await resolvePreplannedContractsList(req, {
-          contractScope: { dateFrom, dateTo, contract, plants },
+          contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
           globalSearch,
           colFilters,
           cacheKey: `${shipmentListFilterCacheKey}:preplanned-breakdown`,
@@ -1860,6 +1862,7 @@ ${vlpLateralJoins}
               dateTo,
               contract,
               plants,
+              sourceType: sourceTypeParam,
             },
             globalSearch,
             colFilters,
@@ -1937,6 +1940,7 @@ ${vlpLateralJoins}
               dateTo,
               contract,
               plants,
+              sourceType: sourceTypeParam,
             },
             globalSearch,
             colFilters,

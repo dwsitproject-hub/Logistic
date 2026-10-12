@@ -13,6 +13,7 @@ import {
   grClosedContractBacklogBaseWhereSql,
   sqlBacklogCompletedGateSql,
   BACKLOG_OS_COMPLETED_MAX_KG,
+  buildUnplannedContractToolbarScope,
 } from './shipmentUnplannedHybridSql';
 
 describe('shipmentUnplannedHybridSql', () => {
@@ -295,5 +296,31 @@ describe('GR-closed contract backlog', () => {
     const gate = sqlBacklogCompletedGateSql('c');
     expect(gate).toContain(' OR ');
     expect(gate).toContain(String(BACKLOG_OS_COMPLETED_MAX_KG));
+  });
+});
+
+describe('buildUnplannedContractToolbarScope source filter', () => {
+  it('applies the toolbar Source filter to the contract rows of the backlog arms', () => {
+    const interco = buildUnplannedContractToolbarScope({ plants: [], sourceType: 'Interco' });
+    expect(interco.sql).toContain('c.source_type');
+    expect(interco.sql).toContain('INTERCO');
+    expect(interco.sql.startsWith('AND ')).toBe(true);
+    const third = buildUnplannedContractToolbarScope({ plants: [], sourceType: '3rd Party' });
+    expect(third.sql).toContain('3RD');
+    // it adds no bind parameter, so the parameter numbering of the callers is untouched
+    expect(interco.params).toEqual([]);
+  });
+
+  it('leaves the scope as it was when no source is picked', () => {
+    expect(buildUnplannedContractToolbarScope({ plants: [] }).sql).toBe('');
+    expect(buildUnplannedContractToolbarScope({ plants: [], sourceType: 'ALL' }).sql).toBe('');
+    expect(buildUnplannedContractToolbarScope({ plants: [], sourceType: 'All' }).sql).toBe('');
+  });
+
+  it('combines with the date scope using one AND chain', () => {
+    const scope = buildUnplannedContractToolbarScope({ plants: [], dateFrom: '2026-01-01', sourceType: 'Interco' });
+    expect(scope.sql).toContain('c.contract_date >= $1');
+    expect(scope.sql.match(/^AND /g)?.length).toBe(1);
+    expect(scope.params).toEqual(['2026-01-01']);
   });
 });

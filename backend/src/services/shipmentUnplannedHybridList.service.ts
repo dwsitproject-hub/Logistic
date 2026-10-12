@@ -39,6 +39,8 @@ export interface UnplannedHybridListContext {
     dateTo?: unknown;
     contract?: unknown;
     plants: string[];
+    /** Toolbar Source filter; applied to the contract backlog arms. */
+    sourceType?: string;
   };
   globalSearch: string;
   colFilters: ColumnFilterPayload;

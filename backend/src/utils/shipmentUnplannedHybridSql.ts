@@ -22,6 +22,7 @@ import {
   sapLoadingPortTextSubquery,
 } from './portDisplaySql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
+import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments';
 import {
   buildShipmentPageUnplannedOpenContractsCte,
   shipmentPageExcludeB2bChildCond,
@@ -1268,6 +1269,8 @@ export function buildUnplannedContractToolbarScope(input: {
   dateTo?: unknown;
   contract?: unknown;
   plants: string[];
+  /** Toolbar Source filter (Interco / 3rd Party / All). Contract-level, so the backlog arms (no shipment row yet) must honour it too. */
+  sourceType?: string;
 }): { sql: string; params: unknown[] } {
   const parts: string[] = [];
   const params: unknown[] = [];
@@ -1297,6 +1300,9 @@ export function buildUnplannedContractToolbarScope(input: {
     parts.push(groupPlantFilter.sql.replace(/^ AND /, ''));
     params.push(...groupPlantFilter.params);
   }
+
+  const sourceSql = appendContractPerfSourceTypeFilter(input.sourceType, 'c.source_type');
+  if (sourceSql) parts.push(sourceSql.replace(/^\s*AND\s+/i, ''));
 
   const sql = parts.length > 0 ? `AND ${parts.join(' AND ')}` : '';
   return { sql, params };

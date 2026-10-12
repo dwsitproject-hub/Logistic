@@ -594,7 +594,8 @@ export async function loadShipmentOutstandingQtyForRequest(
     const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-    const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+    const sourceType = (req.query as { sourceType?: string }).sourceType;
+    const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants, sourceType });
     let idx = scope.params.length + 1;
     const g = appendUnplannedContractBacklogGlobalSearch(globalSearch, idx);
     idx = g.nextIndex;
@@ -712,7 +713,8 @@ export async function loadShipmentAttentionInsightsForRequest(
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-  const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  const sourceType = (req.query as { sourceType?: string }).sourceType;
+  const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants, sourceType });
   let idx = scope.params.length + 1;
   const g = appendUnplannedContractBacklogGlobalSearch(globalSearch, idx);
   idx = g.nextIndex;

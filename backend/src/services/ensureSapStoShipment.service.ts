@@ -116,6 +116,7 @@ export async function findSapStoCandidates(
       dateTo?: unknown;
       contract?: unknown;
       plants: string[];
+      sourceType?: string;
     };
     po?: string;
     fobOnly?: boolean;
