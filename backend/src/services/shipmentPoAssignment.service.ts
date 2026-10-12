@@ -600,12 +600,12 @@ export async function batchSaveShipmentPoKlipQty(args: {
       paramIndex++;
     }
     if (receive != null) {
-      sets.push(`actual_vessel_qty_receive = ${paramIndex}::numeric`);
+      sets.push(`actual_vessel_qty_receive = $${paramIndex}::numeric`);
       values.push(receive);
       paramIndex++;
     }
     if (plan != null) {
-      sets.push(`quantity_shipment_plan = ${paramIndex}::numeric`);
+      sets.push(`quantity_shipment_plan = $${paramIndex}::numeric`);
       values.push(plan);
       paramIndex++;
     }

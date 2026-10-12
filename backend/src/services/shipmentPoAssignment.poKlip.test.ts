@@ -151,3 +151,85 @@ describe('batchSaveShipmentPoKlipQty', () => {
     }
   });
 });
+
+/**
+ * The tests above check the bound VALUES. They did not look at the SQL text, so a placeholder written as "2::numeric" instead of
+ * "$2::numeric" (a lost dollar sign) passed them all and then failed in Postgres with a 500 on the first save that set
+ * Received or Shipment Plan Qty. These pin the statement itself.
+ */
+describe('batchSaveShipmentPoKlipQty UPDATE statement', () => {
+  const SIBLING = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+  beforeEach(() => {
+    queryMock.mockReset();
+    resolveContextMock.mockReset();
+    resolveContextMock.mockResolvedValue({
+      lookup_key: 'OP-1004030778-33324700',
+      contract_numbers: '1004030778',
+      po_numbers: '',
+      has_sap_sto: false,
+      can_add_po: true,
+      add_po_blocked_reason: null,
+    });
+    queryMock
+      .mockResolvedValueOnce({ rows: [{ shipment_id: SIBLING }] })
+      .mockResolvedValueOnce({ rows: [] });
+  });
+
+  const run = async (row: Record<string, unknown>) => {
+    const result = await batchSaveShipmentPoKlipQty({
+      anchorShipmentUuid: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      rows: [{ contractNumber: '1004030778', poNumber: '1001030778', ...row }],
+    });
+    const update = queryMock.mock.calls.find(
+      (c) => typeof c[0] === 'string' && String(c[0]).includes('UPDATE shipments'),
+    );
+    return { result, sql: String(update?.[0] ?? ''), values: (update?.[1] ?? []) as unknown[] };
+  };
+
+  const expectWellFormed = (sql: string, values: unknown[]) => {
+    // no bare number used as a value: "= 2::numeric" is the lost-dollar-sign bug
+    expect(sql).not.toMatch(/=\s*\d+::/);
+    const used = [...sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]));
+    expect(Math.max(...used)).toBe(values.length);
+    expect(new Set(used).size).toBe(values.length);
+  };
+
+  it('a Shipment Plan Qty alone binds $1 and the shipment id as $2', async () => {
+    const { result, sql, values } = await run({ quantityShipmentPlanKg: 250_000 });
+    expect(result).toEqual({ ok: true });
+    expect(sql).toContain('quantity_shipment_plan = $1::numeric');
+    expect(sql).toContain('WHERE id = $2::uuid');
+    expect(sql).not.toContain('quantity_delivered');
+    expect(values).toEqual([250_000, SIBLING]);
+    expectWellFormed(sql, values);
+  });
+
+  it('Received Qty alone is bound by placeholder, not by a bare number', async () => {
+    const { sql, values } = await run({ quantityReceiveKlipKg: 90_000 });
+    expect(sql).toContain('actual_vessel_qty_receive = $1::numeric');
+    expect(values).toEqual([90_000, SIBLING]);
+    expectWellFormed(sql, values);
+  });
+
+  it('Delivered, Received and Plan together number their placeholders in order', async () => {
+    const { sql, values } = await run({
+      quantityDeliveredKlipKg: 100_000,
+      quantityReceiveKlipKg: 90_000,
+      quantityShipmentPlanKg: 250_000,
+    });
+    expect(sql).toContain('quantity_delivered = $1::numeric');
+    expect(sql).toContain('quantity_delivered_klip = $2::numeric');
+    expect(sql).toContain('actual_vessel_qty_receive = $3::numeric');
+    expect(sql).toContain('quantity_shipment_plan = $4::numeric');
+    expect(sql).toContain('WHERE id = $5::uuid');
+    expect(values).toEqual([100_000, 100_000, 90_000, 250_000, SIBLING]);
+    expectWellFormed(sql, values);
+  });
+
+  it('a Plan of 0 (cleared cell) is saved, not skipped', async () => {
+    const { sql, values } = await run({ quantityShipmentPlanKg: 0 });
+    expect(sql).toContain('quantity_shipment_plan = $1::numeric');
+    expect(values).toEqual([0, SIBLING]);
+  });
+});
