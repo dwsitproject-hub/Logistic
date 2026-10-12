@@ -128,9 +128,52 @@ if (!userArg || !po) {
       console.log(`  ${label.padEnd(30)} PO not found in the first 80 pages`);
       return null;
     };
-    console.log('\nwithout a search, 20 rows a page, skipSapJoin=true (what scrolling the table shows):');
-    const posUser = await locate('E  user scope', scoped);
-    const posAll = await locate('F  no scope (Admin)', {});
+    // --cards-only skips this page-by-page read (the slow part: up to 160 list calls) and goes straight to the status cards below
+    const cardsOnly = process.argv.includes('--cards-only');
+    let posUser = null;
+    let posAll = null;
+    if (!cardsOnly) {
+      console.log('\nwithout a search, 20 rows a page, skipSapJoin=true (what scrolling the table shows):');
+      posUser = await locate('E  user scope', scoped);
+      posAll = await locate('F  no scope (Admin)', {});
+    }
+
+    // Every status card with the user's scope and the PO as the search. A row that reads "Planned" in the table must be listed under the Planned card;
+    // if it is listed under another card (or none), the card filter and the row's own status disagree, and the row printed here says why.
+    console.log("\nstatus cards with the user's scope + the PO as the search (skipSapJoin=true, as the page):");
+    const rowFields = (r) => ({
+      row_kind: r.row_kind,
+      status: r.status,
+      vessel: r.vessel_name,
+      sto: r.sto_number,
+      po: r.po_numbers,
+      contracts: r.contract_numbers,
+      contract_ext_no: r.contract_ext_no,
+      sap_closed: r.is_contract_sap_closed,
+      import_status: r.contract_import_status,
+      atc: r.ata_vessel_complete_discharge,
+      eta_arrival: r.eta_arrival,
+      qty_delivered: r.quantity_delivered,
+      qty_delivered_klip: r.quantity_delivered_klip,
+      os: r.outstanding_quantity,
+    });
+    for (const st of ['ALL', 'OPEN', 'CLOSE', 'UNPLANNED', 'PREPLANNED', 'PLANNED', 'COMPLETED', 'CANCELLED']) {
+      const params = {
+        page: '1', limit: '50', compact: 'true', includeSummary: 'false', skipSapJoin: 'true', search: po,
+      };
+      if (st !== 'ALL') params.status = st;
+      if (from) params.dateFrom = from;
+      if (to) params.dateTo = to;
+      if (scope.group_plants.length) params.plant = scope.group_plants;
+      if (scope.products.length) params.columnFilters = JSON.stringify({ product: { type: 'multi', values: scope.products, includeBlank: false } });
+      let payload = null;
+      const res = { status() { return this; }, json(p) { payload = p; return this; }, setHeader() { return this; }, send(p) { payload = p; return this; } };
+      await getShipments({ query: params, params: {}, body: {}, headers: {}, user: { id: user.id, role: user.role } }, res);
+      const rows = (payload && payload.data && payload.data.shipments) || [];
+      const hit = rows.filter((r) => JSON.stringify(r).includes(po));
+      console.log(`  status=${st.padEnd(10)} rows=${String(rows.length).padStart(3)}  PO present: ${hit.length ? 'YES' : 'no'}`);
+      if (hit.length && (st === 'ALL' || st === 'PLANNED')) console.log('      ' + JSON.stringify(rowFields(hit[0])));
+    }
 
     console.log('\nreading:');
     if (f.Atrue && f.Btrue) console.log("  With the page's own parameters the PO is returned for the user and for Admin when searched; E/F say where it sits without a search.");
