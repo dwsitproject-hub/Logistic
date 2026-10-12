@@ -36,7 +36,13 @@ import {
 import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from '../utils/groupPlantSql';
 import { resolvedPlantCodeSql } from '../utils/portDisplaySql';
 import { resolveShipmentEditContext, type ShipmentEditContext } from './shipmentEditContext.service';
-import { resolveSapLoadingPortNameMapForShipment, sapLoadingPortSequenceKey } from './vesselLoadingPortsFromSap.service';
+import {
+  normalizePortToken,
+  resolveMasterPortDisplayName,
+  resolveSapLoadingPortNameMapForShipment,
+  sapLoadingPortSequenceKey,
+  sapPortNameForLoadingPort,
+} from './vesselLoadingPortsFromSap.service';
 import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 import { dedupeStoGroupPorts } from '../utils/vesselLoadingPortDedupe';
 import { mergeShipmentVesselFromSapRow } from './shipmentVesselFromSap.service';
@@ -280,12 +286,35 @@ async function loadPortsAndInfo(
     shipmentUuid,
   );
 
+  /*
+   * SAP names are few (a handful per STO), so look up each one's master display name once.
+   */
+  const masterDisplayNameOf = new Map<string, string>();
+  for (const sapName of sapPortNames.allLoadingNames) {
+    const display = await resolveMasterPortDisplayName(sapName);
+    masterDisplayNameOf.set(normalizePortToken(sapName), display);
+  }
+
   const ports = dedupedPortRows.map((port) => {
     const isDischarge = Boolean(port.is_discharge_port);
     const sequence = sapLoadingPortSequenceKey(port.port_sequence);
+    /*
+     * A loading port whose name SAP reported is returned as stored here even when SAP filed it under
+     * a different slot, so the modal's SAP/KLIP badge reads "SAP" for a port the user never touched.
+     * Only a name SAP never reported falls back to the slot's value, which makes the badge "KLIP"
+     * and shows what SAP had in that slot underneath. A name the data records a user writing
+     * (klip_edited_fields has port_name) skips the match altogether - the user may have picked another
+     * port SAP also reported.
+     */
     const sapPortName = isDischarge
       ? sapPortNames.discharge
-      : sapPortNames.bySequence.get(sequence) ?? null;
+      : sapPortNameForLoadingPort({
+          portName: port.port_name,
+          klipEditedFields: port.klip_edited_fields,
+          allSapNames: sapPortNames.allLoadingNames,
+          masterDisplayNameOf,
+          slotSapName: sapPortNames.bySequence.get(sequence),
+        });
     return {
       ...port,
       sap_port_name: sapPortName,

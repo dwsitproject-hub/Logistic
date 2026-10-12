@@ -102,6 +102,17 @@ describe('buildKlipEditedFieldsChangedSetSql', () => {
     expect(VESSEL_LOADING_PORT_PROVENANCE_COLUMNS).toContain('ata_vessel_arrival');
     expect(VESSEL_LOADING_PORT_PROVENANCE_COLUMNS).toContain('quality_ffa');
   });
+
+  it('tracks the port name, which SAP and the modal both write', () => {
+    expect(VESSEL_LOADING_PORT_PROVENANCE_COLUMNS).toContain('port_name');
+  });
+
+  it('can compare a name through an expression, so a round-tripped display value is not a change', () => {
+    const expr = "(CASE WHEN COALESCE(is_discharge_port, false) THEN port_name ELSE $2 END)";
+    const sql = buildKlipEditedFieldsChangedSetSql([{ column: 'port_name', placeholder: expr }]);
+    expect(sql).toContain(`${expr} IS DISTINCT FROM port_name`);
+    expect(sql).toContain("ARRAY['port_name']");
+  });
 });
 
 /**

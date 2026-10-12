@@ -4,12 +4,14 @@ import {
   buildVesselLoadingPortsFromSapParsedData,
   extractLoadingPortNamesFromSapData,
   isValidHumanPortName,
+  matchSapPortNameForPortRow,
   mergeSapQualitySnapshot,
   mergeSapSnapshot,
   resolvePrimarySapDischargePortText,
   resolvePrimarySapLoadingPortText,
   resolveSapLoadingPortTextBySequence,
   sapLoadingPortSequenceKey,
+  sapPortNameForLoadingPort,
   sapParsedDataHasMultipleLoadingPorts,
 } from './vesselLoadingPortsFromSap.service';
 
@@ -148,5 +150,82 @@ describe('vesselLoadingPortsFromSap.service', () => {
     expect(src).toContain('cancelBogusExtraLoadingPorts');
     expect(src).toContain('isValidHumanPortName');
     expect(src).toContain('Auto-cancelled: invalid/numeric port name');
+  });
+});
+
+describe('matchSapPortNameForPortRow (SAP vs KLIP badge on a loading port)', () => {
+  const sapNames = ['PORT TELUK PANDAN', 'SADAI'];
+
+  it('a port SAP reported in another slot is SAP\'s, so port 2 is not called KLIP', () => {
+    // Port 2 is numbered by the plan builder; SAP filed SADAI under a different row's slot 1.
+    expect(matchSapPortNameForPortRow('SADAI', sapNames)).toBe('SADAI');
+  });
+
+  it('ignores case, spacing and the PORT prefix', () => {
+    expect(matchSapPortNameForPortRow(' teluk  pandan ', sapNames)).toBe('teluk  pandan');
+  });
+
+  it('matches through the master display name the plan stores instead of SAP\'s raw text', () => {
+    const display = new Map([['TELUK PANDAN', 'TELUK PANDAN - TL']]);
+    expect(matchSapPortNameForPortRow('Teluk Pandan - TL', sapNames, display)).toBe('Teluk Pandan - TL');
+  });
+
+  it('a name SAP never reported is the user\'s and has no SAP counterpart', () => {
+    expect(matchSapPortNameForPortRow('PANGKAL BALAM', sapNames)).toBeNull();
+  });
+
+  it('a blank or placeholder name never matches', () => {
+    expect(matchSapPortNameForPortRow('', sapNames)).toBeNull();
+    expect(matchSapPortNameForPortRow(null, sapNames)).toBeNull();
+    expect(matchSapPortNameForPortRow('0.00', ['0.00'])).toBeNull();
+  });
+});
+
+describe('sapPortNameForLoadingPort (recorded user edit vs name match)', () => {
+  const allSapNames = ['PORT TELUK PANDAN', 'SADAI'];
+
+  it('without a record, a name SAP reported is SAP\'s', () => {
+    expect(
+      sapPortNameForLoadingPort({
+        portName: 'SADAI',
+        klipEditedFields: [],
+        allSapNames,
+        slotSapName: 'PORT TELUK PANDAN',
+      }),
+    ).toBe('SADAI');
+  });
+
+  it('a user who picked another port SAP also reported is not called SAP', () => {
+    // Port 1 was TELUK PANDAN in SAP; the user switched it to SADAI, which SAP reported for port 2.
+    expect(
+      sapPortNameForLoadingPort({
+        portName: 'SADAI',
+        klipEditedFields: ['port_name'],
+        allSapNames,
+        slotSapName: 'PORT TELUK PANDAN',
+      }),
+    ).toBe('PORT TELUK PANDAN');
+  });
+
+  it('a recorded edit with no SAP value in that slot has no SAP counterpart', () => {
+    expect(
+      sapPortNameForLoadingPort({
+        portName: 'SADAI',
+        klipEditedFields: ['port_name'],
+        allSapNames,
+        slotSapName: undefined,
+      }),
+    ).toBeNull();
+  });
+
+  it('other recorded fields do not count as a port name edit', () => {
+    expect(
+      sapPortNameForLoadingPort({
+        portName: 'SADAI',
+        klipEditedFields: ['ata_vessel_arrival'],
+        allSapNames,
+        slotSapName: null,
+      }),
+    ).toBe('SADAI');
   });
 });

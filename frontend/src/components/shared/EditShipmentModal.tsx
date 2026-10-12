@@ -445,7 +445,12 @@ function ModalPortKlipSapLabel({
   sequence,
 }: {
   portRow:
-    | { port_name?: unknown; sap_port_name?: unknown; is_discharge_port?: unknown }
+    | {
+        port_name?: unknown
+        sap_port_name?: unknown
+        is_discharge_port?: unknown
+        klip_edited_fields?: unknown
+      }
     | null
     | undefined
   shipmentInfo?: Record<string, unknown> | null
@@ -457,6 +462,8 @@ function ModalPortKlipSapLabel({
     klipValue: klip,
     sapValue: sap,
     format: 'text',
+    // The data records a user writing this name: KLIP even when it equals a name SAP reported.
+    klipEdited: isKlipEditedField(portRow?.klip_edited_fields, 'port_name'),
   })
   const showFooter = shouldShowKlipSapFooter(provenance, sap, 'text')
   return (
@@ -2916,6 +2923,7 @@ export function EditShipmentModal({
                           loadingPortRows[0]?.port_sequence ?? 1,
                         )}
                         format="text"
+                        klipEdited={isKlipEditedField(loadingPortRows[0]?.klip_edited_fields, 'port_name')}
                         editing={activeEtaBlock.isEditing && canModifyCoreSections}
                         editControl={
                           <Input

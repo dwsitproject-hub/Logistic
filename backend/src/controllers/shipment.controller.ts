@@ -34,6 +34,18 @@ const VESSEL_LOADING_PORT_CHANGED_PROVENANCE_SQL = buildKlipEditedFieldsChangedS
   { column: 'ata_loading_completed', placeholder: '$18' },
   { column: 'ata_vessel_sailed', placeholder: '$20' },
   { column: 'loading_rate', placeholder: '$26' },
+  /*
+   * The name is compared through an expression, so the same statement that saves the whole form can tell a
+   * typed change from a displayed value that round-tripped: a discharge port, and a row whose stored name is
+   * blank (the modal then shows a fallback from shipments.port_of_loading), compare equal to themselves and
+   * are never marked. A name typed into a blank field is therefore not recorded - an empty name has no SAP
+   * counterpart to be confused with, and the badge falls back to comparing against SAP.
+   */
+  {
+    column: 'port_name',
+    placeholder:
+      "(CASE WHEN COALESCE(is_discharge_port, false) OR NULLIF(BTRIM(port_name), '') IS NULL THEN port_name ELSE $2 END)",
+  },
   // No eta_* here: SAP never sends ETA (0 occurrences across 27,003 SAP rows, against 1,800 for
   // ATA), so it is KLIP input already and needs no marker. See klipEditedFields.ts.
 ]);

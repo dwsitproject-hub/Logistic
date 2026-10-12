@@ -46,6 +46,13 @@ export const VESSEL_LOADING_PORT_PROVENANCE_COLUMNS = [
   'quantity_at_loading_port',
   'loading_rate',
   /*
+   * port_name: the SAP plan writes it and so does the Edit Shipment modal. Marked only when a save CHANGES
+   * a name that was already there (see VESSEL_LOADING_PORT_CHANGED_PROVENANCE_SQL), and cleared again when
+   * the SAP import overwrites it with a different name - so the marker always means "the name on screen is
+   * the user's", which equality with a SAP name cannot tell (a user can pick another SAP-reported port).
+   */
+  'port_name',
+  /*
    * eta_* columns are deliberately absent. The SAP writer does pass them through the same merge,
    * so the code path exists - but SAP never supplies a value: across 27,003 sap_processed_data
    * rows the ETA keys appear 0 times, against 1,800 for ATA. ETA is KLIP input and proves itself,

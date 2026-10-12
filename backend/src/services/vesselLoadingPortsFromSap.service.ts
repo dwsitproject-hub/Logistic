@@ -13,7 +13,7 @@ function trimText(value: unknown): string | null {
   return text;
 }
 
-function normalizePortToken(value: string): string {
+export function normalizePortToken(value: string): string {
   return value
     .trim()
     .toUpperCase()
@@ -82,6 +82,64 @@ export function resolveSapLoadingPortTextBySequence(
 export interface SapLoadingPortNameMap {
   bySequence: Map<number, string>;
   discharge: string | null;
+  /**
+   * Every loading port name SAP reported for the STO group, in any slot of any SAP row. The slot-by-
+   * slot map above cannot answer "did this port come from SAP" for a port whose number differs from
+   * the slot SAP used - see matchSapPortNameForPortRow.
+   */
+  allLoadingNames: string[];
+}
+
+/**
+ * The stored name of a loading port when SAP reported it (raw or via master display name), else null.
+ *
+ * A port row is numbered by the plan builder (buildVesselLoadingPortsPlanForShipment), not by SAP's
+ * "Vessel Loading Port 1/2/3" slot: when the ports sit on different SAP rows of one STO each row
+ * reports its own single port in slot 1, so port 2 has no slot-2 name to compare against, and the
+ * plan also stores the master-data display name rather than SAP's raw text. Comparing slot by slot
+ * therefore called an untouched SAP port "KLIP". A name is SAP's when it matches any SAP name of the
+ * group, raw or through the master display name; a name nobody in SAP reported is the user's.
+ *
+ * Returns the port's OWN text, not SAP's raw one: the modal decides the badge by comparing the two
+ * strings, and the master display name would never equal SAP's raw text.
+ */
+export function matchSapPortNameForPortRow(
+  portName: unknown,
+  allSapNames: readonly string[],
+  masterDisplayNameOf: ReadonlyMap<string, string> = new Map(),
+): string | null {
+  const own = trimText(portName);
+  if (!own) return null;
+  const ownToken = normalizePortToken(own);
+  for (const sapName of allSapNames) {
+    if (normalizePortToken(sapName) === ownToken) return own;
+    const display = masterDisplayNameOf.get(normalizePortToken(sapName));
+    if (display && normalizePortToken(display) === ownToken) return own;
+  }
+  return null;
+}
+
+/**
+ * The SAP name the modal compares a stored loading port against.
+ *
+ * A name the data records a user writing (klip_edited_fields has port_name) skips the match: the user may
+ * have picked another port SAP also reported, and equality would call that SAP's. It then compares against
+ * what SAP had in that port's own slot, so the reader still sees the value SAP sent.
+ */
+export function sapPortNameForLoadingPort(opts: {
+  portName: unknown;
+  klipEditedFields: unknown;
+  allSapNames: readonly string[];
+  masterDisplayNameOf?: ReadonlyMap<string, string>;
+  slotSapName: string | null | undefined;
+}): string | null {
+  const userWroteName = Array.isArray(opts.klipEditedFields) && opts.klipEditedFields.includes('port_name');
+  if (userWroteName) return opts.slotSapName ?? null;
+  return (
+    matchSapPortNameForPortRow(opts.portName, opts.allSapNames, opts.masterDisplayNameOf) ??
+    opts.slotSapName ??
+    null
+  );
 }
 
 /** Map a VLP port_sequence onto SAP Vessel Loading Port 1/2/3 (0 / NaN → 1). */
@@ -98,8 +156,14 @@ export async function resolveSapLoadingPortNameMapForShipment(
 ): Promise<SapLoadingPortNameMap> {
   const stoRows = await resolveAllSapParsedDataForSto(shipmentUuid, preferredSto);
   const bySequence = new Map<number, string>();
+  const allLoadingNames: string[] = [];
   let discharge: string | null = null;
   for (const row of stoRows) {
+    for (const name of extractLoadingPortNamesFromSapData(row.data)) {
+      if (!allLoadingNames.some((e) => normalizePortToken(e) === normalizePortToken(name))) {
+        allLoadingNames.push(name);
+      }
+    }
     for (const seq of [1, 2, 3] as const) {
       if (!bySequence.has(seq)) {
         const name = resolveSapLoadingPortTextBySequence(row.data, seq);
@@ -110,7 +174,7 @@ export async function resolveSapLoadingPortNameMapForShipment(
       discharge = resolvePrimarySapDischargePortText(row.data);
     }
   }
-  return { bySequence, discharge };
+  return { bySequence, discharge, allLoadingNames };
 }
 
 /** Primary SAP loading port text for denormalizing onto shipments.port_of_loading. */
@@ -497,7 +561,7 @@ async function resolveAllSapParsedDataForSto(
     .map((data) => ({ data }));
 }
 
-async function resolveMasterPortDisplayName(sapPortName: string): Promise<string> {
+export async function resolveMasterPortDisplayName(sapPortName: string): Promise<string> {
   const token = normalizePortToken(sapPortName);
   if (!token) return sapPortName;
   const match = await query(
@@ -779,6 +843,11 @@ async function upsertVesselLoadingPortRow(
          cancel_remark = NULL,
          cancelled_at = NULL,
          cancelled_by_user_id = NULL,
+         -- This statement overwrites port_name with SAP's; a user's name it replaces is no longer the user's.
+         klip_edited_fields = CASE
+           WHEN port_name IS DISTINCT FROM $2 THEN array_remove(COALESCE(klip_edited_fields, '{}'), 'port_name')
+           ELSE klip_edited_fields
+         END,
          updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`,
       [existing.rows[0].id, ...values],
