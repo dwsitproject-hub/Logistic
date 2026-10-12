@@ -493,7 +493,8 @@ export interface PoKlipQtyRow {
 }
 
 export type BatchSavePoKlipResult =
-  | { ok: true }
+  /** `shipmentIds`: the sibling shipments whose row was written, so the caller can refresh what is derived from them. */
+  | { ok: true; shipmentIds: string[] }
   | { ok: false; status: number; message: string };
 
 async function findSiblingShipmentIdForContract(
@@ -535,6 +536,7 @@ export async function batchSaveShipmentPoKlipQty(args: {
     return { ok: false, status: 400, message: 'Could not resolve shipment STO / operation group' };
   }
 
+  const updatedShipmentIds: string[] = [];
   for (const row of args.rows) {
     const contractNumber = String(row.contractNumber ?? '').trim();
     if (!contractNumber) continue;
@@ -616,7 +618,8 @@ export async function batchSaveShipmentPoKlipQty(args: {
       `UPDATE shipments SET ${sets.join(', ')} WHERE id = $${paramIndex}::uuid`,
       values,
     );
+    updatedShipmentIds.push(siblingId);
   }
 
-  return { ok: true };
+  return { ok: true, shipmentIds: updatedShipmentIds };
 }

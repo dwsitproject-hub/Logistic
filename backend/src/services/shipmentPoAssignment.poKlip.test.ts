@@ -56,7 +56,10 @@ describe('batchSaveShipmentPoKlipQty', () => {
       ],
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({
+      ok: true,
+      shipmentIds: ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'],
+    });
     const updateCalls = queryMock.mock.calls.filter(
       (c) => typeof c[0] === 'string' && String(c[0]).includes('UPDATE shipments'),
     );
@@ -106,7 +109,10 @@ describe('batchSaveShipmentPoKlipQty', () => {
       ],
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({
+      ok: true,
+      shipmentIds: ['dddddddd-dddd-dddd-dddd-dddddddddddd', 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'],
+    });
     const findCalls = queryMock.mock.calls.filter(
       (c) => typeof c[0] === 'string' && String(c[0]).includes('SELECT s.id::text'),
     );
@@ -197,7 +203,7 @@ describe('batchSaveShipmentPoKlipQty UPDATE statement', () => {
 
   it('a Shipment Plan Qty alone binds $1 and the shipment id as $2', async () => {
     const { result, sql, values } = await run({ quantityShipmentPlanKg: 250_000 });
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, shipmentIds: [SIBLING] });
     expect(sql).toContain('quantity_shipment_plan = $1::numeric');
     expect(sql).toContain('WHERE id = $2::uuid');
     expect(sql).not.toContain('quantity_delivered');
@@ -225,6 +231,25 @@ describe('batchSaveShipmentPoKlipQty UPDATE statement', () => {
     expect(sql).toContain('WHERE id = $5::uuid');
     expect(values).toEqual([100_000, 100_000, 90_000, 250_000, SIBLING]);
     expectWellFormed(sql, values);
+  });
+
+  it('reports every sibling it wrote, so the caller can refresh what is derived from them', async () => {
+    queryMock.mockReset();
+    queryMock
+      .mockResolvedValueOnce({ rows: [{ shipment_id: SIBLING }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ shipment_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    const result = await batchSaveShipmentPoKlipQty({
+      anchorShipmentUuid: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      rows: [
+        { contractNumber: '1004030778', poNumber: null, quantityDeliveredKlipKg: 0 },
+        { contractNumber: '1014003113', poNumber: null, quantityDeliveredKlipKg: 0 },
+        { contractNumber: '1014003143', poNumber: null },
+      ],
+    });
+    // the third row carries nothing to write, so it is neither updated nor reported
+    expect(result).toEqual({ ok: true, shipmentIds: [SIBLING, 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'] });
   });
 
   it('a Plan of 0 (cleared cell) is saved, not skipped', async () => {

@@ -2868,6 +2868,28 @@ export const batchSaveShipmentPoKlipQtyHandler = async (req: AuthRequest, res: R
       });
     }
 
+    /*
+     * Everything derived from these quantities has to be refreshed for EVERY sibling written, not only the anchor.
+     *
+     * A shipment's Completed status and a contract's OS Qty read contract_qty_move_snapshot (shipmentListContractOsWithinBandExpr), and
+     * PUT /shipments/:id refreshes that snapshot for the anchor shipment only - and runs BEFORE this request in the Edit Shipment save.
+     * So clearing Delivered on a 3-PO group left two contracts still counted as delivered: Delivery Qty read 2,000 MT instead of 0,
+     * OS 1,000 MT instead of 3,000, and the row was Completed by one contract's snapshot and Planned by another's, which is how it
+     * fell out of both status cards.
+     */
+    const refreshIds = Array.from(new Set([id, ...result.shipmentIds]));
+    try {
+      const { ContractQtyMoveSnapshotService } = await import('../services/contractQtyMoveSnapshot.service');
+      await ContractQtyMoveSnapshotService.refreshForShipmentIds(refreshIds);
+      const { scheduleContractPerformanceRefreshForShipments } = await import(
+        '../services/contractPerformanceSnapshot.service'
+      );
+      scheduleContractPerformanceRefreshForShipments(refreshIds);
+    } catch (err) {
+      logger.warn('Contract qty_move snapshot refresh after PO qty save failed', { err, shipmentIds: refreshIds });
+    }
+
+    // After the refresh, so a list read that lands in between cannot cache the old numbers again.
     invalidateShipmentsListCache();
     invalidateShippingPerformanceRowCache();
 
