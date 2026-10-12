@@ -28,10 +28,10 @@ describe('mergeShipmentVesselFromSapRow', () => {
     expect({ name: row.vessel_name, klip: row.vessel_name_klip }).toEqual(first);
   });
 
-  it('keeps KLIP when is_contract_sap_closed is the string false', () => {
+  it('keeps KLIP when is_contract_sap_closed is the string false (no master resolved, so the Open order applies)', () => {
+    // With a master the name would be the master's either way; without one, "false" read as closed would give SAP's name.
     const row: Record<string, unknown> = {
       vessel_name: 'VESSEL B',
-      vessel_name_master: 'BG. ANDALAN 02',
       vessel_name_sap: 'VESSEL A',
       is_contract_sap_closed: 'false',
     };
@@ -39,7 +39,7 @@ describe('mergeShipmentVesselFromSapRow', () => {
     expect(row.vessel_name).toBe('VESSEL B');
   });
 
-  it('prefers KLIP over master and SAP when contract is Open', () => {
+  it('prefers the master name over KLIP and SAP when contract is Open', () => {
     const row: Record<string, unknown> = {
       id: 'ship-1',
       vessel_name: 'VESSEL B',
@@ -50,7 +50,8 @@ describe('mergeShipmentVesselFromSapRow', () => {
       is_contract_sap_closed: false,
     };
     expect(mergeShipmentVesselFromSapRow(row)).toBe(true);
-    expect(row.vessel_name).toBe('VESSEL B');
+    expect(row.vessel_name).toBe('BG. ANDALAN 02');
+    // what is stored stays readable for the KLIP-vs-SAP comparison; only the display name follows the master
     expect(row.vessel_name_klip).toBe('VESSEL B');
     expect(row.vessel_name_sap).toBe('VESSEL A');
     expect(row.vessel_code).toBe('K01');
@@ -72,7 +73,7 @@ describe('mergeShipmentVesselFromSapRow', () => {
     expect(row.vessel_name_sap).toBe('VESSEL A');
   });
 
-  it('uses SAP over master when Open and KLIP is empty', () => {
+  it('uses the master name over SAP when Open and KLIP is empty', () => {
     const row: Record<string, unknown> = {
       id: 'ship-1',
       vessel_name: null,
@@ -82,7 +83,7 @@ describe('mergeShipmentVesselFromSapRow', () => {
       is_contract_sap_closed: false,
     };
     expect(mergeShipmentVesselFromSapRow(row)).toBe(true);
-    expect(row.vessel_name).toBe('VESSEL A');
+    expect(row.vessel_name).toBe('BG. ANDALAN 02');
     expect(row.vessel_name_klip).toBeNull();
   });
 

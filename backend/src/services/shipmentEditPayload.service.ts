@@ -131,6 +131,7 @@ const SHIPMENT_BY_ID_SQL = `
     sap_sto.vessel_code_sap,
     sap_sto.vessel_owner_sap,
     mv.id AS master_vessel_resolved_id,
+    mv_sap.id AS master_vessel_sap_resolved_id,
     mv.vessel_name_master,
     mv.vessel_code_master,
     mv.vessel_owner_master,
@@ -178,6 +179,11 @@ const SHIPMENT_BY_ID_SQL = `
     'mv',
     's.master_vessel_id',
   )}
+  /*
+   * The master vessel the SAP row's OWN code / name resolves to. The modal shows the master's name, and compares it with SAP's spelling for the
+   * KLIP / SAP badge: when both point at the same master vessel they are the same vessel, whatever SAP spelled.
+   */
+  ${sqlMasterVesselLateralJoin('sap_sto.vessel_code_sap', 'sap_sto.vessel_name_sap', 'mv_sap')}
   WHERE s.id = $1::uuid
   LIMIT 1`;
 

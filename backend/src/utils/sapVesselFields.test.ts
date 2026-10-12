@@ -37,11 +37,26 @@ describe('resolveShipmentDisplayVesselName', () => {
     ).toBe('BG. ANDALAN 02');
   });
 
-  it('prefers KLIP over master and SAP when contract is Open', () => {
+  it('prefers the master name over a stored KLIP name when the contract is Open', () => {
     expect(
       resolveShipmentDisplayVesselName('BG. ANDALAN 02', 'MV SAP', 'VESSEL B', {
         contractSapClosed: false,
       }),
+    ).toBe('BG. ANDALAN 02');
+  });
+
+  it("shows the master spelling for a shipment whose stored name is SAP's own spelling of the vessel", () => {
+    // PO 1011003250: stored "PRIMA SAMUDERA 9" (SAP's spelling for MPRIMA9), master of that code is "PRIMA SAMUDRA IX".
+    expect(
+      resolveShipmentDisplayVesselName('PRIMA SAMUDRA IX', 'PRIMA SAMUDERA 9', 'PRIMA SAMUDERA 9', {
+        contractSapClosed: false,
+      }),
+    ).toBe('PRIMA SAMUDRA IX');
+  });
+
+  it("with no master, Open still shows the KLIP name before SAP's", () => {
+    expect(
+      resolveShipmentDisplayVesselName(null, 'MV SAP', 'VESSEL B', { contractSapClosed: false }),
     ).toBe('VESSEL B');
   });
 
@@ -51,12 +66,12 @@ describe('resolveShipmentDisplayVesselName', () => {
     );
   });
 
-  it('prefers SAP over master when Open and KLIP is empty', () => {
+  it('prefers the master name over SAP when Open and KLIP is empty', () => {
     expect(
       resolveShipmentDisplayVesselName('BG. ANDALAN 02', 'MV SAP', '', {
         contractSapClosed: false,
       }),
-    ).toBe('MV SAP');
+    ).toBe('BG. ANDALAN 02');
   });
 
   it('falls back to SAP when master is missing and GR is closed', () => {
@@ -106,16 +121,29 @@ describe('hasKlipVesselNameOverride', () => {
 });
 
 describe('sqlShipmentListDisplayVesselName', () => {
-  it('prefers KLIP when Open and KLIP is filled', () => {
-    const sql = sqlShipmentListDisplayVesselName(
-      'mv.vessel_name',
-      'sa.vessel_name_sap',
-      's.vessel_name',
-      's.is_contract_sap_closed',
-    );
+  const sql = sqlShipmentListDisplayVesselName(
+    'mv.vessel_name_master',
+    'sa.vessel_name_sap',
+    's.vessel_name',
+    's.is_contract_sap_closed',
+  );
+
+  it('still falls back to KLIP when Open and no master resolved', () => {
     expect(sql).toContain('s.is_contract_sap_closed');
     expect(sql).toContain('s.vessel_name');
     expect(sql).toContain('IS NOT TRUE');
+  });
+
+  it('puts the master name first, before any KLIP / SAP / closed branch', () => {
+    const firstWhen = sql.indexOf('WHEN');
+    const masterWhen = sql.indexOf("NULLIF(TRIM(mv.vessel_name_master), '') IS NOT NULL");
+    expect(masterWhen).toBeGreaterThan(-1);
+    expect(masterWhen).toBeLessThan(sql.indexOf('IS NOT TRUE'));
+    expect(sql.slice(firstWhen, masterWhen)).not.toContain('s.vessel_name');
+  });
+
+  it('references the master column no more often than the old expression did (it sits in the hot list SQL)', () => {
+    expect(sql.split('mv.vessel_name_master').length - 1).toBeLessThanOrEqual(3);
   });
 });
 

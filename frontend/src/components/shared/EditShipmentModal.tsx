@@ -52,6 +52,7 @@ import {
   hasKlipVesselNameOverride,
   isContractSapClosedFlag,
   normalizeVesselNameKey,
+  sapVesselNameForCompare,
   shipmentVesselPrimaryName,
 } from '@/lib/shipmentVesselCompare'
 import { invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
@@ -799,6 +800,9 @@ export function EditShipmentModal({
   const [vesselName, setVesselName] = useState('')
   const [originalVesselName, setOriginalVesselName] = useState('')
   const [sapVesselName, setSapVesselName] = useState('')
+  /** The master vessel the loaded shipment resolved to, and the one SAP's own code / name resolves to (for the KLIP / SAP badge). */
+  const [loadedMasterVesselId, setLoadedMasterVesselId] = useState('')
+  const [sapMasterVesselId, setSapMasterVesselId] = useState('')
   const [sapVesselCode, setSapVesselCode] = useState('')
   const [pendingMasterVessel, setPendingMasterVessel] = useState<MasterVesselOption | null>(null)
   const [vesselMeta, setVesselMeta] = useState<Record<string, string>>({})
@@ -908,11 +912,18 @@ export function EditShipmentModal({
     }))
   }, [])
 
-  const vesselOverride = hasKlipVesselNameOverride(vesselName, sapVesselName)
-  const vesselMismatch = hasKlipSapMismatch(vesselName, sapVesselName, 'text')
+  // The vessel on screen is the master's spelling; SAP may spell the same vessel differently. Same master vessel = same vessel, no KLIP badge.
+  const sapVesselNameCompared = sapVesselNameForCompare(
+    vesselName,
+    sapVesselName,
+    sapMasterVesselId,
+    pendingMasterVessel?.id || loadedMasterVesselId,
+  )
+  const vesselOverride = hasKlipVesselNameOverride(vesselName, sapVesselNameCompared)
+  const vesselMismatch = hasKlipSapMismatch(vesselName, sapVesselNameCompared, 'text')
   const vesselProvenance = resolveKlipSapProvenance({
     klipValue: vesselName,
-    sapValue: sapVesselName,
+    sapValue: sapVesselNameCompared,
     format: 'text',
   })
   const showVesselSapFooter = shouldShowKlipSapFooter(vesselProvenance, sapVesselName, 'text')
@@ -1105,6 +1116,8 @@ export function EditShipmentModal({
     setVesselName('')
     setOriginalVesselName('')
     setSapVesselName('')
+    setLoadedMasterVesselId('')
+    setSapMasterVesselId('')
     setSapVesselCode('')
     setPendingMasterVessel(null)
     setVesselMeta({})
@@ -1347,6 +1360,8 @@ export function EditShipmentModal({
           (Boolean(masterVn) &&
             normalizeVesselNameKey(masterVn) === normalizeVesselNameKey(klipVn))
         setSapVesselName(sapVn)
+        setLoadedMasterVesselId(String(row.master_vessel_resolved_id ?? '').trim())
+        setSapMasterVesselId(String(row.master_vessel_sap_resolved_id ?? '').trim())
         setSapVesselCode(String(row.vessel_code_sap ?? '').trim())
         setVesselName(primaryVn)
         setOriginalVesselName(primaryVn)

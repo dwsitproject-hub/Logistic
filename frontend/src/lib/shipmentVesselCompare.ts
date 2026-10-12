@@ -18,6 +18,25 @@ export function hasKlipVesselNameOverride(klipName: unknown, sapName: unknown): 
   return klip !== sap
 }
 
+/**
+ * The SAP name to compare the displayed vessel name against.
+ *
+ * The displayed name is the Master Vessel's spelling, while SAP may spell the same vessel differently ("PRIMA SAMUDERA 9" for master
+ * "PRIMA SAMUDRA IX"), which would badge an untouched vessel KLIP. When the SAP row's code / name resolves to the SAME master vessel as the
+ * one on screen it is the same vessel, so compare the name with itself. A different master (the user picked another vessel) keeps SAP's own text.
+ */
+export function sapVesselNameForCompare(
+  displayName: unknown,
+  sapName: unknown,
+  sapMasterVesselId: unknown,
+  currentMasterVesselId: unknown,
+): string {
+  const sapId = trimVesselName(sapMasterVesselId)
+  const currentId = trimVesselName(currentMasterVesselId)
+  if (sapId && currentId && sapId === currentId) return trimVesselName(displayName)
+  return trimVesselName(sapName)
+}
+
 export interface ShipmentVesselPrimaryNameOptions {
   masterName?: unknown
   /** GR Close → Master/SAP first (same as list). Open → KLIP then SAP. */
@@ -25,8 +44,9 @@ export interface ShipmentVesselPrimaryNameOptions {
 }
 
 /**
- * Editable / primary vessel name — aligned with list hydrate:
- * Open: KLIP → SAP → Master. Closed: Master → SAP → KLIP.
+ * Editable / primary vessel name - aligned with the list (backend resolveShipmentDisplayVesselName):
+ * the Master Vessel name whenever one resolved for the shipment's code, else
+ * Open: KLIP → SAP. Closed: SAP → KLIP.
  */
 export function shipmentVesselPrimaryName(
   klipName: unknown,
@@ -37,10 +57,8 @@ export function shipmentVesselPrimaryName(
   const klip = trimVesselName(klipName)
   const sap = trimVesselName(sapName)
   const master = trimVesselName(options?.masterName)
-  if (!closed) {
-    return klip || sap || master
-  }
-  return master || sap || klip
+  if (master) return master
+  return closed ? sap || klip : klip || sap
 }
 
 /** pg / JSON flags — Boolean('false') is true, so parse explicitly. */

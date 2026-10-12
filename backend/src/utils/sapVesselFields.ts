@@ -117,15 +117,21 @@ export function sqlLatestNonBlankAgg(expr: string, updatedAtExpr = 's.updated_at
 
 export interface ShipmentDisplayVesselNameOptions {
   /**
-   * GR Close (PO vs STO per incoterm). Closed → Master/SAP first.
-   * Open → non-empty KLIP input wins, then Master/SAP.
+   * GR Close (PO vs STO per incoterm). Only decides the order when NO Master Vessel resolved:
+   * Closed → SAP then KLIP; Open → KLIP then SAP.
    */
   contractSapClosed?: boolean;
 }
 
 /**
  * List / card vessel name.
- * Open + KLIP filled → KLIP. Empty KLIP or GR Close → Master, then SAP, then KLIP.
+ *
+ * The Master Vessel name wins whenever one resolved for the shipment - by the vessel code (KLIP's, else the SAP import's, matched to the master's
+ * code or one of its SAP aliases), by the master id, or by the normalised name (sqlMasterVesselCanonicalLateralJoin). A vessel name is the master's
+ * normalised spelling, not whatever text a SAP row or an old KLIP edit left in shipments.vessel_name: PO 1011003250 stored "PRIMA SAMUDERA 9" (SAP's
+ * spelling for code MPRIMA9) while Master Vessel calls that vessel, code MPRIMA91, "PRIMA SAMUDRA IX" - requested 2026-10-12.
+ *
+ * With no master: Open → KLIP then SAP; Closed (or no options) → SAP then KLIP.
  */
 export function resolveShipmentDisplayVesselName(
   vesselNameMaster: unknown,
@@ -138,11 +144,9 @@ export function resolveShipmentDisplayVesselName(
   const klip = canonicalVesselName(vesselNameKlip);
   // Explicit Open (list overlay): KLIP if filled, else SAP then Master.
   // No options → legacy Master-first (STO preview / shipping perf).
-  if (options && options.contractSapClosed !== true) {
-    if (klip) return klip;
-    return sap ?? master ?? klip;
-  }
-  return master ?? sap ?? klip;
+  if (master) return master;
+  if (options && options.contractSapClosed !== true) return klip ?? sap;
+  return sap ?? klip;
 }
 
 export const sqlShipmentDisplayVesselName = (
@@ -156,8 +160,9 @@ export const sqlShipmentDisplayVesselName = (
 )`;
 
 /**
- * List / pipeline-card display name — matches resolveShipmentDisplayVesselName
- * when contractSapClosed is passed (Open: KLIP, else SAP then Master; Close: Master then SAP).
+ * List / pipeline-card display name - matches resolveShipmentDisplayVesselName
+ * when contractSapClosed is passed: the Master Vessel name when one resolved, else
+ * Open: KLIP then SAP; Closed: SAP then KLIP.
  */
 export const sqlShipmentListDisplayVesselName = (
   masterExpr: string,
@@ -165,17 +170,12 @@ export const sqlShipmentListDisplayVesselName = (
   klipExpr: string,
   closedExpr: string,
 ): string => `(CASE
+  WHEN NULLIF(TRIM(${masterExpr}), '') IS NOT NULL
+    THEN NULLIF(TRIM(${masterExpr}), '')
   WHEN COALESCE(${closedExpr}, FALSE) IS NOT TRUE
     AND NULLIF(TRIM(${klipExpr}), '') IS NOT NULL
     THEN NULLIF(TRIM(${klipExpr}), '')
-  WHEN COALESCE(${closedExpr}, FALSE) IS NOT TRUE
-    THEN COALESCE(
-      NULLIF(TRIM(${sapExpr}), ''),
-      NULLIF(TRIM(${masterExpr}), ''),
-      NULLIF(TRIM(${klipExpr}), '')
-    )
   ELSE COALESCE(
-    NULLIF(TRIM(${masterExpr}), ''),
     NULLIF(TRIM(${sapExpr}), ''),
     NULLIF(TRIM(${klipExpr}), '')
   )

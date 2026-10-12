@@ -3,6 +3,7 @@ import {
   hasKlipVesselNameOverride,
   isContractSapClosedFlag,
   shipmentListHydrateVesselName,
+  sapVesselNameForCompare,
   shipmentVesselPrimaryName,
 } from './shipmentVesselCompare'
 
@@ -17,13 +18,37 @@ describe('shipmentVesselCompare', () => {
     expect(shipmentVesselPrimaryName('VESSEL B', 'VESSEL A')).toBe('VESSEL B')
   })
 
-  it('does not prefer Master over KLIP when Open', () => {
+  it('compares the displayed name with itself when SAP resolves to the same master vessel', () => {
+    expect(sapVesselNameForCompare('PRIMA SAMUDRA IX', 'PRIMA SAMUDERA 9', 'm-1', 'm-1')).toBe('PRIMA SAMUDRA IX')
+  })
+
+  it("keeps SAP's own text when SAP resolves to another master vessel, to nothing, or the user picked another vessel", () => {
+    expect(sapVesselNameForCompare('PRIMA SAMUDRA IX', 'LUMINOR 5', 'm-2', 'm-1')).toBe('LUMINOR 5')
+    expect(sapVesselNameForCompare('PRIMA SAMUDRA IX', 'PRIMA SAMUDERA 9', null, 'm-1')).toBe('PRIMA SAMUDERA 9')
+    expect(sapVesselNameForCompare('PRIMA SAMUDRA IX', '', '', '')).toBe('')
+  })
+
+  it('prefers the Master name over a stored KLIP name when Open', () => {
     expect(
       shipmentVesselPrimaryName('VESSEL B', 'VESSEL A', {
         masterName: 'BG. ANDALAN 02',
         contractSapClosed: false,
       }),
-    ).toBe('VESSEL B')
+    ).toBe('BG. ANDALAN 02')
+  })
+
+  it('shows PRIMA SAMUDRA IX for a stored SAP spelling of the same vessel', () => {
+    expect(
+      shipmentVesselPrimaryName('PRIMA SAMUDERA 9', '', {
+        masterName: 'PRIMA SAMUDRA IX',
+        contractSapClosed: false,
+      }),
+    ).toBe('PRIMA SAMUDRA IX')
+  })
+
+  it('without a Master, Open shows KLIP before SAP and Closed shows SAP before KLIP', () => {
+    expect(shipmentVesselPrimaryName('VESSEL B', 'VESSEL A', { contractSapClosed: false })).toBe('VESSEL B')
+    expect(shipmentVesselPrimaryName('VESSEL B', 'VESSEL A', { contractSapClosed: true })).toBe('VESSEL A')
   })
 
   it('prefers Master when GR is Closed', () => {
