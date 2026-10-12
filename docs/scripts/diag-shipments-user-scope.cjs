@@ -175,6 +175,56 @@ if (!userArg || !po) {
       if (hit.length && (st === 'ALL' || st === 'PLANNED')) console.log('      ' + JSON.stringify(rowFields(hit[0])));
     }
 
+    // The card filter is SQL (shipmentEffectiveStatusExpr over the grouped row); the row's own status comes from the same expression in the list select. They can only
+    // disagree if the grouped row they read carries a different is_contract_os_within_band ("nothing left outstanding" => COMPLETED). So: the flag per contract, straight from
+    // the snapshot the list reads, and the same three cards on the other list path (skipSapJoin=false).
+    try {
+      const { shipmentListContractOsWithinBandExpr } = dist('utils/shipmentListFilters');
+      const rowCard = await (async () => {
+        const params = { page: '1', limit: '50', compact: 'true', includeSummary: 'false', skipSapJoin: 'true', search: po };
+        if (from) params.dateFrom = from;
+        if (to) params.dateTo = to;
+        let payload = null;
+        const res = { status() { return this; }, json(p) { payload = p; return this; }, setHeader() { return this; }, send(p) { payload = p; return this; } };
+        await getShipments({ query: params, params: {}, body: {}, headers: {}, user: { id: user.id, role: user.role } }, res);
+        const rows = (payload && payload.data && payload.data.shipments) || [];
+        return rows.find((r) => JSON.stringify(r).includes(po)) || null;
+      })();
+      const numbers = rowCard ? String(rowCard.contract_numbers || '').split(',').map((v) => v.trim()).filter(Boolean) : [po];
+      const band = await pool.query(
+        `SELECT c.contract_id, c.po_number, c.incoterm, c.transport_mode, c.quantity_ordered,
+                qms.quantity_delivery_vessel, qms.quantity_delivery_trucking, qms.quantity_receive,
+                (${shipmentListContractOsWithinBandExpr('c', 'qms')}) AS within_band
+         FROM contracts c
+         LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id
+         WHERE c.contract_id = ANY($1::text[])
+         ORDER BY c.contract_id`,
+        [numbers],
+      );
+      console.log('\nOS-within-band per contract of that row (what makes a grouped row COMPLETED in the card filter):');
+      band.rows.forEach((r) =>
+        console.log(`  ${r.contract_id}  po=${r.po_number}  ${r.incoterm}  ordered=${r.quantity_ordered}  delivery(vessel)=${r.quantity_delivery_vessel}  receive=${r.quantity_receive}  within_band=${r.within_band}`),
+      );
+      console.log('  group flag (BOOL_AND) = ' + (band.rows.length > 0 && band.rows.every((r) => r.within_band === true)));
+    } catch (e) {
+      console.log('\nOS-within-band check failed: ' + (e && e.message ? e.message : e));
+    }
+    console.log('\nthe same cards on the full list path (skipSapJoin=false):');
+    for (const st of ['ALL', 'PLANNED', 'COMPLETED']) {
+      const params = { page: '1', limit: '50', compact: 'true', includeSummary: 'false', skipSapJoin: 'false', search: po };
+      if (st !== 'ALL') params.status = st;
+      if (from) params.dateFrom = from;
+      if (to) params.dateTo = to;
+      if (scope.group_plants.length) params.plant = scope.group_plants;
+      if (scope.products.length) params.columnFilters = JSON.stringify({ product: { type: 'multi', values: scope.products, includeBlank: false } });
+      let payload = null;
+      const res = { status() { return this; }, json(p) { payload = p; return this; }, setHeader() { return this; }, send(p) { payload = p; return this; } };
+      await getShipments({ query: params, params: {}, body: {}, headers: {}, user: { id: user.id, role: user.role } }, res);
+      const rows = (payload && payload.data && payload.data.shipments) || [];
+      const hit = rows.filter((r) => JSON.stringify(r).includes(po));
+      console.log(`  status=${st.padEnd(10)} rows=${String(rows.length).padStart(3)}  PO present: ${hit.length ? 'YES' : 'no'}${hit.length ? '  row status=' + hit[0].status : ''}`);
+    }
+
     console.log('\nreading:');
     if (f.Atrue && f.Btrue) console.log("  With the page's own parameters the PO is returned for the user and for Admin when searched; E/F say where it sits without a search.");
     else if (!f.Atrue && f.Btrue && f.Ctrue && !f.Dtrue) console.log("  Hidden by the Product assignment (the user's products are listed at the top).");
