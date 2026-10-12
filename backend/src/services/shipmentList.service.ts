@@ -1157,6 +1157,17 @@ function attachShipmentExecutionTradeCycleDays(
   );
 }
 
+/**
+ * Rows whose status the LIST SQL already decided (effective_status), kept by identity.
+ *
+ * normalizeShipmentListRows deletes effective_status once it has copied it into status, and the hybrid list normalizes the same row objects TWICE: once inside
+ * fetchShipmentExecutionPage and again over the merged execution + backlog rows. The second pass found no effective_status and fell back to deriveShipmentStatus, which
+ * reads the milestone dates alone. A grouped row the SQL had made COMPLETED ("nothing left outstanding on every contract of the STO group", is_contract_os_within_band)
+ * therefore came out PLANNED whenever it carried an ETA - while the status cards, which filter on the SQL expression, still listed it under Completed. Production,
+ * PO 1011003250: three FOB POs of one voyage, 1,000 MT delivered of 1,000 MT each, read Planned in the table and were missing under the Planned card.
+ */
+const STATUS_DECIDED_BY_SQL = new WeakSet<object>();
+
 export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentListRow[] {
   const todayMid = new Date();
   todayMid.setHours(0, 0, 0, 0);
@@ -1208,9 +1219,12 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
     const sqlEffective = String(row.effective_status ?? '').trim();
     if (sqlEffective) {
       row.status = sqlEffective.toUpperCase();
+      STATUS_DECIDED_BY_SQL.add(row);
       delete (row as { effective_status?: unknown }).effective_status;
       delete (row as { group_status_floor?: unknown }).group_status_floor;
       delete (row as { group_active_status_count?: unknown }).group_active_status_count;
+    } else if (STATUS_DECIDED_BY_SQL.has(row)) {
+      // An earlier pass already took the status from the SQL and deleted effective_status. Deriving it again from the dates would drop what the SQL knew.
     } else if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') {
       row.status = 'CANCELLED';
     } else {

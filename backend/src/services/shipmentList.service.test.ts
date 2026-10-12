@@ -219,6 +219,43 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.status).toBe('SAILED');
   });
 
+  it('a second pass keeps the status the SQL decided (the hybrid list normalizes the same rows twice)', () => {
+    // Production, PO 1011003250: three FOB POs of one voyage, nothing outstanding on any of them. The SQL says COMPLETED; the milestone dates alone say PLANNED (an ETA, no ATA).
+    const row = () =>
+      ({
+        row_kind: 'shipment',
+        sto_number: null,
+        status: 'PLANNED',
+        effective_status: 'COMPLETED',
+        is_contract_os_within_band: true,
+        is_contract_sap_closed: false,
+        eta_arrival: '2026-10-10',
+        quantity_delivered: '1000000.00',
+        quantity_delivered_klip: '1000000.00',
+      }) as unknown as Parameters<typeof normalizeShipmentListRows>[0][number];
+
+    const once = normalizeShipmentListRows([row()]);
+    expect(once[0]?.status).toBe('COMPLETED');
+
+    // fetchShipmentExecutionPage normalizes, then computeHybridShipmentsList normalizes the merged rows - the same objects
+    const twice = normalizeShipmentListRows(normalizeShipmentListRows([row()]));
+    expect(twice[0]?.status).toBe('COMPLETED');
+    expect(twice[0] as unknown as Record<string, unknown>).not.toHaveProperty('effective_status');
+  });
+
+  it('still derives from the milestones for a row the SQL did not decide, on every pass', () => {
+    const row = () =>
+      ({
+        row_kind: 'shipment',
+        sto_number: 'STO-1',
+        status: 'PLANNED',
+        ata_vessel_sailed_from_loading_port: '2026-07-18',
+        is_contract_sap_closed: false,
+      }) as unknown as Parameters<typeof normalizeShipmentListRows>[0][number];
+    expect(normalizeShipmentListRows([row()])[0]?.status).toBe('SAILED');
+    expect(normalizeShipmentListRows(normalizeShipmentListRows([row()]))[0]?.status).toBe('SAILED');
+  });
+
   it('keeps SQL effective_status when JS ATA would promote to Arrived LP', async () => {
     const rows = normalizeShipmentListRows([
       {
