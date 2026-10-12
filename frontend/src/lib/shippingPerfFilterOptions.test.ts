@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { contractPerfProductOptions } from '@/lib/contractPerformanceFilters'
 import { shippingPerfAvailableValues } from '@/lib/shippingPerfFilterOptions'
 
 const ROWS = [
@@ -57,5 +58,26 @@ describe('shippingPerfAvailableValues', () => {
 
   it('returns empty lists for an empty dataset rather than throwing', () => {
     expect(shippingPerfAvailableValues([], NONE).products).toEqual([])
+  })
+})
+
+describe('Shipping Performance Product dropdown', () => {
+  const base = { source_type: 'SAP', incoterm: 'FOB', plant_site: 'BONTANG', supplier: 'S', group_name: 'G', status: 'PLANNED' }
+  const rows = ['CPO', 'PK', 'POME', 'SHELL PALM', 'UCO', 'RPO', 'RBDPS', 'UCO'].map((product) => ({ ...base, product }))
+
+  it('offers every product the rows have, not only CPO / PK / POME / Shell Palm', () => {
+    const available = shippingPerfAvailableValues(rows, NONE)
+    expect(contractPerfProductOptions(available.products, [])).toEqual(
+      ['CPO', 'PK', 'POME', 'RBDPS', 'RPO', 'Shell Palm', 'UCO'].sort((a, b) => a.localeCompare(b)),
+    )
+  })
+
+  it('keeps a picked product in the list even when the other filters hide its rows', () => {
+    const available = shippingPerfAvailableValues(rows.filter((r) => r.product === 'CPO'), NONE)
+    expect(contractPerfProductOptions(available.products, ['UCO'])).toEqual(['CPO', 'UCO'])
+  })
+
+  it('shows the four fixed labels until there are rows to derive from', () => {
+    expect(contractPerfProductOptions(null, [])).toEqual(['CPO', 'PK', 'POME', 'Shell Palm'])
   })
 })

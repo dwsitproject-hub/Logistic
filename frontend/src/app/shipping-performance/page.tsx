@@ -142,7 +142,7 @@ import {
   PerformanceContractDateControl,
 } from '@/components/performance/PerformanceContractDateControl'
 import {
-  CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
+  contractPerfProductOptions,
   CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
   mapUserProductsToContractPerfOptions,
 } from '@/lib/contractPerformanceFilters'
@@ -1799,13 +1799,12 @@ function ShippingPerformancePageContent() {
       ),
     [spAvailableValues, selectedSources],
   )
+  /*
+   * Every product the date-scoped rows have, not the four fixed labels narrowed by them: a product outside CPO / PK / POME / Shell Palm
+   * (UCO, RPO, ...) could never be offered however many rows it had. Same builder as Contract Performance.
+   */
   const narrowedProductOptions = useMemo(
-    () =>
-      narrowFilterOptions(
-        CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
-        spAvailableValues.products,
-        selectedProducts,
-      ),
+    () => contractPerfProductOptions(spAvailableValues.products, selectedProducts),
     [spAvailableValues, selectedProducts],
   )
   const narrowedIncotermOptions = useMemo(
