@@ -878,8 +878,11 @@ async function upsertVesselLoadingPortRow(
          cancelled_at = NULL,
          cancelled_by_user_id = NULL,
          -- This statement overwrites port_name with SAP's; a user's name it replaces is no longer the user's.
+         -- $2 is cast here on purpose. It is also assigned to port_name (varchar) above, and Postgres analyses the whole SET list BEFORE coercing each
+         -- value to its column: a bare $2 in this comparison is deduced as text while the assignment needs character varying, and the statement fails with
+         -- "inconsistent types deduced for parameter $2" - which failed 256 STO rows of the 2026-10-13 06:00 import.
          klip_edited_fields = CASE
-           WHEN port_name IS DISTINCT FROM $2 THEN array_remove(COALESCE(klip_edited_fields, '{}'), 'port_name')
+           WHEN port_name IS DISTINCT FROM $2::varchar THEN array_remove(COALESCE(klip_edited_fields, '{}'), 'port_name')
            ELSE klip_edited_fields
          END,
          updated_at = CURRENT_TIMESTAMP
