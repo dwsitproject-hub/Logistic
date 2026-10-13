@@ -5,6 +5,32 @@
  * API responses already get Helmet headers from the Express backend.
  * Keep CSP permissive enough for Next.js App Router (inline styles/scripts).
  */
+
+/**
+ * Downstream Hub SDK origin, or null when the SDK is not configured.
+ *
+ * Same rule as sdkUrl()/isHubSdkEnabled() in src/lib/hubSdk.ts, which decides whether the root
+ * layout renders the script tag — keep the two in step, or the tag is rendered and then blocked.
+ * Only script-src needs it: connect-src below already admits any http(s) origin, so the SDK's
+ * POSTs to /api/sdk/v1/collect are allowed as they stand.
+ *
+ * headers() is baked into the routes manifest at BUILD time, like the NEXT_PUBLIC_* values
+ * themselves, so this has to be known when `next build` runs, not when the server starts.
+ */
+function hubSdkOrigin() {
+  const raw = String(process.env.NEXT_PUBLIC_HUB_SDK_URL || '').trim()
+  const key = String(process.env.NEXT_PUBLIC_HUB_SDK_KEY || '').trim()
+  if (!raw || !key) return null
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : null
+  } catch {
+    return null
+  }
+}
+
+const HUB_SDK_ORIGIN = hubSdkOrigin()
+
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -16,7 +42,7 @@ const CONTENT_SECURITY_POLICY = [
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  `script-src 'self' 'unsafe-inline' 'unsafe-eval'${HUB_SDK_ORIGIN ? ` ${HUB_SDK_ORIGIN}` : ''}`,
   "connect-src 'self' http: https: ws: wss:",
 ].join('; ')
 

@@ -1,4 +1,5 @@
 import api from '@/lib/api';
+import { hubIdentify, hubReset } from '@/lib/hubSdk';
 
 export type AuthUser = {
   id?: string;
@@ -11,6 +12,8 @@ export type AuthUser = {
   group_plants?: string[];
   products?: string[];
   is_first_login?: boolean;
+  /** Downstream Hub user id (OIDC `sub`); null for users who never signed in through the Hub. */
+  hub_user_id?: string | null;
 };
 
 export type LoginOptions = {
@@ -23,9 +26,15 @@ const DEFAULT_LOGIN_OPTIONS: LoginOptions = {
   hubSso: false,
 };
 
+/**
+ * Every path that learns who is signed in comes through here — local login, the SSO callback,
+ * and <Layout>'s /auth/me check on each page — so this is where the Hub SDK is told. A no-op
+ * unless the SDK is configured.
+ */
 export function storeUserLocally(user: AuthUser): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem('user', JSON.stringify(user));
+  hubIdentify(user);
 }
 
 export function readUserLocally(): AuthUser | null {
@@ -39,10 +48,16 @@ export function readUserLocally(): AuthUser | null {
   }
 }
 
+/**
+ * Every sign-out path comes through here (logout, an expired session, no access), so this is where
+ * the Hub SDK forgets the user — otherwise the next person on the same browser would inherit this
+ * one's session and their bug reports would carry this one's activity. A no-op unless configured.
+ */
 export function clearLocalAuth(): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem('token');
   localStorage.removeItem('user');
+  hubReset();
 }
 
 export function isAuthenticatedLocally(): boolean {

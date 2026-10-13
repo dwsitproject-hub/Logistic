@@ -16,6 +16,12 @@ services:
         BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-}
         # Jetty columns on the Shipments table. Set true only where JPS is live.
         NEXT_PUBLIC_JPS_ENABLED: ${NEXT_PUBLIC_JPS_ENABLED:-false}
+        # Downstream Hub SDK. Off unless URL and KEY are both set. Staging and production use
+        # DIFFERENT script URLs and keys - see .env.example. GIT_SHA: pass the commit at build time.
+        NEXT_PUBLIC_HUB_SDK_URL: ${NEXT_PUBLIC_HUB_SDK_URL:-}
+        NEXT_PUBLIC_HUB_SDK_KEY: ${NEXT_PUBLIC_HUB_SDK_KEY:-}
+        NEXT_PUBLIC_HUB_SDK_DEBUG: ${NEXT_PUBLIC_HUB_SDK_DEBUG:-false}
+        NEXT_PUBLIC_GIT_SHA: ${NEXT_PUBLIC_GIT_SHA:-}
     container_name: klip-frontend
     environment:
       NODE_ENV: production

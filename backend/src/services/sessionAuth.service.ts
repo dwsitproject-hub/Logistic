@@ -16,6 +16,16 @@ export interface SessionUserPayload {
   products: string[];
   is_active: boolean;
   is_first_login: boolean;
+  /**
+   * Downstream Hub user id: the OIDC `sub` claim, stored as users.hub_oidc_sub at SSO sign-in.
+   * The Hub SDK identifies the user by this, not by KLIP's own id. Null for users who have never
+   * signed in through the Hub; the SDK then falls back to matching by email.
+   *
+   * Every response that returns the session user is built here, and that is the point: the SDK
+   * starts a new analytics session whenever the identity it is given changes, so if /auth/login
+   * returned this field and /auth/me did not, each sign-in would split into two sessions.
+   */
+  hub_user_id: string | null;
 }
 
 export async function buildSessionUserPayload(userRow: Record<string, unknown>): Promise<SessionUserPayload> {
@@ -34,6 +44,7 @@ export async function buildSessionUserPayload(userRow: Record<string, unknown>):
     products: scope.products,
     is_active: Boolean(userRow.is_active),
     is_first_login: Boolean(userRow.is_first_login),
+    hub_user_id: userRow.hub_oidc_sub ? String(userRow.hub_oidc_sub) : null,
   };
 }
 

@@ -24,6 +24,26 @@ COPY package*.json ./
 # Install dependencies
 RUN npm ci
 
+# Downstream Hub SDK (usage analytics, JS errors, "Report a bug"). Off unless BOTH the URL and
+# the key are set; then the root layout loads the SDK and the CSP admits its origin. All three
+# are NEXT_PUBLIC_*, so they are read at BUILD time - see the note on NEXT_PUBLIC_JPS_ENABLED.
+#
+# Declared AFTER `npm ci` on purpose. An ARG in scope at a RUN step is part of that step's cache
+# key, and NEXT_PUBLIC_GIT_SHA changes on every commit: declared above, it would throw away the
+# dependency layer and reinstall node_modules on every single build.
+#
+#   NEXT_PUBLIC_GIT_SHA=$(git rev-parse --short HEAD) docker compose -f docker-compose.frontend.yml up -d --build
+#
+# (.git is outside this build context, so the SHA cannot be read in here; pass it in.)
+ARG NEXT_PUBLIC_HUB_SDK_URL=
+ARG NEXT_PUBLIC_HUB_SDK_KEY=
+ARG NEXT_PUBLIC_HUB_SDK_DEBUG=false
+ARG NEXT_PUBLIC_GIT_SHA=
+ENV NEXT_PUBLIC_HUB_SDK_URL=${NEXT_PUBLIC_HUB_SDK_URL}
+ENV NEXT_PUBLIC_HUB_SDK_KEY=${NEXT_PUBLIC_HUB_SDK_KEY}
+ENV NEXT_PUBLIC_HUB_SDK_DEBUG=${NEXT_PUBLIC_HUB_SDK_DEBUG}
+ENV NEXT_PUBLIC_GIT_SHA=${NEXT_PUBLIC_GIT_SHA}
+
 # Copy source files
 COPY . .
 

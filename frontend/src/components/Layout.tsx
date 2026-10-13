@@ -8,7 +8,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/t
 import { AppTourProvider, useAppTour } from './AppTourProvider'
 import { PageActivityFab } from './PageActivityFab'
 import { UserActivityTracker } from './UserActivityTracker'
-import { BookOpen, Loader2, LogOut, Menu, X } from 'lucide-react'
+import { BookOpen, Bug, Loader2, LogOut, Menu, X } from 'lucide-react'
+import { hubOpenBugReport, isHubSdkEnabled } from '@/lib/hubSdk'
 import { PageHeaderBusyProvider, usePageHeaderBusyState } from '@/components/PageHeaderBusyContext'
 import { resolvePageTitle } from '@/lib/resolvePageTitle'
 import {
@@ -192,6 +193,27 @@ function LayoutChrome({
                 </TooltipTrigger>
                 <TooltipContent side="bottom">App tour</TooltipContent>
               </Tooltip>
+              {/* Downstream Hub bug report. Absent unless the Hub SDK is configured at build time. */}
+              {isHubSdkEnabled() && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => hubOpenBugReport()}
+                      aria-label="Report a bug"
+                      className={cn(
+                        'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200/90 shadow-sm transition-all',
+                        'bg-gradient-to-r from-slate-50 to-gray-50',
+                        'hover:border-slate-300 hover:from-slate-100 hover:to-gray-100',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2',
+                      )}
+                    >
+                      <Bug className="h-4 w-4 text-slate-700" aria-hidden />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Report a bug</TooltipContent>
+                </Tooltip>
+              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -276,8 +298,9 @@ function LayoutWithPermissions({
 
     const allowed = filterNavigationItems(NAV_ITEMS, user.role, perms)
     if (allowed.length === 0) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
+      // Same two keys as before, through the one function every sign-out uses, so the Hub SDK
+      // forgets this user here too.
+      clearLocalAuth()
       router.replace('/login?error=no_access')
       return
     }

@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
 import { MetaMaskErrorGuard } from '@/components/MetaMaskErrorGuard'
+import { HubSdkScript } from '@/components/HubSdkScript'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -22,6 +23,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        {/* Downstream Hub SDK — renders nothing unless configured at build time. */}
+        <HubSdkScript />
+      </head>
       <body className={inter.className}>
         <MetaMaskErrorGuard />
         {children}
