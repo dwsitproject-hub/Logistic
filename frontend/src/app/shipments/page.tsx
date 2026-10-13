@@ -1666,7 +1666,7 @@ function ShipmentsPageContent() {
     Promise.all([
       api.get('/contracts/filter-options/group-plants'),
       api.get('/contracts/filter-options/incoterms?scope=shipment'),
-      api.get('/dashboard/filter-options/products'),
+      api.get('/contracts/filter-options/products?scope=shipment'),
       api.get('/dashboard/filter-options/suppliers'),
     ])
       .then(([plantRes, incRes, productRes, supplierRes]) => {

@@ -167,6 +167,7 @@ import { TRUCKING_REALIZATIONS_JOIN } from '../utils/truckingRealizationSql';
 import { SQL_B2B_PARTIES_FOR_ORIGIN_PO } from '../utils/b2bPartiesForContractSql';
 import { resolveStoListMilestoneDates } from '../utils/contractStoListMilestoneDates';
 import { incotermsForScope, parseFilterOptionScope } from '../utils/filterOptionScopes';
+import { ALL_CONTRACT_PRODUCT_OPTIONS_SQL, buildShipmentProductOptionsSql } from '../utils/shipmentProductOptionsSql';
 
 export { B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL };
 
@@ -1316,6 +1317,24 @@ export const getContractFilterIncoterms = async (req: AuthRequest, res: Response
   } catch (error) {
     logger.error('Get contract incoterm filter options error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch incoterm filter options' } });
+  }
+};
+
+/**
+ * Product filter options. `?scope=shipment` is the Shipments page's own contract scope (utils/shipmentProductOptionsSql.ts) so the filter never offers a product the page cannot
+ * carry; without a scope it is every product of every contract, as the dashboard endpoint it replaces returned.
+ */
+export const getContractFilterProducts = async (req: AuthRequest, res: Response) => {
+  try {
+    const scope = parseFilterOptionScope(req.query?.scope);
+    const products = await ttlMemo(`filter-options:contract-products:${scope === 'shipment' ? 'shipment' : 'all'}`, 5 * 60 * 1000, async () => {
+      const r = await query(scope === 'shipment' ? buildShipmentProductOptionsSql() : ALL_CONTRACT_PRODUCT_OPTIONS_SQL);
+      return r.rows.map((x: { product: string }) => String(x.product));
+    });
+    return res.json({ success: true, data: { products } });
+  } catch (error) {
+    logger.error('Get contract product filter options error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch product filter options' } });
   }
 };
 
