@@ -11,6 +11,7 @@ are treated one by one; a value cut at SAP's 35 characters ending ' P' is restor
 Rows that need a decision are yellow, changed rows green. Nothing is dropped: every Pair ID and every other column is copied as it was.
 Needs openpyxl.
 """
+import os
 import re
 import sys
 import collections
@@ -32,61 +33,9 @@ TK = re.compile(r'^\s*TK\b\s*\.?\s*', re.I)
 OTHER = re.compile(r'^\s*(KLM|MV|KM)\b\s*\.?\s*', re.I)
 
 
-NOT_A_COMPANY = {'CIF', 'FOB', 'CFR', 'FRC', 'LCO'}  # an incoterm sitting in the owner column
-LEGAL = r'(PT|CV|UD|PD)'
-
-
-def norm_owner_segment(seg, truncated):
-    """One company name -> 'PT. NAME' (legal form moved to the front, dotted; PT. added when the name has none). Returns (text, notes)."""
-    notes = []
-    seg = re.sub(r'\s+', ' ', seg).strip().upper()
-    seg = re.sub(r'\bP\.\s?T\.?(?=\s|$)', 'PT.', seg)  # P.T. -> PT.
-    if truncated and re.search(r' P$', seg):
-        seg = seg[:-2] + ' PT.'
-        notes.append('PT. terpotong di 35 karakter SAP, dipulihkan')
-    m = re.match(r'^' + LEGAL + r'\b\.?\s*(.*)$', seg)
-    legal, body = (m.group(1), m.group(2)) if m else (None, seg)
-    if not m:
-        m = re.match(r'^(.*?)[\s,]+' + LEGAL + r'\.?$', seg)
-        if m:
-            legal, body = m.group(2), m.group(1).strip()
-            notes.append(f'{legal}. dipindah ke depan')
-    if legal is None:
-        legal = 'PT'
-        notes.append('PT. ditambah')
-    elif not m or not seg.startswith(f'{legal}. '):
-        if 'dipindah ke depan' not in ' '.join(notes) and 'terpotong' not in ' '.join(notes):
-            notes.append('PT. dirapikan')
-    if re.search(r'\bSDN\s*BHD\b', body):
-        notes.append('SDN BHD (perusahaan Malaysia): cek apakah PT. tepat')
-    return f'{legal}. {body}', notes
-
-
-def norm_owner(value):
-    """Vessel Owner (Company Name): upper-case, PT. at the front, PT. added where missing. Returns (new, note)."""
-    if value is None or str(value).strip() == '':
-        return None, ''
-    raw = str(value)
-    text = re.sub(r'\s+', ' ', raw).strip().upper()
-    if text in NOT_A_COMPANY:
-        return text, 'Bukan nama perusahaan (incoterm di kolom owner) - tidak diubah, perlu dikoreksi'
-    truncated = len(raw.strip()) == 35
-    parts, notes = [], []
-    for seg in re.split(r'\s/\s', text):
-        out_seg, n = norm_owner_segment(seg, truncated)
-        parts.append(out_seg)
-        notes += n
-    if len(parts) > 1:
-        notes.append('dua perusahaan dipisah " / ", tiap nama diperlakukan sendiri')
-    new = ' / '.join(parts)
-    note = '; '.join(dict.fromkeys(notes))
-    if not note and new != text:
-        note = 'PT. dirapikan'
-    return new, note
-
-
-def key(s):
-    return re.sub(r'[^A-Z0-9]', '', str(s or '').upper())
+# the owner / name rules live in vessel_common.py (shared with the registry scripts); -I drops the script directory from sys.path, so add it back
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from vessel_common import key, norm_owner  # noqa: E402
 
 
 wb = openpyxl.load_workbook(SRC)
