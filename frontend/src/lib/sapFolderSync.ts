@@ -67,6 +67,15 @@ export function findRunStartedSince(runs: SapFolderRun[], sinceMs: number, skewM
   return runs.find((r) => new Date(r.started_at).getTime() >= cutoff) ?? null
 }
 
+/**
+ * The moment to match a Sync click's run against: the server's clock when it sent one, the browser's otherwise. Runs are stamped by the
+ * server, so a browser clock that is more than the skew allowance ahead never finds its own run.
+ */
+export function syncClickTimeMs(serverNowIso: unknown, browserNowMs: number): number {
+  const server = typeof serverNowIso === 'string' ? new Date(serverNowIso).getTime() : NaN
+  return Number.isNaN(server) ? browserNowMs : server
+}
+
 /** True once that run has finished, so polling can stop. */
 export function isSapFolderRunFinished(run: SapFolderRun | null): boolean {
   return !!run && run.outcome !== 'running' && !!run.finished_at

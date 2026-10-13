@@ -9,6 +9,7 @@ import {
   findRunStartedSince,
   formatSapFolderTime,
   isSapFolderRunFinished,
+  syncClickTimeMs,
   type SapFolderRun,
   type SapFolderRunTone,
 } from '@/lib/sapFolderSync';
@@ -72,9 +73,11 @@ const SapFolderSyncControl: React.FC<{ canSync: boolean; onTick: () => void }> =
   const handleSync = async () => {
     setMessage(null);
     setSyncing(true);
-    const clickedAt = Date.now();
+    const clickedLocalAt = Date.now();
+    let clickedAt = clickedLocalAt;
     try {
-      await api.post('/sap-master-v2/auto-import/sync');
+      const res = await api.post('/sap-master-v2/auto-import/sync');
+      clickedAt = syncClickTimeMs(res.data?.data?.serverNow, clickedLocalAt);
     } catch (error) {
       setSyncing(false);
       setMessage({ text: errorMessage(error), tone: 'warn' });
@@ -92,7 +95,7 @@ const SapFolderSyncControl: React.FC<{ canSync: boolean; onTick: () => void }> =
           const described = describeSapFolderRun(mine!);
           setMessage({ text: `${described.label}${mine!.detail ? ` - ${mine!.detail}` : ''}`, tone: described.tone });
           onTickRef.current();
-        } else if (Date.now() - clickedAt > GIVE_UP_MS) {
+        } else if (Date.now() - clickedLocalAt > GIVE_UP_MS) {
           stopPolling();
           setSyncing(false);
           setMessage({ text: 'The sync is taking too long. Check the import list and the backend log.', tone: 'warn' });

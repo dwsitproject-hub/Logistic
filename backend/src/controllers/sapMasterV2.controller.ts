@@ -491,7 +491,11 @@ export const startSapFolderSync = async (req: Request, res: Response): Promise<v
     });
     return;
   }
-  res.status(202).json({ success: true, data: { started: true } });
+  // The page matches the run it started by time. The database's clock stamps sap_auto_import_runs.started_at, so hand it back:
+  // a browser whose own clock runs ahead (39 s on one PC) would otherwise never recognise its run and spin until it gave up.
+  const pool = (await import('../database/connection')).default;
+  const clock = await pool.query('SELECT NOW() AS now');
+  res.status(202).json({ success: true, data: { started: true, serverNow: new Date(clock.rows[0].now).toISOString() } });
 };
 
 /** Latest runs of the folder job (cron and Sync), whether one is running now, and how the cron is set. */

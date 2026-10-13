@@ -4,6 +4,7 @@ import {
   findRunStartedSince,
   formatSapFolderTime,
   isSapFolderRunFinished,
+  syncClickTimeMs,
   type SapFolderRun,
 } from './sapFolderSync'
 
@@ -49,5 +50,22 @@ describe('sapFolderSync', () => {
   it('shows Jakarta time', () => {
     expect(formatSapFolderTime('2026-10-07T23:00:00.000Z')).toMatch(/08 Oct 2026/)
     expect(formatSapFolderTime(null)).toBe('-')
+  })
+})
+
+describe('syncClickTimeMs', () => {
+  it('uses the server clock, so a browser that runs ahead still recognises the run its click started', () => {
+    const serverNow = '2026-10-13T02:21:58.000Z'
+    const browserNow = new Date('2026-10-13T02:22:37.000Z').getTime() // 39 s ahead, as measured on one PC
+    const clickedAt = syncClickTimeMs(serverNow, browserNow)
+    const started = run({ id: 'mine', started_at: '2026-10-13T02:21:59.000Z' })
+    expect(findRunStartedSince([started], clickedAt)?.id).toBe('mine')
+    // the browser clock alone would have missed it - the bug this replaces
+    expect(findRunStartedSince([started], browserNow)).toBeNull()
+  })
+
+  it('falls back to the browser clock when the server did not send one', () => {
+    expect(syncClickTimeMs(undefined, 1234)).toBe(1234)
+    expect(syncClickTimeMs('not a date', 1234)).toBe(1234)
   })
 })
