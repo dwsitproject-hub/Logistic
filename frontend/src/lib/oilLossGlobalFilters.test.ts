@@ -3,7 +3,7 @@ import {
   applyOilLossGlobalFilters,
   buildOilLossPeriodOptions,
   matchesOilLossGlobalProductsMultiFilter,
-  matchesOilLossGlobalTransportFilter,
+  matchesOilLossGlobalIncotermFilter,
   oilLossProductOptions,
   resolveOilLossPeriodDateRange,
 } from '@/lib/oilLossGlobalFilters'
@@ -14,7 +14,7 @@ function row(overrides: Partial<OilLossSourceRow> = {}): OilLossSourceRow {
     contract_date: '2026-07-15',
     product: 'CPO',
     group_plant: 'PLANT-A',
-    incoterm: 'CIF',
+    incoterm: 'FOB',
     transport_mode: 'SEA',
     ...overrides,
   } as OilLossSourceRow
@@ -47,7 +47,6 @@ describe('oilLossGlobalFilters', () => {
     const filtered = applyOilLossGlobalFilters({
       rows,
       period: 'YTD',
-      transport: 'Vessel',
       selectedProducts: ['CPO'],
       selectedGroupPlants: ['PLANT-A'],
     })
@@ -63,7 +62,6 @@ describe('oilLossGlobalFilters', () => {
     const filtered = applyOilLossGlobalFilters({
       rows,
       period: 'YTD',
-      transport: 'Vessel',
       selectedGroupPlants: ['BONTANG', 'Blank'],
     })
     expect(filtered).toHaveLength(1)
@@ -78,7 +76,6 @@ describe('oilLossGlobalFilters', () => {
     const filtered = applyOilLossGlobalFilters({
       rows,
       period: 'YTD',
-      transport: 'Vessel',
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
     })
@@ -94,7 +91,6 @@ describe('oilLossGlobalFilters', () => {
     const filtered = applyOilLossGlobalFilters({
       rows,
       period: 'MTD',
-      transport: 'Vessel',
       referenceDate: augRef,
     })
     expect(filtered).toHaveLength(1)
@@ -146,17 +142,53 @@ describe('oilLossGlobalFilters', () => {
     })
   })
 
-  it('matchesOilLossGlobalTransportFilter — Vessel and Truck stay exclusive', () => {
-    expect(matchesOilLossGlobalTransportFilter(row(), 'Vessel')).toBe(true)
-    expect(matchesOilLossGlobalTransportFilter(row(), 'Truck')).toBe(false)
+  it('counts FOB transactions only: CIF, CFR and the trucking incoterms are out', () => {
+    expect(matchesOilLossGlobalIncotermFilter(row({ incoterm: 'FOB' }))).toBe(true)
+    expect(matchesOilLossGlobalIncotermFilter(row({ incoterm: ' fob ' }))).toBe(true)
+    for (const incoterm of ['CIF', 'CFR', 'FRC', 'LCO', '', null]) {
+      expect(matchesOilLossGlobalIncotermFilter(row({ incoterm: incoterm as string | null }))).toBe(false)
+    }
+  })
 
-    const truckRow = row({ transport_mode: 'SEA', incoterm: 'FRC' })
-    expect(matchesOilLossGlobalTransportFilter(truckRow, 'Truck')).toBe(true)
-    expect(matchesOilLossGlobalTransportFilter(truckRow, 'Vessel')).toBe(false)
+  it('applyOilLossGlobalFilters drops every non-FOB row', () => {
+    const rows = [
+      row({ id: 'fob', incoterm: 'FOB' }),
+      row({ id: 'cif', incoterm: 'CIF' }),
+      row({ id: 'cfr', incoterm: 'CFR' }),
+      row({ id: 'frc', incoterm: 'FRC', transport_mode: 'LAND' }),
+    ]
+    expect(applyOilLossGlobalFilters({ rows, period: 'YTD' }).map((r) => r.id)).toEqual(['fob'])
+  })
 
-    const cfrRow = row({ transport_mode: 'LAND', incoterm: 'CFR' })
-    expect(matchesOilLossGlobalTransportFilter(cfrRow, 'Vessel')).toBe(true)
-    expect(matchesOilLossGlobalTransportFilter(cfrRow, 'Truck')).toBe(false)
+  it('applyOilLossGlobalFilters filters by loading port, case-insensitively, with Blank for a row that has none', () => {
+    const rows = [
+      row({ id: 'a', loading_location: 'POM KENDAWANGAN' }),
+      row({ id: 'b', loading_location: ' pom  kendawangan ' }),
+      row({ id: 'c', loading_location: 'PORT TELUK TAPANG' }),
+      row({ id: 'd', loading_location: '' }),
+    ]
+    const ids = (selectedLoadingPorts: string[]) =>
+      applyOilLossGlobalFilters({ rows, period: 'YTD', selectedLoadingPorts }).map((r) => r.id)
+    expect(ids([])).toEqual(['a', 'b', 'c', 'd'])
+    expect(ids(['Pom Kendawangan'])).toEqual(['a', 'b'])
+    expect(ids(['PORT TELUK TAPANG', 'Blank'])).toEqual(['c', 'd'])
+  })
+
+  it('loading port, product and region/plant combine (AND), so the cards, drilldown and table see one row set', () => {
+    const rows = [
+      row({ id: 'keep', product: 'CPO', group_plant: 'PLANT-A', loading_location: 'PORT A' }),
+      row({ id: 'other-port', product: 'CPO', group_plant: 'PLANT-A', loading_location: 'PORT B' }),
+      row({ id: 'other-product', product: 'PK', group_plant: 'PLANT-A', loading_location: 'PORT A' }),
+      row({ id: 'other-plant', product: 'CPO', group_plant: 'PLANT-B', loading_location: 'PORT A' }),
+    ]
+    const out = applyOilLossGlobalFilters({
+      rows,
+      period: 'YTD',
+      selectedProducts: ['CPO'],
+      selectedGroupPlants: ['PLANT-A'],
+      selectedLoadingPorts: ['PORT A'],
+    })
+    expect(out.map((r) => r.id)).toEqual(['keep'])
   })
 })
 

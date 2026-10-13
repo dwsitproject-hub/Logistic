@@ -1,34 +1,15 @@
 import { canonicalProductName, sameProduct } from '@/lib/productAlias'
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import {
+  isOilLossPageIncoterm,
   matchesOilLossModeFilter,
-  matchesOilLossTruckSegment,
-  matchesOilLossVesselSegment,
 } from '@/lib/oilLossEligibility'
+import { matchesOilLossLoadingPortFilter } from '@/lib/oilLossLoadingPort'
 import { valueInRegionSiteList } from '@/lib/globalScopeFilters'
 
 export type OilLossGlobalPeriodKey = 'YTD' | 'MTD' | `month-${number}`
 
-/**
- * Vessel and Trucking are separate grains (voyage vs PO), so the toolbar has no All.
- * Vessel shows R1–Loss. Trucking shows only the Loss card.
- */
-export type OilLossGlobalTransportFilter = 'Vessel' | 'Truck'
-
 export type OilLossGlobalProductFilter = 'All' | 'CPO' | 'PK' | 'POME' | 'SHELL PALM'
-
-export const OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS: readonly OilLossGlobalTransportFilter[] = [
-  'Vessel',
-  'Truck',
-] as const
-
-/** Truck stays the stored value; the toolbar label is Trucking. */
-export function oilLossGlobalTransportLabel(value: OilLossGlobalTransportFilter): string {
-  if (value === 'Truck') return 'Trucking'
-  return value
-}
-
-export const OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT: OilLossGlobalTransportFilter = 'Vessel'
 
 export const OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS = ['CPO', 'PK', 'POME', 'SHELL PALM'] as const
 
@@ -145,13 +126,9 @@ function resolveRowDate(row: OilLossSourceRow): string {
   return String(row.contract_date ?? row.operation_date ?? '').slice(0, 10)
 }
 
-/** All / Vessel / Truck — incoterm × transport segment (SSOT with global eligibility). */
-export function matchesOilLossGlobalTransportFilter(
-  row: OilLossSourceRow,
-  filter: OilLossGlobalTransportFilter,
-): boolean {
-  if (filter === 'Vessel') return matchesOilLossVesselSegment(row)
-  return matchesOilLossTruckSegment(row)
+/** Oil Loss counts FOB transactions only (page rule, lib/oilLossEligibility.ts). */
+export function matchesOilLossGlobalIncotermFilter(row: OilLossSourceRow): boolean {
+  return isOilLossPageIncoterm(row.incoterm)
 }
 
 export function matchesOilLossGlobalProductsMultiFilter(
@@ -175,8 +152,8 @@ export function matchesOilLossGlobalProductFilter(
 export type ApplyOilLossGlobalFiltersInput = {
   rows: OilLossSourceRow[]
   period: OilLossGlobalPeriodKey
-  transport: OilLossGlobalTransportFilter
   selectedProducts?: string[]
+  selectedLoadingPorts?: string[]
   selectedGroupPlants?: string[]
   selectedModes?: string[]
   selectedIncoterms?: string[]
@@ -186,12 +163,12 @@ export type ApplyOilLossGlobalFiltersInput = {
   referenceDate?: Date
 }
 
-/** SSOT pipeline for Oil Loss Section 1 + Section 3 (global bar + toolbar mode/incoterm). */
+/** SSOT pipeline for Oil Loss Section 1 (R1-Loss), the drilldown and the table: FOB only, then period, region/plant, product and loading port. */
 export function applyOilLossGlobalFilters({
   rows,
   period,
-  transport,
   selectedProducts = [],
+  selectedLoadingPorts = [],
   selectedGroupPlants = [],
   selectedModes = [],
   selectedIncoterms = [],
@@ -210,7 +187,8 @@ export function applyOilLossGlobalFilters({
     if (selectedGroupPlants.length > 0 && !valueInRegionSiteList(row.group_plant || row.plant_site, selectedGroupPlants)) {
       return false
     }
-    if (!matchesOilLossGlobalTransportFilter(row, transport)) return false
+    if (!matchesOilLossGlobalIncotermFilter(row)) return false
+    if (!matchesOilLossLoadingPortFilter(row, selectedLoadingPorts)) return false
     if (!matchesOilLossGlobalProductsMultiFilter(row, selectedProducts)) return false
     const d = resolveRowDate(row)
     if (!d) return false

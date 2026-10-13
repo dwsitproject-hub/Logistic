@@ -21,7 +21,7 @@ type OilLossDrilldownSectionProps = {
   rows: OilLossSourceRow[]
   filters: OilLossDrilldownFilters
   onFiltersChange: (filters: OilLossDrilldownFilters) => void
-  /** Active global scope tokens under the title (period, transport, multi-filters). */
+  /** Active global scope tokens under the title (period, region/plant, product, loading port). */
   scopeSegments?: readonly string[]
   loading?: boolean
   dataFetching?: boolean
@@ -51,16 +51,14 @@ export default function OilLossDrilldownSection({
   const tree = useMemo(() => buildOilLossDrilldownTree(rows), [rows])
 
   const productNode = tree.find((n) => n.key === filters.product)
-  const plantNode = productNode?.children.find((n) => n.key === filters.plant)
-  const incotermNode = plantNode?.children.find((n) => n.key === filters.incoterm)
-  const transporterNode = incotermNode?.children.find((n) => n.key === filters.transporter)
+  const vesselNode = productNode?.children.find((n) => n.key === filters.vessel)
+  const loadingPortNode = vesselNode?.children.find((n) => n.key === filters.loadingPort)
 
   const applyClick = (next: Partial<OilLossDrilldownFilters>) => {
     onFiltersChange({
       product: 'product' in next ? (next.product ?? null) : filters.product,
-      plant: 'plant' in next ? (next.plant ?? null) : filters.plant,
-      incoterm: 'incoterm' in next ? (next.incoterm ?? null) : filters.incoterm,
-      transporter: 'transporter' in next ? (next.transporter ?? null) : filters.transporter,
+      vessel: 'vessel' in next ? (next.vessel ?? null) : filters.vessel,
+      loadingPort: 'loadingPort' in next ? (next.loadingPort ?? null) : filters.loadingPort,
       supplier: 'supplier' in next ? (next.supplier ?? null) : filters.supplier,
     })
   }
@@ -126,7 +124,7 @@ export default function OilLossDrilldownSection({
               isRefreshing ? 'opacity-65' : 'opacity-100'
             }`}
           >
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
               {OIL_LOSS_DRILLDOWN_CATEGORIES.map(({ level, title }) => {
                 const style = OIL_LOSS_DRILLDOWN_LEVEL_STYLES[level]
                 const subtitle = oilLossDrilldownColumnSubtitle(level, filters)
@@ -137,67 +135,47 @@ export default function OilLossDrilldownSection({
                       <div className="space-y-2">
                         {tree.map((node) =>
                           renderCard(node, level, filters.product === node.key, tree, () => {
-                            applyClick({
-                              product: node.key,
-                              plant: null,
-                              incoterm: null,
-                              transporter: null,
-                              supplier: null,
-                            })
+                            applyClick({ product: node.key, vessel: null, loadingPort: null, supplier: null })
                           }),
                         )}
                       </div>
                     )
                   }
-                  if (level === 'plant') {
+                  if (level === 'vessel') {
                     if (!filters.product) {
-                      return <div className="text-sm text-gray-500">Select a product to see plants.</div>
+                      return <div className="text-sm text-gray-500">Select a product to see vessels.</div>
                     }
                     return (
                       <div className="space-y-2">
                         {(productNode?.children ?? []).map((node) =>
-                          renderCard(node, level, filters.plant === node.key, productNode?.children ?? [], () => {
-                            applyClick({ plant: node.key, incoterm: null, transporter: null, supplier: null })
+                          renderCard(node, level, filters.vessel === node.key, productNode?.children ?? [], () => {
+                            applyClick({ vessel: node.key, loadingPort: null, supplier: null })
                           }),
                         )}
                       </div>
                     )
                   }
-                  if (level === 'incoterm') {
-                    if (!filters.plant) {
-                      return <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
+                  if (level === 'loadingPort') {
+                    if (!filters.vessel) {
+                      return <div className="text-sm text-gray-500">Select a vessel to see loading ports.</div>
                     }
                     return (
                       <div className="space-y-2">
-                        {(plantNode?.children ?? []).map((node) =>
-                          renderCard(node, level, filters.incoterm === node.key, plantNode?.children ?? [], () => {
-                            applyClick({ incoterm: node.key, transporter: null, supplier: null })
+                        {(vesselNode?.children ?? []).map((node) =>
+                          renderCard(node, level, filters.loadingPort === node.key, vesselNode?.children ?? [], () => {
+                            applyClick({ loadingPort: node.key, supplier: null })
                           }),
                         )}
                       </div>
                     )
                   }
-                  if (level === 'transporter') {
-                    if (!filters.incoterm) {
-                      return <div className="text-sm text-gray-500">Select an incoterm to see transporters.</div>
-                    }
-                    return (
-                      <div className="space-y-2">
-                        {(incotermNode?.children ?? []).map((node) =>
-                          renderCard(node, level, filters.transporter === node.key, incotermNode?.children ?? [], () => {
-                            applyClick({ transporter: node.key, supplier: null })
-                          }),
-                        )}
-                      </div>
-                    )
-                  }
-                  if (!filters.transporter) {
-                    return <div className="text-sm text-gray-500">Select a transporter to see suppliers.</div>
+                  if (!filters.loadingPort) {
+                    return <div className="text-sm text-gray-500">Select a loading port to see suppliers.</div>
                   }
                   return (
                     <div className="space-y-2">
-                      {(transporterNode?.children ?? []).map((node) =>
-                        renderCard(node, level, filters.supplier === node.key, transporterNode?.children ?? [], () => {
+                      {(loadingPortNode?.children ?? []).map((node) =>
+                        renderCard(node, level, filters.supplier === node.key, loadingPortNode?.children ?? [], () => {
                           applyClick({ supplier: node.key })
                         }),
                       )}

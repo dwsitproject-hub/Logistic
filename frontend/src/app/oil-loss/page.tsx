@@ -10,10 +10,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Droplets, Eye, GripVertical, Loader2, Ship, SlidersHorizontal, Truck, X } from 'lucide-react'
+import { Droplets, Eye, GripVertical, Loader2, Ship, SlidersHorizontal, X } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
-import { ViewTruckingOperationModal } from '@/components/trucking/ViewTruckingOperationModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
@@ -27,7 +26,8 @@ import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 import { formatOilLossAvgMt, formatOilLossAvgPct, formatOilLossMtFromKg, formatOilLossPct } from '@/lib/oilLossFormat'
-import { filterOilLossEligibleRows } from '@/lib/oilLossEligibility'
+import { filterOilLossPageRows } from '@/lib/oilLossEligibility'
+import { oilLossLoadingPortOptions } from '@/lib/oilLossLoadingPort'
 import { filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import {
   buildOilLossSummaryForDateRange,
@@ -44,12 +44,8 @@ import {
   buildOilLossPeriodOptions,
   OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS,
   oilLossProductOptions,
-  OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT,
-  OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS,
-  oilLossGlobalTransportLabel,
   resolveOilLossPeriodDateRange,
   type OilLossGlobalPeriodKey,
-  type OilLossGlobalTransportFilter,
 } from '@/lib/oilLossGlobalFilters'
 import OilLossDrilldownSection from '@/components/oil-loss/OilLossDrilldownSection'
 import {
@@ -99,7 +95,6 @@ import {
   OIL_LOSS_ALL_CONTRACT_DEFAULT_VISIBLE_COLUMN_IDS,
   aggregateOilLossByContract,
   buildOilLossAllContractVisibleColumns,
-  filterOilLossColumnsForTransport,
   mergeOilLossAllContractColumnOrder,
   oilLossAllContractCompactColumnFallbackOrder,
   oilLossAllContractDefaultVisibleColumnIds,
@@ -1210,11 +1205,6 @@ export default function OilLossPage() {
     editStoNumber: string | null
     editContractNumbers: string | null
   } | null>(null)
-  const [viewTruckingModal, setViewTruckingModal] = useState<{
-    contractId: string
-    contractExtNo: string | null
-    poNumber: string | null
-  } | null>(null)
   const pageSize = 20
 
   const activePrefs = columnPrefsByView[viewMode]
@@ -1263,21 +1253,12 @@ export default function OilLossPage() {
   }, [availableGroupPlants, alignGroupPlantsToOptions])
   const showBlockingLoad = (loading && rows.length === 0) || !userScopeReady
   const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('YTD')
-  const [globalTransport, setGlobalTransport] =
-    useState<OilLossGlobalTransportFilter>(OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT)
+  const [selectedLoadingPorts, setSelectedLoadingPorts] = useState<string[]>([])
   const [drilldownFilters, setDrilldownFilters] = useState<OilLossDrilldownFilters>(
     EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
   )
   const globalPeriodOptions = useMemo(() => buildOilLossPeriodOptions(), [])
 
-  const globalTransportOptions = useMemo(
-    () =>
-      OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((value) => ({
-        value,
-        label: oilLossGlobalTransportLabel(value),
-      })),
-    [],
-  )
   const globalPeriodMeta = useMemo(
     () => resolveOilLossPeriodDateRange(globalPeriod),
     [globalPeriod],
@@ -1301,7 +1282,7 @@ export default function OilLossPage() {
     const cached = !options?.force ? peekCache<OilLossApiEnvelope>(cacheKey) : null
     const applyOilLossEnvelope = (envelope: OilLossApiEnvelope) => {
       oilLossSnapshotAtRef.current = envelope.snapshotRefreshedAt ?? null
-      setRows(filterOilLossEligibleRows(Array.isArray(envelope?.data) ? envelope.data : []))
+      setRows(filterOilLossPageRows(Array.isArray(envelope?.data) ? envelope.data : []))
     }
     if (!quiet && cached) {
       applyOilLossEnvelope(cached)
@@ -1373,7 +1354,7 @@ export default function OilLossPage() {
       const rebuilt = envelope.snapshotStale !== true && refreshedAt !== baseline
       if (rebuilt) {
         oilLossSnapshotAtRef.current = refreshedAt
-        setRows(filterOilLossEligibleRows(Array.isArray(envelope.data) ? envelope.data : []))
+        setRows(filterOilLossPageRows(Array.isArray(envelope.data) ? envelope.data : []))
         stop()
         return
       }
@@ -1651,7 +1632,7 @@ export default function OilLossPage() {
     setGlobalPeriod('YTD')
     setDateFrom(ytd.dateFrom)
     setDateTo(ytd.dateTo)
-    setGlobalTransport(OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT)
+    setSelectedLoadingPorts([])
     handleProductsChange([])
     handleGroupPlantsChange([])
     resetUserScopeFilters()
@@ -1671,21 +1652,21 @@ export default function OilLossPage() {
     globalPeriod,
     dateFrom,
     dateTo,
-    globalTransport,
+    selectedLoadingPorts,
     selectedProducts,
     selectedGroupPlants,
   ])
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [globalPeriod, dateFrom, dateTo, globalTransport, selectedProducts])
+  }, [globalPeriod, dateFrom, dateTo, selectedLoadingPorts, selectedProducts])
 
   const globallyFilteredRows = useMemo(() => {
     return applyOilLossGlobalFilters({
       rows,
       period: globalPeriod,
-      transport: globalTransport,
       selectedProducts,
+      selectedLoadingPorts,
       selectedGroupPlants,
       dateFrom,
       dateTo,
@@ -1693,8 +1674,8 @@ export default function OilLossPage() {
   }, [
     rows,
     globalPeriod,
-    globalTransport,
     selectedProducts,
+    selectedLoadingPorts,
     selectedGroupPlants,
     dateFrom,
     dateTo,
@@ -1706,13 +1687,31 @@ export default function OilLossPage() {
       applyOilLossGlobalFilters({
         rows,
         period: globalPeriod,
-        transport: globalTransport,
         selectedProducts: [],
+        selectedLoadingPorts,
         selectedGroupPlants,
         dateFrom,
         dateTo,
       }),
-    [rows, globalPeriod, globalTransport, selectedGroupPlants, dateFrom, dateTo],
+    [rows, globalPeriod, selectedLoadingPorts, selectedGroupPlants, dateFrom, dateTo],
+  )
+  /** The rows every filter but Loading Port leaves in, so picking a port never hides the other ports from the list. */
+  const loadingPortListRows = useMemo(
+    () =>
+      applyOilLossGlobalFilters({
+        rows,
+        period: globalPeriod,
+        selectedProducts,
+        selectedLoadingPorts: [],
+        selectedGroupPlants,
+        dateFrom,
+        dateTo,
+      }),
+    [rows, globalPeriod, selectedProducts, selectedGroupPlants, dateFrom, dateTo],
+  )
+  const loadingPortDropdownOptions = useMemo(
+    () => oilLossLoadingPortOptions(loadingPortListRows, selectedLoadingPorts),
+    [loadingPortListRows, selectedLoadingPorts],
   )
   const productDropdownOptions = useMemo(
     () =>
@@ -1795,19 +1794,6 @@ export default function OilLossPage() {
     })
   }, [])
 
-  const openTruckingFromOilLossRow = useCallback((row: OilLossAllContractRow) => {
-    const contractId = firstOilLossToken(row.contract_number) || firstOilLossToken(row.contract_ext_no)
-    if (!contractId) {
-      alert('PO or contract number is required to open View Trucking.')
-      return
-    }
-    setViewTruckingModal({
-      contractId,
-      contractExtNo: firstOilLossToken(row.contract_ext_no) || null,
-      poNumber: firstOilLossToken(row.po_number) || null,
-    })
-  }, [])
-
   const aggregatedRows = useMemo(() => {
     if (viewMode === 'all_contract') return aggregatedContractRows
     if (viewMode === 'by_transporter') return aggregatedTransporterRows
@@ -1833,8 +1819,8 @@ export default function OilLossPage() {
               visibleColumnIds,
               columnOrderIds,
             )
-    return filterOilLossColumnsForTransport(picked, globalTransport)
-  }, [viewMode, visibleColumnIds, columnOrderIds, globalTransport])
+    return picked
+  }, [viewMode, visibleColumnIds, columnOrderIds])
 
   const filteredRows = useMemo(() => {
     const sortCol = activeCompactColumns.find((c) => c.id === sortKey)
@@ -1866,6 +1852,7 @@ export default function OilLossPage() {
   }, [
     filteredRows.length,
     selectedProducts,
+    selectedLoadingPorts,
     selectedGroupPlants,
     dateFrom,
     dateTo,
@@ -1943,13 +1930,12 @@ export default function OilLossPage() {
       .map((id) => byId.get(id))
       .filter((c): c is CompactColumn => !!c && !visibleIds.has(c.id))
       .sort((a, b) => a.label.localeCompare(b.label))
-    return filterOilLossColumnsForTransport([...visibleColumns, ...hiddenCols], globalTransport)
+    return [...visibleColumns, ...hiddenCols]
   }, [
     visibleColumns,
     columnOrderIds,
     activeCompactColumns,
     viewMode,
-    globalTransport,
     allContractColumnIds,
     transporterColumnIds,
     supplierColumnIds,
@@ -1996,7 +1982,7 @@ export default function OilLossPage() {
               globalPeriod !== 'YTD' ||
               !periodRangeMatchesDates(resolveOilLossPeriodDateRange('YTD'), dateFrom, dateTo) ||
               selectedGroupPlants.length > 0 ||
-              globalTransport !== OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT ||
+              selectedLoadingPorts.length > 0 ||
               selectedProducts.length > 0
             }
             chips={[
@@ -2022,28 +2008,11 @@ export default function OilLossPage() {
                   ]
                 : []),
               ...selectionChips('Region/Plant', selectedGroupPlants, handleGroupPlantsChange),
-              ...(globalTransport !== OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT
-                ? [
-                    {
-                      id: 'transport',
-                      label: `Transport: ${oilLossGlobalTransportLabel(globalTransport)}`,
-                      onRemove: () => setGlobalTransport(OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT),
-                    },
-                  ]
-                : []),
               ...selectionChips('Product', selectedProducts, handleProductsChange),
+              ...selectionChips('Loading Port', selectedLoadingPorts, setSelectedLoadingPorts),
             ]}
           >
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StyledNativeSelect
-              label="Transport"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              inlineLabel={false}
-              minWidthClassName="w-full"
-              value={globalTransport}
-              onChange={setGlobalTransport}
-              options={globalTransportOptions}
-            />
             <SearchableMultiSelect
               label="Product"
               labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
@@ -2052,6 +2021,16 @@ export default function OilLossPage() {
               onChange={handleProductsChange}
               placeholder="All"
               emptyMessage="No products"
+              uppercaseOptionLabels
+            />
+            <SearchableMultiSelect
+              label="Loading Port"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+              options={loadingPortDropdownOptions}
+              selected={selectedLoadingPorts}
+              onChange={setSelectedLoadingPorts}
+              placeholder="All"
+              emptyMessage="No loading ports"
               uppercaseOptionLabels
             />
           </div>
@@ -2069,7 +2048,7 @@ export default function OilLossPage() {
               totalMt: null,
               totalPct: null,
             }
-            const cardDisabled = globalTransport !== 'Vessel' && card.key !== 'r4'
+            const cardDisabled = false
             const avgPct = cardDisabled || showBlockingLoad ? null : summary.avgPct
             const avgMt = cardDisabled || showBlockingLoad ? null : summary.avgMt
 
@@ -2135,9 +2114,10 @@ export default function OilLossPage() {
             formatContractDateScopeLabel(globalPeriod, dateFrom, dateTo, (p) =>
               resolveOilLossPeriodDateRange(p as OilLossGlobalPeriodKey),
             ),
-            oilLossGlobalTransportLabel(globalTransport),
+            'FOB',
             ...(selectedGroupPlants.length > 0 ? [selectedGroupPlants.join(', ')] : []),
             ...(selectedProducts.length > 0 ? [selectedProducts.join(', ')] : []),
+            ...(selectedLoadingPorts.length > 0 ? [selectedLoadingPorts.join(', ')] : []),
           ]}
           loading={showBlockingLoad}
           dataFetching={dataFetching}
@@ -2538,14 +2518,7 @@ export default function OilLossPage() {
                                     {viewMode === 'all_contract' ? (
                                       (() => {
                                         const contractRow = row as OilLossAllContractRow
-                                        const isVessel = globalTransport === 'Vessel'
-                                        const canOpen = isVessel
-                                          ? isShipmentUuid(String(contractRow.shipment_id ?? '').trim())
-                                          : Boolean(
-                                              firstOilLossToken(contractRow.contract_number) ||
-                                                firstOilLossToken(contractRow.contract_ext_no),
-                                            )
-                                        const label = isVessel ? 'View shipment' : 'View trucking'
+                                        const canOpen = isShipmentUuid(String(contractRow.shipment_id ?? '').trim())
                                         return (
                                           <Tooltip>
                                             <TooltipTrigger asChild>
@@ -2553,25 +2526,14 @@ export default function OilLossPage() {
                                                 variant="outline"
                                                 size="icon"
                                                 disabled={!canOpen}
-                                                onClick={() => {
-                                                  if (isVessel) openVesselFromOilLossRow(contractRow)
-                                                  else openTruckingFromOilLossRow(contractRow)
-                                                }}
-                                                className={
-                                                  isVessel
-                                                    ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
-                                                    : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
-                                                }
-                                                aria-label={label}
+                                                onClick={() => openVesselFromOilLossRow(contractRow)}
+                                                className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                                aria-label="View shipment"
                                               >
-                                                {isVessel ? (
-                                                  <Ship className="h-4 w-4" />
-                                                ) : (
-                                                  <Truck className="h-4 w-4" />
-                                                )}
+                                                <Ship className="h-4 w-4" />
                                               </Button>
                                             </TooltipTrigger>
-                                            <TooltipContent side="top">{label}</TooltipContent>
+                                            <TooltipContent side="top">View shipment</TooltipContent>
                                           </Tooltip>
                                         )
                                       })()
@@ -2659,16 +2621,10 @@ export default function OilLossPage() {
 
                 <p className="text-xs text-gray-500 mt-3">
                   {viewMode === 'all_contract'
-                    ? globalTransport === 'Vessel'
-                      ? 'One row per STO, the same rows as Shipments Completed. POs on that STO stay in the row. Qty Delivery and Qty Receive are SAP. SFAL and SFBD are the shipment figures for R1–R3. A completed STO with missing quantities still appears. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
-                      : 'One row per PO. Trucking calculates Loss only (Qty Receive − Qty Delivery). SFAL and SFBD are not used. Quantities in MT (stored as Kg). Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
-                    : globalTransport === 'Vessel'
-                      ? viewMode === 'by_transporter'
-                        ? 'Aggregated by transporter. Qty Delivery and Qty Receive are SAP, summed once per contract. SFAL and SFBD are the shipment figures for R1–R3. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
-                        : 'Aggregated by supplier. Qty Delivery and Qty Receive are SAP, summed once per contract. SFAL and SFBD are the shipment figures for R1–R3. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
-                      : viewMode === 'by_transporter'
-                        ? 'Aggregated by transporter. Trucking calculates Loss only (Qty Receive − Qty Delivery). SFAL and SFBD are not used. Quantities in MT (stored as Kg).'
-                        : 'Aggregated by supplier. Trucking calculates Loss only (Qty Receive − Qty Delivery). SFAL and SFBD are not used. Quantities in MT (stored as Kg).'}
+                    ? 'FOB only. One row per STO, the same rows as Shipments Completed. POs on that STO stay in the row. Qty Delivery and Qty Receive are SAP. SFAL and SFBD are the shipment figures for R1–R3. A completed STO with missing quantities still appears. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
+                    : viewMode === 'by_transporter'
+                      ? 'FOB only. Aggregated by transporter. Qty Delivery and Qty Receive are SAP, summed once per contract. SFAL and SFBD are the shipment figures for R1–R3. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
+                      : 'FOB only. Aggregated by supplier. Qty Delivery and Qty Receive are SAP, summed once per contract. SFAL and SFBD are the shipment figures for R1–R3. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'}
                 </p>
               </div>
           </CardContent>
@@ -2693,15 +2649,6 @@ export default function OilLossPage() {
           editContractNumbers={viewShipmentModal?.editContractNumbers ?? null}
           onSubmit={async () => {}}
           onShipmentChanged={reloadOilLossAfterShipmentEdit}
-        />
-
-        <ViewTruckingOperationModal
-          open={viewTruckingModal != null}
-          onClose={() => setViewTruckingModal(null)}
-          editTruckingOperationId={null}
-          initialContractId={viewTruckingModal?.contractId ?? null}
-          initialContractExtNo={viewTruckingModal?.contractExtNo ?? null}
-          initialPoNumber={viewTruckingModal?.poNumber ?? null}
         />
       </div>
       </StitchFields>

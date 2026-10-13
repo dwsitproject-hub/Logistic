@@ -1,32 +1,35 @@
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { aggregateOilLossRowsByGroup, type OilLossMergedRow } from '@/lib/oilLossGroupAggregation'
+import { oilLossLoadingPortLabel } from '@/lib/oilLossLoadingPort'
 
-export type OilLossDrilldownCategory = 'product' | 'plant' | 'incoterm' | 'transporter' | 'supplier'
+/**
+ * Oil Loss drilldown: Product > Vessel > Loading Port > Supplier.
+ * (It was Product > Region/Plant > Incoterm > Transporter > Supplier. The page counts FOB vessel voyages only, so Incoterm and
+ * Transporter no longer separate anything: the transporter of a vessel row IS the vessel. Region/Plant stays a filter of the page.)
+ */
+export type OilLossDrilldownCategory = 'product' | 'vessel' | 'loadingPort' | 'supplier'
 
 export const OIL_LOSS_DRILLDOWN_CATEGORIES: ReadonlyArray<{
   level: OilLossDrilldownCategory
   title: string
 }> = [
   { level: 'product', title: 'Product' },
-  { level: 'plant', title: 'Region/Plant' },
-  { level: 'incoterm', title: 'Incoterm' },
-  { level: 'transporter', title: 'Transporter' },
+  { level: 'vessel', title: 'Vessel' },
+  { level: 'loadingPort', title: 'Loading Port' },
   { level: 'supplier', title: 'Supplier' },
 ] as const
 
 export type OilLossDrilldownFilters = {
   product: string | null
-  plant: string | null
-  incoterm: string | null
-  transporter: string | null
+  vessel: string | null
+  loadingPort: string | null
   supplier: string | null
 }
 
 export const EMPTY_OIL_LOSS_DRILLDOWN_FILTERS: OilLossDrilldownFilters = {
   product: null,
-  plant: null,
-  incoterm: null,
-  transporter: null,
+  vessel: null,
+  loadingPort: null,
   supplier: null,
 }
 
@@ -34,7 +37,7 @@ export type OilLossDrilldownTreeNode = {
   key: string
   label: string
   contractCount: number
-  /** Unweighted average Loss % across groups in this node. Null when no group has Qty Delivery. */
+  /** Unweighted average Loss % across groups in this node. Null when no group has a measurable Loss (Qty Delivery and Qty Receive both above zero). */
   avgLossPct: number | null
   children: OilLossDrilldownTreeNode[]
 }
@@ -45,17 +48,27 @@ function normalizeGroupLabel(value: unknown, fallback = 'Blank'): string {
 }
 
 /**
+ * Whether a merged group has a measurable Loss. The same rule the table and the R1-Loss cards use: Qty Delivery AND Qty Receive both above zero.
+ * A voyage whose receive is still 0 (not received yet, or never filled in) shows "-" in the table; it is not a 100% loss, so it must not
+ * pull a drilldown average down either.
+ */
+function groupHasMeasurableLoss(group: OilLossMergedRow): boolean {
+  return group.quantity_delivery > 0 && group.quantity_received > 0
+}
+
+/**
  * R4 / Loss kg (Qty Receive − Qty Delivery) on an already-merged group (one row per contract, or
  * one row per SEA voyage when it spans multiple contracts — quantities are pre-summed).
+ * Zero when the group has no measurable Loss.
  */
 function groupR4OilLossKg(group: OilLossMergedRow): number {
-  if (group.quantity_delivery <= 0) return 0
+  if (!groupHasMeasurableLoss(group)) return 0
   return group.quantity_received - group.quantity_delivery
 }
 
-/** Loss % for one group. Null when Qty Delivery is missing or not positive. */
+/** Loss % for one group. Null when the group has no measurable Loss (see groupHasMeasurableLoss). */
 function groupLossPct(group: OilLossMergedRow): number | null {
-  if (group.quantity_delivery <= 0) return null
+  if (!groupHasMeasurableLoss(group)) return null
   return (groupR4OilLossKg(group) / group.quantity_delivery) * 100
 }
 
@@ -79,12 +92,11 @@ export function groupLabelForRow(row: OilLossSourceRow, category: OilLossDrilldo
   switch (category) {
     case 'product':
       return normalizeGroupLabel(row.product)
-    case 'plant':
-      return normalizeGroupLabel(row.plant_site || row.group_plant)
-    case 'incoterm':
-      return normalizeGroupLabel(row.incoterm)
-    case 'transporter':
-      return normalizeGroupLabel(row.transporter, '-')
+    case 'vessel':
+      // transporter is the vessel name for a vessel row; it only covers a row whose vessel_name came through blank
+      return normalizeGroupLabel(row.vessel_name || row.transporter)
+    case 'loadingPort':
+      return oilLossLoadingPortLabel(row)
     case 'supplier':
       return normalizeGroupLabel(row.supplier, '-')
     default:
@@ -105,9 +117,8 @@ export function isOilLossDrilldownValueSet(value: string | null | undefined): va
 export function hasOilLossDrilldownSelection(filters: OilLossDrilldownFilters): boolean {
   return (
     isOilLossDrilldownValueSet(filters.product) ||
-    isOilLossDrilldownValueSet(filters.plant) ||
-    isOilLossDrilldownValueSet(filters.incoterm) ||
-    isOilLossDrilldownValueSet(filters.transporter) ||
+    isOilLossDrilldownValueSet(filters.vessel) ||
+    isOilLossDrilldownValueSet(filters.loadingPort) ||
     isOilLossDrilldownValueSet(filters.supplier)
   )
 }
@@ -115,31 +126,39 @@ export function hasOilLossDrilldownSelection(filters: OilLossDrilldownFilters): 
 export function oilLossDrilldownSelectionsEqual(a: OilLossDrilldownFilters, b: OilLossDrilldownFilters): boolean {
   return (
     a.product === b.product &&
-    a.plant === b.plant &&
-    a.incoterm === b.incoterm &&
-    a.transporter === b.transporter &&
+    a.vessel === b.vessel &&
+    a.loadingPort === b.loadingPort &&
     a.supplier === b.supplier
   )
 }
 
+/** Picking a level keeps the levels above it and clears the ones below, so the path stays a path. */
 export function buildNextOilLossDrilldownSelection(
   prev: OilLossDrilldownFilters,
   level: OilLossDrilldownCategory,
   label: string,
 ): OilLossDrilldownFilters {
   if (level === 'product') {
-    return { product: label, plant: null, incoterm: null, transporter: null, supplier: null }
+    return { product: label, vessel: null, loadingPort: null, supplier: null }
   }
-  if (level === 'plant') {
-    return { ...prev, plant: label, incoterm: null, transporter: null, supplier: null }
+  if (level === 'vessel') {
+    return { ...prev, vessel: label, loadingPort: null, supplier: null }
   }
-  if (level === 'incoterm') {
-    return { ...prev, incoterm: label, transporter: null, supplier: null }
-  }
-  if (level === 'transporter') {
-    return { ...prev, transporter: label, supplier: null }
+  if (level === 'loadingPort') {
+    return { ...prev, loadingPort: label, supplier: null }
   }
   return { ...prev, supplier: label }
+}
+
+/** The labels picked so far, in level order, as the subtitle of a column shows them. */
+function pathLabels(filters: OilLossDrilldownFilters, upTo: OilLossDrilldownCategory): string {
+  const order: OilLossDrilldownCategory[] = ['product', 'vessel', 'loadingPort', 'supplier']
+  return order
+    .slice(0, order.indexOf(upTo) + 1)
+    .map((level) => filters[level])
+    .filter(isOilLossDrilldownValueSet)
+    .map(displayOilLossGroupLabel)
+    .join(' › ')
 }
 
 export function oilLossDrilldownColumnSubtitle(
@@ -151,49 +170,29 @@ export function oilLossDrilldownColumnSubtitle(
       return isOilLossDrilldownValueSet(filters.product)
         ? `Selected: ${displayOilLossGroupLabel(filters.product)}`
         : 'Pick one'
-    case 'plant':
+    case 'vessel': {
       if (!isOilLossDrilldownValueSet(filters.product)) return 'Pick product first'
-      return isOilLossDrilldownValueSet(filters.plant)
-        ? `${displayOilLossGroupLabel(filters.product)} › ${displayOilLossGroupLabel(filters.plant)}`
+      return isOilLossDrilldownValueSet(filters.vessel)
+        ? pathLabels(filters, 'vessel')
         : `Under ${displayOilLossGroupLabel(filters.product)}`
-    case 'incoterm':
-      if (!isOilLossDrilldownValueSet(filters.product) || !isOilLossDrilldownValueSet(filters.plant)) {
-        return 'Pick region/plant first'
-      }
-      return isOilLossDrilldownValueSet(filters.incoterm)
-        ? `${displayOilLossGroupLabel(filters.product)} › ${displayOilLossGroupLabel(filters.plant)} › ${displayOilLossGroupLabel(filters.incoterm)}`
-        : `Under ${displayOilLossGroupLabel(filters.product)} › ${displayOilLossGroupLabel(filters.plant)}`
-    case 'transporter': {
-      if (!isOilLossDrilldownValueSet(filters.incoterm)) return 'Pick incoterm first'
-      const base = [filters.product, filters.plant, filters.incoterm]
-        .filter(isOilLossDrilldownValueSet)
-        .map(displayOilLossGroupLabel)
-        .join(' › ')
-      return isOilLossDrilldownValueSet(filters.transporter)
-        ? `${base} › ${displayOilLossGroupLabel(filters.transporter)}`
-        : `Under ${base}`
+    }
+    case 'loadingPort': {
+      if (!isOilLossDrilldownValueSet(filters.vessel)) return 'Pick vessel first'
+      return isOilLossDrilldownValueSet(filters.loadingPort)
+        ? pathLabels(filters, 'loadingPort')
+        : `Under ${pathLabels(filters, 'vessel')}`
     }
     case 'supplier': {
-      if (!isOilLossDrilldownValueSet(filters.transporter)) return 'Pick transporter first'
-      const base = [filters.product, filters.plant, filters.incoterm, filters.transporter]
-        .filter(isOilLossDrilldownValueSet)
-        .map(displayOilLossGroupLabel)
-        .join(' › ')
+      if (!isOilLossDrilldownValueSet(filters.loadingPort)) return 'Pick loading port first'
       return isOilLossDrilldownValueSet(filters.supplier)
-        ? `${base} › ${displayOilLossGroupLabel(filters.supplier)}`
-        : `Under ${base}`
+        ? pathLabels(filters, 'supplier')
+        : `Under ${pathLabels(filters, 'loadingPort')}`
     }
   }
 }
 
 export function formatOilLossDrilldownPath(filters: OilLossDrilldownFilters): string {
-  const parts: string[] = []
-  if (isOilLossDrilldownValueSet(filters.product)) parts.push(displayOilLossGroupLabel(filters.product))
-  if (isOilLossDrilldownValueSet(filters.plant)) parts.push(displayOilLossGroupLabel(filters.plant))
-  if (isOilLossDrilldownValueSet(filters.incoterm)) parts.push(displayOilLossGroupLabel(filters.incoterm))
-  if (isOilLossDrilldownValueSet(filters.transporter)) parts.push(displayOilLossGroupLabel(filters.transporter))
-  if (isOilLossDrilldownValueSet(filters.supplier)) parts.push(displayOilLossGroupLabel(filters.supplier))
-  return parts.join(' › ')
+  return pathLabels(filters, 'supplier')
 }
 
 export function applyOilLossDrilldownFilters(
@@ -205,15 +204,12 @@ export function applyOilLossDrilldownFilters(
     if (isOilLossDrilldownValueSet(filters.product) && groupLabelForRow(row, 'product') !== filters.product) {
       return false
     }
-    if (isOilLossDrilldownValueSet(filters.plant) && groupLabelForRow(row, 'plant') !== filters.plant) {
-      return false
-    }
-    if (isOilLossDrilldownValueSet(filters.incoterm) && groupLabelForRow(row, 'incoterm') !== filters.incoterm) {
+    if (isOilLossDrilldownValueSet(filters.vessel) && groupLabelForRow(row, 'vessel') !== filters.vessel) {
       return false
     }
     if (
-      isOilLossDrilldownValueSet(filters.transporter) &&
-      groupLabelForRow(row, 'transporter') !== filters.transporter
+      isOilLossDrilldownValueSet(filters.loadingPort) &&
+      groupLabelForRow(row, 'loadingPort') !== filters.loadingPort
     ) {
       return false
     }
@@ -225,10 +221,9 @@ export function applyOilLossDrilldownFilters(
 }
 
 type SupplierAcc = PctAcc
-type TransporterAcc = PctAcc & { suppliers: Map<string, SupplierAcc> }
-type IncotermAcc = PctAcc & { transporters: Map<string, TransporterAcc> }
-type PlantAcc = PctAcc & { incoterms: Map<string, IncotermAcc> }
-type ProductAcc = PctAcc & { plants: Map<string, PlantAcc> }
+type LoadingPortAcc = PctAcc & { suppliers: Map<string, SupplierAcc> }
+type VesselAcc = PctAcc & { loadingPorts: Map<string, LoadingPortAcc> }
+type ProductAcc = PctAcc & { vessels: Map<string, VesselAcc> }
 
 function emptyPctAcc(): PctAcc {
   return { contracts: new Set(), pctSum: 0, pctCount: 0 }
@@ -252,7 +247,7 @@ function suppliersToNodes(map: Map<string, SupplierAcc>): OilLossDrilldownTreeNo
   )
 }
 
-function transportersToNodes(map: Map<string, TransporterAcc>): OilLossDrilldownTreeNode[] {
+function loadingPortsToNodes(map: Map<string, LoadingPortAcc>): OilLossDrilldownTreeNode[] {
   return sortTreeNodes(
     [...map.entries()].map(([key, agg]) => ({
       key,
@@ -264,34 +259,22 @@ function transportersToNodes(map: Map<string, TransporterAcc>): OilLossDrilldown
   )
 }
 
-function incotermsToNodes(map: Map<string, IncotermAcc>): OilLossDrilldownTreeNode[] {
+function vesselsToNodes(map: Map<string, VesselAcc>): OilLossDrilldownTreeNode[] {
   return sortTreeNodes(
     [...map.entries()].map(([key, agg]) => ({
       key,
       label: key,
       contractCount: agg.contracts.size,
       avgLossPct: avgLossPctFromAcc(agg),
-      children: transportersToNodes(agg.transporters),
-    })),
-  )
-}
-
-function plantsToNodes(map: Map<string, PlantAcc>): OilLossDrilldownTreeNode[] {
-  return sortTreeNodes(
-    [...map.entries()].map(([key, agg]) => ({
-      key,
-      label: key,
-      contractCount: agg.contracts.size,
-      avgLossPct: avgLossPctFromAcc(agg),
-      children: incotermsToNodes(agg.incoterms),
+      children: loadingPortsToNodes(agg.loadingPorts),
     })),
   )
 }
 
 /**
- * Hierarchical drilldown tree — Product → Region/Plant → Incoterm → Transporter → Supplier.
- * Rows are first merged into one row per group (vessel STO or trucking contract/PO) so a
- * multi-PO STO contributes one Loss % sample, not one per member PO.
+ * Hierarchical drilldown tree — Product → Vessel → Loading Port → Supplier.
+ * Rows are first merged into one row per voyage (one STO, or its Operation ID) so a multi-PO STO
+ * contributes one Loss % sample, not one per member PO.
  */
 export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDrilldownTreeNode[] {
   const groups = aggregateOilLossRowsByGroup(rows)
@@ -301,39 +284,32 @@ export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDril
     const contractKey = group.id
     const pct = groupLossPct(group)
     const prod = groupLabelForRow(group, 'product')
-    const plant = groupLabelForRow(group, 'plant')
-    const incoterm = groupLabelForRow(group, 'incoterm')
-    const transporter = groupLabelForRow(group, 'transporter')
+    const vessel = groupLabelForRow(group, 'vessel')
+    const loadingPort = groupLabelForRow(group, 'loadingPort')
     const supplier = groupLabelForRow(group, 'supplier')
 
     if (!root.has(prod)) {
-      root.set(prod, { ...emptyPctAcc(), plants: new Map() })
+      root.set(prod, { ...emptyPctAcc(), vessels: new Map() })
     }
     const pN = root.get(prod)!
     touchAgg(pN, contractKey, pct)
 
-    if (!pN.plants.has(plant)) {
-      pN.plants.set(plant, { ...emptyPctAcc(), incoterms: new Map() })
+    if (!pN.vessels.has(vessel)) {
+      pN.vessels.set(vessel, { ...emptyPctAcc(), loadingPorts: new Map() })
     }
-    const plN = pN.plants.get(plant)!
-    touchAgg(plN, contractKey, pct)
+    const vN = pN.vessels.get(vessel)!
+    touchAgg(vN, contractKey, pct)
 
-    if (!plN.incoterms.has(incoterm)) {
-      plN.incoterms.set(incoterm, { ...emptyPctAcc(), transporters: new Map() })
+    if (!vN.loadingPorts.has(loadingPort)) {
+      vN.loadingPorts.set(loadingPort, { ...emptyPctAcc(), suppliers: new Map() })
     }
-    const iN = plN.incoterms.get(incoterm)!
-    touchAgg(iN, contractKey, pct)
+    const lN = vN.loadingPorts.get(loadingPort)!
+    touchAgg(lN, contractKey, pct)
 
-    if (!iN.transporters.has(transporter)) {
-      iN.transporters.set(transporter, { ...emptyPctAcc(), suppliers: new Map() })
+    if (!lN.suppliers.has(supplier)) {
+      lN.suppliers.set(supplier, emptyPctAcc())
     }
-    const tN = iN.transporters.get(transporter)!
-    touchAgg(tN, contractKey, pct)
-
-    if (!tN.suppliers.has(supplier)) {
-      tN.suppliers.set(supplier, emptyPctAcc())
-    }
-    const sN = tN.suppliers.get(supplier)!
+    const sN = lN.suppliers.get(supplier)!
     touchAgg(sN, contractKey, pct)
   }
 
@@ -343,7 +319,7 @@ export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDril
       label: key,
       contractCount: agg.contracts.size,
       avgLossPct: avgLossPctFromAcc(agg),
-      children: plantsToNodes(agg.plants),
+      children: vesselsToNodes(agg.vessels),
     })),
   )
 }
@@ -373,26 +349,19 @@ export const OIL_LOSS_DRILLDOWN_LEVEL_STYLES: Record<
     border: 'border-amber-200',
     selectedBorder: 'border-amber-500',
   },
-  plant: {
-    headerBg: 'bg-emerald-50',
-    badge: 'bg-emerald-100 text-emerald-800',
-    bar: 'bg-emerald-600',
-    border: 'border-emerald-200',
-    selectedBorder: 'border-emerald-500',
-  },
-  incoterm: {
-    headerBg: 'bg-violet-50',
-    badge: 'bg-violet-100 text-violet-800',
-    bar: 'bg-violet-600',
-    border: 'border-violet-200',
-    selectedBorder: 'border-violet-500',
-  },
-  transporter: {
+  vessel: {
     headerBg: 'bg-sky-50',
     badge: 'bg-sky-100 text-sky-800',
     bar: 'bg-sky-600',
     border: 'border-sky-200',
     selectedBorder: 'border-sky-500',
+  },
+  loadingPort: {
+    headerBg: 'bg-emerald-50',
+    badge: 'bg-emerald-100 text-emerald-800',
+    bar: 'bg-emerald-600',
+    border: 'border-emerald-200',
+    selectedBorder: 'border-emerald-500',
   },
   supplier: {
     headerBg: 'bg-rose-50',

@@ -70,3 +70,19 @@ export function matchesOilLossModeFilter(
   const normalized = normalizeOilLossMode(rowMode)
   return selectedModes.some((m) => normalizeOilLossMode(m) === normalized)
 }
+
+/**
+ * The Oil Loss PAGE counts FOB transactions only (Vessel segment, one incoterm of the three it used to take).
+ *
+ * This is a page rule, not an API rule: GET /oil-loss still returns CIF / FOB / CFR vessel rows and the trucking rows, because the Vessel
+ * History modal on Shipping Performance reads the same endpoint and keeps its own CIF / FOB / CFR scope (filterOilLossEligibleRows above).
+ */
+export const OIL_LOSS_PAGE_INCOTERMS = ['FOB'] as const
+
+export function isOilLossPageIncoterm(value: string | null | undefined): boolean {
+  return (OIL_LOSS_PAGE_INCOTERMS as readonly string[]).includes(normalizeOilLossIncoterm(value))
+}
+
+export function filterOilLossPageRows<T extends OilLossTransportSegmentRow>(rows: readonly T[]): T[] {
+  return rows.filter((row) => isOilLossPageIncoterm(row.incoterm)) as T[]
+}

@@ -246,6 +246,10 @@ export type OilLossMergedRow = {
   supplier: string | null
   buyer: string | null
   transporter: string | null
+  /** Vessel the voyage ran on. The Oil Loss drilldown and its Vessel level read this. */
+  vessel_name: string | null
+  /** Primary loading port of the voyage (shipment port_of_loading); see lib/oilLossLoadingPort.ts. */
+  loading_location: string | null
   transport_mode: string | null
   operation_id: string | null
   /** Completed shipment opened by View Shipment. Group `id` is the STO key, not this UUID. */
@@ -293,6 +297,8 @@ function mergedRowFromFirst(row: OilLossSourceRow, key: string): OilLossMergedRo
     supplier: String(row.supplier ?? '').trim() || null,
     buyer: String(row.buyer ?? '').trim() || null,
     transporter: String(row.transporter ?? '').trim() || null,
+    vessel_name: String(row.vessel_name ?? '').trim() || null,
+    loading_location: String(row.loading_location ?? '').trim() || null,
     transport_mode: String(row.transport_mode ?? '').trim() || null,
     operation_id: String(row.operation_id ?? '').trim() || null,
     shipment_id: shipmentUuidOrNull(row.id),
@@ -324,6 +330,8 @@ function mergeSameContractRowInto(existing: OilLossMergedRow, row: OilLossSource
   if (!existing.supplier) existing.supplier = String(row.supplier ?? '').trim() || null
   if (!existing.buyer) existing.buyer = String(row.buyer ?? '').trim() || null
   if (!existing.transporter) existing.transporter = String(row.transporter ?? '').trim() || null
+  if (!existing.vessel_name) existing.vessel_name = String(row.vessel_name ?? '').trim() || null
+  if (!existing.loading_location) existing.loading_location = String(row.loading_location ?? '').trim() || null
   if (!existing.operation_id) {
     const op = String(row.operation_id ?? '').trim()
     if (op) existing.operation_id = op
@@ -376,6 +384,8 @@ function mergeOuterGroupInto(existing: OilLossMergedRow, incoming: OilLossMerged
   if (!existing.supplier) existing.supplier = incoming.supplier
   if (!existing.buyer) existing.buyer = incoming.buyer
   if (!existing.transporter) existing.transporter = incoming.transporter
+  if (!existing.vessel_name) existing.vessel_name = incoming.vessel_name
+  if (!existing.loading_location) existing.loading_location = incoming.loading_location
   if (!existing.operation_id) existing.operation_id = incoming.operation_id
   if (!existing.shipment_id) existing.shipment_id = incoming.shipment_id
 
