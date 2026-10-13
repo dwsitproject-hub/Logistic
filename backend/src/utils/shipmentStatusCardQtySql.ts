@@ -2,12 +2,67 @@
  * Shipments page Section 1 — per-card Contract Qty / Outstanding Qty aggregates (kg).
  */
 
-import { shipmentListRowContractQtySql } from './shipmentListQtySql';
+import { shipmentListRowContractIdsSql } from './shipmentListQtySql';
+import { sqlShipmentActiveStageRankExpr } from './shipmentActiveStageRank';
 import { shipmentListQtyMoveCteFromPage } from './shipmentOutstandingQtySql';
 import {
   sqlShipmentExecutionOsPerContractCtes,
   sqlShipmentSection1LightExecutionEnrichSelect,
 } from './shipmentOutstandingQtySummarySql';
+
+/**
+ * Contract Qty of the status cards, counted ONCE PER CONTRACT.
+ *
+ * It used to be SUM(contract_qty) over the ROWS of each stage, and a CIF / CFR PO with several Type T STOs is several rows - each carrying
+ * the whole PO's quantity - so the cards counted it once per STO. Measured on SIT 2026-10-13: 1,020,900 MT against 240,925 MT once per
+ * contract (4.2x) for the CIF / CFR POs on two or more rows.
+ *
+ * One entry per contract, at the stage of its FURTHEST active sibling - the rule the OS cards already use (execution_os: DISTINCT ON contract,
+ * stage_rank DESC), so a PO's Contract Qty and its OS sit on the same card. A contract with no active sibling is COMPLETED when any of its
+ * rows is, otherwise CANCELLED (a cancelled leg does not undo a delivered one). The contracts of a row are the same set the row's own
+ * Contract Qty summed (shipmentListRowContractIdsSql), so a row-grain figure and this one differ only by the repeats.
+ *
+ * Needs `<enriched>.sto_key`, `.contract_numbers`, `.effective_status` and `.is_unplanned_execution`.
+ */
+export function sqlShipmentContractQtyOncePerContractCtes(enrichedAlias = 'enriched'): string {
+  return `
+    contract_qty_rows AS (
+      SELECT
+        c.id AS contract_uuid,
+        c.quantity_ordered::numeric AS qty,
+        ${enrichedAlias}.effective_status,
+        ${enrichedAlias}.is_unplanned_execution,
+        ${sqlShipmentActiveStageRankExpr(`${enrichedAlias}.effective_status`)} AS stage_rank
+      FROM ${enrichedAlias}
+      JOIN contracts c
+        ON c.contract_id IS NOT NULL
+       AND TRIM(c.contract_id) <> ''
+       AND c.id IN (${shipmentListRowContractIdsSql(enrichedAlias)}
+       )
+    ),
+    contract_qty_once AS (
+      SELECT DISTINCT ON (contract_uuid)
+        contract_uuid,
+        qty,
+        effective_status,
+        is_unplanned_execution
+      FROM contract_qty_rows
+      ORDER BY
+        contract_uuid,
+        stage_rank DESC,
+        CASE WHEN effective_status = 'COMPLETED' THEN 1 ELSE 0 END DESC
+    )`;
+}
+
+/** The four Contract Qty fields of the status cards, summed over contract_qty_once. */
+export function sqlShipmentContractQtyOnceSelect(): string {
+  const sum = (where: string) =>
+    `COALESCE((SELECT SUM(COALESCE(qty, 0)) FROM contract_qty_once WHERE ${where}), 0)::numeric`;
+  return `${sum('is_unplanned_execution')} AS unplanned_execution_contract_qty,
+      ${sum("effective_status = 'PLANNED'")} AS planned_contract_qty,
+      ${sum("effective_status = 'COMPLETED'")} AS completed_contract_qty,
+      ${sum("effective_status = 'CANCELLED'")} AS cancelled_contract_qty`;
+}
 
 export interface ShipmentStatusContractQtyKg {
   unplanned: number;
@@ -226,15 +281,13 @@ export async function buildShipmentStatusCardQtyExecutionAggregateQuery(
     enriched AS (
       SELECT
         ${sqlShipmentSection1LightExecutionEnrichSelect('sp')},
-        (${shipmentListRowContractQtySql('sp')}) AS contract_qty
+        sp.sto_key
       FROM shipment_page sp
     ),
+    ${sqlShipmentContractQtyOncePerContractCtes('enriched')},
     ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true })}
     SELECT
-      COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE is_unplanned_execution), 0)::numeric AS unplanned_execution_contract_qty,
-      COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'PLANNED'), 0)::numeric AS planned_contract_qty,
-      COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'COMPLETED'), 0)::numeric AS completed_contract_qty,
-      COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'CANCELLED'), 0)::numeric AS cancelled_contract_qty,
+      ${sqlShipmentContractQtyOnceSelect()},
       0::numeric AS unplanned_execution_outstanding_qty,
       COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'PLANNED') FROM execution_os), 0)::numeric AS planned_outstanding_qty,
       COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${LOADING_STATUS_GROUP}) FROM execution_os), 0)::numeric AS at_loading_port_outstanding_qty,

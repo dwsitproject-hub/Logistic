@@ -78,14 +78,14 @@ describe('Shipments OS cards are contract grain - they must stay the same when r
   });
 });
 
-describe('Shipments counts are per ROW - merging rows lowers them on purpose', () => {
+describe('Shipments stage counts are per ROW - merging rows lowers them on purpose', () => {
   it('stage counts are COUNT(*) over rows (a PO on 3 STO rows counts 3 times today, once after the merge)', () => {
     const sql = shipmentPagePipelineSummarySelectSql();
     expect(sql.match(/COUNT\(\*\) FILTER/g)).toHaveLength(13);
     expect(sql).not.toMatch(/COUNT\(DISTINCT/);
   });
 
-  it('the card Contract Qty is summed per row, not per contract (the same 3x today)', async () => {
+  it('the card Contract Qty is counted once per CONTRACT (it was once per row: 4.2x on SIT for CIF / CFR POs on several STO rows)', async () => {
     const sql = await buildShipmentSection1CombinedSummaryQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
       unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
@@ -93,13 +93,19 @@ describe('Shipments counts are per ROW - merging rows lowers them on purpose', (
       summaryScopeCte: '',
       summaryEnrichedFrom: 'filtered_shipments',
     });
+    // one entry per contract, at its furthest active stage - the same rule as execution_os, so a PO's Contract Qty and OS share a card
+    expect(sql).toContain('contract_qty_once AS (');
+    expect(sql).toContain('DISTINCT ON (contract_uuid)');
+    expect(sql).toMatch(/ORDER BY\s+contract_uuid,\s+stage_rank DESC/);
     for (const status of ['PLANNED', 'COMPLETED', 'CANCELLED']) {
-      expect(sql).toContain(
-        `SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = '${status}')`,
-      );
+      expect(sql).toContain(`FROM contract_qty_once WHERE effective_status = '${status}'`);
     }
+    // the per-row sum is gone, and the row-level contract_qty is no longer computed for every row
+    expect(sql).not.toContain('SUM(COALESCE(contract_qty, 0))');
+    expect(sql).not.toContain(') AS contract_qty,');
+    // counts stay per row (merging rows lowers them on purpose)
     expect(sql).toMatch(/COUNT\(\*\)[^\n]*AS total_count/);
-    // while the OS of the same cards comes from the contract-grain CTE
+    // and the OS of the same cards still comes from the contract-grain CTE
     expect(sql).toContain('execution_os');
     expect(sql).toContain('DISTINCT ON (contract_number)');
   });

@@ -37,13 +37,23 @@ import { shipmentListRowGlobalOutstandingSql } from './shipmentOutstandingQtySql
  * operation_id / shipment_id OR is split into two UNION branches so each uses its own index.
  */
 export function shipmentListRowContractQtySql(spAlias = 'sp'): string {
-  const groupedSto = `NULLIF(TRIM(${spAlias}.sto_key::text), '')`;
   return `(
     SELECT SUM(c.quantity_ordered::numeric)
     FROM contracts c
     WHERE c.contract_id IS NOT NULL
       AND TRIM(c.contract_id) <> ''
-      AND c.id IN (
+      AND c.id IN (${shipmentListRowContractIdsSql(spAlias)}
+      )
+  )`;
+}
+
+/**
+ * The ids of the contracts a grouped shipment row covers - the set shipmentListRowContractQtySql sums. Needs `<alias>.sto_key` and
+ * `<alias>.contract_numbers`. Exposed so a card can count each of those contracts ONCE across rows instead of once per row.
+ */
+export function shipmentListRowContractIdsSql(spAlias = 'sp'): string {
+  const groupedSto = `NULLIF(TRIM(${spAlias}.sto_key::text), '')`;
+  return `
           SELECT ca.id
           FROM contracts ca
           WHERE ${spAlias}.contract_numbers IS NOT NULL
@@ -74,8 +84,7 @@ export function shipmentListRowContractQtySql(spAlias = 'sp'): string {
           WHERE ${groupedSto} IS NOT NULL
             AND COALESCE(sh_id.status, '') <> 'CANCELLED'
             AND NULLIF(TRIM(sh_id.shipment_id::text), '') = ${groupedSto}
-      )
-  )`;
+`;
 }
 
 /** Incoterm fulfilled kg for list metrics — NULL when the chosen SAP field is NULL. */

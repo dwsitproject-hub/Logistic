@@ -3,7 +3,6 @@
  */
 
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
-import { shipmentListRowContractQtySql } from './shipmentListQtySql';
 import { shipmentListQtyMoveCteFromPage } from './shipmentOutstandingQtySql';
 import { sqlMasterVesselLateralJoin } from './masterVesselDisplaySql';
 import { sqlCoalesceSourceType } from './sapSourceTypeSql';
@@ -16,6 +15,8 @@ import {
   parseShipmentStatusContractQtyFromExecutionRow,
   parseShipmentStatusOutstandingQtyFromExecutionRow,
   type ShipmentStatusCardQtyBundle,
+  sqlShipmentContractQtyOnceSelect,
+  sqlShipmentContractQtyOncePerContractCtes,
 } from './shipmentStatusCardQtySql';
 import { sqlShipmentExecutionOsPerContractCtes } from './shipmentOutstandingQtySummarySql';
 
@@ -123,7 +124,6 @@ async function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1Combin
           f.*,
           ${buildShipmentSummaryEtaEnrichmentSelect('f')},
           FALSE AS is_unplanned_execution,
-          (${shipmentListRowContractQtySql('f')}) AS contract_qty,
           NULL::text AS vessel_name_sap,
           NULL::text AS vessel_code_sap,
           mv.vessel_name_master,
@@ -132,6 +132,7 @@ async function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1Combin
         FROM ${opts.summaryEnrichedFrom} f
         ${masterJoin}
       ),
+      ${sqlShipmentContractQtyOncePerContractCtes('enriched')},
       ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true })}`;
 }
 
@@ -280,10 +281,7 @@ export async function buildShipmentSection1CombinedSummaryQuery(
         COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND discharge_d)::bigint AS eta_discharge_d,
         COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND discharge_d_minus_2)::bigint AS eta_discharge_d_minus_2,
         COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND NOT discharge_d_minus_2 AND discharge_more_than_7d)::bigint AS eta_discharge_more_than_7d,
-        COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE is_unplanned_execution), 0)::numeric AS unplanned_execution_contract_qty,
-        COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'PLANNED'), 0)::numeric AS planned_contract_qty,
-        COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'COMPLETED'), 0)::numeric AS completed_contract_qty,
-        COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'CANCELLED'), 0)::numeric AS cancelled_contract_qty,
+        ${sqlShipmentContractQtyOnceSelect()},
         0::numeric AS unplanned_execution_outstanding_qty,
         COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'PLANNED') FROM execution_os), 0)::numeric AS planned_outstanding_qty,
         COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${LOADING_STATUS_GROUP}) FROM execution_os), 0)::numeric AS at_loading_port_outstanding_qty,
