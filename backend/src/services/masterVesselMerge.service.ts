@@ -11,7 +11,9 @@ import type { PoolClient } from 'pg';
  * and then it is deleted.
  *
  * Refused (blockers) rather than guessed: a row linked to DHM is never the one that goes away, since deleting it would orphan the DHM
- * record - merge the other way; two different roles, or a tug into a barge, are two ships; and a vessel into itself.
+ * record - merge the other way; a row that was input in KLIP (klip_origin) is not the one that goes away unless the caller says so
+ * (allowProtected), because it may exist nowhere else; two different roles, or a tug into a barge, are two ships; and a vessel into itself.
+ * Before the delete it checks that nothing still points at the row, so a cascade can never take a shipment link, alias or pair with it.
  */
 
 export interface MasterRow {
@@ -23,6 +25,8 @@ export interface MasterRow {
   code_status: string | null;
   dhm_id: string | null;
   dhm_code: string | null;
+  /** Input in KLIP (master_vessels.klip_origin, migration 234). Optional so rows from before the column still type-check. */
+  klip_origin?: boolean;
 }
 
 export interface MergePlan {
@@ -35,13 +39,19 @@ export interface MergePlan {
 const isTug = (t: string | null | undefined) => /^TUG/i.test(String(t ?? '').trim());
 
 /** Pure: why this merge must not happen. */
-export function mergeBlockers(from: MasterRow | null, into: MasterRow | null): string[] {
+export function mergeBlockers(from: MasterRow | null, into: MasterRow | null, options: { allowProtected?: boolean } = {}): string[] {
   if (!from) return ['baris yang akan digabung (from) tidak ditemukan'];
   if (!into) return ['baris tujuan (into) tidak ditemukan'];
   const out: string[] = [];
   if (from.id === into.id) out.push('from dan into adalah baris yang sama');
   if (from.dhm_id) {
     out.push(`"${from.vessel_name}" sudah terhubung ke DHM (${from.dhm_code ?? from.dhm_id}); menghapusnya akan menggantung rekaman DHM - gabungkan ke arah sebaliknya`);
+  }
+  if (from.klip_origin && !options.allowProtected) {
+    out.push(
+      `"${from.vessel_name}" diinput lewat KLIP dan mungkin belum ada di SAP / DHM; menghapusnya menghilangkan satu-satunya catatan kapal ini - ` +
+        `gabungkan ke arah sebaliknya, atau pakai --allow-protected bila memang kapal ini yang harus diganti`,
+    );
   }
   if (from.vessel_role && into.vessel_role && from.vessel_role !== into.vessel_role) {
     out.push(`peran berbeda (${from.vessel_role} vs ${into.vessel_role}): dua kapal, bukan satu`);
@@ -53,7 +63,7 @@ export function mergeBlockers(from: MasterRow | null, into: MasterRow | null): s
   return out;
 }
 
-const ROW_SQL = `SELECT id::text, vessel_name, vessel_code, vessel_role, vessel_type, code_status, dhm_id::text, dhm_code FROM master_vessels`;
+const ROW_SQL = `SELECT id::text, vessel_name, vessel_code, vessel_role, vessel_type, code_status, dhm_id::text, dhm_code, COALESCE(klip_origin, FALSE) AS klip_origin FROM master_vessels`;
 
 /** `ref` is a master vessel id (uuid) or its exact name, case-insensitively. A name that matches several rows is refused. */
 export async function findMasterRow(client: Pick<PoolClient, 'query'>, ref: string): Promise<MasterRow | null> {
@@ -67,10 +77,15 @@ export async function findMasterRow(client: Pick<PoolClient, 'query'>, ref: stri
   return (res.rows[0] as MasterRow | undefined) ?? null;
 }
 
-export async function planMasterVesselMerge(client: Pick<PoolClient, 'query'>, fromRef: string, intoRef: string): Promise<MergePlan> {
+export async function planMasterVesselMerge(
+  client: Pick<PoolClient, 'query'>,
+  fromRef: string,
+  intoRef: string,
+  options: { allowProtected?: boolean } = {},
+): Promise<MergePlan> {
   const from = await findMasterRow(client, fromRef);
   const into = await findMasterRow(client, intoRef);
-  const blockers = mergeBlockers(from, into);
+  const blockers = mergeBlockers(from, into, options);
   const counts = { aliases: 0, shipments: 0, pairs: 0 };
   if (from) {
     const [a, s, p] = await Promise.all([
@@ -134,6 +149,22 @@ export async function applyMasterVesselMerge(
   const moved =
     ((await client.query(`UPDATE vessel_pairs SET tb_master_vessel_id = $1::uuid, updated_at = CURRENT_TIMESTAMP WHERE tb_master_vessel_id = $2::uuid`, [into, from])).rowCount ?? 0) +
     ((await client.query(`UPDATE vessel_pairs SET bg_master_vessel_id = $1::uuid, updated_at = CURRENT_TIMESTAMP WHERE bg_master_vessel_id = $2::uuid`, [into, from])).rowCount ?? 0);
+
+  // Everything that pointed at the copy has moved. Check it before the delete: ON DELETE CASCADE would take a leftover alias or pair with the row, and
+  // SET NULL would silently unlink a leftover shipment.
+  const left = await client.query(
+    `SELECT (SELECT count(*) FROM shipments WHERE master_vessel_id = $1::uuid)::int AS shipments_left,
+            (SELECT count(*) FROM master_vessel_code_aliases WHERE master_vessel_id = $1::uuid)::int AS aliases_left,
+            (SELECT count(*) FROM vessel_pairs WHERE tb_master_vessel_id = $1::uuid OR bg_master_vessel_id = $1::uuid)::int AS pairs_left`,
+    [from],
+  );
+  const l = (left.rows[0] ?? {}) as { shipments_left?: number; aliases_left?: number; pairs_left?: number };
+  const leftover = Number(l.shipments_left || 0) + Number(l.aliases_left || 0) + Number(l.pairs_left || 0);
+  if (leftover > 0) {
+    throw new Error(
+      `merge aborted: ${l.shipments_left || 0} shipment(s), ${l.aliases_left || 0} alias(es) and ${l.pairs_left || 0} pair(s) still point at "${plan.from.vessel_name}"`,
+    );
+  }
 
   await client.query(`DELETE FROM master_vessels WHERE id = $1::uuid`, [from]);
   if (options.renameSurvivorTo && options.renameSurvivorTo.trim()) {

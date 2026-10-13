@@ -1,3 +1,4 @@
+import { loadMasterVesselProtection } from '../services/masterVesselProtection.service';
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
@@ -210,6 +211,15 @@ export const createMasterVessel = async (req: AuthRequest, res: Response): Promi
       return;
     }
 
+    /*
+     * Add New Vessel is the only door a vessel that exists nowhere else comes through, so a vessel this call CREATED is flagged klip_origin and is kept
+     * out of the master cleanup (services/masterVesselProtection.service.ts). A call that reused an existing vessel flags nothing: that vessel's origin
+     * is whatever it already was.
+     */
+    if (resolved.created) {
+      await query(`UPDATE master_vessels SET klip_origin = TRUE WHERE id = $1`, [resolved.master_vessel_id]);
+    }
+
     const fetchResult = await query(`SELECT * FROM master_vessels WHERE id = $1`, [
       resolved.master_vessel_id,
     ]);
@@ -368,6 +378,25 @@ export const importJovinMasterVessels = async (req: AuthRequest, res: Response):
 export const deleteMasterVessel = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    /*
+     * Deleting a master vessel also deletes its SAP code aliases and tug/barge pairs (ON DELETE CASCADE) and unlinks its shipments (SET NULL). A vessel that
+     * was input in KLIP may exist nowhere else, so it is refused here; removing one on purpose is a deliberate script run (merge-master-vessel.cjs
+     * --allow-protected), not a click.
+     */
+    const protection = (await loadMasterVesselProtection({ query: (sql, params) => query(sql, params) }, [id])).get(String(id));
+    if (protection?.protected) {
+      res.status(409).json({
+        success: false,
+        error: {
+          code: 'MASTER_VESSEL_PROTECTED',
+          message: `"${protection.vesselName}" was added in KLIP and cannot be deleted from here: it may not exist in SAP or DHM yet, and deleting it also removes its code aliases and pairs${
+            protection.shipmentsActive > 0 ? ` and unlinks ${protection.shipmentsActive} active shipment(s)` : ''
+          }.`,
+          reasons: protection.reasons.map((r) => r.code),
+        },
+      });
+      return;
+    }
     const result = await query('DELETE FROM master_vessels WHERE id = $1 RETURNING id', [id]);
     if (result.rows.length === 0) {
       res.status(404).json({ success: false, error: { message: 'Master vessel not found' } });

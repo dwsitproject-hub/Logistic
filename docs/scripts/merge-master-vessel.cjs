@@ -13,7 +13,9 @@
  *
  * What moves: the SAP codes of the row that goes (as non-primary aliases), shipments that pointed at it, the pairs it was in, and any
  * field the survivor leaves empty (role, owner, capacity, type, heating, lambung, terms). Nothing the survivor already has is overwritten.
- * It refuses: two different roles, a tug into a barge, a DHM-linked row as the one that goes away.
+ * It refuses: two different roles, a tug into a barge, a DHM-linked row as the one that goes away, and a row that was INPUT IN KLIP (Add New Vessel,
+ * master_vessels.klip_origin) as the one that goes away - it may exist nowhere else. --allow-protected overrides only that last one, when the vessel
+ * really is the one to replace. See master-vessel-protection.cjs for the list of KLIP-input vessels.
  */
 const path = require('path');
 const dist = (p) => require(path.join(process.cwd(), 'dist', p));
@@ -28,6 +30,7 @@ function arg(name) {
   const into = arg('--into');
   const rename = arg('--rename');
   const apply = process.argv.includes('--apply');
+  const allowProtected = process.argv.includes('--allow-protected');
   if (!from || !into) {
     console.error('Give --from "<name or id>" and --into "<name or id>".');
     process.exit(1);
@@ -37,8 +40,8 @@ function arg(name) {
   const client = await pool.connect();
   let code = 0;
   try {
-    const plan = await svc.planMasterVesselMerge(client, from, into);
-    const row = (r) => (r ? `${r.vessel_name}  [${r.vessel_code}, ${r.code_status}${r.vessel_role ? ', ' + r.vessel_role : ''}${r.vessel_type ? ', ' + r.vessel_type : ''}]  dhm=${r.dhm_code || '-'}` : '(not found)');
+    const plan = await svc.planMasterVesselMerge(client, from, into, { allowProtected });
+    const row = (r) => (r ? `${r.vessel_name}  [${r.vessel_code}, ${r.code_status}${r.vessel_role ? ', ' + r.vessel_role : ''}${r.vessel_type ? ', ' + r.vessel_type : ''}]  dhm=${r.dhm_code || '-'}${r.klip_origin ? '  KLIP-INPUT' : ''}` : '(not found)');
     console.log(`GOES AWAY : ${row(plan.from)}`);
     console.log(`STAYS     : ${row(plan.into)}${rename ? `   -> will be renamed "${String(rename).toUpperCase()}"` : ''}`);
     if (plan.from) console.log(`MOVES     : ${plan.counts.aliases} SAP code alias(es), ${plan.counts.shipments} shipment(s), ${plan.counts.pairs} pair(s)`);

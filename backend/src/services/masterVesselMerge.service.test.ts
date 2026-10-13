@@ -32,6 +32,23 @@ describe('mergeBlockers', () => {
   });
 });
 
+describe('mergeBlockers - a vessel input in KLIP', () => {
+  const klipRow = (over: Partial<MasterRow> = {}) => row({ id: 'k', vessel_name: 'BG. METRO 05.35', vessel_code: 'TMP-METRO0535', vessel_role: null, vessel_type: 'BARGE', klip_origin: true, ...over });
+
+  it('is not the one that goes away unless the caller says so', () => {
+    expect(mergeBlockers(klipRow(), row({ id: 'c', vessel_role: null, vessel_type: 'BARGE' })).join(' ')).toMatch(/diinput lewat KLIP/);
+    expect(mergeBlockers(klipRow(), row({ id: 'c', vessel_role: null, vessel_type: 'BARGE' }), { allowProtected: true })).toEqual([]);
+  });
+
+  it('can be the one that STAYS, with no flag needed', () => {
+    expect(mergeBlockers(row({ vessel_role: null, vessel_type: 'BARGE' }), klipRow())).toEqual([]);
+  });
+
+  it('is only protected by klip_origin: a SAP-made row goes away as before', () => {
+    expect(mergeBlockers(row(), dhmRow())).toEqual([]);
+  });
+});
+
 function fakeClient(rows: MasterRow[]) {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
   const query = async (sql: string, params: unknown[] = []) => {
@@ -85,5 +102,42 @@ describe('planMasterVesselMerge / applyMasterVesselMerge', () => {
     calls.length = 0;
     await expect(applyMasterVesselMerge(client, plan)).rejects.toThrow(/merge refused/);
     expect(calls).toEqual([]);
+  });
+
+  it('aborts BEFORE the delete when something still points at the copy, so no cascade can take it', async () => {
+    const calls: string[] = [];
+    const rowsIn = [row(), dhmRow()];
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => {
+        calls.push(sql.replace(/\s+/g, ' '));
+        if (/FROM master_vessels\s+WHERE id = \$1::uuid/i.test(sql)) return { rows: rowsIn.filter((r) => r.id === params[0]) };
+        if (/upper\(trim\(vessel_name\)\)/i.test(sql)) return { rows: rowsIn.filter((r) => r.vessel_name.toUpperCase() === String(params[0]).toUpperCase()) };
+        if (/shipments_left/.test(sql)) return { rows: [{ shipments_left: 1, aliases_left: 0, pairs_left: 2 }] };
+        return { rows: [], rowCount: 1 };
+      },
+    } as unknown as PoolClient;
+    const plan = await planMasterVesselMerge(client, 'TB. TOLLANDAK II', 'TB. TOL LANDAK II');
+    await expect(applyMasterVesselMerge(client, plan)).rejects.toThrow(/merge aborted: 1 shipment\(s\), 0 alias\(es\) and 2 pair\(s\) still point/);
+    expect(calls.some((c) => /DELETE FROM master_vessels/.test(c))).toBe(false);
+  });
+
+  it('refuses a KLIP-input row as the one that goes away, and writes nothing', async () => {
+    const klip = row({ id: 'k', vessel_name: 'BG. METRO 05.35', klip_origin: true, vessel_role: null, vessel_type: null });
+    const { client, calls } = fakeClient([klip, row({ id: 'b', vessel_name: 'BG. METRO 05.35 SAP', vessel_role: null, vessel_type: null })]);
+    const plan = await planMasterVesselMerge(client, 'BG. METRO 05.35', 'BG. METRO 05.35 SAP');
+    expect(plan.blockers.join(' ')).toMatch(/diinput lewat KLIP/);
+    calls.length = 0;
+    await expect(applyMasterVesselMerge(client, plan)).rejects.toThrow(/merge refused/);
+    expect(calls).toEqual([]);
+  });
+
+  it('merges a KLIP-input row away when allowProtected is passed', async () => {
+    const klip = row({ id: 'k', vessel_name: 'BG. METRO 05.35', klip_origin: true, vessel_role: null, vessel_type: null });
+    const { client, calls } = fakeClient([klip, row({ id: 'b', vessel_name: 'BG. METRO 05.35 SAP', vessel_role: null, vessel_type: null })]);
+    const plan = await planMasterVesselMerge(client, 'BG. METRO 05.35', 'BG. METRO 05.35 SAP', { allowProtected: true });
+    expect(plan.blockers).toEqual([]);
+    calls.length = 0;
+    await applyMasterVesselMerge(client, plan);
+    expect(calls.some((c) => /DELETE FROM master_vessels/.test(c.sql))).toBe(true);
   });
 });
