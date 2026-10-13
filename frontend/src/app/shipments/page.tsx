@@ -175,13 +175,8 @@ import {
 } from '@/lib/shipmentListPorts'
 import { resolveLoadingPortDisplayLabel } from '@/lib/loadingPortDisplay'
 import { resolveShipmentListSuppliers } from '@/lib/shipmentListSuppliers'
-import { groupShipmentsBySto, type ShipmentStoGroup } from '@/lib/shipmentStoGrouping'
-import {
-  groupShipmentsForDisplay,
-  poGroupColumnMode,
-  poGroupStatusRow,
-  type ShipmentDisplayGroup,
-} from '@/lib/shipmentPoGrouping'
+import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
+import { joinDistinctValues, mergeRowsByPo, type PoMergedRow } from '@/lib/shipmentPoGrouping'
 import {
   resolveShipmentApiLookupKey,
   resolveShipmentDisplayStoNumber,
@@ -245,13 +240,14 @@ import {
   type ShipmentsPipelineStageFilter,
 } from '@/lib/shipmentsPageFilterState'
 import {
-  OperationalStackedCommaCell,
+  OperationalInlineCommaCell,
   getOperationalColumnLayout,
   operationalTableColumnClass,
 } from '@/lib/operationalTableLayout'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
   SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalMultiValueTooltip,
   operationalRowFieldTooltipText,
   shouldApplyOperationalTruncateTooltip,
 } from '@/lib/operationalTableTruncateUi'
@@ -764,6 +760,24 @@ function ShipmentRowEditButton({
       </TooltipContent>
     </Tooltip>
   )
+}
+
+/** The STO rows a table row stands for: itself, or - for the merged row of one CIF / CFR PO - every STO row of that PO (lib/shipmentPoGrouping.ts). */
+function poRowsOf(shipment: Shipment): Shipment[] {
+  return (shipment as PoMergedRow<Shipment>).poRows ?? [shipment]
+}
+
+/** Sum of a per-STO quantity over the rows a table row stands for; null when none of them has the quantity. */
+function sumKgOverRows(shipment: Shipment, pick: (row: Shipment) => number | null | undefined): number | null {
+  let any = false
+  let total = 0
+  for (const row of poRowsOf(shipment)) {
+    const kg = pick(row)
+    if (kg == null || Number.isNaN(kg)) continue
+    any = true
+    total += kg
+  }
+  return any ? total : null
 }
 
 function parseApiNumber(value: unknown): number | null {
@@ -1370,8 +1384,6 @@ function ShipmentsPageContent() {
   const [expandedShipmentIds, setExpandedShipmentIds] = useState<Set<string>>(() => new Set())
   /** Section 3 — STO group headers collapsed (empty = all expanded). */
   const [collapsedStoGroupKeys, setCollapsedStoGroupKeys] = useState<Set<string>>(() => new Set())
-  /** CIF / CFR PO headers the user has opened. They start closed: one line per PO, the STO rows underneath on demand. */
-  const [expandedPoGroupKeys, setExpandedPoGroupKeys] = useState<Set<string>>(() => new Set())
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [dragColId, setDragColId] = useState<string | null>(null)
   /**
@@ -4290,7 +4302,9 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => (s.row_kind === 'contract_backlog' ? '' : resolveShipmentDisplayStoNumber(s.sto_number)),
       render: (s) => (
-        <span className="text-sm">{resolveShipmentDisplayStoNumber(s.sto_number)}</span>
+        <OperationalInlineCommaCell
+          value={(s as PoMergedRow<Shipment>).poStos?.join(', ') ?? resolveShipmentDisplayStoNumber(s.sto_number)}
+        />
       ),
     },
     {
@@ -4418,16 +4432,9 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => resolveShipmentListLoadingPorts(s),
-      render: (s) => {
-        const loadingPorts = resolveShipmentListLoadingPorts(s)
-        return (
-          <OperationalStackedCommaCell
-            value={loadingPorts}
-            title={loadingPorts || ''}
-            truncateLongParts
-          />
-        )
-      },
+      render: (s) => (
+        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map(resolveShipmentListLoadingPorts))} />
+      ),
     },
     {
       id: 'discharge_port',
@@ -4436,16 +4443,8 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => resolveShipmentListDischargePorts(s),
       render: (s) => {
-        // Same cell as Loading Port: one port per line, ellipsis when the column is narrower than the name, and the full
-        // value in the hover title - a bare span clipped the name with no way to read the rest.
-        const dischargePorts = resolveShipmentListDischargePorts(s)
-        return (
-          <OperationalStackedCommaCell
-            value={dischargePorts}
-            title={dischargePorts || ''}
-            truncateLongParts
-          />
-        )
+        // Same cell as Loading Port: the ports side by side, an ellipsis when the column is narrower, the full list one per line in the hover tooltip.
+        return <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map(resolveShipmentListDischargePorts))} />
       },
     },
     {
@@ -4463,7 +4462,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.contract_ext_no || '',
       render: (s) => (
-        <OperationalStackedCommaCell value={s.contract_ext_no} title={s.contract_ext_no || ''} />
+        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map((r) => r.contract_ext_no))} />
       )
     },
     {
@@ -4473,7 +4472,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.po_numbers || '',
       render: (s) => (
-        <OperationalStackedCommaCell value={s.po_numbers} title={s.po_numbers || ''} />
+        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map((r) => r.po_numbers))} />
       )
     },
     {
@@ -4482,16 +4481,9 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => resolveShipmentListSuppliers(s),
-      render: (s) => {
-        const supplier = resolveShipmentListSuppliers(s)
-        return (
-          <OperationalStackedCommaCell
-            value={supplier}
-            title={supplier || ''}
-            truncateLongParts
-          />
-        )
-      },
+      render: (s) => (
+        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map(resolveShipmentListSuppliers))} />
+      ),
     },
     {
       id: 'vessel_name',
@@ -4577,7 +4569,7 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(resolveShipmentListStoKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(sumKgOverRows(s, resolveShipmentListStoKg), SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -4592,9 +4584,9 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentListShipmentPlanKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {shipmentListShipmentPlanKg(s) == null
+          {sumKgOverRows(s, shipmentListShipmentPlanKg) == null
             ? '-'
-            : formatSapQtyMtDisplay(shipmentListShipmentPlanKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+            : formatSapQtyMtDisplay(sumKgOverRows(s, shipmentListShipmentPlanKg), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },
@@ -4608,7 +4600,7 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(shipmentListDeliveredKgForViewTable(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(sumKgOverRows(s, shipmentListDeliveredKgForViewTable), SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -4623,7 +4615,7 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(shipmentListReceiveKgForViewTable(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(sumKgOverRows(s, shipmentListReceiveKgForViewTable), SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -4751,10 +4743,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.contract_numbers || s.contract_number || '',
       render: (s) => (
-        <OperationalStackedCommaCell
-          value={s.contract_numbers || s.contract_number}
-          title={s.contract_numbers || s.contract_number || ''}
-        />
+        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map((r) => r.contract_numbers || r.contract_number))} />
       )
     },
     {
@@ -4764,10 +4753,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.contract_reference_po || '',
       render: (s) => (
-        <OperationalStackedCommaCell
-          value={s.contract_reference_po}
-          title={s.contract_reference_po || ''}
-        />
+        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map((r) => r.contract_reference_po))} />
       )
     },
     {
@@ -5351,22 +5337,16 @@ function ShipmentsPageContent() {
   }, [prePlannedTableGroups, compactColumns, sortKey, sortDir, sortStack, getColumnRawValue])
 
   const stoGroupedShipments = useMemo(
-    () => groupShipmentsBySto(paginatedShipments),
+    () => groupShipmentsBySto(mergeRowsByPo(paginatedShipments)),
     [paginatedShipments],
   )
 
-  /** The STO groups, with the STO rows of one CIF / CFR PO gathered under one header (display only; see lib/shipmentPoGrouping.ts). */
-  const shipmentDisplayGroups = useMemo(
-    () => groupShipmentsForDisplay(stoGroupedShipments),
-    [stoGroupedShipments],
-  )
-
-  /** Left expand/chevron column only when STO or PO grouping needs collapse (otherwise it looks like empty left gap). */
+  /** Left expand/chevron column only when STO grouping needs collapse (otherwise it looks like empty left gap). */
   const showStoExpandColumn = useMemo(
     () =>
       statusFilter !== 'PREPLANNED' &&
-      shipmentDisplayGroups.some((group) => group.kind === 'po' || group.stoGroup.rows.length > 1),
-    [statusFilter, shipmentDisplayGroups],
+      stoGroupedShipments.some((group) => group.rows.length > 1),
+    [statusFilter, stoGroupedShipments],
   )
 
   const renderPrePlannedGroupedCell = useCallback(
@@ -5446,92 +5426,6 @@ function ShipmentsPageContent() {
       return next
     })
   }, [])
-
-  const togglePoGroupExpanded = useCallback((poKey: string) => {
-    setExpandedPoGroupKeys((prev) => {
-      const next = new Set(prev)
-      if (next.has(poKey)) next.delete(poKey)
-      else next.add(poKey)
-      return next
-    })
-  }, [])
-
-  /**
-   * One cell of a CIF / CFR PO header. STO: the STOs, comma-separated. Status: the furthest active sibling (where the PO's OS sits on the
-   * cards). Contract Qty and Outstanding Qty: once - every sibling row already repeats the PO's figure. STO Qty / Plan / Delivery / Received:
-   * added up, they are per STO. Anything else: the distinct values, or the row's own rendering when they are all the same.
-   */
-  const renderPoGroupHeaderCell = useCallback(
-    (col: CompactColumn, group: Extract<ShipmentDisplayGroup<Shipment>, { kind: 'po' }>) => {
-      const rows = group.rows
-      const mode = poGroupColumnMode(col.id)
-
-      if (mode === 'sto') {
-        return (
-          <>
-            <span className="text-sm text-slate-900">{group.stoDisplays.join(', ') || '-'}</span>
-            <Badge variant="outline" className="ml-2 text-xs font-normal">
-              {group.stoDisplays.length} STO
-            </Badge>
-          </>
-        )
-      }
-      if (mode === 'status') return col.render(poGroupStatusRow(rows))
-      if (mode === 'once') return col.render(rows[0])
-
-      if (mode === 'sum') {
-        if (!qtyFieldsReady && col.id !== 'quantity_shipment_plan') return <QtyLoadingDots />
-        const pick: (row: Shipment) => number | null | undefined =
-          col.id === 'quantity_delivered'
-            ? shipmentListDeliveredKgForViewTable
-            : col.id === 'quantity_receive'
-              ? shipmentListReceiveKgForViewTable
-              : col.id === 'sto_quantity'
-                ? resolveShipmentListStoKg
-                : shipmentListShipmentPlanKg
-        let any = false
-        let total = 0
-        for (const row of rows) {
-          const kg = pick(row)
-          if (kg == null || Number.isNaN(kg)) continue
-          any = true
-          total += kg
-        }
-        return (
-          <span className="text-sm break-words tabular-nums">
-            {any ? formatSapQtyMtDisplay(total, SHIPMENT_QTY_MT_DISPLAY_OPTS) : '-'}
-          </span>
-        )
-      }
-
-      const isDateCol =
-        col.id === 'contract_date' ||
-        col.id === 'delivery_start_date' ||
-        col.id === 'delivery_end_date' ||
-        col.id === 'delivery_start' ||
-        col.id === 'delivery_end'
-      const lines = collectDistinctFormattedValues(
-        rows,
-        (m) => {
-          const raw = getColumnRawValue(m, col.id)
-          if (raw == null || raw === '' || typeof raw === 'object') return ''
-          return String(raw)
-        },
-        isDateCol ? (v) => formatShortDate(v) : undefined,
-      )
-      if (lines.length <= 1) return col.render(rows[0])
-      return (
-        <span className="text-sm flex flex-col gap-0.5">
-          {lines.map((line, i) => (
-            <span key={`${line}-${i}`} className="block whitespace-nowrap">
-              {line}
-            </span>
-          ))}
-        </span>
-      )
-    },
-    [qtyFieldsReady],
-  )
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages)
@@ -7765,10 +7659,9 @@ function ShipmentsPageContent() {
                             })
                           }
 
-                          const renderStoGroup = (group: ShipmentStoGroup<Shipment>, insidePoGroup: boolean): ReactNode[] => {
-                            // inside a PO header the STO header is not drawn: the PO header already names the STOs, and each row shows its own
-                            const isMultiStoGroup = group.rows.length > 1 && !insidePoGroup
-                            const stoGroupCollapsed = !insidePoGroup && collapsedStoGroupKeys.has(group.stoKey)
+                          return stoGroupedShipments.flatMap((group) => {
+                            const isMultiStoGroup = group.rows.length > 1
+                            const stoGroupCollapsed = collapsedStoGroupKeys.has(group.stoKey)
                             const nodes: ReactNode[] = []
 
                             if (isMultiStoGroup) {
@@ -7835,15 +7728,14 @@ function ShipmentsPageContent() {
                               const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                               stripeIdx += 1
                               const isStoChildRow = isMultiStoGroup
-                              const isPoChildRow = insidePoGroup
                               nodes.push(
                             // STO-expanded rows can repeat shipment.id across STO groups;
                             // duplicate keys corrupt list reconciliation and leave stale rows.
                             <Fragment key={`${group.stoKey}|${shipment.id}`}>
-                              <tr className={`${rowBg} ${isStoChildRow || isPoChildRow ? 'border-l-2 border-slate-200' : ''}`}>
+                              <tr className={`${rowBg} ${isStoChildRow ? 'border-l-2 border-slate-200' : ''}`}>
                                 {showStoExpandColumn ? (
                                   <td className="align-middle w-10 px-1 py-1.5">
-                                    {isStoChildRow || isPoChildRow ? (
+                                    {isStoChildRow ? (
                                       <span className="inline-block w-5" aria-hidden />
                                     ) : null}
                                   </td>
@@ -7869,23 +7761,25 @@ function ShipmentsPageContent() {
                                         SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS,
                                       )
                                     const truncateTooltip = useTruncateTooltip
-                                      ? col.id === 'supplier' || col.id === 'loading_port'
-                                        ? (() => {
-                                            const text =
-                                              col.id === 'supplier'
-                                                ? resolveShipmentListSuppliers(shipment)
-                                                : resolveShipmentListLoadingPorts(shipment)
-                                            if (!text || text === '-') return null
-                                            return text
-                                              .split(',')
-                                              .map((part) => part.trim())
-                                              .filter(Boolean)
-                                              .join('\n')
-                                          })()
-                                        : operationalRowFieldTooltipText(
-                                            col.id,
-                                            shipment as unknown as Record<string, unknown>,
+                                      ? col.id === 'shipment_id'
+                                        ? operationalMultiValueTooltip(
+                                            (shipment as PoMergedRow<Shipment>).poStos?.join(', ') ??
+                                              resolveShipmentDisplayStoNumber(shipment.sto_number),
                                           )
+                                        : col.id === 'supplier' || col.id === 'loading_port'
+                                          ? operationalMultiValueTooltip(
+                                              joinDistinctValues(
+                                                poRowsOf(shipment).map(
+                                                  col.id === 'supplier' ? resolveShipmentListSuppliers : resolveShipmentListLoadingPorts,
+                                                ),
+                                              ),
+                                            )
+                                          : operationalMultiValueTooltip(
+                                              operationalRowFieldTooltipText(
+                                                col.id,
+                                                shipment as unknown as Record<string, unknown>,
+                                              ),
+                                            )
                                       : null
                                     const cellContent =
                                       col.id === 'vessel_name' && tableInlineEditActive ? (
@@ -8194,57 +8088,6 @@ function ShipmentsPageContent() {
                               )
                             }
                             return nodes
-                          }
-
-                          return shipmentDisplayGroups.flatMap((displayGroup) => {
-                            if (displayGroup.kind === 'sto') return renderStoGroup(displayGroup.stoGroup, false)
-
-                            const poExpanded = expandedPoGroupKeys.has(displayGroup.key)
-                            const poNodes: ReactNode[] = [
-                              <tr
-                                key={`po-group-${displayGroup.key}`}
-                                className="bg-slate-100 border-y border-slate-200"
-                              >
-                                {showStoExpandColumn ? (
-                                  <td className="align-middle w-10 px-1 py-1.5">
-                                    <button
-                                      type="button"
-                                      onClick={() => togglePoGroupExpanded(displayGroup.key)}
-                                      className="p-1 text-slate-600 hover:text-slate-900"
-                                      title={poExpanded ? 'Collapse STOs of this PO' : 'Expand STOs of this PO'}
-                                      aria-expanded={poExpanded}
-                                    >
-                                      {poExpanded ? (
-                                        <ChevronDown className="h-5 w-5" />
-                                      ) : (
-                                        <ChevronRight className="h-5 w-5" />
-                                      )}
-                                    </button>
-                                  </td>
-                                ) : null}
-                                {visibleColumns.map((col) => {
-                                  const opColClass = operationalTableColumnClass(
-                                    getOperationalColumnLayout('shipments', col.id),
-                                  )
-                                  return (
-                                    <td
-                                      key={col.id}
-                                      className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
-                                    >
-                                      <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
-                                        {renderPoGroupHeaderCell(col, displayGroup)}
-                                      </div>
-                                    </td>
-                                  )
-                                })}
-                                <td
-                                  className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
-                                />
-                              </tr>,
-                            ]
-                            if (!poExpanded) return poNodes
-                            for (const stoGroup of displayGroup.stoGroups) poNodes.push(...renderStoGroup(stoGroup, true))
-                            return poNodes
                           })
                         })()}
                         </tbody>
@@ -8317,10 +8160,9 @@ function ShipmentsPageContent() {
                     )
                   })
                   ) : (
-                  (() => {
-                  const renderStoGroupCard = (group: ShipmentStoGroup<Shipment>, insidePoGroup: boolean): ReactNode[] => {
-                    const isMultiStoGroup = group.rows.length > 1 && !insidePoGroup
-                    const stoGroupCollapsed = !insidePoGroup && collapsedStoGroupKeys.has(group.stoKey)
+                  stoGroupedShipments.flatMap((group) => {
+                    const isMultiStoGroup = group.rows.length > 1
+                    const stoGroupCollapsed = collapsedStoGroupKeys.has(group.stoKey)
                     const nodes: ReactNode[] = []
 
                     if (isMultiStoGroup) {
@@ -8358,7 +8200,7 @@ function ShipmentsPageContent() {
                     nodes.push(
                       <div
                         key={`${group.stoKey}|${shipment.id}`}
-                        className={`border rounded-lg transition-colors ${isMultiStoGroup || insidePoGroup ? 'ml-3 border-l-2 border-slate-200' : ''} ${tableInlineEditActive ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
+                        className={`border rounded-lg transition-colors ${isMultiStoGroup ? 'ml-3 border-l-2 border-slate-200' : ''} ${tableInlineEditActive ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                       >
                         <div className="p-4 flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-3 mb-3">
@@ -8379,7 +8221,7 @@ function ShipmentsPageContent() {
                               </div>
                               <div className="min-w-0">
                                 <div className="font-semibold truncate">
-                                  {resolveShipmentDisplayStoNumber(shipment.sto_number)}
+                                  {(shipment as PoMergedRow<Shipment>).poStos?.join(', ') ?? resolveShipmentDisplayStoNumber(shipment.sto_number)}
                                 </div>
                                 {shipment.operation_id ? (
                                   <div className="text-[10px] text-gray-500 truncate">
@@ -8560,42 +8402,7 @@ function ShipmentsPageContent() {
                     )
                     }
                     return nodes
-                  }
-
-                  return shipmentDisplayGroups.flatMap((displayGroup) => {
-                    if (displayGroup.kind === 'sto') return renderStoGroupCard(displayGroup.stoGroup, false)
-
-                    const poExpanded = expandedPoGroupKeys.has(displayGroup.key)
-                    const poNodes: ReactNode[] = [
-                      <div
-                        key={`m-po-group-${displayGroup.key}`}
-                        className="border rounded-lg bg-slate-100 px-3 py-2 flex items-center gap-2"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => togglePoGroupExpanded(displayGroup.key)}
-                          className="p-1 text-slate-600 hover:text-slate-900 shrink-0"
-                          aria-expanded={poExpanded}
-                        >
-                          {poExpanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-                        </button>
-                        <div className="min-w-0">
-                          <div className="text-sm text-slate-900 truncate">PO {displayGroup.poNumber}</div>
-                          <div className="text-xs text-gray-600 truncate">{displayGroup.stoDisplays.join(', ')}</div>
-                        </div>
-                        <Badge variant="outline" className="text-xs font-normal shrink-0">
-                          {displayGroup.stoDisplays.length} STO
-                        </Badge>
-                        <Badge className={`${getStatusColor(poGroupStatusRow(displayGroup.rows).status)} ml-auto shrink-0`}>
-                          {formatShipmentStatusLabel(poGroupStatusRow(displayGroup.rows).status)}
-                        </Badge>
-                      </div>,
-                    ]
-                    if (!poExpanded) return poNodes
-                    for (const stoGroup of displayGroup.stoGroups) poNodes.push(...renderStoGroupCard(stoGroup, true))
-                    return poNodes
                   })
-                  })()
                   )}
                   </div>
 

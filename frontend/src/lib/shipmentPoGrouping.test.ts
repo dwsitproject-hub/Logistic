@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
-  groupShipmentsForDisplay,
-  poGroupColumnMode,
+  joinDistinctValues,
+  mergeRowsByPo,
   poGroupStatusRow,
   shipmentPoGroupKey,
   shipmentStageRank,
@@ -22,7 +21,6 @@ function row(over: Partial<ShipmentPoGroupRow> = {}): ShipmentPoGroupRow {
     ...over,
   }
 }
-const display = (rows: ShipmentPoGroupRow[]) => groupShipmentsForDisplay(groupShipmentsBySto(rows))
 
 describe('shipmentPoGroupKey', () => {
   it('is the PO for a CIF / CFR STO row of exactly one PO', () => {
@@ -35,7 +33,7 @@ describe('shipmentPoGroupKey', () => {
     expect(shipmentPoGroupKey(row({ incoterm: 'FOB' }))).toBeNull()
     expect(shipmentPoGroupKey(row({ incoterm: 'FRC' }))).toBeNull()
     expect(shipmentPoGroupKey(row({ incoterm: null }))).toBeNull()
-    // a STO shared by two POs is one row of two POs - it belongs to no single PO header
+    // a STO shared by two POs is one row of two POs - it belongs to no single PO
     expect(shipmentPoGroupKey(row({ po_numbers: '111, 222' }))).toBeNull()
     expect(shipmentPoGroupKey(row({ po_numbers: '' }))).toBeNull()
     // a backlog row is not a STO row
@@ -45,45 +43,53 @@ describe('shipmentPoGroupKey', () => {
   })
 })
 
-describe('groupShipmentsForDisplay', () => {
-  it('puts the STO rows of one CIF PO under one header, with the STOs listed in order', () => {
+describe('mergeRowsByPo', () => {
+  it('turns the STO rows of one CIF PO into ONE row that lists the STOs in order', () => {
     const rows = [
       row({ sto_key: '1586005441', sto_number: '1586005441' }),
       row({ sto_key: '1586005442', sto_number: '1586005442' }),
       row({ sto_key: '1586005443', sto_number: '1586005443' }),
     ]
-    const groups = display(rows)
-    expect(groups).toHaveLength(1)
-    const g = groups[0]
-    expect(g.kind).toBe('po')
-    if (g.kind !== 'po') return
-    expect(g.poNumber).toBe('1581000998')
-    expect(g.rows.map((r) => r.id)).toEqual(rows.map((r) => r.id))
-    expect(g.stoDisplays.join(', ')).toBe('1586005441, 1586005442, 1586005443')
+    const merged = mergeRowsByPo(rows)
+    expect(merged).toHaveLength(1)
+    expect(merged[0].poStos).toEqual(['1586005441', '1586005442', '1586005443'])
+    expect(merged[0].poRows?.map((r) => r.id)).toEqual(rows.map((r) => r.id))
   })
 
-  it('keeps the position of the PO\'s first row and gathers its later rows, even with other rows between', () => {
+  it('sits where the PO\'s first row was and takes its later rows from wherever they are', () => {
     const a1 = row({ po_numbers: 'A' })
     const other = row({ po_numbers: 'B', incoterm: 'FOB' })
     const a2 = row({ po_numbers: 'A' })
-    const groups = display([a1, other, a2])
-    expect(groups.map((g) => g.kind)).toEqual(['po', 'sto'])
-    expect(groups[0].kind === 'po' && groups[0].rows.map((r) => r.id)).toEqual([a1.id, a2.id])
+    const merged = mergeRowsByPo([a1, other, a2])
+    expect(merged).toHaveLength(2)
+    expect(merged[0].poRows?.map((r) => r.id)).toEqual([a1.id, a2.id])
+    expect(merged[1].id).toBe(other.id)
   })
 
-  it('a PO with a single row is not a group', () => {
-    const groups = display([row({ po_numbers: 'SOLO' })])
-    expect(groups).toHaveLength(1)
-    expect(groups[0].kind).toBe('sto')
+  it('the merged row IS the row whose status it shows, so its buttons act on that STO', () => {
+    const planned = row({ status: 'PLANNED' })
+    const loading = row({ status: 'LOADING' })
+    const [merged] = mergeRowsByPo([planned, loading])
+    expect(merged.id).toBe(loading.id)
+    expect(merged.status).toBe('LOADING')
   })
 
-  it('FOB, a shared STO and a row with no STO stay exactly as they were', () => {
+  it('a PO with a single row is returned untouched (same object, nothing added)', () => {
+    const solo = row({ po_numbers: 'SOLO' })
+    const merged = mergeRowsByPo([solo])
+    expect(merged[0]).toBe(solo)
+    expect(merged[0].poRows).toBeUndefined()
+  })
+
+  it('FOB, a STO shared by several POs and a row with no STO come back exactly as they were', () => {
     const fob1 = row({ incoterm: 'FOB', po_numbers: 'F' })
     const fob2 = row({ incoterm: 'FOB', po_numbers: 'F' })
     const shared = row({ po_numbers: 'A, B' })
-    const groups = display([fob1, fob2, shared])
-    expect(groups.every((g) => g.kind === 'sto')).toBe(true)
-    expect(groups).toHaveLength(3)
+    const noSto = { id: 'no-sto', incoterm: 'CIF', po_numbers: 'Z' }
+    const input = [fob1, fob2, shared, noSto]
+    const merged = mergeRowsByPo(input)
+    expect(merged).toHaveLength(4)
+    merged.forEach((m, i) => expect(m).toBe(input[i]))
   })
 
   it('does not lose or duplicate a row', () => {
@@ -91,30 +97,25 @@ describe('groupShipmentsForDisplay', () => {
       row({ po_numbers: 'A' }), row({ po_numbers: 'A' }), row({ po_numbers: 'B' }), row({ po_numbers: 'B' }),
       row({ po_numbers: 'B' }), row({ po_numbers: 'C', incoterm: 'FOB' }), row({ po_numbers: 'D' }),
     ]
-    const ids = display(rows).flatMap((g) => (g.kind === 'po' ? g.rows : g.stoGroup.rows)).map((r) => r.id)
+    const merged = mergeRowsByPo(rows)
+    const ids = merged.flatMap((m) => (m.poRows ? m.poRows.map((r) => r.id) : [m.id]))
     expect(ids.sort()).toEqual(rows.map((r) => r.id).sort())
+    expect(merged).toHaveLength(4) // A, B, C, D
   })
 
-  it('two rows with the SAME STO key stay one STO group inside the PO header', () => {
+  it('two rows with the SAME STO number list that STO once', () => {
     const k = { sto_key: 'SAMESTO', sto_number: 'SAMESTO' }
-    const g = display([row(k), row(k), row({ po_numbers: '1581000998' })])
-    expect(g).toHaveLength(1)
-    expect(g[0].kind === 'po' && g[0].stoGroups).toHaveLength(2)
-    expect(g[0].kind === 'po' && g[0].rows).toHaveLength(3)
-    expect(g[0].kind === 'po' && g[0].stoDisplays).toHaveLength(2)
+    const [merged] = mergeRowsByPo([row(k), row(k), row({ sto_key: 'OTHER', sto_number: 'OTHER' })])
+    expect(merged.poStos).toEqual(['SAMESTO', 'OTHER'])
+    expect(merged.poRows).toHaveLength(3)
   })
 })
 
-describe('what the header shows', () => {
-  it('Contract Qty and Outstanding Qty once (they repeat on every sibling); per-STO quantities added up', () => {
-    expect(poGroupColumnMode('contract_qty')).toBe('once')
-    expect(poGroupColumnMode('outstanding_quantity')).toBe('once')
-    for (const id of ['sto_quantity', 'quantity_shipment_plan', 'quantity_delivered', 'quantity_receive']) {
-      expect(poGroupColumnMode(id)).toBe('sum')
-    }
-    expect(poGroupColumnMode('shipment_id')).toBe('sto')
-    expect(poGroupColumnMode('status')).toBe('status')
-    expect(poGroupColumnMode('supplier')).toBe('stack')
+describe('what a merged row shows', () => {
+  it('lists the distinct values of several rows side by side, in first-seen order, ignoring case and blanks', () => {
+    expect(joinDistinctValues(['A, B', 'B, C', null, '', ' a '])).toBe('A, B, C')
+    expect(joinDistinctValues(['1586005441'])).toBe('1586005441')
+    expect(joinDistinctValues([null, undefined, ''])).toBe('')
   })
 
   it('the stage ranks match the backend (furthest active wins; COMPLETED and CANCELLED below every active stage)', () => {
@@ -126,7 +127,7 @@ describe('what the header shows', () => {
     expect(shipmentStageRank(null)).toBe(shipmentStageRank('CANCELLED'))
   })
 
-  it('the header takes the furthest active stage, where the PO\'s OS already sits on the cards', () => {
+  it('the status is the furthest active stage, where the PO\'s OS already sits on the cards', () => {
     const rows = [{ status: 'COMPLETED' }, { status: 'PLANNED' }, { status: 'LOADING' }, { status: 'PLANNED' }]
     expect(poGroupStatusRow(rows).status).toBe('LOADING')
     expect(poGroupStatusRow([{ status: 'COMPLETED' }, { status: 'PLANNED' }]).status).toBe('PLANNED')

@@ -14,7 +14,7 @@ export const COMPACT_TABLE_STACK_CLASS = 'klip-compact-table-stack'
 const SHIPMENT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
   late_indicator: 'short',
   vessel_name: 'truncate',
-  shipment_id: 'token',
+  shipment_id: 'truncate',
   loading_port: 'truncate',
   discharge_port: 'truncate',
   supplier: 'truncate',
@@ -384,6 +384,21 @@ export function resolveOperationalColumnMinWidthPx(opts: {
     default:
       return Math.max(headerMin, cellPx, opts.basePx)
   }
+}
+
+/**
+ * Several values side by side, comma-separated, on ONE line (the column's width cuts it with an ellipsis when it is longer). The full list is the hover tooltip of the cell
+ * (operationalMultiValueTooltip), one value per line - the way the Shipping Performance table shows a list.
+ */
+export function OperationalInlineCommaCell({ value, className = 'text-sm' }: { value?: string | null; className?: string }) {
+  const parts = String(value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((part) => formatOperationalTableTextDisplay(part))
+    .filter((part) => part !== '-')
+  if (parts.length === 0) return <span className={className}>-</span>
+  return <span className={`${className} ${COMPACT_TABLE_NOWRAP_CLASS}`}>{parts.join(', ')}</span>
 }
 
 export function OperationalStackedCommaCell({

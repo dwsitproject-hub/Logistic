@@ -1,19 +1,18 @@
 /**
- * Shipments table - a CIF / CFR PO with several STOs shown as ONE collapsible header.
+ * Shipments table - the STO rows of one CIF / CFR PO shown as ONE row.
  *
- * A CIF / CFR PO usually carries several SAP STOs of Type T (trucking legs, no vessel), and the list is one row per STO. The header gives the
- * PO one line (the STOs comma-separated, quantities added up where they are per STO); the STO rows stay underneath it, because each of them
- * is a real shipment with its own status, edit, documents and quantities.
+ * A CIF / CFR PO usually carries several SAP STOs of Type T (trucking legs, no vessel), and the list is one row per STO. This puts them in one table row, the way the PO
+ * column already lists several POs of one STO: the STO cell lists the STOs side by side, comma-separated, and its hover tooltip shows them one per line. Quantities that are per
+ * STO are added up; Contract Qty and Outstanding Qty are PO-level figures every sibling row repeats, so they are shown once; the status is the furthest active stage of the siblings,
+ * where the PO's OS already sits on the cards.
  *
- * This is DISPLAY only. The rows, the paging, the cards and the OS are untouched: a PO still counts once per STO in the stage counts, and
- * its Contract Qty and OS are already once per contract. Merging at the data grain is a different, riskier change (see
- * backend/src/utils/shipmentCifCfrStoGrain.regression.test.ts).
+ * This is DISPLAY only. The rows, the paging, the cards and the OS are untouched: the stage counts still count one per STO, and Contract Qty and OS on the cards are already
+ * once per contract. The row's buttons act on ONE of the STOs (the one whose status the row shows) - the others cannot be edited from this row.
  *
- * Only a row of exactly ONE PO is groupable. A STO shared by several POs is one row of several POs and stays where it is - it belongs to no
- * single PO header.
+ * Only a row of exactly ONE PO merges. A STO shared by several POs is one row of several POs and stays as it is.
  */
 
-import { resolveShipmentStoKey, type ShipmentStoGroup } from '@/lib/shipmentStoGrouping'
+import { resolveShipmentStoDisplay, resolveShipmentStoKey } from '@/lib/shipmentStoGrouping'
 
 export const SHIPMENT_PO_GROUP_INCOTERMS = ['CIF', 'CFR'] as const
 
@@ -45,95 +44,66 @@ export function shipmentPoGroupKey(row: ShipmentPoGroupRow): string | null {
   return `po:${tokens[0]}`
 }
 
-export type ShipmentDisplayGroup<T> =
-  | { kind: 'sto'; key: string; stoGroup: ShipmentStoGroup<T> }
-  | {
-      kind: 'po'
-      key: string
-      poNumber: string
-      stoGroups: ShipmentStoGroup<T>[]
-      /** Every row of the PO, in list order. */
-      rows: T[]
-      /** The distinct STO numbers of the rows, in list order. */
-      stoDisplays: string[]
-    }
+/** A row that stands for several STO rows of one PO. `poRows` are the rows it replaced, in list order; `poStos` their distinct STO numbers. */
+export type PoMergedRow<T> = T & { poRows?: T[]; poStos?: string[] }
 
 /**
- * Put the STO groups of one PO under one header, at the position of the PO's first row. A STO group joins a PO only when ALL its rows are
- * groupable and of the same PO. A PO that ends up with a single row is not a group: it stays an ordinary STO group.
+ * Replace the STO rows of one PO by a single row at the position of the PO's first row. The merged row IS the row whose status it shows (so its buttons act on that STO),
+ * with `poRows` and `poStos` added. A PO with a single row is left exactly as it is.
  */
-export function groupShipmentsForDisplay<T extends ShipmentPoGroupRow>(
-  stoGroups: readonly ShipmentStoGroup<T>[],
-): ShipmentDisplayGroup<T>[] {
-  const out: ShipmentDisplayGroup<T>[] = []
-  const poIndex = new Map<string, number>()
-
-  for (const stoGroup of stoGroups) {
-    const keys = new Set(stoGroup.rows.map((row) => shipmentPoGroupKey(row)))
-    const key = keys.size === 1 ? [...keys][0] : null
-    if (!key) {
-      out.push({ kind: 'sto', key: stoGroup.stoKey, stoGroup })
-      continue
-    }
-    const at = poIndex.get(key)
-    if (at === undefined) {
-      poIndex.set(key, out.length)
-      out.push({
-        kind: 'po',
-        key,
-        poNumber: key.slice('po:'.length),
-        stoGroups: [stoGroup],
-        rows: [...stoGroup.rows],
-        stoDisplays: [],
-      })
-      continue
-    }
-    const existing = out[at]
-    if (existing.kind === 'po') {
-      existing.stoGroups.push(stoGroup)
-      existing.rows.push(...stoGroup.rows)
+export function mergeRowsByPo<T extends ShipmentPoGroupRow>(rows: readonly T[]): PoMergedRow<T>[] {
+  const members = new Map<string, T[]>()
+  for (const row of rows) {
+    const key = shipmentPoGroupKey(row)
+    if (key) {
+      const list = members.get(key)
+      if (list) list.push(row)
+      else members.set(key, [row])
     }
   }
-
-  return out.map((group) => {
-    if (group.kind !== 'po') return group
-    if (group.rows.length < 2) return { kind: 'sto' as const, key: group.stoGroups[0].stoKey, stoGroup: group.stoGroups[0] }
+  const out: PoMergedRow<T>[] = []
+  const placed = new Set<string>()
+  for (const row of rows) {
+    const key = shipmentPoGroupKey(row)
+    const group = key ? members.get(key) : undefined
+    if (!key || !group || group.length < 2) {
+      out.push(row)
+      continue
+    }
+    if (placed.has(key)) continue
+    placed.add(key)
     const seen = new Set<string>()
-    const stoDisplays: string[] = []
-    for (const stoGroup of group.stoGroups) {
-      const text = stoGroup.stoDisplay
+    const poStos: string[] = []
+    for (const member of group) {
+      const text = resolveShipmentStoDisplay(resolveShipmentStoKey(member))
       if (!text || text === '—' || seen.has(text)) continue
       seen.add(text)
-      stoDisplays.push(text)
+      poStos.push(text)
     }
-    return { ...group, stoDisplays }
-  })
+    out.push({ ...poGroupStatusRow(group), poRows: group, poStos })
+  }
+  return out
 }
 
-/* ------------------------------------------------------------------------------------------------------------------------------------ */
-/* What the header shows in each column                                                                                                */
-/* ------------------------------------------------------------------------------------------------------------------------------------ */
-
-export type PoGroupColumnMode = 'sto' | 'status' | 'once' | 'sum' | 'stack'
-
-/**
- * Contract Qty and Outstanding Qty are PO-level figures every sibling STO row already repeats, so the header shows them ONCE (adding them up
- * would be the 4.2x the status cards used to show). STO Qty, Plan, Delivery and Received are per STO, so they are added up.
- */
-const ONCE_COLUMNS = new Set(['contract_qty', 'outstanding_quantity'])
-const SUM_COLUMNS = new Set(['sto_quantity', 'quantity_shipment_plan', 'quantity_delivered', 'quantity_receive'])
-
-export function poGroupColumnMode(columnId: string): PoGroupColumnMode {
-  if (columnId === 'shipment_id') return 'sto'
-  if (columnId === 'status') return 'status'
-  if (ONCE_COLUMNS.has(columnId)) return 'once'
-  if (SUM_COLUMNS.has(columnId)) return 'sum'
-  return 'stack'
+/** 'A, B' + 'B, C' -> 'A, B, C': the distinct comma-separated values of several rows, in first-seen order. */
+export function joinDistinctValues(values: ReadonlyArray<string | null | undefined>): string {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    for (const part of String(value ?? '').split(',')) {
+      const text = part.trim()
+      const k = text.toLowerCase()
+      if (!text || seen.has(k)) continue
+      seen.add(k)
+      out.push(text)
+    }
+  }
+  return out.join(', ')
 }
 
 /**
- * How far along the pipeline a status is - the same ranks as backend/src/utils/shipmentActiveStageRank.ts (furthest active stage wins; anything
- * not listed, COMPLETED and CANCELLED included, ranks below every active stage).
+ * How far along the pipeline a status is - the same ranks as backend/src/utils/shipmentActiveStageRank.ts (furthest active stage wins; anything not listed, COMPLETED and
+ * CANCELLED included, ranks below every active stage).
  */
 const STAGE_RANKS: ReadonlyArray<readonly [number, readonly string[]]> = [
   [5, ['ARRIVED_DP', 'BERTHED_DP', 'UNLOADING']],
@@ -149,8 +119,8 @@ export function shipmentStageRank(status: string | null | undefined): number {
 }
 
 /**
- * The row whose status the PO header shows: the furthest active stage, so the header sits where the PO's OS already sits on the cards. With
- * nothing active, COMPLETED beats CANCELLED (a cancelled leg does not undo a delivered one). Ties keep list order.
+ * The row whose status the merged row shows: the furthest active stage, so it sits where the PO's OS already sits on the cards. With nothing active, COMPLETED beats
+ * CANCELLED (a cancelled leg does not undo a delivered one). Ties keep list order.
  */
 export function poGroupStatusRow<T extends { status?: string | null }>(rows: readonly T[]): T {
   const score = (row: T) => {
