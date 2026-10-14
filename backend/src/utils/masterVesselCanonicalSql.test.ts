@@ -28,7 +28,7 @@ describe('sqlMasterVesselCanonicalLateralJoin', () => {
     const order = sql.slice(sql.indexOf('ORDER BY'));
 
     it('ranks the normalised name, then the code, then the id', () => {
-      const nameAt = order.indexOf('mv.normalized_vessel_name = normalize_vessel_name(s.vessel_name)');
+      const nameAt = order.indexOf('mv.normalized_vessel_name = mv_name_key.nv');
       const codeAt = order.indexOf('upper(trim(mv.vessel_code))');
       const idAt = order.indexOf('mv.id = s.master_vessel_id');
       expect(nameAt).toBeGreaterThan(-1);
@@ -46,6 +46,12 @@ describe('sqlMasterVesselCanonicalLateralJoin', () => {
 
     it('does not rank by a name that is blank', () => {
       expect(order).toContain("NULLIF(trim(s.vessel_name), '') IS NOT NULL");
+    });
+
+    it('normalises the shipment name once per shipment, in a fenced one-row subquery, not per Master Vessel row', () => {
+      expect(sql.match(/normalize_vessel_name\(/g)).toHaveLength(1);
+      expect(sql).toContain('FROM (SELECT normalize_vessel_name(s.vessel_name) AS nv OFFSET 0) mv_name_key');
+      expect(sql.slice(0, sql.indexOf('ORDER BY'))).toContain('mv.normalized_vessel_name = mv_name_key.nv');
     });
   });
 

@@ -77,7 +77,12 @@ export function sqlMasterVesselCanonicalLateralJoin(
   alias = 'mv',
   masterVesselIdExpr?: string,
 ): string {
-  const normName = sqlNormalizeVesselNameExpr(vesselNameExpr);
+  /*
+   * The shipment's normalised name, worked out ONCE per shipment row in a one-row subquery (OFFSET 0 keeps the planner from folding it back in).
+   * normalize_vessel_name is plpgsql, and written inline in the join condition it ran once per Master Vessel row per shipment, twice (WHERE and ORDER BY):
+   * 470 masters x 998 rows on the Shipments list of the dev copy was 2.2 s of the query's 15.6 s; with this, 0.3 s and the same rows.
+   */
+  const normName = 'mv_name_key.nv';
   const idMatch = masterVesselIdExpr
     ? `OR (
             ${masterVesselIdExpr} IS NOT NULL
@@ -104,7 +109,8 @@ export function sqlMasterVesselCanonicalLateralJoin(
           mv.vessel_capacity_mt AS vessel_capacity_mt_master,
           mv.vessel_type AS vessel_type_master,
           mv.terms AS vessel_terms_master
-        FROM master_vessels mv
+        FROM (SELECT ${sqlNormalizeVesselNameExpr(vesselNameExpr)} AS nv OFFSET 0) mv_name_key
+        CROSS JOIN master_vessels mv
         LEFT JOIN master_vessel_code_aliases a
           ON a.master_vessel_id = mv.id
           AND NULLIF(trim(${vesselCodeExpr}), '') IS NOT NULL
