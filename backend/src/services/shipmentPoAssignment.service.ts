@@ -334,6 +334,7 @@ export async function attachPurchaseOrderToShipment(args: {
       `
       UPDATE shipments SET
         operation_id = COALESCE($2, operation_id),
+        operation_id_source = CASE WHEN $2 IS NOT NULL THEN NULL ELSE operation_id_source END,
         vessel_name = COALESCE($3, vessel_name),
         vessel_code = COALESCE($4, vessel_code),
         voyage_no = COALESCE($5, voyage_no),

@@ -2,6 +2,7 @@ import type { PoolClient, QueryResultRow } from 'pg';
 import { query } from '../database/connection';
 import { sqlSpdPoNumberExpr } from './contractLogisticsStoDetailSql';
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
+import { isSapImportOperationIdSource } from './sapShellOperationId';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
 
@@ -77,10 +78,11 @@ export async function hasKlipShipmentActivity(
   const rowRes = await runQuery<{
     shipment_id: string | null;
     operation_id: string | null;
+    operation_id_source: string | null;
     daily_deliverables: unknown;
   }>(
     db,
-    `SELECT shipment_id, operation_id, daily_deliverables
+    `SELECT shipment_id, operation_id, operation_id_source, daily_deliverables
      FROM shipments WHERE id = $1::uuid LIMIT 1`,
     [shipmentId],
   );
@@ -88,7 +90,8 @@ export async function hasKlipShipmentActivity(
   if (!row) return false;
 
   if (isKlipManualShipmentId(row.shipment_id)) return true;
-  if (row.operation_id && String(row.operation_id).trim()) return true;
+  // An id KLIP gave a SAP-imported row by itself is no user plan: counting it would stop the SAP re-import refreshing the row.
+  if (row.operation_id && String(row.operation_id).trim() && !isSapImportOperationIdSource(row.operation_id_source)) return true;
 
   const daily = row.daily_deliverables;
   if (Array.isArray(daily) && daily.length > 0) return true;

@@ -46,6 +46,7 @@ import {
   buildTruckingKlipProtectedSetSql,
 } from '../utils/klipSapFieldMerge';
 import { getOrCreateActiveTruckingOp } from '../utils/truckingActiveOp';
+import { ensureSapShellOperationId } from '../utils/sapShellOperationId';
 import {
   allocateNextSyntheticSequence,
   buildSyntheticOperationId,
@@ -1434,6 +1435,8 @@ export class SapDataDistributionService {
           });
         }
       }
+      // A SAP STO is Planned from the moment it exists, so the row carries its KLIP operation id (after finalize: it may have just renamed shipment_id).
+      await ensureSapShellOperationId(client, id);
       // Write-through: a later row in this same chunk sharing this exact PO+SAP-shipment-id must
       // see this write without a round trip - mirrors existingProcessedMap's pattern in
       // sapMasterV2Import.service.ts. finalizeSapShipmentAfterUpsert (above) may have just renamed
@@ -1621,6 +1624,7 @@ export class SapDataDistributionService {
           });
         }
       }
+      await ensureSapShellOperationId(client, newId);
       // Write-through - see the matching comment on the UPDATE branch's `return id;` above.
       if (shipmentPrefetchMap && contractPoNumber) {
         shipmentPrefetchMap.set(shipmentPoSapIdKey(contractPoNumber, String(shipmentIdFromSap)), {

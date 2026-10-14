@@ -207,7 +207,13 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
           FROM contracts c
           LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
           WHERE s.contract_id = c.id
-            AND TRIM(COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id::text)) = TRIM($1::text)
+            AND TRIM(COALESCE(
+              c.sto_number::text,
+              l.effective_sto,
+              CASE WHEN TRIM(s.shipment_id::text) ~ '^[0-9]+$' THEN s.shipment_id::text END,
+              s.operation_id,
+              s.shipment_id::text
+            )) = TRIM($1::text)
             AND (
               s.vessel_code IS NULL OR TRIM(s.vessel_code) = ''
               OR s.vessel_name IS NULL OR TRIM(s.vessel_name) = ''

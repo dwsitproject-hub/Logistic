@@ -324,6 +324,7 @@ export async function createShipmentsFromContracts(
         `
           UPDATE shipments SET
             operation_id  = COALESCE($1, operation_id),
+            operation_id_source = CASE WHEN $1 IS NOT NULL THEN NULL ELSE operation_id_source END,
             vessel_name   = COALESCE($2, vessel_name),
             vessel_code   = COALESCE($3, vessel_code),
             voyage_no     = COALESCE($4, voyage_no),

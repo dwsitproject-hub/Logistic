@@ -255,7 +255,7 @@ export async function clearParallelSapStoOperationIdCollisions(
 
   await client.query(
     `UPDATE shipments s
-     SET operation_id = NULL, updated_at = CURRENT_TIMESTAMP
+     SET operation_id = NULL, operation_id_source = NULL, updated_at = CURRENT_TIMESTAMP
      FROM contracts c
      WHERE s.contract_id = c.id
        AND s.id = ANY($1::uuid[])`,

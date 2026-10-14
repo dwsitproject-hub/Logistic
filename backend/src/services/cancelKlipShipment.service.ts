@@ -65,6 +65,30 @@ async function sapStoExistsInSpd(stoKey: string): Promise<boolean> {
   return result.rows.length > 0;
 }
 
+/**
+ * True when a row the cancellation would touch is a SAP-imported STO whose operation id KLIP assigned (operation_id_source = 'SAP_IMPORT').
+ * Covers the anchor and every other open row sharing the group key.
+ */
+export async function groupHasSapImportedShell(lookupKey: string, anchorShipmentUuid: string): Promise<boolean> {
+  const key = String(lookupKey ?? '').trim();
+  if (!key) return false;
+  const result = await query(
+    `
+    SELECT 1
+    FROM shipments s
+    WHERE COALESCE(s.status, '') <> 'CANCELLED'
+      AND UPPER(TRIM(COALESCE(s.operation_id_source, ''))) = 'SAP_IMPORT'
+      AND (
+        TRIM(COALESCE(s.operation_id, '')) = TRIM($1::text)
+        OR s.id = $2::uuid
+      )
+    LIMIT 1
+    `,
+    [key, anchorShipmentUuid],
+  );
+  return result.rows.length > 0;
+}
+
 export function isKlipOnlyShipmentGroupEligible(lookupKey: string): boolean {
   const key = String(lookupKey ?? '').trim();
   if (!key) return false;
@@ -161,6 +185,14 @@ export async function cancelKlipShipmentGroup(
   }
 
   if (await sapStoExistsInSpd(lookupKey)) {
+    throw new KlipShipmentCancelError(
+      'This shipment is linked to SAP STO data and cannot be cancelled from KLIP',
+      403,
+    );
+  }
+
+  // A SAP-imported STO carries an OP-SEA id KLIP gave it: that id looks "KLIP-only" to the checks above, so the STO the row really is must be looked at.
+  if (await groupHasSapImportedShell(lookupKey, anchorShipmentUuid)) {
     throw new KlipShipmentCancelError(
       'This shipment is linked to SAP STO data and cannot be cancelled from KLIP',
       403,
