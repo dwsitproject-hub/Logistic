@@ -116,8 +116,8 @@ import {
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import {
   applySection3PortDisplay,
-  resolveShippingPerfDischargePort,
-  resolveShippingPerfLoadingPort,
+  displayShippingPerfDischargePort,
+  displayShippingPerfLoadingPort,
 } from '@/lib/shippingPerformancePorts'
 import { cn } from '@/lib/utils'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
@@ -3434,8 +3434,8 @@ function ShippingPerformancePageContent() {
                             } else if (key === 'loading_port' || key === 'discharge_port') {
                               const resolved =
                                 key === 'loading_port'
-                                  ? resolveShippingPerfLoadingPort(row)
-                                  : resolveShippingPerfDischargePort(row)
+                                  ? displayShippingPerfLoadingPort(row)
+                                  : displayShippingPerfDischargePort(row)
                               cellContent = (
                                 <span className="text-sm">
                                   {formatPortColumnDisplay(resolved)}

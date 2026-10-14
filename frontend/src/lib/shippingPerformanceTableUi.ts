@@ -14,8 +14,8 @@ import {
   type OperationalColumnLayout,
 } from '@/lib/operationalTableLayout'
 import {
-  resolveShippingPerfDischargePort,
-  resolveShippingPerfLoadingPort,
+  displayShippingPerfDischargePort,
+  displayShippingPerfLoadingPort,
   type ShippingPerformancePortSource,
 } from '@/lib/shippingPerformancePorts'
 import { formatVesselTableDisplay } from '@/lib/sapDisplayValue'
@@ -274,9 +274,9 @@ export function shippingPerfCellTooltipText(
     case 'incoterm':
       return String(row.incoterm ?? '').trim() || null
     case 'loading_port':
-      return resolveShippingPerfLoadingPort(row)
+      return displayShippingPerfLoadingPort(row)
     case 'discharge_port':
-      return resolveShippingPerfDischargePort(row)
+      return displayShippingPerfDischargePort(row)
     case 'group_name':
       return String(row.group_name ?? '').trim() || null
     case 'contract_qty':
