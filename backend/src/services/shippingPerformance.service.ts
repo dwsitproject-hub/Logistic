@@ -46,6 +46,7 @@ import { sqlRegionSiteDisplayForContract,
   sqlContractHasResolvedRegionSiteExpr,
 } from '../utils/regionSiteSql';
 import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql';
+import { sqlShipmentDischargePortTypedByUser } from '../utils/b2bChildDischargePortSql';
 import { isContractLatestSpdSnapshotFresh } from './contractLatestSpdSnapshot.service';
 import { normalizePlanningStatusValues } from '../utils/contractPlanningStatusSql';
 
@@ -134,8 +135,9 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
  * Bumped when TC vessel performance metrics (fuel/freight/pump rate/sailing speed/shortage) were
  * added to the row SELECT, and again when the STO-group merge started surfacing these fields
  * from whichever member row has them set (see mergeTcVesselMetricFields).
+ * v40: rows carry discharge_port_b2b_child (the ending B2B child's discharge port).
  */
-const ROW_CACHE_KEY = 'shipping-performance-rows-v39';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v40';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what
@@ -365,6 +367,9 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
     ...maxMergeMilestoneFields(rows),
     ...mergeTcVesselMetricFields(rows),
     sto_key: pick.sto_key ?? shippingPerfStoGroupKey(pick).replace(/^(sto:|ship:|op:|id:)/, ''),
+    // the ending B2B child's discharge port: from whichever member has one, not only the picked row
+    discharge_port_b2b_child:
+      rows.map((row) => row.discharge_port_b2b_child).find((v) => v != null && String(v).trim() !== '') ?? null,
     po_number:
       (pick.po_numbers as string | undefined) ??
       (joinDistinctValues(rows, 'po_number') || pick.po_number),
@@ -986,6 +991,8 @@ export async function buildShippingPerformanceSql(): Promise<string> {
         ) AS vlp_discharge_port_name,
         sa.sap_vessel_loading_port_1,
         sa.sap_vessel_discharge_port,
+        -- the ending B2B child's port (b2b_end is the snapshot join above), unless a user typed this shipment's port: where it is set it replaces every other port (utils/b2bChildDischargePortSql.ts)
+        CASE WHEN ${sqlShipmentDischargePortTypedByUser('s')} THEN NULL ELSE NULLIF(TRIM(b2b_end.discharge_port), '') END AS discharge_port_b2b_child,
         COALESCE(NULLIF(TRIM(s.port_of_loading), ''), 'Blank') AS loading_port,
         COALESCE(NULLIF(TRIM(s.port_of_discharge), ''), 'Blank') AS discharge_port,
         c.group_name,

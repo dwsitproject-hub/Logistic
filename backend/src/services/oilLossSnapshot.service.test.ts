@@ -25,7 +25,12 @@ describe('oilLossSnapshotNeedsRebuild', () => {
   });
 
   it('rebuilds a snapshot that filled a blank SFAL from a sibling PO', () => {
-    expect(OIL_LOSS_SNAPSHOT_LOGIC_VERSION).toBe(9);
+    expect(OIL_LOSS_SNAPSHOT_LOGIC_VERSION).toBeGreaterThanOrEqual(9);
     expect(oilLossSnapshotNeedsRebuild({ ...built, logicVersion: 8 })).toBe(true);
+  });
+
+  it('rebuilds a snapshot written before a B2B origin took its ending child\'s discharge port', () => {
+    expect(OIL_LOSS_SNAPSHOT_LOGIC_VERSION).toBeGreaterThanOrEqual(10);
+    expect(oilLossSnapshotNeedsRebuild({ ...built, logicVersion: 9 })).toBe(true);
   });
 });

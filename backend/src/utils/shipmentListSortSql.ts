@@ -82,7 +82,7 @@ export const SHIPMENT_LIST_SORT_COLUMNS: Record<string, string> = {
   loading_port:
     "LOWER(COALESCE(NULLIF(TRIM(fs.loading_ports_klip), ''), NULLIF(TRIM(fs.port_of_loading), ''), ''))",
   discharge_port:
-    "LOWER(COALESCE(NULLIF(TRIM(fs.discharge_ports_klip), ''), NULLIF(TRIM(fs.port_of_discharge), ''), ''))",
+    "LOWER(COALESCE(NULLIF(TRIM(fs.discharge_port_b2b_child), ''), NULLIF(TRIM(fs.discharge_ports_klip), ''), NULLIF(TRIM(fs.port_of_discharge), ''), ''))",
   contract_ext_no: "LOWER(COALESCE(NULLIF(TRIM(fs.contract_ext_no::text), ''), ''))",
 };
 
@@ -366,6 +366,7 @@ export function buildShipmentListEnrichedCteBody(qtySelectSql: string): string {
           NULLIF(TRIM(fs.port_of_loading), '')
         ) AS loading_ports_sort,
         COALESCE(
+          NULLIF(TRIM(fs.discharge_port_b2b_child), ''),
           CASE
             WHEN COALESCE(fs.is_contract_sap_closed, FALSE) IS TRUE THEN
               NULLIF(TRIM(sdpa.sap_discharge_ports), '')

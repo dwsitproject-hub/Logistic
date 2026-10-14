@@ -14,6 +14,11 @@ export type ShippingPerformancePortSource = {
   vlp_discharge_port_name?: string | null
   sap_vessel_loading_port_1?: string | null
   sap_vessel_discharge_port?: string | null
+  /**
+   * The ending B2B child's discharge port. A B2B origin (parent) is the company in the middle, so where this is set it replaces every other port of the row;
+   * the server leaves it empty when a user typed the shipment's port (a typed port wins) and when the contract has no B2B child.
+   */
+  discharge_port_b2b_child?: string | null
 }
 
 const INVALID_PORT_VALUES = new Set(['', 'blank', '0.00', '-', '—'])
@@ -58,9 +63,10 @@ export function resolveShippingPerfLoadingPort(row: ShippingPerformancePortSourc
   )
 }
 
-/** SAP Vessel Discharge Port, then KLIP shipment discharge port (add/edit shipment). */
+/** The ending B2B child's port, then SAP Vessel Discharge Port, then KLIP shipment discharge port (add/edit shipment). */
 export function resolveShippingPerfDischargePort(row: ShippingPerformancePortSource): string | null {
   return pickShippingPortName(
+    row.discharge_port_b2b_child,
     row.sap_vessel_discharge_port,
     row.port_of_discharge,
     row.vlp_discharge_port_name,

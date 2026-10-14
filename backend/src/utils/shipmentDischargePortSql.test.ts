@@ -79,7 +79,8 @@ describe('Shipments Discharge Port filter: the SQL', () => {
     expect(f.nextIndex).toBe(3);
     expect(f.sql).toContain('COALESCE(');
     expect(f.sql).toContain(', TRUE)');
-    expect(f.sql).not.toContain('ANY(');
+    // no bound text[] (the klip_edited_fields provenance check has its own ANY, on a column)
+    expect(f.sql).not.toMatch(/ANY\(\$\d+/);
   });
 
   it('Blank together with ports adds an arm instead of replacing them', () => {
@@ -137,6 +138,58 @@ describe('Shipments Discharge Port filter: shipments and backlog contracts share
 
   it('uses the contract reference it is given', () => {
     expect(buildContractDischargePortFilter(['A'], 1, 'k.contract_id').sql).toContain('spd.contract_number = k.contract_id');
+  });
+});
+
+describe('Shipments Discharge Port filter: a B2B parent is at its ending child\'s port', () => {
+  const sql = (ports: string[]) => buildShipmentDischargePortFilter(ports, 1).sql.replace(/\s+/g, ' ');
+
+  it('reads the child\'s port from the snapshot by the contract\'s po_number, behind the fresh guard', () => {
+    const s = sql(['PORT BATAM']);
+    expect(s).toContain('FROM b2b_ending_child_snapshot m');
+    expect(s).toContain('m.origin_po = NULLIF(TRIM(c.po_number), \'\')');
+    expect(s).toContain('b2b_ending_child_snapshot_meta');
+    expect(s).toContain('is_stale IS TRUE');
+  });
+
+  it('the child\'s port decides when there is one, and only otherwise do the shipment\'s own ports', () => {
+    const s = sql(['BATAM']);
+    // COALESCE(<verdict of the child port, NULL without one>, <the own-port arms>)
+    expect(s.startsWith('COALESCE( (SELECT CASE WHEN bc.p IS NULL THEN NULL ELSE')).toBe(true);
+    expect(s.indexOf('b2b_ending_child_snapshot')).toBeLessThan(s.indexOf('vessel_loading_ports vd'));
+    expect(s).toContain('= ANY($1::text[])');
+  });
+
+  it('a port a KLIP user typed beats the child\'s: on the shipment or on an active discharge leg (klip_edited_fields)', () => {
+    const s = sql(['BATAM']);
+    expect(s).toContain("'port_of_discharge' = ANY(s.klip_edited_fields)");
+    expect(s).toContain("'port_name' = ANY(vt.klip_edited_fields)");
+    expect(s).toContain('COALESCE(vt.is_cancelled, false) = false');
+    expect(s).toContain('NOT (');
+  });
+
+  it('Blank alone never matches a shipment that has a child port: the child names a port', () => {
+    const s = sql(['Blank']);
+    expect(s).toContain('ELSE COALESCE(FALSE, FALSE) END');
+  });
+
+  it('the child lookup is evaluated once per shipment (one scalar subquery), not once per arm', () => {
+    expect(sql(['BATAM', 'Blank']).match(/FROM b2b_ending_child_snapshot m/g)?.length).toBe(1);
+  });
+
+  it('a contract with no shipment gets the child\'s port too, else its own SAP port', () => {
+    const c = buildContractDischargePortFilter(['PORT BATAM'], 1).sql.replace(/\s+/g, ' ');
+    expect(c).toContain('FROM b2b_ending_child_snapshot m');
+    expect(c).toContain('m.origin_po = NULLIF(TRIM(c.po_number), \'\')');
+    expect(c).toContain("spd.data->'raw'->>'Vessel Discharge Port'");
+    expect(c.indexOf('b2b_ending_child_snapshot')).toBeLessThan(c.indexOf('sap_processed_data'));
+    // the contract's own text is read once
+    expect(c.match(/FROM sap_processed_data spd/g)?.length).toBe(1);
+  });
+
+  it('the contract reference follows the id reference it is given', () => {
+    const c = buildContractDischargePortFilter(['A'], 1, 'k.contract_id').sql.replace(/\s+/g, ' ');
+    expect(c).toContain('m.origin_po = NULLIF(TRIM(k.po_number), \'\')');
   });
 });
 

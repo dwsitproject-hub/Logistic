@@ -201,6 +201,7 @@ import { ttlMemo } from '../utils/ttlMemo';
 import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from '../utils/groupPlantSql';
 import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
 import { buildDischargePortFilters } from '../utils/shipmentDischargePortSql';
+import { sqlShipmentDischargePortTypedByUser } from '../utils/b2bChildDischargePortSql';
 import { resolveDischargePortPicks } from '../services/dischargePortMap.service';
 import {
   sqlB2bEndingDischargeDestExpr,
@@ -1071,6 +1072,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           BOOL_AND(${shipmentListContractOsWithinBandExpr()}) AS is_contract_os_within_band,
           ${sqlShipmentListLoadingPortsKlipAgg()},
           ${sqlShipmentListDischargePortsKlipAgg()},
+          -- the ending B2B child's port (b2b_end is the snapshot join above), unless a user typed this shipment's port: where it is set it replaces every other port (utils/b2bChildDischargePortSql.ts)
+          MAX(CASE WHEN ${sqlShipmentDischargePortTypedByUser('s')} THEN NULL ELSE NULLIF(TRIM(b2b_end.discharge_port), '') END) AS discharge_port_b2b_child,
 ${ataSelect}
 ${etaExtraSelect}
 ${contractMetaSelectCore}
@@ -2337,6 +2340,7 @@ ${vlpLateralJoins}
           NULLIF(TRIM(sp.port_of_loading), '')
         ) AS loading_ports,
         COALESCE(
+          NULLIF(TRIM(sp.discharge_port_b2b_child), ''),
           CASE
             WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
               NULLIF(TRIM(sdpa.sap_discharge_ports), '')

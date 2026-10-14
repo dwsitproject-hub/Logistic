@@ -4,7 +4,8 @@ import { buildOilLossGainSql, buildOilLossMainSql } from '../utils/oilLossQueryS
 import type { OilLossPayload } from './oilLoss.service';
 
 export const OIL_LOSS_SNAPSHOT_TABLE = 'oil_loss_snapshot';
-export const OIL_LOSS_SNAPSHOT_LOGIC_VERSION = 9;
+/** v10: a B2B origin's unloading_location is its ending child's discharge port (utils/b2bChildDischargePortSql.ts). */
+export const OIL_LOSS_SNAPSHOT_LOGIC_VERSION = 10;
 
 const STALE_REFRESH_DEBOUNCE_MS = 60_000;
 

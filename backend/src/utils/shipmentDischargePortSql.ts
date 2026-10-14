@@ -2,17 +2,21 @@ import {
   humanReadablePortNameExpr,
   sapDischargePortTextSubquery,
 } from './portDisplaySql';
+import { sqlContractDischargePortWithB2bChild, sqlShipmentB2bChildDischargePort } from './b2bChildDischargePortSql';
 
 /**
  * The Shipments page's Discharge Port filter.
  *
- * Which port a SHIPMENT has is the KLIP side of what the table shows (shipmentListPortsSql.ts, sqlShipmentListDischargePortsKlipAgg): its active discharge
+ * B2B first: the port of a B2B origin (parent) is its ending CHILD's (utils/b2bChildDischargePortSql.ts), because the parent is the company in the middle. For a
+ * shipment the child's port replaces everything below unless a user typed the port; for a contract with no shipment it replaces the contract's own SAP port.
+ *
+ * Which port a SHIPMENT has otherwise is the KLIP side of what the table shows (shipmentListPortsSql.ts, sqlShipmentListDischargePortsKlipAgg): its active discharge
  * leg(s) in vessel_loading_ports when it has any named one, otherwise shipments.port_of_discharge. SAP's Vessel Discharge Port is copied onto that column at
  * import (denormalizeShipmentPortsFromSap), so it is mostly SAP's own text. A port that only the SAP side carries (a GR-closed row the SAP aggregate shows
  * first) is not matched: the SAP side exists only for the rows of one page, and matching it would mean running it over the whole filtered set.
  *
- * Which port a BACKLOG CONTRACT (Unplanned, Preplanned, Completed, Cancelled: no shipment yet) has is what the table shows for it: the newest SAP row's
- * Vessel Discharge Port (sapDischargePortTextSubquery), read with the same expression the backlog rows are drawn with.
+ * Which port a BACKLOG CONTRACT (Unplanned, Preplanned, Completed, Cancelled: no shipment yet) has is what the table shows for it: the ending child's port, else the
+ * newest SAP row's Vessel Discharge Port (sapDischargePortTextSubquery), read with the same expression the backlog rows are drawn with.
  *
  * What the picks ARE is decided before this file: a pick is a Master Port (or a text nobody mapped, or Blank), and utils/dischargePortMap.ts expands it to every
  * spelling that stands for it. Here a spelling is an identity: "PORT BONTANG", "Port of Bontang" and "BONTANG" are one (the rule the Shipments list de-duplicates
@@ -83,8 +87,13 @@ export function sqlDischargePortIdentity(columnExpr: string): string {
  * humanReadablePortNameExpr repeats the text it is given (four times), so the SAP lookup goes in a one-row subquery and runs once per contract,
  * the way shipmentUnplannedHybridSql.ts draws the same column.
  */
-function sqlBacklogContractPort(contractIdRef: string): string {
+function sqlOwnContractPort(contractIdRef: string): string {
   return `(SELECT ${humanReadablePortNameExpr('bp0.p')} FROM (SELECT ${sapDischargePortTextSubquery(contractIdRef)} AS p) bp0)`;
+}
+
+/** What a B2B origin's ending child says, else the contract's own: the port a contract with no shipment is drawn with (utils/b2bChildDischargePortSql.ts). */
+export function sqlBacklogContractPort(contractIdRef: string, contractPoRef = contractIdRef.replace(/contract_id$/, 'po_number')): string {
+  return sqlContractDischargePortWithB2bChild(contractPoRef, sqlOwnContractPort(contractIdRef));
 }
 
 /** True for an empty value, a numeric SAP code or a placeholder: a column that names no port. NULL counts as blank. */
@@ -109,13 +118,17 @@ export interface DischargePortFilters {
 export function buildDischargePortFilters(
   ports: readonly string[],
   startIndex: number,
-  opts: { shipmentAlias?: string; contractIdRef?: string } = {},
+  opts: { shipmentAlias?: string; contractAlias?: string; contractIdRef?: string; contractPoRef?: string } = {},
 ): DischargePortFilters {
   const { identities, includeBlank } = resolveDischargePortSelection(ports);
   if (identities.length === 0 && !includeBlank) return { shipmentSql: '', contractSql: '', params: [], nextIndex: startIndex };
 
   const s = opts.shipmentAlias ?? 's';
-  const contractIdRef = opts.contractIdRef ?? 'c.contract_id';
+  const contractAlias = opts.contractAlias ?? 'c';
+  const contractIdRef = opts.contractIdRef ?? `${contractAlias}.contract_id`;
+  const contractPoRef = opts.contractPoRef ?? contractIdRef.replace(/contract_id$/, 'po_number');
+  /** The ending child's port for the shipment (NULL: no child, or a user typed the port). One lookup, in a scalar subquery. */
+  const childPortExpr = sqlShipmentB2bChildDischargePort(s, contractAlias);
   /** The shipment's named, active discharge legs: when it has one, those are its ports (as in the table) and the shipment column is not looked at. */
   const namedLeg = (extra: string) => `EXISTS (
         SELECT 1 FROM vessel_loading_ports vd
@@ -126,15 +139,18 @@ export function buildDischargePortFilters(
       )`;
   const arms: string[] = [];
   /** The same port text the backlog row is drawn with: the newest SAP row's, without blanks and numeric codes. Evaluated once, in one scalar subquery. */
-  const contractPortExpr = sqlBacklogContractPort(contractIdRef);
+  const contractPortExpr = sqlBacklogContractPort(contractIdRef, contractPoRef);
   const contractArms: string[] = [];
   const params: unknown[] = [];
   let next = startIndex;
+  /** What the ending child's port says about the pick: true or false when the shipment has one, NULL when it has none (the arms below then decide). */
+  let childVerdict = 'NULL';
 
   if (identities.length > 0) {
     const idx = next;
     params.push(identities);
     next += 1;
+    childVerdict = `${sqlDischargePortIdentity('bc.p')} = ANY($${idx}::text[])`;
     arms.push(
       namedLeg(`${sqlDischargePortIdentity('vd.port_name')} = ANY($${idx}::text[])`),
       `(NOT ${namedLeg(`NOT ${sqlIsNoPort('vd.port_name')}`)}
@@ -149,8 +165,13 @@ export function buildDischargePortFilters(
     );
     contractArms.push(sqlIsNoPort('bp.p'));
   }
+  // a shipment with an ending child's port is at THAT port (a pick of Blank alone cannot match: the child names a port); only without one do the arms decide
+  const shipmentArms = `(${arms.join('\n      OR ')})`;
   return {
-    shipmentSql: `(${arms.join('\n      OR ')})`,
+    shipmentSql: `COALESCE(
+      (SELECT CASE WHEN bc.p IS NULL THEN NULL ELSE COALESCE(${identities.length > 0 ? childVerdict : 'FALSE'}, FALSE) END FROM (SELECT ${childPortExpr} AS p) bc),
+      ${shipmentArms}
+    )`,
     contractSql: `COALESCE((SELECT ${contractArms.join(' OR ')} FROM (SELECT ${contractPortExpr} AS p) bp), FALSE)`,
     params,
     nextIndex: next,
@@ -185,14 +206,15 @@ export function buildContractDischargePortFilter(
 export function buildShipmentDischargePortOptionsSql(contractScopeSql: string): string {
   return `
     WITH page_shipments AS (
-      SELECT s.id, s.port_of_discharge
+      -- b2b_port: the ending child's port when the shipment has one (then its own names are not offered: the table shows the child's)
+      SELECT s.id, s.port_of_discharge, ${sqlShipmentB2bChildDischargePort('s', 'c')} AS b2b_port
       FROM shipments s
       JOIN contracts c ON c.id = s.contract_id
       LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
       WHERE ${contractScopeSql}
     ),
     page_backlog AS (
-      SELECT ${sqlBacklogContractPort('c.contract_id')} AS port_of_discharge
+      SELECT ${sqlBacklogContractPort('c.contract_id', 'c.po_number')} AS port_of_discharge
       FROM contracts c
       LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
       WHERE ${contractScopeSql}
@@ -202,13 +224,19 @@ export function buildShipmentDischargePortOptionsSql(contractScopeSql: string): 
       SELECT UPPER(REGEXP_REPLACE(BTRIM(b.port_of_discharge), '\\s+', ' ', 'g')) AS label
       FROM page_backlog b
       UNION
+      SELECT UPPER(REGEXP_REPLACE(BTRIM(p.b2b_port), '\\s+', ' ', 'g')) AS label
+      FROM page_shipments p
+      WHERE p.b2b_port IS NOT NULL
+      UNION
       SELECT UPPER(REGEXP_REPLACE(BTRIM(p.port_of_discharge), '\\s+', ' ', 'g')) AS label
       FROM page_shipments p
+      WHERE p.b2b_port IS NULL
       UNION
       SELECT UPPER(REGEXP_REPLACE(BTRIM(vd.port_name), '\\s+', ' ', 'g')) AS label
       FROM page_shipments p
       JOIN vessel_loading_ports vd ON vd.shipment_id = p.id
-      WHERE COALESCE(vd.is_discharge_port, false) = true
+      WHERE p.b2b_port IS NULL
+        AND COALESCE(vd.is_discharge_port, false) = true
         AND COALESCE(vd.is_cancelled, false) = false
     )
     SELECT label FROM named

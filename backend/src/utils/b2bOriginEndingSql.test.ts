@@ -4,6 +4,7 @@ import {
   buildB2bEndingChildSnapshotRefreshSql,
   sqlB2bEndingBuyerAgg,
   sqlB2bEndingBuyerExpr,
+  sqlB2bChildDischargePortLookup,
   sqlB2bEndingChildMapSelect,
   sqlB2bEndingDischargeDestExpr,
   sqlB2bEndingPlantCodeAgg,
@@ -137,5 +138,44 @@ describe('B2B origin qty / GR STO overlay helpers', () => {
     expect(sql).toContain('COALESCE(NULLIF(parent.qty, 0)');
     expect(sql).toContain('quantity_delivery_trucking');
     expect(sql).not.toContain('parent.qty +');
+  });
+});
+
+describe('B2B ending child discharge port (migration 235)', () => {
+  const map = sqlB2bEndingChildMapSelect().replace(/\s+/g, ' ');
+  const refresh = buildB2bEndingChildSnapshotRefreshSql().replace(/\s+/g, ' ');
+
+  it('the snapshot stores the child\'s SAP Vessel Discharge Port next to the other overlay columns', () => {
+    expect(refresh).toContain('discharge_destination, discharge_port, child_gr_sto_status');
+    expect(refresh).toContain('latest.discharge_port');
+    expect(map).toContain("ch_spd.data->'raw'->>'Vessel Discharge Port'");
+  });
+
+  it('it is the NEWEST child that has a human port name, so a port missing on the latest child does not hide the previous one', () => {
+    expect(map).toContain('ARRAY_AGG(s1.child_port) FILTER (WHERE s1.child_port IS NOT NULL)');
+    expect(map).toContain('PARTITION BY s1.origin_po ORDER BY s1.contract_date DESC NULLS LAST, s1.created_at DESC NULLS LAST');
+    expect(map).toContain('ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING');
+  });
+
+  it('blanks and numeric SAP codes are no port, and the SAP text is read once before it is cleaned', () => {
+    expect(map).toContain("IN ('', '0', '0.00')");
+    expect(map).toMatch(/s0\.child_port_text/);
+    expect(map.match(/ch_spd\.data->'raw'->>'Vessel Discharge Port'/g)?.length).toBe(1);
+  });
+
+  it('the other overlay columns still come from the latest child as a whole', () => {
+    expect(map).toContain('SELECT DISTINCT ON (origin_po)');
+    expect(map).toContain('ORDER BY origin_po, contract_date DESC NULLS LAST, created_at DESC NULLS LAST');
+  });
+});
+
+describe('sqlB2bChildDischargePortLookup', () => {
+  it('is a PK lookup on the snapshot by the origin PO, ignored while the snapshot is being rebuilt', () => {
+    const sql = sqlB2bChildDischargePortLookup('c.po_number').replace(/\s+/g, ' ');
+    expect(sql).toContain('FROM b2b_ending_child_snapshot m');
+    expect(sql).toContain("m.origin_po = NULLIF(TRIM(c.po_number), '')");
+    expect(sql).toContain("NULLIF(TRIM(m.discharge_port), '')");
+    expect(sql).toContain('is_stale IS TRUE');
+    expect(sql).not.toContain('sap_processed_data');
   });
 });

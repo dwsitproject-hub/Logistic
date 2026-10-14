@@ -17,6 +17,7 @@ import {
 } from './contractLogisticsStoDetailSql';
 import { latestSpdDerivedSelectList } from './contractLatestSpdDerivedSql';
 import { sqlRegionSiteRawForContract } from './regionSiteSql';
+import { sqlShipmentB2bChildDischargePort } from './b2bChildDischargePortSql';
 import {
   sqlShipmentListPrimaryFieldAgg,
   sqlShipmentListPrimaryIdAgg,
@@ -99,7 +100,8 @@ export function buildOilLossVesselCompletedCtes(): string {
           TO_CHAR(MAX(c.contract_date), 'YYYY-MM-DD') AS contract_date,
           COALESCE(MAX(${plantExpr}), 'Blank') AS plant_site,
           MAX(s.port_of_loading) AS loading_location,
-          MAX(s.port_of_discharge) AS unloading_location,
+          -- the ending B2B child's port when a B2B origin's shipment has one (unless a user typed the port), else the shipment's own: the origin is the company in the middle
+          COALESCE(MAX(${sqlShipmentB2bChildDischargePort('s', 'c')}), MAX(s.port_of_discharge)) AS unloading_location,
           ${sqlOpenedShipmentQty('NULLIF(s.sfal_qty, 0)')} AS shipment_sfal_kg,
           ${sqlOpenedShipmentQty('NULLIF(s.sfbd_qty, 0)')} AS shipment_sfbd_kg
         ${vesselFromSql()}

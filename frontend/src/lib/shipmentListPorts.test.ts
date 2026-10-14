@@ -116,3 +116,31 @@ describe('shipmentListPorts', () => {
     ).toBe('Bonemanjing')
   })
 })
+
+describe('shipmentListPorts: a B2B origin is at its ending child\'s port', () => {
+  const origin = {
+    sap_discharge_ports: 'TSB TRADING PLANT 1',
+    discharge_ports_klip: 'TSB TRADING PLANT 1',
+    port_of_discharge: 'TSB TRADING PLANT 1',
+  }
+
+  it('the child\'s port replaces SAP\'s and KLIP\'s, open or closed', () => {
+    for (const closed of [true, false]) {
+      expect(
+        resolveShipmentListDischargePorts({ ...origin, is_contract_sap_closed: closed, discharge_port_b2b_child: 'PORT BATAM' }),
+      ).toBe('PORT BATAM')
+    }
+  })
+
+  it('an empty child port (none, or a user typed the shipment\'s port) leaves the row as it was', () => {
+    expect(resolveShipmentListDischargePorts({ ...origin, is_contract_sap_closed: false, discharge_port_b2b_child: null })).toBe('TSB TRADING PLANT 1')
+    expect(resolveShipmentListDischargePorts({ ...origin, is_contract_sap_closed: true, discharge_port_b2b_child: '' })).toBe('TSB TRADING PLANT 1')
+    expect(
+      resolveShipmentListDischargePorts({ discharge_ports_klip: 'PORT DUMAI', sap_discharge_ports: 'TSB TRADING PLANT 1', is_contract_sap_closed: false, discharge_port_b2b_child: null }),
+    ).toBe('PORT DUMAI')
+  })
+
+  it('a child port that is a numeric code or a placeholder is no port', () => {
+    expect(resolveShipmentListDischargePorts({ ...origin, is_contract_sap_closed: false, discharge_port_b2b_child: '74.66' })).toBe('TSB TRADING PLANT 1')
+  })
+})

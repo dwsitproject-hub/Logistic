@@ -15,7 +15,7 @@ import {
 } from './prePlannedParcelCapacity.service';
 import { AuditService } from './audit.service';
 import logger from '../utils/logger';
-import { humanReadablePortNameExpr, sapDischargePortTextSubquery } from '../utils/portDisplaySql';
+import { sqlBacklogContractPort } from '../utils/shipmentDischargePortSql';
 
 export interface PrePlannedGroupMemberDto {
   contractId: string;
@@ -579,8 +579,8 @@ export async function listPrePlannedGroups(filters: {
       c.delivery_start_date,
       c.delivery_end_date,
       c.contract_date,
-      -- one SAP lookup per member (humanReadablePortNameExpr repeats the text it is given)
-      (SELECT ${humanReadablePortNameExpr('bp.p')} FROM (SELECT ${sapDischargePortTextSubquery('pgm.contract_number')} AS p) bp) AS member_discharge_port
+      -- the port of a contract with no shipment: its ending B2B child's, else its own SAP port - one SAP lookup per member (same expression as the Shipments backlog rows)
+      ${sqlBacklogContractPort('pgm.contract_number', 'c.po_number')} AS member_discharge_port
     FROM pre_planned_groups pg
     LEFT JOIN pre_planned_group_members pgm ON pgm.group_id = pg.id AND pgm.released_at IS NULL
     LEFT JOIN contracts c ON c.id = pgm.contract_id

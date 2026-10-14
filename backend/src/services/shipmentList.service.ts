@@ -1317,6 +1317,7 @@ const LIST_PAGE_SELECT = `
           NULLIF(TRIM(sp.port_of_loading), '')
         ) AS loading_ports,
         COALESCE(
+          NULLIF(TRIM(sp.discharge_port_b2b_child), ''),
           CASE
             WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
               NULLIF(TRIM(sdpa.sap_discharge_ports), '')
@@ -1370,6 +1371,7 @@ const LIST_PAGE_SELECT_ENRICHED = `
           NULLIF(TRIM(sp.port_of_loading), '')
         ) AS loading_ports,
         COALESCE(
+          NULLIF(TRIM(sp.discharge_port_b2b_child), ''),
           CASE
             WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
               NULLIF(TRIM(sdpa.sap_discharge_ports), '')

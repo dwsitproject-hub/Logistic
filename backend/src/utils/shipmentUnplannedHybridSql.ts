@@ -18,11 +18,10 @@ import {
   contractExtNoSubquery,
   humanReadablePortNameExpr,
   resolvedPlantCodeSql,
-  sapDischargePortTextSubquery,
   sapLoadingPortTextSubquery,
 } from './portDisplaySql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
-import { buildContractDischargePortFilter } from './shipmentDischargePortSql';
+import { buildContractDischargePortFilter, sqlBacklogContractPort } from './shipmentDischargePortSql';
 import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments';
 import {
   buildShipmentPageUnplannedOpenContractsCte,
@@ -384,7 +383,11 @@ export function unplannedContractBacklogRowSelectSql(
    * Wrapped in a one-row subselect so the latest-SAP-row lookup runs once, not once per CASE arm of the name cleaner.
    */
   const sapLoadingPort = `(SELECT ${humanReadablePortNameExpr('bp.p')} FROM (SELECT ${sapLoadingPortTextSubquery('c.contract_id')} AS p) bp)`;
-  const sapDischargePort = `(SELECT ${humanReadablePortNameExpr('bp.p')} FROM (SELECT ${sapDischargePortTextSubquery('c.contract_id')} AS p) bp)`;
+  /*
+   * A B2B origin (parent) is the company in the middle: the port is its ending CHILD's (b2bChildDischargePortSql.ts), then the PO's own SAP port. This is the same
+   * expression the Discharge Port filter matches a backlog contract by, so the row and the filter agree.
+   */
+  const sapDischargePort = sqlBacklogContractPort('c.contract_id', 'c.po_number');
   const statusSql =
     options?.promoteLowOsToCompleted && statusLiteral !== 'COMPLETED'
       ? `CASE WHEN (${outstandingExpr}) <= ${BACKLOG_OS_COMPLETED_MAX_KG} THEN 'COMPLETED' ELSE '${statusLiteral}' END`

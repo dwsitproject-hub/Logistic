@@ -19,6 +19,7 @@
 import { sqlSapGrStoStatusFromJson } from './sapIncotermMetrics';
 import { sapDischargeDestinationFromJson } from './sapTruckingLoadingLocationSql';
 import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
+import { humanReadablePortNameExpr, sapSpdDischargePortTextExpr } from './portDisplaySql';
 
 export const SQL_SPD_CONTRACT_REFF_PO = (dataExpr: string): string => `NULLIF(TRIM(COALESCE(
   ${dataExpr}->'contract'->>'contract_reference_po',
@@ -58,7 +59,13 @@ const SQL_B2B_CHILD_LATEST_SPD = `
           ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
         ) ch_spd ON ch_spd.contract_number = ch.contract_id`;
 
-/** origin_po → latest child plant / company / buyer / unload (computed once, then hashed). */
+/**
+ * origin_po → latest child plant / company / buyer / unload (computed once, then hashed).
+ *
+ * `discharge_port` is the newest child's SAP Vessel Discharge Port that HAS a human name: the other columns come from the latest child as a whole, but a port
+ * missing on the latest child must not hide one the previous child carries (humanReadablePortNameExpr repeats the text it is given, so the text is read once
+ * in the inner select and turned into a name one level up).
+ */
 export function sqlB2bEndingChildMapSelect(): string {
   return `
       SELECT DISTINCT ON (origin_po)
@@ -67,26 +74,43 @@ export function sqlB2bEndingChildMapSelect(): string {
         company_name,
         buyer,
         unload_location,
-        discharge_destination
+        discharge_destination,
+        discharge_port
       FROM (
         SELECT
-          ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} AS origin_po,
-          ch.plant_code,
-          COALESCE(
-            NULLIF(TRIM(ch.company_name), ''),
-            ${SQL_CHILD_BUYER}
-          ) AS company_name,
-          ${SQL_CHILD_BUYER} AS buyer,
-          COALESCE(
-            ${SQL_SPD_TRUCK_DISCHARGE_LOCATION('ch_spd.data')},
-            ${SQL_CHILD_BUYER}
-          ) AS unload_location,
-          ${sapDischargeDestinationFromJson('ch_spd.data')} AS discharge_destination,
-          ch.contract_date,
-          ch.created_at
-        FROM contracts ch
-        ${SQL_B2B_CHILD_LATEST_SPD}
-        WHERE ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} IS NOT NULL
+          s1.*,
+          (ARRAY_AGG(s1.child_port) FILTER (WHERE s1.child_port IS NOT NULL) OVER (
+            PARTITION BY s1.origin_po
+            ORDER BY s1.contract_date DESC NULLS LAST, s1.created_at DESC NULLS LAST
+            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+          ))[1] AS discharge_port
+        FROM (
+          SELECT
+            s0.origin_po, s0.plant_code, s0.company_name, s0.buyer, s0.unload_location, s0.discharge_destination,
+            s0.contract_date, s0.created_at,
+            ${humanReadablePortNameExpr('s0.child_port_text')} AS child_port
+          FROM (
+            SELECT
+              ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} AS origin_po,
+              ch.plant_code,
+              COALESCE(
+                NULLIF(TRIM(ch.company_name), ''),
+                ${SQL_CHILD_BUYER}
+              ) AS company_name,
+              ${SQL_CHILD_BUYER} AS buyer,
+              COALESCE(
+                ${SQL_SPD_TRUCK_DISCHARGE_LOCATION('ch_spd.data')},
+                ${SQL_CHILD_BUYER}
+              ) AS unload_location,
+              ${sapDischargeDestinationFromJson('ch_spd.data')} AS discharge_destination,
+              ${sapSpdDischargePortTextExpr('ch_spd')} AS child_port_text,
+              ch.contract_date,
+              ch.created_at
+            FROM contracts ch
+            ${SQL_B2B_CHILD_LATEST_SPD}
+            WHERE ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} IS NOT NULL
+          ) s0
+        ) s1
       ) b2b_child_src
       ORDER BY origin_po, contract_date DESC NULLS LAST, created_at DESC NULLS LAST`;
 }
@@ -148,6 +172,19 @@ export function sqlB2bEndingBuyerExpr(originBuyerExpr: string, alias = 'b2b_end'
 export function sqlB2bEndingDischargeDestExpr(originDestExpr: string, alias = 'b2b_end'): string {
   const stored = sqlNormalizeDischargeDestination(`NULLIF(TRIM(${alias}.discharge_destination), '')`);
   return `COALESCE(${stored}, ${originDestExpr})`;
+}
+
+/**
+ * The ending child's discharge port of an origin PO, or NULL (no child, or the child names none, or the snapshot is being rebuilt). Scalar PK lookup on the
+ * snapshot, like the unload one below: the caller COALESCEs it with the contract's own port.
+ */
+export function sqlB2bChildDischargePortLookup(originPoExpr: string): string {
+  return `(
+    SELECT NULLIF(TRIM(m.discharge_port), '')
+    FROM ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} m
+    WHERE m.origin_po = NULLIF(TRIM(${originPoExpr}), '')
+      AND ${sqlB2bEndingChildSnapshotFreshGuard()}
+  )`;
 }
 
 /** Scalar lookup against the snapshot PK (not a sap_processed_data scan). */
@@ -274,6 +311,7 @@ export function buildB2bEndingChildSnapshotRefreshSql(): string {
       buyer,
       unload_location,
       discharge_destination,
+      discharge_port,
       child_gr_sto_status,
       child_count,
       refreshed_at
@@ -285,6 +323,7 @@ export function buildB2bEndingChildSnapshotRefreshSql(): string {
       latest.buyer,
       latest.unload_location,
       latest.discharge_destination,
+      latest.discharge_port,
       agg.child_gr_sto_status,
       agg.child_count,
       NOW()

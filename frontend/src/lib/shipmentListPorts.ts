@@ -111,8 +111,15 @@ export function resolveShipmentListLoadingPorts(row: ShipmentListPortSource): st
   return pickPortByGrStatus(resolveKlipLoadingPorts(row), resolveSapLoadingPorts(row), closed)
 }
 
-/** Resolved discharge ports for list table. */
+/**
+ * Resolved discharge ports for list table.
+ *
+ * A B2B origin (parent) is the company in the middle: the ending child's port replaces every other port (the server leaves `discharge_port_b2b_child` empty when a
+ * user typed the shipment's port, and the typed port then follows the rule below).
+ */
 export function resolveShipmentListDischargePorts(row: ShipmentListPortSource): string {
+  const child = splitCommaPorts(row.discharge_port_b2b_child)
+  if (child.length > 0) return joinUniquePorts(child)
   const closed = isContractSapClosedFlag(row.is_contract_sap_closed)
   return pickPortByGrStatus(resolveKlipDischargePorts(row), resolveSapDischargePorts(row), closed)
 }
