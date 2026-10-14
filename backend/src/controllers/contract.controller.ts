@@ -172,9 +172,8 @@ import {
   buildShipmentProductOptionsSql,
   shipmentPageOptionsScopeSql,
 } from '../utils/shipmentProductOptionsSql';
-import { buildShipmentDischargePortOptionsSql } from '../utils/shipmentDischargePortSql';
-import { canonicalDischargePort, dischargePortMapEntries } from '../utils/dischargePortMap';
-import { loadDischargePortMap } from '../services/dischargePortMap.service';
+import { buildShipmentMasterPortOptionsSql } from '../utils/shipmentDischargePortSql';
+import { loadMasterPortMapEntries } from '../services/masterPortResolver.service';
 
 export { B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL };
 
@@ -1346,20 +1345,14 @@ export const getContractFilterProducts = async (req: AuthRequest, res: Response)
 };
 
 /**
- * Discharge Port options of the Shipments page: the named discharge ports of the page's own shipments (utils/shipmentDischargePortSql.ts), one entry per spelling.
- * The page lists a port once whatever its spelling and adds Blank itself.
+ * Discharge Port options of the Shipments page: the Master Ports the page's own shipments and backlog contracts are at (utils/shipmentDischargePortSql.ts). A port text
+ * that has no Master Port is not offered: it cannot be found through this filter (it is still found by PO and the other searches).
  */
 export const getContractFilterDischargePorts = async (_req: AuthRequest, res: Response) => {
   try {
-    const dischargePorts = await ttlMemo('filter-options:shipment-discharge-ports', 5 * 60 * 1000, async () => {
-      const [r, map] = await Promise.all([
-        query(buildShipmentDischargePortOptionsSql(shipmentPageOptionsScopeSql())),
-        loadDischargePortMap(),
-      ]);
-      // each text as its Master Port (a text nobody mapped stays itself), once
-      const labels = new Set<string>();
-      for (const row of r.rows as Array<{ label: string }>) labels.add(canonicalDischargePort(map, row.label));
-      return [...labels].sort((a, b) => a.localeCompare(b));
+    const dischargePorts = await ttlMemo('filter-options:shipment-master-ports', 60 * 1000, async () => {
+      const r = await query(buildShipmentMasterPortOptionsSql(shipmentPageOptionsScopeSql()));
+      return (r.rows as Array<{ label: string }>).map((row) => row.label);
     });
     return res.json({ success: true, data: { dischargePorts } });
   } catch (error) {
@@ -1369,12 +1362,12 @@ export const getContractFilterDischargePorts = async (_req: AuthRequest, res: Re
 };
 
 /**
- * The Master Port mapping for pages that filter in the browser (Oil Loss, Shipping Performance): identity of a SAP port text -> its Master Port label
- * (utils/dischargePortMap.ts). A few dozen entries.
+ * The Master Port mapping for pages that filter and draw ports in the browser (Oil Loss, Shipping Performance, the Shipments list): identity of a vessel port text ->
+ * its Master Port label (services/masterPortResolver.service.ts). A few dozen entries.
  */
 export const getContractFilterDischargePortMap = async (_req: AuthRequest, res: Response) => {
   try {
-    const entries = dischargePortMapEntries(await loadDischargePortMap());
+    const entries = await loadMasterPortMapEntries();
     return res.json({ success: true, data: { entries } });
   } catch (error) {
     logger.error('Get discharge port map error:', error);

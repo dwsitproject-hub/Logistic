@@ -5,6 +5,8 @@
  * Numeric codes (e.g. Vessel LOA mistaken for ZNEGO-INCO2 port id) are skipped.
  */
 
+import { masterPortOf } from '@/lib/portDisplay'
+
 export type ShippingPerformancePortSource = {
   port_of_loading?: string | null
   port_of_discharge?: string | null
@@ -63,22 +65,33 @@ export function resolveShippingPerfLoadingPort(row: ShippingPerformancePortSourc
   )
 }
 
-/** The ending B2B child's port, then SAP Vessel Discharge Port, then KLIP shipment discharge port (add/edit shipment). */
-export function resolveShippingPerfDischargePort(row: ShippingPerformancePortSource): string | null {
-  return pickShippingPortName(
+/** Every usable discharge port text of a row, in the order the table prefers them: the ending B2B child's, the SAP Vessel Discharge Port, the KLIP shipment's. */
+export function dischargePortCandidates(row: ShippingPerformancePortSource): string[] {
+  return [
     row.discharge_port_b2b_child,
     row.sap_vessel_discharge_port,
     row.port_of_discharge,
     row.vlp_discharge_port_name,
     row.discharge_port,
-  )
+  ].flatMap((candidate) => {
+    const name = pickShippingPortName(candidate)
+    return name ? [name] : []
+  })
+}
+
+/** The ending B2B child's port, then SAP Vessel Discharge Port, then KLIP shipment discharge port (add/edit shipment). */
+export function resolveShippingPerfDischargePort(row: ShippingPerformancePortSource): string | null {
+  return dischargePortCandidates(row)[0] ?? null
 }
 
 /** Section 3 table rows — apply resolved port names for display and sort only. */
 export function applySection3PortDisplay<T extends ShippingPerformancePortSource>(row: T): T {
+  // drawn as the Master Port of the first text that has one (the same text the Discharge Port filter reads), else the text the table always showed
+  const candidates = dischargePortCandidates(row)
+  const master = candidates.map((text) => masterPortOf(text)).find((label): label is string => label !== null)
   return {
     ...row,
     loading_port: resolveShippingPerfLoadingPort(row),
-    discharge_port: resolveShippingPerfDischargePort(row),
+    discharge_port: master ?? candidates[0] ?? null,
   }
 }

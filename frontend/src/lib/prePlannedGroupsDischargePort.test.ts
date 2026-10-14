@@ -49,8 +49,8 @@ describe('pre-planned groups under the Discharge Port filter', () => {
     expect(codes(['PORT BONTANG'])).toEqual([])
   })
 
-  it('Blank finds a group with a member that has no SAP port; a group with no member has no port to match', () => {
-    expect(codes(['Blank'])).toEqual(['G3'])
+  it('a remembered Blank pick means nothing now: it filters nothing', () => {
+    expect(codes(['Blank'])).toEqual(codes([]))
   })
 
   it('leaves the groups as they were when no port is picked, and combines with the other toolbar filters', () => {

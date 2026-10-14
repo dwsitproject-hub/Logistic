@@ -15,7 +15,7 @@
 import { dischargePortOptionsFrom, type DischargePortResolver } from '@/lib/dischargePortFilter'
 import {
   normalizeScopeGroupKey,
-  rowDischargePort,
+  rowDischargePortForFilter,
   rowMatchesToolbarMultiFilters,
   scopeGroupKeyParts,
 } from '@/lib/globalScopeFilters'
@@ -112,7 +112,7 @@ export function shippingPerfAvailableValues<T extends Row>(
       without('selectedGroupPlants').map((r) => normalizeScopeGroupKey(r.plant_site)),
     ),
     dischargePorts: dischargePortOptionsFrom(
-      without('selectedDischargePorts').map((r) => rowDischargePort(r)),
+      without('selectedDischargePorts').map((r) => rowDischargePortForFilter(r, selections.dischargePortResolver)),
       selections.selectedDischargePorts ?? [],
       selections.dischargePortResolver,
     ),

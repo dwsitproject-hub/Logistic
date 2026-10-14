@@ -13,6 +13,9 @@ import {
   type ShippingPerformancePortSource,
 } from '@/lib/shippingPerformancePorts'
 import { isContractSapClosedFlag } from '@/lib/shipmentVesselCompare'
+import { displayPortLabel, normalizeListPortIdentity } from '@/lib/portDisplay'
+
+export { normalizeListPortIdentity }
 
 export type ShipmentListPortSource = ShippingPerformancePortSource & {
   loading_ports?: string | null
@@ -22,17 +25,6 @@ export type ShipmentListPortSource = ShippingPerformancePortSource & {
   sap_loading_ports?: string | null
   sap_discharge_ports?: string | null
   is_contract_sap_closed?: boolean | string | null
-}
-
-/** Align with vesselLoadingPortDedupe.normalizePortIdentity (PORT OF X ≡ X). */
-export function normalizeListPortIdentity(name: unknown): string {
-  return String(name ?? '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, ' ')
-    .trim()
-    .replace(/^(PORT|JETTY|TERMINAL|PELABUHAN|DERMAGA)(\s+OF)?\s+/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
 }
 
 function splitCommaPorts(value: unknown): string[] {
@@ -119,7 +111,14 @@ export function resolveShipmentListLoadingPorts(row: ShipmentListPortSource): st
  */
 export function resolveShipmentListDischargePorts(row: ShipmentListPortSource): string {
   const child = splitCommaPorts(row.discharge_port_b2b_child)
-  if (child.length > 0) return joinUniquePorts(child)
-  const closed = isContractSapClosedFlag(row.is_contract_sap_closed)
-  return pickPortByGrStatus(resolveKlipDischargePorts(row), resolveSapDischargePorts(row), closed)
+  const text = child.length > 0
+    ? joinUniquePorts(child)
+    : pickPortByGrStatus(resolveKlipDischargePorts(row), resolveSapDischargePorts(row), isContractSapClosedFlag(row.is_contract_sap_closed))
+  return asMasterPorts(text)
+}
+
+/** Each port of a list drawn as its Master Port when it has one, else as it is (the original SAP / KLIP text); two texts of one port become one. */
+function asMasterPorts(text: string): string {
+  if (!text) return text
+  return joinUniquePorts(text.split(',').map((part) => displayPortLabel(part.trim())).filter(Boolean))
 }

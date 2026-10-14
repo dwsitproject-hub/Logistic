@@ -300,27 +300,27 @@ describe('GR-closed contract backlog', () => {
 });
 
 describe('buildUnplannedContractToolbarScope discharge port filter', () => {
-  it('matches a backlog contract by the SAP port the table draws for it, with one bound text[]', () => {
+  it('matches a backlog contract by the Master Port of the SAP port the table draws for it, with one bound text[] of the picked labels', () => {
     const scope = buildUnplannedContractToolbarScope({ plants: [], dischargePorts: ['BONTANG', 'EUP EDIBLE OIL BONTANG'] });
     expect(scope.sql.startsWith('AND ')).toBe(true);
     expect(scope.sql).toContain("spd.data->'raw'->>'Vessel Discharge Port'");
     expect(scope.sql).toContain('spd.contract_number = c.contract_id');
-    expect(scope.sql).toContain('= ANY($1::text[])');
+    expect(scope.sql).toContain('klip_resolve_master_port_id(bp.p)');
+    expect(scope.sql).toContain('UNNEST($1::text[])');
     expect(scope.params).toEqual([['BONTANG', 'EUP EDIBLE OIL BONTANG']]);
     // never the old "leave the backlog out"
     expect(scope.sql).not.toMatch(/AND FALSE$/);
   });
 
-  it('Blank alone finds the backlog contracts with no SAP port and binds nothing', () => {
+  it('Blank is no pick any more: a remembered one adds nothing and binds nothing', () => {
     const scope = buildUnplannedContractToolbarScope({ plants: [], dischargePorts: ['Blank'] });
     expect(scope.params).toEqual([]);
-    expect(scope.sql).not.toContain('ANY(');
-    expect(scope.sql).toContain(', TRUE)');
+    expect(scope.sql).toBe('');
   });
 
   it('puts the port first and numbers the other scope parts after it', () => {
     const scope = buildUnplannedContractToolbarScope({ plants: [], dateFrom: '2026-01-01', dischargePorts: ['BONTANG'] });
-    expect(scope.sql).toContain('= ANY($1::text[])');
+    expect(scope.sql).toContain('UNNEST($1::text[])');
     expect(scope.sql).toContain('c.contract_date >= $2');
     expect(scope.sql.match(/^AND /g)?.length).toBe(1);
     expect(scope.params).toEqual([['BONTANG'], '2026-01-01']);

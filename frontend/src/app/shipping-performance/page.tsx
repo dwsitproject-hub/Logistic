@@ -33,6 +33,7 @@ import { narrowFilterOptions } from '@/lib/filterOptionNarrowing'
 import { shippingPerfAvailableValues } from '@/lib/shippingPerfFilterOptions'
 import type { DischargePortResolver } from '@/lib/dischargePortFilter'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
+import { setPortDisplayResolver } from '@/lib/portDisplay'
 import { PLANNING_STATUS_OPTIONS } from '@/lib/planningStatus'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
@@ -1502,6 +1503,8 @@ function ShippingPerformancePageContent() {
   const [selectedDischargePorts, setSelectedDischargePorts] = useState<string[]>([])
   /** Master Port mapping of the SAP port text; null until it loads, then a plant name such as EUP EDIBLE OIL BONTANG is listed as the port it maps to. */
   const dischargePortResolver = useDischargePortResolver()
+  // the tables draw a port as its Master Port when the map has it (lib/portDisplay.ts); set while rendering so every cell below reads the same map
+  setPortDisplayResolver(dischargePortResolver)
   const {
     selectedProducts,
     selectedGroupPlants,
@@ -2334,7 +2337,7 @@ function ShippingPerformancePageContent() {
   /** Section 3 only — resolve port columns (shipment operation → SAP fallback) before sort/render. */
   const section3DisplayRows = useMemo(
     () => drilldownFilteredRows.map(applySection3PortDisplay),
-    [drilldownFilteredRows],
+    [drilldownFilteredRows, dischargePortResolver],
   )
 
   // Step D: apply Section 3 sorting

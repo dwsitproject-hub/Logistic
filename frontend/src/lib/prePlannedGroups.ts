@@ -1,5 +1,5 @@
 import api from '@/lib/api';
-import { matchesDischargePortSelection, type DischargePortResolver } from '@/lib/dischargePortFilter';
+import { matchesDischargePortSelection, realDischargePicks, type DischargePortResolver } from '@/lib/dischargePortFilter';
 
 export interface PrePlannedGroupMember {
   contractId: string;
@@ -193,7 +193,7 @@ export function filterPrePlannedGroupsByGlobalScope(
   scope: PrePlannedGlobalScopeFilters,
 ): PrePlannedGroup[] {
   const searchTerm = normScopeValue(scope.searchTerm);
-  const ports = scope.selectedDischargePorts ?? [];
+  const ports = realDischargePicks(scope.selectedDischargePorts);
 
   return groups.filter((group) => {
     if (

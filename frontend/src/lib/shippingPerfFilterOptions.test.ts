@@ -29,8 +29,8 @@ describe('Shipping Performance Discharge Port filter', () => {
     { product: 'UCO', incoterm: 'FOB', plant_site: 'BATAM', supplier: 'SUP D', port_of_discharge: 'Blank', status: 'PLANNED' },
   ]
 
-  it('offers each port once, spelling variants as one, with Blank last', () => {
-    expect(shippingPerfAvailableValues(rows, NONE).dischargePorts).toEqual(['KIJING', 'PORT BONTANG', 'Blank'])
+  it('offers each port once, spelling variants as one, and no Blank (a row with no port cannot be found through this filter)', () => {
+    expect(shippingPerfAvailableValues(rows, NONE).dischargePorts).toEqual(['KIJING', 'PORT BONTANG'])
   })
 
   it('a picked port narrows the OTHER lists, by the port the table shows (SAP first)', () => {
@@ -43,22 +43,22 @@ describe('Shipping Performance Discharge Port filter', () => {
 
   it('does not narrow the port list by its own filter', () => {
     const v = shippingPerfAvailableValues(rows, { ...NONE, selectedDischargePorts: ['KIJING'] })
-    expect(v.dischargePorts).toEqual(['KIJING', 'PORT BONTANG', 'Blank'])
+    expect(v.dischargePorts).toEqual(['KIJING', 'PORT BONTANG'])
   })
 
   it('the other filters narrow the port list', () => {
-    expect(shippingPerfAvailableValues(rows, { ...NONE, selectedGroupPlants: ['BATAM'] }).dischargePorts).toEqual(['KIJING', 'Blank'])
+    expect(shippingPerfAvailableValues(rows, { ...NONE, selectedGroupPlants: ['BATAM'] }).dischargePorts).toEqual(['KIJING'])
     expect(shippingPerfAvailableValues(rows, { ...NONE, selectedProducts: ['PK'] }).dischargePorts).toEqual(['BONTANG'])
   })
 
   it('keeps a picked port listed when the other filters leave it no row', () => {
     const v = shippingPerfAvailableValues(rows, { ...NONE, selectedDischargePorts: ['TANJUNG PURA'], selectedGroupPlants: ['BATAM'] })
-    expect(v.dischargePorts).toEqual(['KIJING', 'TANJUNG PURA', 'Blank'])
+    expect(v.dischargePorts).toEqual(['KIJING', 'TANJUNG PURA'])
   })
 
-  it('Blank finds the rows with no port', () => {
+  it('a remembered Blank pick means nothing now: it narrows nothing', () => {
     const v = shippingPerfAvailableValues(rows, { ...NONE, selectedDischargePorts: ['Blank'] })
-    expect(v.products).toEqual(['UCO'])
+    expect(v.products).toEqual(['CPO', 'PK', 'UCO'])
   })
 
   describe('through the Master Port mapping', () => {
@@ -72,8 +72,8 @@ describe('Shipping Performance Discharge Port filter', () => {
       { product: 'UCO', incoterm: 'FOB', plant_site: 'BATAM', supplier: 'SUP C', sap_vessel_discharge_port: 'EUP TRADING PLANT', status: 'PLANNED' },
     ]
 
-    it('lists the Master Port once, and the plant name nobody mapped as itself', () => {
-      expect(shippingPerfAvailableValues(mapped, { ...NONE, dischargePortResolver: resolver }).dischargePorts).toEqual(['EUP TRADING PLANT', 'PORT BONTANG'])
+    it('lists the Master Port once, and not the plant name nobody mapped', () => {
+      expect(shippingPerfAvailableValues(mapped, { ...NONE, dischargePortResolver: resolver }).dischargePorts).toEqual(['PORT BONTANG'])
       // without the map the plant name is a port of its own
       expect(shippingPerfAvailableValues(mapped, NONE).dischargePorts).toEqual(['BONTANG', 'EUP EDIBLE OIL BONTANG', 'EUP TRADING PLANT'])
     })

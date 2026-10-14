@@ -253,6 +253,7 @@ import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionS
 import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
 import { isMultiStoPo, poStoOutstandingHelpText } from '@/lib/poStoOutstanding'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
+import { setPortDisplayResolver } from '@/lib/portDisplay'
 import { DEFAULT_SHIPMENTS_COMPACT_SORT, forgetShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
@@ -1122,6 +1123,8 @@ function ShipmentsPageContent() {
   const [availableDischargePorts, setAvailableDischargePorts] = useState<string[]>([])
   /** Master Port mapping of the SAP port text, for the pre-planned groups the browser filters (the list itself is filtered on the server). */
   const dischargePortResolver = useDischargePortResolver()
+  // the table and its export draw a port as its Master Port when the map has it (lib/portDisplay.ts); set while rendering so every cell reads the same map
+  setPortDisplayResolver(dischargePortResolver)
   const debouncedSelectedDischargePorts = useDebouncedValue(selectedDischargePorts, 400)
   const scopeSummaryRequestKey = useMemo(
     () =>
@@ -1679,7 +1682,7 @@ function ShipmentsPageContent() {
   }, [])
   /** Blank is offered last, and what is picked stays listed even if the options have not loaded. */
   const dischargePortDropdownOptions = useMemo(
-    () => dischargePortOptionsFrom([...availableDischargePorts, ''], selectedDischargePorts),
+    () => dischargePortOptionsFrom(availableDischargePorts, selectedDischargePorts),
     [availableDischargePorts, selectedDischargePorts],
   )
 

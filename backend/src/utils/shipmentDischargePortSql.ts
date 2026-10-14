@@ -112,16 +112,33 @@ export interface DischargePortFilters {
 }
 
 /**
- * Both predicates for the picked ports, starting at parameter `startIndex`: ONE text[] of identities (none when only Blank is picked) that both read.
- * Empty selection: no SQL, no parameter.
+ * The ports a pick stands for, as a SQL expression: the Master Port ids of the picked labels (uuid[]). A pick is a Master Port label; a label that is no Master Port
+ * resolves to nothing and so matches nothing. Uncorrelated, so Postgres evaluates it once per statement. The ::uuid[] cast matters: `= ANY((SELECT ...))` is read as
+ * ANY over the ROWS of a subquery (uuid = uuid[] fails), while a cast makes it one array value.
+ */
+function sqlPickedMasterPortIds(textArrayParam: string): string {
+  return `(SELECT COALESCE(ARRAY_AGG(DISTINCT klip_resolve_master_port_id(pk.x)) FILTER (WHERE klip_resolve_master_port_id(pk.x) IS NOT NULL), ARRAY[]::uuid[])
+    FROM UNNEST(${textArrayParam}::text[]) AS pk(x))::uuid[]`;
+}
+
+/**
+ * Both predicates for the picked ports, starting at parameter `startIndex`: ONE text[] of the picked labels that both read, resolved to Master Port ids in SQL.
+ * Empty selection: no SQL, no parameter. "Blank" is not a pick any more: a row whose text has no Master Port cannot be found through this filter (it is still found
+ * by PO and the other searches).
  */
 export function buildDischargePortFilters(
   ports: readonly string[],
   startIndex: number,
   opts: { shipmentAlias?: string; contractAlias?: string; contractIdRef?: string; contractPoRef?: string } = {},
 ): DischargePortFilters {
-  const { identities, includeBlank } = resolveDischargePortSelection(ports);
-  if (identities.length === 0 && !includeBlank) return { shipmentSql: '', contractSql: '', params: [], nextIndex: startIndex };
+  const picked = [
+    ...new Set(
+      ports
+        .map((p) => String(p ?? '').replace(/\s+/g, ' ').trim().toUpperCase())
+        .filter((p) => p !== '' && p.toLowerCase() !== DISCHARGE_PORT_BLANK && !isNotAPortIdentity(normalizeDischargePortIdentity(p))),
+    ),
+  ].sort();
+  if (picked.length === 0) return { shipmentSql: '', contractSql: '', params: [], nextIndex: startIndex };
 
   const s = opts.shipmentAlias ?? 's';
   const contractAlias = opts.contractAlias ?? 'c';
@@ -137,44 +154,24 @@ export function buildDischargePortFilters(
           AND COALESCE(vd.is_cancelled, false) = false
           AND ${extra}
       )`;
-  const arms: string[] = [];
-  /** The same port text the backlog row is drawn with: the newest SAP row's, without blanks and numeric codes. Evaluated once, in one scalar subquery. */
+  /** The same port text the backlog row is drawn with: the ending child's, else the newest SAP row's. Evaluated once, in one scalar subquery. */
   const contractPortExpr = sqlBacklogContractPort(contractIdRef, contractPoRef);
-  const contractArms: string[] = [];
-  const params: unknown[] = [];
-  let next = startIndex;
-  /** What the ending child's port says about the pick: true or false when the shipment has one, NULL when it has none (the arms below then decide). */
-  let childVerdict = 'NULL';
+  const idx = startIndex;
+  const ids = sqlPickedMasterPortIds(`$${idx}`);
 
-  if (identities.length > 0) {
-    const idx = next;
-    params.push(identities);
-    next += 1;
-    childVerdict = `${sqlDischargePortIdentity('bc.p')} = ANY($${idx}::text[])`;
-    arms.push(
-      namedLeg(`${sqlDischargePortIdentity('vd.port_name')} = ANY($${idx}::text[])`),
-      `(NOT ${namedLeg(`NOT ${sqlIsNoPort('vd.port_name')}`)}
-        AND ${sqlDischargePortIdentity(`${s}.port_of_discharge`)} = ANY($${idx}::text[]))`,
-    );
-    contractArms.push(`COALESCE(${sqlDischargePortIdentity('bp.p')} = ANY($${idx}::text[]), FALSE)`);
-  }
-  if (includeBlank) {
-    arms.push(
-      `(NOT ${namedLeg(`NOT ${sqlIsNoPort('vd.port_name')}`)}
-        AND ${sqlIsNoPort(`${s}.port_of_discharge`)})`,
-    );
-    contractArms.push(sqlIsNoPort('bp.p'));
-  }
-  // a shipment with an ending child's port is at THAT port (a pick of Blank alone cannot match: the child names a port); only without one do the arms decide
-  const shipmentArms = `(${arms.join('\n      OR ')})`;
+  // a shipment with an ending child's port is at THAT port; only without one do its legs and its own column decide. The ids on the legs and on the shipment
+  // are the Master Port each text resolves to (migration 237), kept by trigger.
+  const shipmentArms = `(${namedLeg(`vd.master_port_id = ANY(${ids})`)}
+      OR (NOT ${namedLeg(`NOT ${sqlIsNoPort('vd.port_name')}`)}
+        AND ${s}.discharge_master_port_id = ANY(${ids})))`;
   return {
     shipmentSql: `COALESCE(
-      (SELECT CASE WHEN bc.p IS NULL THEN NULL ELSE COALESCE(${identities.length > 0 ? childVerdict : 'FALSE'}, FALSE) END FROM (SELECT ${childPortExpr} AS p) bc),
+      (SELECT CASE WHEN bc.p IS NULL THEN NULL ELSE COALESCE(klip_resolve_master_port_id(bc.p) = ANY(${ids}), FALSE) END FROM (SELECT ${childPortExpr} AS p) bc),
       ${shipmentArms}
     )`,
-    contractSql: `COALESCE((SELECT ${contractArms.join(' OR ')} FROM (SELECT ${contractPortExpr} AS p) bp), FALSE)`,
-    params,
-    nextIndex: next,
+    contractSql: `COALESCE((SELECT klip_resolve_master_port_id(bp.p) = ANY(${ids}) FROM (SELECT ${contractPortExpr} AS p) bp), FALSE)`,
+    params: [picked],
+    nextIndex: startIndex + 1,
   };
 }
 
@@ -244,4 +241,16 @@ export function buildShipmentDischargePortOptionsSql(contractScopeSql: string, o
     SELECT label${opts.withSource ? ', src' : ''} FROM named
     WHERE NOT ${sqlIsNoPort('label')}
     ORDER BY label`;
+}
+
+/**
+ * The Discharge Port dropdown: the Master Ports the page's shipments and backlog contracts are at (each text of buildShipmentDischargePortOptionsSql resolved to its
+ * Master Port, once). A text with no Master Port is not offered: it cannot be found through this filter.
+ */
+export function buildShipmentMasterPortOptionsSql(contractScopeSql: string): string {
+  return `
+    SELECT DISTINCT UPPER(BTRIM(mp.port)) AS label
+    FROM (${buildShipmentDischargePortOptionsSql(contractScopeSql)}) l
+    JOIN master_loading_ports mp ON mp.id = klip_resolve_master_port_id(l.label)
+    ORDER BY 1`;
 }

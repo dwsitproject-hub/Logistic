@@ -26,8 +26,9 @@ describe('oilLossDischargePort', () => {
     expect(matchesOilLossDischargePortFilter({ unloading_location: 'A' }, [])).toBe(true)
     expect(matchesOilLossDischargePortFilter({ unloading_location: 'a' }, ['A', 'B'])).toBe(true)
     expect(matchesOilLossDischargePortFilter({ unloading_location: 'C' }, ['A', 'B'])).toBe(false)
+    // Blank is no pick any more: a remembered one is dropped, and a row with no port is found by no port
     expect(matchesOilLossDischargePortFilter({ unloading_location: '' }, ['Blank'])).toBe(true)
-    expect(matchesOilLossDischargePortFilter({ unloading_location: 'A' }, ['Blank'])).toBe(false)
+    expect(matchesOilLossDischargePortFilter({ unloading_location: '' }, ['A'])).toBe(false)
   })
 
   it('PORT BONTANG, Port of Bontang and BONTANG are one port, as on the Shipments list', () => {
@@ -39,14 +40,14 @@ describe('oilLossDischargePort', () => {
     expect(oilLossDischargePortOptions(rows, [])).toHaveLength(1)
   })
 
-  it('lists every port the rows have once, sorted, with Blank last', () => {
+  it('lists every port the rows have once, sorted, without Blank', () => {
     const rows = [
       { unloading_location: 'DUMAI' },
       { unloading_location: 'bontang' },
       { unloading_location: '' },
       { unloading_location: null },
     ]
-    expect(oilLossDischargePortOptions(rows, [])).toEqual(['BONTANG', 'DUMAI', 'Blank'])
+    expect(oilLossDischargePortOptions(rows, [])).toEqual(['BONTANG', 'DUMAI'])
   })
 
   it('keeps a picked port listed when no row has it, without duplicating one that does', () => {
@@ -67,12 +68,21 @@ describe('Oil Loss discharge port through the Master Port mapping', () => {
   ]
 
   it('lists the Master Port once and filters every text that maps to it', () => {
-    expect(oilLossDischargePortOptions(rows as never[], [], resolver)).toEqual(['DUMAI', 'PORT BONTANG'])
+    expect(oilLossDischargePortOptions(rows as never[], [], resolver)).toEqual(['PORT BONTANG'])
     const ids = (selectedDischargePorts: string[], r = resolver) =>
       applyOilLossGlobalFilters({ rows: rows as never[], period: 'YTD', selectedDischargePorts, dischargePortResolver: r }).map((x) => x.id)
     expect(ids(['PORT BONTANG'])).toEqual(['plant', 'port'])
     // before the map has loaded the plant name is a port of its own
     expect(ids(['PORT BONTANG'], null as never)).toEqual(['port'])
+  })
+
+  it('a text with no Master Port is not offered and not found by a pick (the row stays in the table)', () => {
+    const unmapped = [...rows, row({ id: 'trading', unloading_location: 'EUP TRADING PLANT' })]
+    expect(oilLossDischargePortOptions(unmapped as never[], [], resolver)).toEqual(['PORT BONTANG'])
+    const ids = (selectedDischargePorts: string[]) =>
+      applyOilLossGlobalFilters({ rows: unmapped as never[], period: 'YTD', selectedDischargePorts, dischargePortResolver: resolver }).map((x) => x.id)
+    expect(ids([])).toEqual(['plant', 'port', 'other', 'trading'])
+    expect(ids(['PORT BONTANG'])).toEqual(['plant', 'port'])
   })
 })
 
@@ -88,7 +98,7 @@ describe('applyOilLossGlobalFilters with a discharge port', () => {
       applyOilLossGlobalFilters({ rows, period: 'YTD', ...extra }).map((r) => r.id)
     expect(ids({})).toEqual(['keep', 'other-discharge', 'other-plant', 'no-discharge'])
     expect(ids({ selectedDischargePorts: ['dumai'] })).toEqual(['keep', 'other-plant'])
-    expect(ids({ selectedDischargePorts: ['Blank'] })).toEqual(['no-discharge'])
+    expect(ids({ selectedDischargePorts: ['Blank'] })).toEqual(['keep', 'other-discharge', 'other-plant', 'no-discharge'])
     expect(
       ids({
         selectedDischargePorts: ['DUMAI'],

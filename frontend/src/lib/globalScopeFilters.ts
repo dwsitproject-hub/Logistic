@@ -1,6 +1,6 @@
 /** Shared helpers for Incoterm / Product / Group Plant toolbar filters across list & performance pages. */
-import { matchesDischargePortSelection, type DischargePortResolver } from '@/lib/dischargePortFilter'
-import { resolveShippingPerfDischargePort, type ShippingPerformancePortSource } from '@/lib/shippingPerformancePorts'
+import { masterPortLabel, matchesDischargePortSelection, type DischargePortResolver } from '@/lib/dischargePortFilter'
+import { dischargePortCandidates, resolveShippingPerfDischargePort, type ShippingPerformancePortSource } from '@/lib/shippingPerformancePorts'
 
 export type ToolbarMultiFilterState = {
   selectedIncoterms: string[]
@@ -137,6 +137,16 @@ export function rowDischargePort(row: ShippingPerformancePortSource): string {
   return resolveShippingPerfDischargePort(row) ?? ''
 }
 
+/**
+ * The text the Discharge Port filter reads a row by: the first of the row's port texts that has a Master Port (the child's, SAP's, the shipment's: a text that is a
+ * plant name and maps to nothing does not hide a shipment port that does), else the one the table shows. Without a resolver, the one the table shows.
+ */
+export function rowDischargePortForFilter(row: ShippingPerformancePortSource, resolver?: DischargePortResolver | null): string {
+  const candidates = dischargePortCandidates(row)
+  if (!resolver) return candidates[0] ?? ''
+  return candidates.find((text) => masterPortLabel(text, resolver) !== null) ?? candidates[0] ?? ''
+}
+
 export function rowMatchesToolbarMultiFilters(
   row: ShippingPerformancePortSource & {
     incoterm?: unknown
@@ -173,7 +183,7 @@ export function rowMatchesToolbarMultiFilters(
     if (!valueInRegionSiteList(row.group_plant ?? row.plant_site, filters.selectedGroupPlants)) return false
   }
   if (filters.selectedDischargePorts && filters.selectedDischargePorts.length > 0) {
-    if (!matchesDischargePortSelection(rowDischargePort(row), filters.selectedDischargePorts, filters.dischargePortResolver)) return false
+    if (!matchesDischargePortSelection(rowDischargePortForFilter(row, filters.dischargePortResolver), filters.selectedDischargePorts, filters.dischargePortResolver)) return false
   }
   if (filters.selectedPlanningStatuses && filters.selectedPlanningStatuses.length === 1) {
     const st = String(row.status ?? '').trim().toUpperCase()
