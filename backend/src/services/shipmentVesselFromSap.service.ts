@@ -183,29 +183,34 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
 
       const stoKey = trimOrNull(row.sto_key);
       if (stoKey) {
+        /*
+         * The newest SAP row's STO is looked up per contract (LATERAL, on the contract_number index), not as DISTINCT ON over the whole SAP table:
+         * this runs for every row of every Shipments page that carries a SAP vessel, mostly to change nothing, and the whole-table form cost
+         * ~0.8 s alone and ~2 s under the page's own load (four at a time, beside the list queries). Same rows updated: 62 STO keys x 2 on the dev
+         * copy, in rolled-back transactions, gave identical id sets (113 rows); 827 -> 22 ms each.
+         */
         await query(
-          `WITH latest_spd_contract AS (
-             SELECT DISTINCT ON (spd.contract_number)
-               spd.contract_number,
-               NULLIF(TRIM(COALESCE(
-                 spd.sto_number::text,
-                 spd.data->'raw'->>'STO No.',
-                 spd.data->'raw'->>'STO Number',
-                 spd.data->'shipment'->>'sto_no',
-                 spd.data->'contract'->>'sto_no'
-               )), '') AS effective_sto
-             FROM sap_processed_data spd
-             WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-             ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-           )
-           UPDATE shipments s SET
+          `UPDATE shipments s SET
             vessel_code = COALESCE(NULLIF(TRIM(s.vessel_code), ''), $2),
             vessel_name = COALESCE(NULLIF(TRIM(s.vessel_name), ''), $3),
             vessel_owner = COALESCE(NULLIF(TRIM(s.vessel_owner), ''), $4),
             master_vessel_id = COALESCE($5::uuid, s.master_vessel_id),
             updated_at = CURRENT_TIMESTAMP
           FROM contracts c
-          LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+          LEFT JOIN LATERAL (
+            SELECT NULLIF(TRIM(COALESCE(
+              spd.sto_number::text,
+              spd.data->'raw'->>'STO No.',
+              spd.data->'raw'->>'STO Number',
+              spd.data->'shipment'->>'sto_no',
+              spd.data->'contract'->>'sto_no'
+            )), '') AS effective_sto
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+              AND TRIM(spd.contract_number) != ''
+            ORDER BY spd.created_at DESC NULLS LAST
+            LIMIT 1
+          ) l ON TRUE
           WHERE s.contract_id = c.id
             AND TRIM(COALESCE(
               c.sto_number::text,
