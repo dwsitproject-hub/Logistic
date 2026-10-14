@@ -203,7 +203,9 @@ export function buildContractDischargePortFilter(
  * scope as the Product options: its incoterms, a contract SAP still carries, no B2B child). One row per spelling; the controller maps each to its Master Port
  * (utils/dischargePortMap.ts) and lists a port once.
  */
-export function buildShipmentDischargePortOptionsSql(contractScopeSql: string): string {
+export function buildShipmentDischargePortOptionsSql(contractScopeSql: string, opts: { withSource?: boolean } = {}): string {
+  // withSource (the diagnostic only): which source of the page each label comes from. The page itself asks for the label alone.
+  const src = (name: string) => (opts.withSource ? `, '${name}' AS src` : '');
   return `
     WITH page_shipments AS (
       -- b2b_port: the ending child's port when the shipment has one (then its own names are not offered: the table shows the child's)
@@ -221,25 +223,25 @@ export function buildShipmentDischargePortOptionsSql(contractScopeSql: string): 
         AND NOT EXISTS (SELECT 1 FROM shipments sx WHERE sx.contract_id = c.id)
     ),
     named AS (
-      SELECT UPPER(REGEXP_REPLACE(BTRIM(b.port_of_discharge), '\\s+', ' ', 'g')) AS label
+      SELECT UPPER(REGEXP_REPLACE(BTRIM(b.port_of_discharge), '\\s+', ' ', 'g')) AS label${src('backlog contract (SAP port)')}
       FROM page_backlog b
       UNION
-      SELECT UPPER(REGEXP_REPLACE(BTRIM(p.b2b_port), '\\s+', ' ', 'g')) AS label
+      SELECT UPPER(REGEXP_REPLACE(BTRIM(p.b2b_port), '\\s+', ' ', 'g')) AS label${src('B2B ending child port')}
       FROM page_shipments p
       WHERE p.b2b_port IS NOT NULL
       UNION
-      SELECT UPPER(REGEXP_REPLACE(BTRIM(p.port_of_discharge), '\\s+', ' ', 'g')) AS label
+      SELECT UPPER(REGEXP_REPLACE(BTRIM(p.port_of_discharge), '\\s+', ' ', 'g')) AS label${src('shipment port_of_discharge')}
       FROM page_shipments p
       WHERE p.b2b_port IS NULL
       UNION
-      SELECT UPPER(REGEXP_REPLACE(BTRIM(vd.port_name), '\\s+', ' ', 'g')) AS label
+      SELECT UPPER(REGEXP_REPLACE(BTRIM(vd.port_name), '\\s+', ' ', 'g')) AS label${src('discharge leg name')}
       FROM page_shipments p
       JOIN vessel_loading_ports vd ON vd.shipment_id = p.id
       WHERE p.b2b_port IS NULL
         AND COALESCE(vd.is_discharge_port, false) = true
         AND COALESCE(vd.is_cancelled, false) = false
     )
-    SELECT label FROM named
+    SELECT label${opts.withSource ? ', src' : ''} FROM named
     WHERE NOT ${sqlIsNoPort('label')}
     ORDER BY label`;
 }
