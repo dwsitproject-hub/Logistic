@@ -5,6 +5,7 @@ import {
   oilLossDischargePortOptions,
 } from '@/lib/oilLossDischargePort'
 import { applyOilLossGlobalFilters } from '@/lib/oilLossGlobalFilters'
+import { createDischargePortResolver } from '@/lib/dischargePortFilter'
 
 const row = (over: Record<string, unknown>) => ({
   id: 'x',
@@ -51,6 +52,27 @@ describe('oilLossDischargePort', () => {
   it('keeps a picked port listed when no row has it, without duplicating one that does', () => {
     expect(oilLossDischargePortOptions([{ unloading_location: 'DUMAI' }], ['KIJING'])).toEqual(['DUMAI', 'KIJING'])
     expect(oilLossDischargePortOptions([{ unloading_location: 'DUMAI' }], ['dumai'])).toEqual(['DUMAI'])
+  })
+})
+
+describe('Oil Loss discharge port through the Master Port mapping', () => {
+  const resolver = createDischargePortResolver([
+    { identity: 'BONTANG', canonical: 'PORT BONTANG' },
+    { identity: 'EUP EDIBLE OIL BONTANG', canonical: 'PORT BONTANG' },
+  ])
+  const rows = [
+    row({ id: 'plant', unloading_location: 'EUP EDIBLE OIL BONTANG' }),
+    row({ id: 'port', unloading_location: 'PORT BONTANG' }),
+    row({ id: 'other', unloading_location: 'DUMAI' }),
+  ]
+
+  it('lists the Master Port once and filters every text that maps to it', () => {
+    expect(oilLossDischargePortOptions(rows as never[], [], resolver)).toEqual(['DUMAI', 'PORT BONTANG'])
+    const ids = (selectedDischargePorts: string[], r = resolver) =>
+      applyOilLossGlobalFilters({ rows: rows as never[], period: 'YTD', selectedDischargePorts, dischargePortResolver: r }).map((x) => x.id)
+    expect(ids(['PORT BONTANG'])).toEqual(['plant', 'port'])
+    // before the map has loaded the plant name is a port of its own
+    expect(ids(['PORT BONTANG'], null as never)).toEqual(['port'])
   })
 })
 

@@ -251,6 +251,7 @@ import {
 } from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
+import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { DEFAULT_SHIPMENTS_COMPACT_SORT, forgetShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
@@ -1116,6 +1117,8 @@ function ShipmentsPageContent() {
   /** Discharge Port is a plain per-visit filter (no user default), shipment-level on the server. */
   const [selectedDischargePorts, setSelectedDischargePorts] = useState<string[]>([])
   const [availableDischargePorts, setAvailableDischargePorts] = useState<string[]>([])
+  /** Master Port mapping of the SAP port text, for the pre-planned groups the browser filters (the list itself is filtered on the server). */
+  const dischargePortResolver = useDischargePortResolver()
   const debouncedSelectedDischargePorts = useDebouncedValue(selectedDischargePorts, 400)
   const scopeSummaryRequestKey = useMemo(
     () =>
@@ -2554,6 +2557,7 @@ function ShipmentsPageContent() {
       selectedSuppliers,
       selectedGroupPlants,
       selectedDischargePorts,
+      dischargePortResolver,
     }),
     [
       dateFrom,
@@ -2564,6 +2568,7 @@ function ShipmentsPageContent() {
       selectedSuppliers,
       selectedGroupPlants,
       selectedDischargePorts,
+      dischargePortResolver,
     ],
   )
 

@@ -31,6 +31,8 @@ import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import { narrowFilterOptions } from '@/lib/filterOptionNarrowing'
 import { shippingPerfAvailableValues } from '@/lib/shippingPerfFilterOptions'
+import type { DischargePortResolver } from '@/lib/dischargePortFilter'
+import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { PLANNING_STATUS_OPTIONS } from '@/lib/planningStatus'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
@@ -749,6 +751,7 @@ function applyGlobalFiltersToRows(
     selectedProducts: string[]
     selectedGroupPlants: string[]
     selectedDischargePorts?: string[]
+    dischargePortResolver?: DischargePortResolver | null
     selectedSuppliers: string[]
     selectedSupplierGroups: string[]
     /** 'Planned' / 'Unplanned'. Both selected, or neither, is no filter. */
@@ -1497,6 +1500,8 @@ function ShippingPerformancePageContent() {
   const [selectedSupplierGroups, setSelectedSupplierGroups] = useState<string[]>([])
   const [selectedPlanningStatuses, setSelectedPlanningStatuses] = useState<string[]>([])
   const [selectedDischargePorts, setSelectedDischargePorts] = useState<string[]>([])
+  /** Master Port mapping of the SAP port text; null until it loads, then a plant name such as EUP EDIBLE OIL BONTANG is listed as the port it maps to. */
+  const dischargePortResolver = useDischargePortResolver()
   const {
     selectedProducts,
     selectedGroupPlants,
@@ -1777,6 +1782,7 @@ function ShippingPerformancePageContent() {
         selectedIncoterms,
         selectedGroupPlants,
         selectedDischargePorts,
+        dischargePortResolver,
         selectedSuppliers,
         selectedSupplierGroups,
         selectedPlanningStatuses,
@@ -1788,6 +1794,7 @@ function ShippingPerformancePageContent() {
       selectedIncoterms,
       selectedGroupPlants,
       selectedDischargePorts,
+      dischargePortResolver,
       selectedSuppliers,
       selectedSupplierGroups,
       selectedPlanningStatuses,
@@ -1852,6 +1859,7 @@ function ShippingPerformancePageContent() {
         selectedProducts,
         selectedGroupPlants,
         selectedDischargePorts,
+        dischargePortResolver,
         selectedSuppliers,
         selectedSupplierGroups,
         selectedPlanningStatuses,
@@ -1883,6 +1891,7 @@ function ShippingPerformancePageContent() {
         selectedIncoterms,
         selectedGroupPlants,
         selectedDischargePorts,
+        dischargePortResolver,
         selectedSuppliers,
         selectedGroups: selectedSupplierGroups,
         selectedPlanningStatuses,
@@ -1894,6 +1903,7 @@ function ShippingPerformancePageContent() {
     selectedProducts,
     selectedGroupPlants,
     selectedDischargePorts,
+    dischargePortResolver,
     selectedSuppliers,
     selectedSupplierGroups,
     selectedPlanningStatuses,
@@ -1914,6 +1924,7 @@ function ShippingPerformancePageContent() {
       selectedProducts,
       selectedGroupPlants,
       selectedDischargePorts,
+      dischargePortResolver,
       selectedSuppliers,
       selectedSupplierGroups,
       selectedPlanningStatuses,
@@ -1929,6 +1940,7 @@ function ShippingPerformancePageContent() {
     selectedProducts,
     selectedGroupPlants,
     selectedDischargePorts,
+    dischargePortResolver,
     selectedSuppliers,
     selectedSupplierGroups,
     selectedPlanningStatuses,

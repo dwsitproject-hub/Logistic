@@ -173,6 +173,8 @@ import {
   shipmentPageOptionsScopeSql,
 } from '../utils/shipmentProductOptionsSql';
 import { buildShipmentDischargePortOptionsSql } from '../utils/shipmentDischargePortSql';
+import { canonicalDischargePort, dischargePortMapEntries } from '../utils/dischargePortMap';
+import { loadDischargePortMap } from '../services/dischargePortMap.service';
 
 export { B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL };
 
@@ -1350,13 +1352,33 @@ export const getContractFilterProducts = async (req: AuthRequest, res: Response)
 export const getContractFilterDischargePorts = async (_req: AuthRequest, res: Response) => {
   try {
     const dischargePorts = await ttlMemo('filter-options:shipment-discharge-ports', 5 * 60 * 1000, async () => {
-      const r = await query(buildShipmentDischargePortOptionsSql(shipmentPageOptionsScopeSql()));
-      return r.rows.map((x: { label: string }) => String(x.label));
+      const [r, map] = await Promise.all([
+        query(buildShipmentDischargePortOptionsSql(shipmentPageOptionsScopeSql())),
+        loadDischargePortMap(),
+      ]);
+      // each text as its Master Port (a text nobody mapped stays itself), once
+      const labels = new Set<string>();
+      for (const row of r.rows as Array<{ label: string }>) labels.add(canonicalDischargePort(map, row.label));
+      return [...labels].sort((a, b) => a.localeCompare(b));
     });
     return res.json({ success: true, data: { dischargePorts } });
   } catch (error) {
     logger.error('Get shipment discharge port filter options error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch discharge port filter options' } });
+  }
+};
+
+/**
+ * The Master Port mapping for pages that filter in the browser (Oil Loss, Shipping Performance): identity of a SAP port text -> its Master Port label
+ * (utils/dischargePortMap.ts). A few dozen entries.
+ */
+export const getContractFilterDischargePortMap = async (_req: AuthRequest, res: Response) => {
+  try {
+    const entries = dischargePortMapEntries(await loadDischargePortMap());
+    return res.json({ success: true, data: { entries } });
+  } catch (error) {
+    logger.error('Get discharge port map error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch discharge port map' } });
   }
 };
 

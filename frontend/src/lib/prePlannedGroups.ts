@@ -1,4 +1,5 @@
 import api from '@/lib/api';
+import { matchesDischargePortSelection, type DischargePortResolver } from '@/lib/dischargePortFilter';
 
 export interface PrePlannedGroupMember {
   contractId: string;
@@ -10,6 +11,8 @@ export interface PrePlannedGroupMember {
   deliveryStart?: string;
   deliveryEnd?: string;
   contractDate?: string;
+  /** The SAP Vessel Discharge Port of the contract (what the table draws for a contract with no shipment); absent when SAP names none. */
+  dischargePort?: string;
 }
 
 export interface PrePlannedGroup {
@@ -152,10 +155,12 @@ export interface PrePlannedGlobalScopeFilters {
   selectedSuppliers: readonly string[];
   selectedGroupPlants: readonly string[];
   /**
-   * Discharge Port toolbar filter. A pre-planned group is a set of contracts with no shipment yet, so it has no discharge port: any pick leaves
-   * every group out, the same as the contract backlog the server leaves out.
+   * Discharge Port toolbar filter. A pre-planned group is a set of contracts with no shipment yet, so its port is its members' SAP ports: it stays when ANY member's
+   * port is a picked one (Blank: a member with none), the same as the contract backlog on the server.
    */
   selectedDischargePorts?: readonly string[];
+  /** Master Port mapping of the SAP port text (lib/dischargePortFilter.ts); absent until it has loaded. */
+  dischargePortResolver?: DischargePortResolver | null;
 }
 
 function normScopeValue(value: unknown): string {
@@ -188,9 +193,15 @@ export function filterPrePlannedGroupsByGlobalScope(
   scope: PrePlannedGlobalScopeFilters,
 ): PrePlannedGroup[] {
   const searchTerm = normScopeValue(scope.searchTerm);
-  if (scope.selectedDischargePorts && scope.selectedDischargePorts.length > 0) return [];
+  const ports = scope.selectedDischargePorts ?? [];
 
   return groups.filter((group) => {
+    if (
+      ports.length > 0 &&
+      !group.members.some((member) => matchesDischargePortSelection(member.dischargePort, ports, scope.dischargePortResolver))
+    ) {
+      return false;
+    }
     if (
       scope.selectedGroupPlants.length > 0 &&
       !valueInScopeList(group.groupPlant, scope.selectedGroupPlants)
@@ -231,6 +242,7 @@ export function hasPrePlannedGlobalScopeFilters(scope: PrePlannedGlobalScopeFilt
     scope.selectedGroupPlants.length > 0 ||
     scope.selectedIncoterms.length > 0 ||
     scope.selectedProducts.length > 0 ||
-    scope.selectedSuppliers.length > 0
+    scope.selectedSuppliers.length > 0 ||
+    (scope.selectedDischargePorts?.length ?? 0) > 0
   );
 }

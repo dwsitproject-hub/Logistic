@@ -1,18 +1,26 @@
+import {
+  humanReadablePortNameExpr,
+  sapDischargePortTextSubquery,
+} from './portDisplaySql';
+
 /**
- * The Shipments page's Discharge Port filter (phase 1: the port as SAP wrote it, no Master Port mapping).
+ * The Shipments page's Discharge Port filter.
  *
- * Which port a shipment has is the KLIP side of what the table shows (shipmentListPortsSql.ts, sqlShipmentListDischargePortsKlipAgg): its active discharge
+ * Which port a SHIPMENT has is the KLIP side of what the table shows (shipmentListPortsSql.ts, sqlShipmentListDischargePortsKlipAgg): its active discharge
  * leg(s) in vessel_loading_ports when it has any named one, otherwise shipments.port_of_discharge. SAP's Vessel Discharge Port is copied onto that column at
  * import (denormalizeShipmentPortsFromSap), so it is mostly SAP's own text. A port that only the SAP side carries (a GR-closed row the SAP aggregate shows
  * first) is not matched: the SAP side exists only for the rows of one page, and matching it would mean running it over the whole filtered set.
  *
- * Spelling variants are one port, with the rule the Shipments list de-duplicates ports by (frontend normalizeListPortIdentity): "PORT BONTANG",
- * "Port of Bontang" and "BONTANG" match each other. `Blank` finds the shipments with no named port.
+ * Which port a BACKLOG CONTRACT (Unplanned, Preplanned, Completed, Cancelled: no shipment yet) has is what the table shows for it: the newest SAP row's
+ * Vessel Discharge Port (sapDischargePortTextSubquery), read with the same expression the backlog rows are drawn with.
  *
- * The predicate is on the shipment (alias `s`), like the other shipment-level filters, so it narrows relevant_contract_numbers, shipment_base_core and
- * ranked_sto alike. A contract with a shipment to the port is in; its Outstanding is still the whole contract's (contract-level, as for Region/Plant).
- * The contract backlog (Unplanned, Preplanned, Completed, Cancelled contracts with no shipment yet) has no port, so a port filter leaves it out
- * (buildUnplannedContractToolbarScope).
+ * What the picks ARE is decided before this file: a pick is a Master Port (or a text nobody mapped, or Blank), and utils/dischargePortMap.ts expands it to every
+ * spelling that stands for it. Here a spelling is an identity: "PORT BONTANG", "Port of Bontang" and "BONTANG" are one (the rule the Shipments list de-duplicates
+ * ports by, frontend normalizeListPortIdentity), so a list of identities matches whatever the column's spelling. `Blank` finds what names no port.
+ *
+ * The shipment predicate is on `s`, like the other shipment-level filters, so it narrows relevant_contract_numbers, shipment_base_core and ranked_sto alike. A
+ * contract with a shipment to the port is in; its Outstanding is still the whole contract's (contract-level, as for Region/Plant). The backlog predicate is
+ * on the contract, and both share ONE bound text[] so the parameter numbering of the callers moves by one.
  */
 
 export const DISCHARGE_PORT_BLANK = 'blank';
@@ -70,25 +78,44 @@ export function sqlDischargePortIdentity(columnExpr: string): string {
   return stripped;
 }
 
+/**
+ * The port a backlog contract is drawn with: the newest SAP row's Vessel Discharge Port without blanks and numeric codes.
+ * humanReadablePortNameExpr repeats the text it is given (four times), so the SAP lookup goes in a one-row subquery and runs once per contract,
+ * the way shipmentUnplannedHybridSql.ts draws the same column.
+ */
+function sqlBacklogContractPort(contractIdRef: string): string {
+  return `(SELECT ${humanReadablePortNameExpr('bp0.p')} FROM (SELECT ${sapDischargePortTextSubquery(contractIdRef)} AS p) bp0)`;
+}
+
 /** True for an empty value, a numeric SAP code or a placeholder: a column that names no port. NULL counts as blank. */
 function sqlIsNoPort(columnExpr: string): string {
   const id = sqlDischargePortIdentity(columnExpr);
   return `COALESCE((${id} ~ '^[0-9 ]*$' OR ${id} IN ('BLANK', 'DISCHARGE PORT')), TRUE)`;
 }
 
+export interface DischargePortFilters {
+  /** On the shipment (alias `s`). */
+  shipmentSql: string;
+  /** On the backlog contract (`c.contract_id`): the SAP port the table shows for it. */
+  contractSql: string;
+  params: unknown[];
+  nextIndex: number;
+}
+
 /**
- * Shipment-level predicate for the picked discharge ports, starting at parameter `startIndex` (one text[] param of identities, none when only Blank is picked).
- * Empty selection: no SQL.
+ * Both predicates for the picked ports, starting at parameter `startIndex`: ONE text[] of identities (none when only Blank is picked) that both read.
+ * Empty selection: no SQL, no parameter.
  */
-export function buildShipmentDischargePortFilter(
+export function buildDischargePortFilters(
   ports: readonly string[],
   startIndex: number,
-  shipmentAlias = 's',
-): { sql: string; params: unknown[]; nextIndex: number } {
+  opts: { shipmentAlias?: string; contractIdRef?: string } = {},
+): DischargePortFilters {
   const { identities, includeBlank } = resolveDischargePortSelection(ports);
-  if (identities.length === 0 && !includeBlank) return { sql: '', params: [], nextIndex: startIndex };
+  if (identities.length === 0 && !includeBlank) return { shipmentSql: '', contractSql: '', params: [], nextIndex: startIndex };
 
-  const s = shipmentAlias;
+  const s = opts.shipmentAlias ?? 's';
+  const contractIdRef = opts.contractIdRef ?? 'c.contract_id';
   /** The shipment's named, active discharge legs: when it has one, those are its ports (as in the table) and the shipment column is not looked at. */
   const namedLeg = (extra: string) => `EXISTS (
         SELECT 1 FROM vessel_loading_ports vd
@@ -98,6 +125,9 @@ export function buildShipmentDischargePortFilter(
           AND ${extra}
       )`;
   const arms: string[] = [];
+  /** The same port text the backlog row is drawn with: the newest SAP row's, without blanks and numeric codes. Evaluated once, in one scalar subquery. */
+  const contractPortExpr = sqlBacklogContractPort(contractIdRef);
+  const contractArms: string[] = [];
   const params: unknown[] = [];
   let next = startIndex;
 
@@ -110,19 +140,47 @@ export function buildShipmentDischargePortFilter(
       `(NOT ${namedLeg(`NOT ${sqlIsNoPort('vd.port_name')}`)}
         AND ${sqlDischargePortIdentity(`${s}.port_of_discharge`)} = ANY($${idx}::text[]))`,
     );
+    contractArms.push(`COALESCE(${sqlDischargePortIdentity('bp.p')} = ANY($${idx}::text[]), FALSE)`);
   }
   if (includeBlank) {
     arms.push(
       `(NOT ${namedLeg(`NOT ${sqlIsNoPort('vd.port_name')}`)}
         AND ${sqlIsNoPort(`${s}.port_of_discharge`)})`,
     );
+    contractArms.push(sqlIsNoPort('bp.p'));
   }
-  return { sql: `(${arms.join('\n      OR ')})`, params, nextIndex: next };
+  return {
+    shipmentSql: `(${arms.join('\n      OR ')})`,
+    contractSql: `COALESCE((SELECT ${contractArms.join(' OR ')} FROM (SELECT ${contractPortExpr} AS p) bp), FALSE)`,
+    params,
+    nextIndex: next,
+  };
+}
+
+/** The shipment predicate alone (see buildDischargePortFilters). */
+export function buildShipmentDischargePortFilter(
+  ports: readonly string[],
+  startIndex: number,
+  shipmentAlias = 's',
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const f = buildDischargePortFilters(ports, startIndex, { shipmentAlias });
+  return { sql: f.shipmentSql, params: f.params, nextIndex: f.nextIndex };
+}
+
+/** The backlog-contract predicate alone, with its own parameter (see buildDischargePortFilters). */
+export function buildContractDischargePortFilter(
+  ports: readonly string[],
+  startIndex: number,
+  contractIdRef = 'c.contract_id',
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const f = buildDischargePortFilters(ports, startIndex, { contractIdRef });
+  return { sql: f.contractSql, params: f.params, nextIndex: f.nextIndex };
 }
 
 /**
- * The ports the filter can offer: every named discharge port of the Shipments page's own shipments (same contract scope as the Product options:
- * its incoterms, a contract SAP still carries, no B2B child). One row per spelling; the page lists a port once whatever its spelling.
+ * The texts the filter can offer: every named discharge port of the Shipments page's own shipments, and the SAP port of its backlog contracts (same contract
+ * scope as the Product options: its incoterms, a contract SAP still carries, no B2B child). One row per spelling; the controller maps each to its Master Port
+ * (utils/dischargePortMap.ts) and lists a port once.
  */
 export function buildShipmentDischargePortOptionsSql(contractScopeSql: string): string {
   return `
@@ -133,7 +191,17 @@ export function buildShipmentDischargePortOptionsSql(contractScopeSql: string): 
       LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
       WHERE ${contractScopeSql}
     ),
+    page_backlog AS (
+      SELECT ${sqlBacklogContractPort('c.contract_id')} AS port_of_discharge
+      FROM contracts c
+      LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
+      WHERE ${contractScopeSql}
+        AND NOT EXISTS (SELECT 1 FROM shipments sx WHERE sx.contract_id = c.id)
+    ),
     named AS (
+      SELECT UPPER(REGEXP_REPLACE(BTRIM(b.port_of_discharge), '\\s+', ' ', 'g')) AS label
+      FROM page_backlog b
+      UNION
       SELECT UPPER(REGEXP_REPLACE(BTRIM(p.port_of_discharge), '\\s+', ' ', 'g')) AS label
       FROM page_shipments p
       UNION

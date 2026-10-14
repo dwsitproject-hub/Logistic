@@ -22,6 +22,7 @@ import {
   sapLoadingPortTextSubquery,
 } from './portDisplaySql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
+import { buildContractDischargePortFilter } from './shipmentDischargePortSql';
 import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments';
 import {
   buildShipmentPageUnplannedOpenContractsCte,
@@ -1270,8 +1271,8 @@ export function buildUnplannedContractToolbarScope(input: {
   contract?: unknown;
   plants: string[];
   /**
-   * Toolbar Discharge Port filter. A backlog contract has no shipment yet, so it has no port: with a port picked every backlog arm is left out
-   * (the table count in the controller does the same with its own FALSE).
+   * Toolbar Discharge Port filter, already expanded to identities (resolveDischargePortPicks). A backlog contract has no shipment yet, so its port is the one
+   * the table draws for it: the newest SAP row's Vessel Discharge Port. Binds one text[] when a port (not only Blank) is picked.
    */
   dischargePorts?: string[];
   /** Toolbar Source filter (Interco / 3rd Party / All). Contract-level, so the backlog arms (no shipment row yet) must honour it too. */
@@ -1281,7 +1282,12 @@ export function buildUnplannedContractToolbarScope(input: {
   const params: unknown[] = [];
   let cp = 1;
 
-  if (input.dischargePorts && input.dischargePorts.length > 0) parts.push('FALSE');
+  const dischargePortFilter = buildContractDischargePortFilter(input.dischargePorts ?? [], cp);
+  if (dischargePortFilter.sql) {
+    parts.push(dischargePortFilter.sql);
+    params.push(...dischargePortFilter.params);
+    cp = dischargePortFilter.nextIndex;
+  }
 
   if (input.dateFrom) {
     parts.push(`c.contract_date >= $${cp}`);

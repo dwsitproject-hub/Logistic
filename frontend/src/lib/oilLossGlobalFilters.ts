@@ -5,6 +5,7 @@ import {
   matchesOilLossModeFilter,
 } from '@/lib/oilLossEligibility'
 import { matchesOilLossDischargePortFilter } from '@/lib/oilLossDischargePort'
+import type { DischargePortResolver } from '@/lib/dischargePortFilter'
 import { matchesOilLossLoadingPortFilter } from '@/lib/oilLossLoadingPort'
 import { valueInRegionSiteList } from '@/lib/globalScopeFilters'
 
@@ -156,6 +157,8 @@ export type ApplyOilLossGlobalFiltersInput = {
   selectedProducts?: string[]
   selectedLoadingPorts?: string[]
   selectedDischargePorts?: string[]
+  /** Master Port mapping (lib/dischargePortFilter.ts); absent until it has loaded, then only the spelling of a port counts. */
+  dischargePortResolver?: DischargePortResolver | null
   selectedGroupPlants?: string[]
   selectedModes?: string[]
   selectedIncoterms?: string[]
@@ -172,6 +175,7 @@ export function applyOilLossGlobalFilters({
   selectedProducts = [],
   selectedLoadingPorts = [],
   selectedDischargePorts = [],
+  dischargePortResolver = null,
   selectedGroupPlants = [],
   selectedModes = [],
   selectedIncoterms = [],
@@ -192,7 +196,7 @@ export function applyOilLossGlobalFilters({
     }
     if (!matchesOilLossGlobalIncotermFilter(row)) return false
     if (!matchesOilLossLoadingPortFilter(row, selectedLoadingPorts)) return false
-    if (!matchesOilLossDischargePortFilter(row, selectedDischargePorts)) return false
+    if (!matchesOilLossDischargePortFilter(row, selectedDischargePorts, dischargePortResolver)) return false
     if (!matchesOilLossGlobalProductsMultiFilter(row, selectedProducts)) return false
     const d = resolveRowDate(row)
     if (!d) return false

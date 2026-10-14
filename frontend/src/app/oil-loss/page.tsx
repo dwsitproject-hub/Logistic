@@ -28,6 +28,7 @@ import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 import { formatOilLossAvgMt, formatOilLossAvgPct, formatOilLossMtFromKg, formatOilLossPct } from '@/lib/oilLossFormat'
 import { filterOilLossPageRows } from '@/lib/oilLossEligibility'
 import { oilLossDischargePortOptions } from '@/lib/oilLossDischargePort'
+import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { oilLossLoadingPortOptions } from '@/lib/oilLossLoadingPort'
 import { filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import {
@@ -1256,6 +1257,8 @@ export default function OilLossPage() {
   const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('YTD')
   const [selectedLoadingPorts, setSelectedLoadingPorts] = useState<string[]>([])
   const [selectedDischargePorts, setSelectedDischargePorts] = useState<string[]>([])
+  /** Master Port mapping of the SAP port text; null until it loads, then a plant name such as EUP EDIBLE OIL BONTANG is listed as the port it maps to. */
+  const dischargePortResolver = useDischargePortResolver()
   const [drilldownFilters, setDrilldownFilters] = useState<OilLossDrilldownFilters>(
     EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
   )
@@ -1672,6 +1675,7 @@ export default function OilLossPage() {
       selectedProducts,
       selectedLoadingPorts,
       selectedDischargePorts,
+      dischargePortResolver,
       selectedGroupPlants,
       dateFrom,
       dateTo,
@@ -1682,6 +1686,7 @@ export default function OilLossPage() {
     selectedProducts,
     selectedLoadingPorts,
     selectedDischargePorts,
+    dischargePortResolver,
     selectedGroupPlants,
     dateFrom,
     dateTo,
@@ -1696,11 +1701,12 @@ export default function OilLossPage() {
         selectedProducts: [],
         selectedLoadingPorts,
         selectedDischargePorts,
+        dischargePortResolver,
         selectedGroupPlants,
         dateFrom,
         dateTo,
       }),
-    [rows, globalPeriod, selectedLoadingPorts, selectedDischargePorts, selectedGroupPlants, dateFrom, dateTo],
+    [rows, globalPeriod, selectedLoadingPorts, selectedDischargePorts, dischargePortResolver, selectedGroupPlants, dateFrom, dateTo],
   )
   /** The rows every filter but Loading Port leaves in, so picking a port never hides the other ports from the list. */
   const loadingPortListRows = useMemo(
@@ -1711,11 +1717,12 @@ export default function OilLossPage() {
         selectedProducts,
         selectedLoadingPorts: [],
         selectedDischargePorts,
+        dischargePortResolver,
         selectedGroupPlants,
         dateFrom,
         dateTo,
       }),
-    [rows, globalPeriod, selectedProducts, selectedDischargePorts, selectedGroupPlants, dateFrom, dateTo],
+    [rows, globalPeriod, selectedProducts, selectedDischargePorts, dischargePortResolver, selectedGroupPlants, dateFrom, dateTo],
   )
   const loadingPortDropdownOptions = useMemo(
     () => oilLossLoadingPortOptions(loadingPortListRows, selectedLoadingPorts),
@@ -1730,15 +1737,16 @@ export default function OilLossPage() {
         selectedProducts,
         selectedLoadingPorts,
         selectedDischargePorts: [],
+        dischargePortResolver,
         selectedGroupPlants,
         dateFrom,
         dateTo,
       }),
-    [rows, globalPeriod, selectedProducts, selectedLoadingPorts, selectedGroupPlants, dateFrom, dateTo],
+    [rows, globalPeriod, selectedProducts, selectedLoadingPorts, dischargePortResolver, selectedGroupPlants, dateFrom, dateTo],
   )
   const dischargePortDropdownOptions = useMemo(
-    () => oilLossDischargePortOptions(dischargePortListRows, selectedDischargePorts),
-    [dischargePortListRows, selectedDischargePorts],
+    () => oilLossDischargePortOptions(dischargePortListRows, selectedDischargePorts, dischargePortResolver),
+    [dischargePortListRows, selectedDischargePorts, dischargePortResolver],
   )
   const productDropdownOptions = useMemo(
     () =>

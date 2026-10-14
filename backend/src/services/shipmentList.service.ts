@@ -14,6 +14,7 @@ import {
   parseDischargePortParam,
   resolveDischargePortSelectionKey,
 } from '../utils/shipmentDischargePortSql';
+import { resolveDischargePortPicks } from './dischargePortMap.service';
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { computePerfTradeCycleDaysForRow } from './latePerformance.service';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
@@ -605,7 +606,7 @@ export async function loadShipmentOutstandingQtyForRequest(
     const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-    const dischargePorts = parseDischargePortParam((req.query as { dischargePort?: unknown }).dischargePort);
+    const dischargePorts = await resolveDischargePortPicks((req.query as { dischargePort?: unknown }).dischargePort);
     const sourceType = (req.query as { sourceType?: string }).sourceType;
     const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants, dischargePorts, sourceType });
     let idx = scope.params.length + 1;
@@ -725,7 +726,7 @@ export async function loadShipmentAttentionInsightsForRequest(
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-  const dischargePorts = parseDischargePortParam((req.query as { dischargePort?: unknown }).dischargePort);
+  const dischargePorts = await resolveDischargePortPicks((req.query as { dischargePort?: unknown }).dischargePort);
   const sourceType = (req.query as { sourceType?: string }).sourceType;
   const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants, dischargePorts, sourceType });
   let idx = scope.params.length + 1;

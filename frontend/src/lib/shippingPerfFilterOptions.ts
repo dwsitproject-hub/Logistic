@@ -12,7 +12,7 @@
  * STO, and 298 of 10,477 STOs span contracts with different suppliers - so those are split before
  * being offered.
  */
-import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
+import { dischargePortOptionsFrom, type DischargePortResolver } from '@/lib/dischargePortFilter'
 import {
   normalizeScopeGroupKey,
   rowDischargePort,
@@ -28,6 +28,8 @@ export interface ShippingPerfFilterSelections {
   selectedIncoterms: string[]
   selectedGroupPlants: string[]
   selectedDischargePorts: string[]
+  /** Master Port mapping of the SAP port text; absent until it has loaded. */
+  dischargePortResolver?: DischargePortResolver | null
   selectedSuppliers: string[]
   selectedSupplierGroups: string[]
   selectedPlanningStatuses: string[]
@@ -77,6 +79,7 @@ function rowsPassing<T extends Row>(rows: T[], sel: ShippingPerfFilterSelections
       selectedIncoterms: sel.selectedIncoterms,
       selectedGroupPlants: sel.selectedGroupPlants,
       selectedDischargePorts: sel.selectedDischargePorts,
+      dischargePortResolver: sel.dischargePortResolver,
       selectedSuppliers: sel.selectedSuppliers,
       selectedGroups: sel.selectedSupplierGroups,
       selectedPlanningStatuses: sel.selectedPlanningStatuses,
@@ -111,6 +114,7 @@ export function shippingPerfAvailableValues<T extends Row>(
     dischargePorts: dischargePortOptionsFrom(
       without('selectedDischargePorts').map((r) => rowDischargePort(r)),
       selections.selectedDischargePorts ?? [],
+      selections.dischargePortResolver,
     ),
     suppliers: distinct(
       without('selectedSuppliers').flatMap((r) => (r.supplier ? scopeGroupKeyParts(r.supplier) : [])),

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildContractDischargePortFilter,
+  buildDischargePortFilters,
   buildShipmentDischargePortFilter,
   buildShipmentDischargePortOptionsSql,
   normalizeDischargePortIdentity,
@@ -98,6 +100,46 @@ describe('Shipments Discharge Port filter: the SQL', () => {
   });
 });
 
+describe('Shipments Discharge Port filter: shipments and backlog contracts share one parameter', () => {
+  it('both predicates read the same $n, so the callers move their numbering by one, not two', () => {
+    const f = buildDischargePortFilters(['BONTANG', 'DUMAI'], 5);
+    expect(f.params).toEqual([['BONTANG', 'DUMAI']]);
+    expect(f.nextIndex).toBe(6);
+    expect(f.shipmentSql).toContain('= ANY($5::text[])');
+    expect(f.contractSql).toContain('= ANY($5::text[])');
+    expect(f.shipmentSql + f.contractSql).not.toMatch(/\$[6-9]/);
+  });
+
+  it('the contract predicate reads the newest SAP row\'s Vessel Discharge Port, once, the way the backlog rows are drawn', () => {
+    const sql = buildContractDischargePortFilter(['BONTANG'], 1).sql.replace(/\s+/g, ' ');
+    expect(sql).toContain("spd.data->'raw'->>'Vessel Discharge Port'");
+    expect(sql).toContain('ORDER BY spd.created_at DESC NULLS LAST LIMIT 1');
+    expect(sql).toContain('spd.contract_number = c.contract_id');
+    // numeric SAP codes and blanks are no port, as in the table
+    expect(sql).toContain("IN ('', '0', '0.00')");
+    // one scalar subquery per contract: the SAP lookup is not repeated per arm
+    expect(sql.match(/FROM sap_processed_data spd/g)?.length).toBe(1);
+  });
+
+  it('Blank finds a contract whose SAP row names no port; with a port too it is one more arm', () => {
+    const blank = buildContractDischargePortFilter(['Blank'], 3);
+    expect(blank.params).toEqual([]);
+    expect(blank.nextIndex).toBe(3);
+    const both = buildContractDischargePortFilter(['DUMAI', 'Blank'], 3);
+    expect(both.sql).toContain('= ANY($3::text[])');
+    expect(both.sql).toContain(' OR ');
+  });
+
+  it('is empty, and binds nothing, for no pick', () => {
+    expect(buildContractDischargePortFilter([], 2)).toEqual({ sql: '', params: [], nextIndex: 2 });
+    expect(buildDischargePortFilters(['74.66'], 2)).toEqual({ shipmentSql: '', contractSql: '', params: [], nextIndex: 2 });
+  });
+
+  it('uses the contract reference it is given', () => {
+    expect(buildContractDischargePortFilter(['A'], 1, 'k.contract_id').sql).toContain('spd.contract_number = k.contract_id');
+  });
+});
+
 describe('Shipments Discharge Port options SQL', () => {
   const sql = buildShipmentDischargePortOptionsSql(shipmentPageOptionsScopeSql()).replace(/\s+/g, ' ');
 
@@ -105,6 +147,12 @@ describe('Shipments Discharge Port options SQL', () => {
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
     expect(sql).toContain("COALESCE(c.sap_presence, 'PRESENT') = 'PRESENT'");
     expect(sql).toContain("= 'B2B'");
+  });
+
+  it('offers the SAP port of the backlog contracts too: those with no shipment yet', () => {
+    expect(sql).toContain('page_backlog AS');
+    expect(sql).toContain('NOT EXISTS (SELECT 1 FROM shipments sx WHERE sx.contract_id = c.id)');
+    expect(sql).toContain("spd.data->'raw'->>'Vessel Discharge Port'");
   });
 
   it('reads both places a port lives, active legs only, and leaves out blanks and codes', () => {

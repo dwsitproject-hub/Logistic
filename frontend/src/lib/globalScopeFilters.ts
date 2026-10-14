@@ -1,5 +1,5 @@
 /** Shared helpers for Incoterm / Product / Group Plant toolbar filters across list & performance pages. */
-import { matchesDischargePortSelection } from '@/lib/dischargePortFilter'
+import { matchesDischargePortSelection, type DischargePortResolver } from '@/lib/dischargePortFilter'
 import { resolveShippingPerfDischargePort, type ShippingPerformancePortSource } from '@/lib/shippingPerformancePorts'
 
 export type ToolbarMultiFilterState = {
@@ -10,6 +10,8 @@ export type ToolbarMultiFilterState = {
   selectedGroupPlants: string[]
   /** The port the cargo is discharged at (not the Region/Plant): the row's resolved discharge port, SAP first (lib/dischargePortFilter.ts). */
   selectedDischargePorts?: string[]
+  /** Master Port mapping of the SAP port text (lib/dischargePortFilter.ts); absent until it has loaded, then only the spelling counts. */
+  dischargePortResolver?: DischargePortResolver | null
   /**
    * 'Planned' / 'Unplanned'. Planned means scheduled and still running - up to but not including
    * completed, never cancelled - so a finished row belongs to neither value. Selecting both is
@@ -171,7 +173,7 @@ export function rowMatchesToolbarMultiFilters(
     if (!valueInRegionSiteList(row.group_plant ?? row.plant_site, filters.selectedGroupPlants)) return false
   }
   if (filters.selectedDischargePorts && filters.selectedDischargePorts.length > 0) {
-    if (!matchesDischargePortSelection(rowDischargePort(row), filters.selectedDischargePorts)) return false
+    if (!matchesDischargePortSelection(rowDischargePort(row), filters.selectedDischargePorts, filters.dischargePortResolver)) return false
   }
   if (filters.selectedPlanningStatuses && filters.selectedPlanningStatuses.length === 1) {
     const st = String(row.status ?? '').trim().toUpperCase()

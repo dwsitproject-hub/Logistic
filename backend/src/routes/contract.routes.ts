@@ -10,6 +10,7 @@ import {
   getContractFilterIncoterms,
   getContractFilterProducts,
   getContractFilterDischargePorts,
+  getContractFilterDischargePortMap,
   getContractFilterOptionsAvailable,
   getContractFilterGroupPlants,
   getContractFilterMasterGroupPlants,
@@ -86,6 +87,7 @@ router.get('/filter-options/available', getContractFilterOptionsAvailable);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
 router.get('/filter-options/products', getContractFilterProducts);
 router.get('/filter-options/discharge-ports', getContractFilterDischargePorts);
+router.get('/filter-options/discharge-port-map', getContractFilterDischargePortMap);
 router.get('/filter-options/group-plants', getContractFilterGroupPlants);
 router.get('/filter-options/master-group-plants', getContractFilterMasterGroupPlants);
 router.get('/filter-options/b2b-flags', getContractFilterB2bFlags);

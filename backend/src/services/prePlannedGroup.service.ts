@@ -15,6 +15,7 @@ import {
 } from './prePlannedParcelCapacity.service';
 import { AuditService } from './audit.service';
 import logger from '../utils/logger';
+import { humanReadablePortNameExpr, sapDischargePortTextSubquery } from '../utils/portDisplaySql';
 
 export interface PrePlannedGroupMemberDto {
   contractId: string;
@@ -26,6 +27,8 @@ export interface PrePlannedGroupMemberDto {
   deliveryStart?: string;
   deliveryEnd?: string;
   contractDate?: string;
+  /** The SAP Vessel Discharge Port of the contract, as the Shipments table draws it for a contract with no shipment; absent when SAP names none. For the Discharge Port filter. */
+  dischargePort?: string;
 }
 
 export interface PrePlannedGroupDto {
@@ -575,7 +578,9 @@ export async function listPrePlannedGroups(filters: {
       c.product AS member_product,
       c.delivery_start_date,
       c.delivery_end_date,
-      c.contract_date
+      c.contract_date,
+      -- one SAP lookup per member (humanReadablePortNameExpr repeats the text it is given)
+      (SELECT ${humanReadablePortNameExpr('bp.p')} FROM (SELECT ${sapDischargePortTextSubquery('pgm.contract_number')} AS p) bp) AS member_discharge_port
     FROM pre_planned_groups pg
     LEFT JOIN pre_planned_group_members pgm ON pgm.group_id = pg.id AND pgm.released_at IS NULL
     LEFT JOIN contracts c ON c.id = pgm.contract_id
@@ -633,6 +638,7 @@ export async function listPrePlannedGroups(filters: {
         contractDate: row.contract_date
           ? String(row.contract_date).slice(0, 10)
           : undefined,
+        dischargePort: row.member_discharge_port ? String(row.member_discharge_port) : undefined,
       });
     }
   }

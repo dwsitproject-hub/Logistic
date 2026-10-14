@@ -200,7 +200,8 @@ import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql
 import { ttlMemo } from '../utils/ttlMemo';
 import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from '../utils/groupPlantSql';
 import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
-import { buildShipmentDischargePortFilter, parseDischargePortParam } from '../utils/shipmentDischargePortSql';
+import { buildDischargePortFilters } from '../utils/shipmentDischargePortSql';
+import { resolveDischargePortPicks } from '../services/dischargePortMap.service';
 import {
   sqlB2bEndingDischargeDestExpr,
   sqlB2bOriginEndingChildLateralJoin,
@@ -576,8 +577,11 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     // the query so filter builders and cache keys all see one canonical value.
     await applyContractFilterAlias(req.query as Record<string, unknown>);
     const { status, vessel, port, delayed, sto, contract, plant, page = 1, limit = 10 } = req.query;
-    /** Discharge Port toolbar filter: shipment-level (see utils/shipmentDischargePortSql.ts); leaves the contract backlog out. */
-    const dischargePorts = parseDischargePortParam((req.query as { dischargePort?: unknown }).dischargePort);
+    /**
+     * Discharge Port toolbar filter, each pick already expanded to every spelling that stands for it (Master Port, utils/dischargePortMap.ts). Shipment-level for
+     * shipments and the SAP port the table draws for a backlog contract (utils/shipmentDischargePortSql.ts).
+     */
+    const dischargePorts = await resolveDischargePortPicks((req.query as { dischargePort?: unknown }).dischargePort);
     const { dateFrom, dateTo } = parseOptionalStrictDateRange({
       dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
       dateTo: (req.query as { dateTo?: unknown }).dateTo,
@@ -847,12 +851,12 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       cp = groupPlantFilter.nextIndex;
     }
 
-    const dischargePortFilter = buildShipmentDischargePortFilter(dischargePorts, cp);
-    if (dischargePortFilter.sql) {
-      relevantContractWhereParts.push(dischargePortFilter.sql);
-      shipmentBaseWhereParts.push(dischargePortFilter.sql);
-      // a contract with no shipment has no port: the backlog counts (Unplanned table count here, the other arms through buildUnplannedContractToolbarScope) are left out
-      contractScopeParts.push('FALSE');
+    const dischargePortFilter = buildDischargePortFilters(dischargePorts, cp);
+    if (dischargePortFilter.shipmentSql) {
+      relevantContractWhereParts.push(dischargePortFilter.shipmentSql);
+      shipmentBaseWhereParts.push(dischargePortFilter.shipmentSql);
+      // a backlog contract (no shipment yet) is matched by the SAP port the table draws for it; the other backlog arms get it through buildUnplannedContractToolbarScope
+      contractScopeParts.push(dischargePortFilter.contractSql);
       coreParams.push(...dischargePortFilter.params);
       cp = dischargePortFilter.nextIndex;
     }

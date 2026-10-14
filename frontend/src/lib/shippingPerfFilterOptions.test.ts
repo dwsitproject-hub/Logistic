@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { contractPerfProductOptions } from '@/lib/contractPerformanceFilters'
 import { shippingPerfAvailableValues } from '@/lib/shippingPerfFilterOptions'
+import { createDischargePortResolver } from '@/lib/dischargePortFilter'
 
 const ROWS = [
   { product: 'CPO', incoterm: 'FOB', plant_site: 'BONTANG', supplier: 'SUP A', group_name: 'G1', source_type: 'SAP', status: 'PLANNED' },
@@ -58,6 +59,30 @@ describe('Shipping Performance Discharge Port filter', () => {
   it('Blank finds the rows with no port', () => {
     const v = shippingPerfAvailableValues(rows, { ...NONE, selectedDischargePorts: ['Blank'] })
     expect(v.products).toEqual(['UCO'])
+  })
+
+  describe('through the Master Port mapping', () => {
+    const resolver = createDischargePortResolver([
+      { identity: 'BONTANG', canonical: 'PORT BONTANG' },
+      { identity: 'EUP EDIBLE OIL BONTANG', canonical: 'PORT BONTANG' },
+    ])
+    const mapped = [
+      { product: 'CPO', incoterm: 'FOB', plant_site: 'BONTANG', supplier: 'SUP A', sap_vessel_discharge_port: 'EUP EDIBLE OIL BONTANG', status: 'PLANNED' },
+      { product: 'PK', incoterm: 'CIF', plant_site: 'BONTANG', supplier: 'SUP B', port_of_discharge: 'BONTANG', status: 'PLANNED' },
+      { product: 'UCO', incoterm: 'FOB', plant_site: 'BATAM', supplier: 'SUP C', sap_vessel_discharge_port: 'EUP TRADING PLANT', status: 'PLANNED' },
+    ]
+
+    it('lists the Master Port once, and the plant name nobody mapped as itself', () => {
+      expect(shippingPerfAvailableValues(mapped, { ...NONE, dischargePortResolver: resolver }).dischargePorts).toEqual(['EUP TRADING PLANT', 'PORT BONTANG'])
+      // without the map the plant name is a port of its own
+      expect(shippingPerfAvailableValues(mapped, NONE).dischargePorts).toEqual(['BONTANG', 'EUP EDIBLE OIL BONTANG', 'EUP TRADING PLANT'])
+    })
+
+    it('a Master Port pick narrows the other lists to the rows of every text that maps to it', () => {
+      const v = shippingPerfAvailableValues(mapped, { ...NONE, selectedDischargePorts: ['PORT BONTANG'], dischargePortResolver: resolver })
+      expect(v.products).toEqual(['CPO', 'PK'])
+      expect(v.suppliers).toEqual(['SUP A', 'SUP B'])
+    })
   })
 })
 
