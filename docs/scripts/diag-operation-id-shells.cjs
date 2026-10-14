@@ -11,7 +11,8 @@
  *
  *   A  operation_id by kind x has an official 10-digit STO x status     (how many rows are empty, how many carry which kind)
  *   B  empty rows split by real KLIP activity                           (daily deliverables / audit UPDATE / documents / assignment)
- *   C  rows protected from SAP overwrite TODAY by operation_id alone   (0 would mean the protection never depended on it)
+ *   C  rows protected from SAP overwrite TODAY by operation_id alone   (a SAP_IMPORT id does not count: the re-import ignores it)
+ *   H  operation_id_source x kind                                       (how many ids KLIP assigned itself)
  *   D  ids shared by more than one STO                                  (an empty row must never adopt one of these)
  *   E  STOs whose rows carry more than one id; plain numbers that point at another STO
  *   F  assignments keyed by an operation id                             (rows to move when a number id is converted)
@@ -59,7 +60,15 @@ const QUERIES = [
   [
     'C  rows protected from SAP overwrite by operation_id ALONE (today)',
     String.raw`SELECT ${KIND} AS kind, count(*)::int AS rows
-               FROM shipments s WHERE NULLIF(BTRIM(s.operation_id), '') IS NOT NULL AND NOT ${OTHER_ACTIVITY} GROUP BY 1 ORDER BY 1`,
+               FROM shipments s
+               WHERE NULLIF(BTRIM(s.operation_id), '') IS NOT NULL
+                 AND to_jsonb(s)->>'operation_id_source' IS DISTINCT FROM 'SAP_IMPORT'
+                 AND NOT ${OTHER_ACTIVITY} GROUP BY 1 ORDER BY 1`,
+  ],
+  [
+    'H  operation_id_source (SAP_IMPORT = id KLIP gave a SAP-imported row; ignored by the SAP re-import protection). Column is read via to_jsonb: works before migration 236 too',
+    String.raw`SELECT COALESCE(to_jsonb(s)->>'operation_id_source', '(none: user / older)') AS source, ${KIND} AS kind, count(*)::int AS rows
+               FROM shipments s GROUP BY 1, 2 ORDER BY 1, 2`,
   ],
   [
     'D  operation ids shared by more than one STO',
