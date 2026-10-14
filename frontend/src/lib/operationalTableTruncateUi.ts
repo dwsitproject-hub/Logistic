@@ -30,18 +30,8 @@ export function operationalRowFieldTooltipText(
   return text && text !== '-' ? text : null
 }
 
-/** A cell that lists several values in one line shows them one per line in its tooltip: 'A, B, C' -> 'A\nB\nC' (null when there is nothing to show). */
-export function operationalMultiValueTooltip(text: string | null | undefined): string | null {
-  const parts = String(text ?? '')
-    .split(',')
-    .map((p) => p.trim())
-    .filter(Boolean)
-  return parts.length > 0 ? parts.join('\n') : null
-}
-
 /** Long text columns common across operational tables. */
 export const SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
-  'shipment_id',
   'vessel_name',
   'product',
   'supplier',

@@ -176,7 +176,6 @@ import {
 import { resolveLoadingPortDisplayLabel } from '@/lib/loadingPortDisplay'
 import { resolveShipmentListSuppliers } from '@/lib/shipmentListSuppliers'
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
-import { joinDistinctValues, mergeRowsByPo, type PoMergedRow } from '@/lib/shipmentPoGrouping'
 import {
   resolveShipmentApiLookupKey,
   resolveShipmentDisplayStoNumber,
@@ -240,14 +239,13 @@ import {
   type ShipmentsPipelineStageFilter,
 } from '@/lib/shipmentsPageFilterState'
 import {
-  OperationalInlineCommaCell,
+  OperationalStackedCommaCell,
   getOperationalColumnLayout,
   operationalTableColumnClass,
 } from '@/lib/operationalTableLayout'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
   SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS,
-  operationalMultiValueTooltip,
   operationalRowFieldTooltipText,
   shouldApplyOperationalTruncateTooltip,
 } from '@/lib/operationalTableTruncateUi'
@@ -760,24 +758,6 @@ function ShipmentRowEditButton({
       </TooltipContent>
     </Tooltip>
   )
-}
-
-/** The STO rows a table row stands for: itself, or - for the merged row of one CIF / CFR PO - every STO row of that PO (lib/shipmentPoGrouping.ts). */
-function poRowsOf(shipment: Shipment): Shipment[] {
-  return (shipment as PoMergedRow<Shipment>).poRows ?? [shipment]
-}
-
-/** Sum of a per-STO quantity over the rows a table row stands for; null when none of them has the quantity. */
-function sumKgOverRows(shipment: Shipment, pick: (row: Shipment) => number | null | undefined): number | null {
-  let any = false
-  let total = 0
-  for (const row of poRowsOf(shipment)) {
-    const kg = pick(row)
-    if (kg == null || Number.isNaN(kg)) continue
-    any = true
-    total += kg
-  }
-  return any ? total : null
 }
 
 function parseApiNumber(value: unknown): number | null {
@@ -4302,9 +4282,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => (s.row_kind === 'contract_backlog' ? '' : resolveShipmentDisplayStoNumber(s.sto_number)),
       render: (s) => (
-        <OperationalInlineCommaCell
-          value={(s as PoMergedRow<Shipment>).poStos?.join(', ') ?? resolveShipmentDisplayStoNumber(s.sto_number)}
-        />
+        <span className="text-sm">{resolveShipmentDisplayStoNumber(s.sto_number)}</span>
       ),
     },
     {
@@ -4432,9 +4410,16 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => resolveShipmentListLoadingPorts(s),
-      render: (s) => (
-        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map(resolveShipmentListLoadingPorts))} />
-      ),
+      render: (s) => {
+        const loadingPorts = resolveShipmentListLoadingPorts(s)
+        return (
+          <OperationalStackedCommaCell
+            value={loadingPorts}
+            title={loadingPorts || ''}
+            truncateLongParts
+          />
+        )
+      },
     },
     {
       id: 'discharge_port',
@@ -4443,8 +4428,16 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => resolveShipmentListDischargePorts(s),
       render: (s) => {
-        // Same cell as Loading Port: the ports side by side, an ellipsis when the column is narrower, the full list one per line in the hover tooltip.
-        return <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map(resolveShipmentListDischargePorts))} />
+        // Same cell as Loading Port: one port per line, ellipsis when the column is narrower than the name, and the full
+        // value in the hover title - a bare span clipped the name with no way to read the rest.
+        const dischargePorts = resolveShipmentListDischargePorts(s)
+        return (
+          <OperationalStackedCommaCell
+            value={dischargePorts}
+            title={dischargePorts || ''}
+            truncateLongParts
+          />
+        )
       },
     },
     {
@@ -4462,7 +4455,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.contract_ext_no || '',
       render: (s) => (
-        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map((r) => r.contract_ext_no))} />
+        <OperationalStackedCommaCell value={s.contract_ext_no} title={s.contract_ext_no || ''} />
       )
     },
     {
@@ -4472,7 +4465,7 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.po_numbers || '',
       render: (s) => (
-        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map((r) => r.po_numbers))} />
+        <OperationalStackedCommaCell value={s.po_numbers} title={s.po_numbers || ''} />
       )
     },
     {
@@ -4481,9 +4474,16 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => resolveShipmentListSuppliers(s),
-      render: (s) => (
-        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map(resolveShipmentListSuppliers))} />
-      ),
+      render: (s) => {
+        const supplier = resolveShipmentListSuppliers(s)
+        return (
+          <OperationalStackedCommaCell
+            value={supplier}
+            title={supplier || ''}
+            truncateLongParts
+          />
+        )
+      },
     },
     {
       id: 'vessel_name',
@@ -4569,7 +4569,7 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(sumKgOverRows(s, resolveShipmentListStoKg), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(resolveShipmentListStoKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -4584,9 +4584,9 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentListShipmentPlanKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {sumKgOverRows(s, shipmentListShipmentPlanKg) == null
+          {shipmentListShipmentPlanKg(s) == null
             ? '-'
-            : formatSapQtyMtDisplay(sumKgOverRows(s, shipmentListShipmentPlanKg), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+            : formatSapQtyMtDisplay(shipmentListShipmentPlanKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },
@@ -4600,7 +4600,7 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(sumKgOverRows(s, shipmentListDeliveredKgForViewTable), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(shipmentListDeliveredKgForViewTable(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -4615,7 +4615,7 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(sumKgOverRows(s, shipmentListReceiveKgForViewTable), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(shipmentListReceiveKgForViewTable(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -4743,7 +4743,10 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.contract_numbers || s.contract_number || '',
       render: (s) => (
-        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map((r) => r.contract_numbers || r.contract_number))} />
+        <OperationalStackedCommaCell
+          value={s.contract_numbers || s.contract_number}
+          title={s.contract_numbers || s.contract_number || ''}
+        />
       )
     },
     {
@@ -4753,7 +4756,10 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.contract_reference_po || '',
       render: (s) => (
-        <OperationalInlineCommaCell value={joinDistinctValues(poRowsOf(s).map((r) => r.contract_reference_po))} />
+        <OperationalStackedCommaCell
+          value={s.contract_reference_po}
+          title={s.contract_reference_po || ''}
+        />
       )
     },
     {
@@ -5337,7 +5343,7 @@ function ShipmentsPageContent() {
   }, [prePlannedTableGroups, compactColumns, sortKey, sortDir, sortStack, getColumnRawValue])
 
   const stoGroupedShipments = useMemo(
-    () => groupShipmentsBySto(mergeRowsByPo(paginatedShipments)),
+    () => groupShipmentsBySto(paginatedShipments),
     [paginatedShipments],
   )
 
@@ -7761,25 +7767,23 @@ function ShipmentsPageContent() {
                                         SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS,
                                       )
                                     const truncateTooltip = useTruncateTooltip
-                                      ? col.id === 'shipment_id'
-                                        ? operationalMultiValueTooltip(
-                                            (shipment as PoMergedRow<Shipment>).poStos?.join(', ') ??
-                                              resolveShipmentDisplayStoNumber(shipment.sto_number),
+                                      ? col.id === 'supplier' || col.id === 'loading_port'
+                                        ? (() => {
+                                            const text =
+                                              col.id === 'supplier'
+                                                ? resolveShipmentListSuppliers(shipment)
+                                                : resolveShipmentListLoadingPorts(shipment)
+                                            if (!text || text === '-') return null
+                                            return text
+                                              .split(',')
+                                              .map((part) => part.trim())
+                                              .filter(Boolean)
+                                              .join('\n')
+                                          })()
+                                        : operationalRowFieldTooltipText(
+                                            col.id,
+                                            shipment as unknown as Record<string, unknown>,
                                           )
-                                        : col.id === 'supplier' || col.id === 'loading_port'
-                                          ? operationalMultiValueTooltip(
-                                              joinDistinctValues(
-                                                poRowsOf(shipment).map(
-                                                  col.id === 'supplier' ? resolveShipmentListSuppliers : resolveShipmentListLoadingPorts,
-                                                ),
-                                              ),
-                                            )
-                                          : operationalMultiValueTooltip(
-                                              operationalRowFieldTooltipText(
-                                                col.id,
-                                                shipment as unknown as Record<string, unknown>,
-                                              ),
-                                            )
                                       : null
                                     const cellContent =
                                       col.id === 'vessel_name' && tableInlineEditActive ? (
@@ -8221,7 +8225,7 @@ function ShipmentsPageContent() {
                               </div>
                               <div className="min-w-0">
                                 <div className="font-semibold truncate">
-                                  {(shipment as PoMergedRow<Shipment>).poStos?.join(', ') ?? resolveShipmentDisplayStoNumber(shipment.sto_number)}
+                                  {resolveShipmentDisplayStoNumber(shipment.sto_number)}
                                 </div>
                                 {shipment.operation_id ? (
                                   <div className="text-[10px] text-gray-500 truncate">
