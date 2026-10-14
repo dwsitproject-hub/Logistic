@@ -142,10 +142,20 @@ export function rowDischargePort(row: ShippingPerformancePortSource): string {
  * plant name and maps to nothing does not hide a shipment port that does), else the one the table shows. Without a resolver, the one the table shows.
  */
 export function rowDischargePortForFilter(row: ShippingPerformancePortSource, resolver?: DischargePortResolver | null): string {
+  const r = resolver ?? null
+  const known = rowDischargePortMemo.get(row)
+  if (known && known.resolver === r) return known.port
   const candidates = dischargePortCandidates(row)
-  if (!resolver) return candidates[0] ?? ''
-  return candidates.find((text) => masterPortLabel(text, resolver) !== null) ?? candidates[0] ?? ''
+  const port = r ? candidates.find((text) => masterPortLabel(text, r) !== null) ?? candidates[0] ?? '' : candidates[0] ?? ''
+  rowDischargePortMemo.set(row, { resolver: r, port })
+  return port
 }
+
+/**
+ * The answer per row object and resolver: Shipping Performance reads it for every row in each of its filter passes (7 per click), and working out the candidates
+ * (regex clean-up of five texts) each time was ~9 ms a pass on 2,124 rows. Rows are not edited in place (a changed row is a new object), so a stored answer stays true.
+ */
+const rowDischargePortMemo = new WeakMap<object, { resolver: DischargePortResolver | null; port: string }>()
 
 export function rowMatchesToolbarMultiFilters(
   row: ShippingPerformancePortSource & {

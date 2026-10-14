@@ -14,11 +14,14 @@ import {
   attachSapNames,
   cleanSapName,
   dedupeSapNames,
+  MASTER_PORT_MAP_MEMO_KEY,
   MasterPortSapNameConflictError,
   parseSapNamesInput,
   refreshMasterPortIds,
   replaceSapNamesForPort,
+  SHIPMENT_MASTER_PORT_OPTIONS_MEMO_KEY,
 } from './masterPortSapNames';
+import { ttlMemo } from './ttlMemo';
 
 const PORT = '11111111-2222-3333-4444-555555555555';
 const OTHER = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -175,5 +178,17 @@ describe('refreshMasterPortIds', () => {
   it('never throws: the master change is saved already, a failed refresh is only a stale id until the next one', async () => {
     queryMock.mockRejectedValue(new Error('boom'));
     expect(await refreshMasterPortIds()).toBeNull();
+  });
+
+  it('drops the cached port map and Shipments port options, also when the refresh failed, so the next request reads the edited master', async () => {
+    for (const outcome of ['ok', 'fail'] as const) {
+      await ttlMemo(MASTER_PORT_MAP_MEMO_KEY, 60_000, async () => 'old map');
+      await ttlMemo(SHIPMENT_MASTER_PORT_OPTIONS_MEMO_KEY, 60_000, async () => 'old options');
+      if (outcome === 'ok') queryMock.mockResolvedValue({ rows: [{ changed: 1 }] });
+      else queryMock.mockRejectedValue(new Error('boom'));
+      await refreshMasterPortIds();
+      expect(await ttlMemo(MASTER_PORT_MAP_MEMO_KEY, 60_000, async () => 'new map')).toBe('new map');
+      expect(await ttlMemo(SHIPMENT_MASTER_PORT_OPTIONS_MEMO_KEY, 60_000, async () => 'new options')).toBe('new options');
+    }
   });
 });

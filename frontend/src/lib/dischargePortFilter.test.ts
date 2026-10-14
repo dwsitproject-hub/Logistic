@@ -127,3 +127,30 @@ describe('Shipping Performance row discharge port', () => {
     expect(rowMatchesToolbarMultiFilters(trading, { selectedDischargePorts: ['PORT BONTANG'], dischargePortResolver: resolver })).toBe(false)
   })
 })
+
+describe('dischargePortFilter: answers are remembered per resolver, never across resolvers', () => {
+  const other = createDischargePortResolver([{ identity: 'BONTANG', canonical: 'PORT LOKTUAN' }])
+
+  it('the same text gives the same label again, and a different map gives its own label', () => {
+    expect(masterPortLabel('Port Bontang', resolver)).toBe('PORT BONTANG')
+    expect(masterPortLabel('Port Bontang', resolver)).toBe('PORT BONTANG')
+    expect(masterPortLabel('Port Bontang', other)).toBe('PORT LOKTUAN')
+    expect(masterPortLabel('Port Bontang', null)).toBeNull()
+  })
+
+  it('a row read with one map and then another follows the second map', () => {
+    const row = { sap_vessel_discharge_port: 'EUP EDIBLE OIL BONTANG', port_of_discharge: 'BONTANG' }
+    expect(rowDischargePortForFilter(row, resolver)).toBe('EUP EDIBLE OIL BONTANG')
+    expect(rowDischargePortForFilter(row, other)).toBe('BONTANG')
+    expect(rowDischargePortForFilter(row, null)).toBe('EUP EDIBLE OIL BONTANG')
+  })
+
+  it('one selection array matched with two maps uses each map for the picks', () => {
+    const picks = ['PORT LOKTUAN']
+    expect(matchesDischargePortSelection('BONTANG', picks, resolver)).toBe(false)
+    expect(matchesDischargePortSelection('BONTANG', picks, other)).toBe(true)
+    // spelling only, before the map loads
+    expect(matchesDischargePortSelection('Port Loktuan', picks, null)).toBe(true)
+    expect(matchesDischargePortSelection('BONTANG', picks, null)).toBe(false)
+  })
+})

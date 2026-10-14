@@ -9,6 +9,14 @@ import type { PoolClient } from 'pg';
 import pool, { query } from '../database/connection';
 import logger from './logger';
 import { normalizeDischargePortIdentity } from './shipmentDischargePortSql';
+import { invalidateTtlMemo } from './ttlMemo';
+
+/**
+ * Cached answers that are read from the Master Port: the browser map (services/masterPortResolver.service.ts) and the Shipments Discharge Port options
+ * (contract.controller.ts). They are kept for minutes and dropped here on every Master Port change made through KLIP, so an edit shows on the next request.
+ */
+export const MASTER_PORT_MAP_MEMO_KEY = 'master-port-map-entries';
+export const SHIPMENT_MASTER_PORT_OPTIONS_MEMO_KEY = 'filter-options:shipment-master-ports';
 
 export class MasterPortSapNameConflictError extends Error {
   readonly statusCode = 409;
@@ -157,5 +165,8 @@ export async function refreshMasterPortIds(): Promise<number | null> {
   } catch (error) {
     logger.error('Refresh master port ids failed:', error);
     return null;
+  } finally {
+    invalidateTtlMemo(MASTER_PORT_MAP_MEMO_KEY);
+    invalidateTtlMemo(SHIPMENT_MASTER_PORT_OPTIONS_MEMO_KEY);
   }
 }

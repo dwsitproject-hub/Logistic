@@ -41,11 +41,27 @@ export function realDischargePicks(selected: readonly string[] | undefined): str
   return (selected ?? []).filter((port) => cleanDischargePortLabel(port) !== '' && cleanDischargePortLabel(port) !== BLANK_DISCHARGE_PORT.toUpperCase())
 }
 
+/**
+ * Answers per resolver and text. A page filters every row several times per click (Shipping Performance: once per filter list, 7 passes) while the rows carry a few
+ * hundred distinct texts, so the regex clean-up runs once per text instead of once per row and pass. A new map (a new resolver) starts empty.
+ */
+const masterPortLabelMemo = new WeakMap<DischargePortResolver, Map<string, string | null>>()
+
 /** The Master Port a text stands for, or null when it has none (empty, or a text nobody mapped). Null as well while the resolver has not loaded. */
 export function masterPortLabel(value: unknown, resolver?: DischargePortResolver | null): string | null {
-  const label = cleanDischargePortLabel(value);
-  if (!label || !resolver) return null;
-  return resolver.get(spellingIdentity(label)) ?? null;
+  if (!resolver) return null;
+  const key = typeof value === 'string' ? value : String(value ?? '');
+  let memo = masterPortLabelMemo.get(resolver);
+  if (!memo) {
+    memo = new Map();
+    masterPortLabelMemo.set(resolver, memo);
+  }
+  const known = memo.get(key);
+  if (known !== undefined) return known;
+  const label = cleanDischargePortLabel(key);
+  const answer = label ? resolver.get(spellingIdentity(label)) ?? null : null;
+  memo.set(key, answer);
+  return answer;
 }
 
 /** A port text as a read-only field DRAWS it: its Master Port when it has one, else the original text (a "-" or an empty value stays as it is). */
@@ -76,16 +92,31 @@ export function matchesDischargePortSelection(
   selectedPorts: readonly string[] | undefined,
   resolver?: DischargePortResolver | null,
 ): boolean {
-  const selected = realDischargePicks(selectedPorts)
-  if (selected.length === 0) return true
+  const picked = pickedIdentities(selectedPorts, resolver)
+  if (picked.size === 0) return true
   if (!resolver) {
     const identity = spellingIdentity(cleanDischargePortLabel(rowPort))
-    return identity !== '' && selected.some((port) => spellingIdentity(cleanDischargePortLabel(port)) === identity)
+    return identity !== '' && picked.has(identity)
   }
   const row = masterPortLabel(rowPort, resolver)
-  if (!row) return false
-  const rowIdentity = spellingIdentity(row)
-  return selected.some((port) => spellingIdentity(masterPortLabel(port, resolver) ?? cleanDischargePortLabel(port)) === rowIdentity)
+  return row !== null && picked.has(spellingIdentity(row))
+}
+
+/** The picks as identities, worked out once per (selection array, resolver): the selection is page state, so every row of a filter pass passes the same array. */
+const pickedIdentitiesMemo = new WeakMap<readonly string[], { resolver: DischargePortResolver | null; ids: Set<string> }>()
+
+function pickedIdentities(selectedPorts: readonly string[] | undefined, resolver: DischargePortResolver | null | undefined): Set<string> {
+  if (!selectedPorts || selectedPorts.length === 0) return new Set()
+  const r = resolver ?? null
+  const known = pickedIdentitiesMemo.get(selectedPorts)
+  if (known && known.resolver === r) return known.ids
+  const ids = new Set(
+    realDischargePicks(selectedPorts).map((port) =>
+      spellingIdentity(r ? masterPortLabel(port, r) ?? cleanDischargePortLabel(port) : cleanDischargePortLabel(port)),
+    ),
+  )
+  pickedIdentitiesMemo.set(selectedPorts, { resolver: r, ids })
+  return ids
 }
 
 /**

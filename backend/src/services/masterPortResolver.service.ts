@@ -7,6 +7,7 @@
  */
 import { query } from '../database/connection';
 import { ttlMemo } from '../utils/ttlMemo';
+import { MASTER_PORT_MAP_MEMO_KEY } from '../utils/masterPortSapNames';
 
 export interface MasterPortMapEntry {
   identity: string;
@@ -25,9 +26,12 @@ const MASTER_PORT_MAP_SQL = `
   WHERE i.identity <> ''
   ORDER BY i.identity`;
 
-/** Short-lived: a Master Port edit shows within the minute without a request per page load hitting the table. */
+/**
+ * Kept 5 minutes like the other filter options. A Master Port edit made in KLIP drops it at once (refreshMasterPortIds, utils/masterPortSapNames.ts); a port that
+ * only the DHM sync changed shows within the 5 minutes.
+ */
 export async function loadMasterPortMapEntries(): Promise<MasterPortMapEntry[]> {
-  return ttlMemo('master-port-map-entries', 30 * 1000, async () => {
+  return ttlMemo(MASTER_PORT_MAP_MEMO_KEY, 5 * 60 * 1000, async () => {
     const result = await query(MASTER_PORT_MAP_SQL);
     return (result.rows as Array<{ identity: string; canonical: string }>).map((r) => ({ identity: r.identity, canonical: r.canonical }));
   });

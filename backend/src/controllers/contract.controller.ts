@@ -174,6 +174,7 @@ import {
 } from '../utils/shipmentProductOptionsSql';
 import { buildShipmentMasterPortOptionsSql } from '../utils/shipmentDischargePortSql';
 import { loadMasterPortMapEntries } from '../services/masterPortResolver.service';
+import { SHIPMENT_MASTER_PORT_OPTIONS_MEMO_KEY } from '../utils/masterPortSapNames';
 
 export { B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL };
 
@@ -1347,10 +1348,12 @@ export const getContractFilterProducts = async (req: AuthRequest, res: Response)
 /**
  * Discharge Port options of the Shipments page: the Master Ports the page's own shipments and backlog contracts are at (utils/shipmentDischargePortSql.ts). A port text
  * that has no Master Port is not offered: it cannot be found through this filter (it is still found by PO and the other searches).
+ * The query reads every shipment and backlog contract of the page (2.3 s cold on the dev copy), so it is kept 5 minutes like the Product and Region/Plant options;
+ * a Master Port edit made in KLIP drops it at once (refreshMasterPortIds).
  */
 export const getContractFilterDischargePorts = async (_req: AuthRequest, res: Response) => {
   try {
-    const dischargePorts = await ttlMemo('filter-options:shipment-master-ports', 60 * 1000, async () => {
+    const dischargePorts = await ttlMemo(SHIPMENT_MASTER_PORT_OPTIONS_MEMO_KEY, 5 * 60 * 1000, async () => {
       const r = await query(buildShipmentMasterPortOptionsSql(shipmentPageOptionsScopeSql()));
       return (r.rows as Array<{ label: string }>).map((row) => row.label);
     });
