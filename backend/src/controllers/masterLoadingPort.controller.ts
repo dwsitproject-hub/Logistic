@@ -5,6 +5,22 @@ import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { NON_NUMERIC_PORT_NAME_FILTER } from '../utils/portDisplaySql';
+import {
+  assertSapNamesAvailable,
+  attachSapNames,
+  dedupeSapNames,
+  MasterPortSapNameConflictError,
+  parseSapNamesInput,
+  refreshMasterPortIds,
+  replaceSapNamesForPort,
+} from '../utils/masterPortSapNames';
+
+/** 409 for a VESSEL PORT (SAP) name that another port already has; false when the error is something else. */
+function respondSapNameConflict(error: unknown, res: Response): boolean {
+  if (!(error instanceof MasterPortSapNameConflictError)) return false;
+  res.status(409).json({ success: false, error: { message: error.message, conflicts: error.conflicts } });
+  return true;
+}
 
 function wantsDhmOverwrite(req: AuthRequest): boolean {
   const q = String((req.query as { dhmOverwrite?: unknown }).dhmOverwrite ?? '').toLowerCase();
@@ -234,7 +250,7 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
     res.json({
       success: true,
       data: {
-        items: await attachDhmPushState('port', listResult.rows),
+        items: await attachDhmPushState('port', await attachSapNames(listResult.rows)),
         pagination: {
           total: parseInt(countResult.rows[0]?.count ?? '0', 10),
           page: Number(page),
@@ -271,6 +287,8 @@ export const createMasterLoadingPort = async (req: AuthRequest, res: Response): 
       dhm_site_code,
       site_id,
     } = req.body;
+    const sapNames = parseSapNamesInput(req.body?.vessel_port_sap);
+    if (sapNames !== undefined) await assertSapNamesAvailable(dedupeSapNames(sapNames), { name: port });
 
     const insertSql = `
       INSERT INTO master_loading_ports (
@@ -306,11 +324,15 @@ export const createMasterLoadingPort = async (req: AuthRequest, res: Response): 
       linked.siteId,
     ]);
     const saved = result.rows[0] as Record<string, unknown>;
+    if (sapNames !== undefined) await replaceSapNamesForPort(String(saved.id), String(saved.port ?? port ?? ''), sapNames);
+    await refreshMasterPortIds();
     const dhm = await pushMasterPortToDhm(String(saved.id), saved, { overwrite: wantsDhmOverwrite(req) });
     const refreshed = await query(`SELECT * FROM master_loading_ports WHERE id = $1`, [saved.id]);
+    const [withNames] = await attachSapNames([refreshed.rows[0] ?? saved]);
 
-    res.status(201).json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
+    res.status(201).json({ success: true, data: { ...withNames, ...dhm } });
   } catch (error) {
+    if (respondSapNameConflict(error, res)) return;
     logger.error('Create master loading port error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to create master port' } });
   }
@@ -340,6 +362,11 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
       dhm_site_code,
       site_id,
     } = req.body;
+    const sapNames = parseSapNamesInput(req.body?.vessel_port_sap);
+    if (sapNames !== undefined) {
+      const current = await query(`SELECT port FROM master_loading_ports WHERE id = $1::uuid`, [id]);
+      await assertSapNamesAvailable(dedupeSapNames(sapNames), { id, name: port ?? current.rows[0]?.port });
+    }
 
     const updateSql = `
       UPDATE master_loading_ports
@@ -402,15 +429,26 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
       return;
     }
     const saved = result.rows[0] as Record<string, unknown>;
+    if (sapNames !== undefined) await replaceSapNamesForPort(String(saved.id), String(saved.port ?? ''), sapNames);
+    // a rename or a change of names can move every stored port text to another Master Port
+    await refreshMasterPortIds();
     const dhm = await pushMasterPortToDhm(String(saved.id), saved, { overwrite: wantsDhmOverwrite(req) });
     const refreshed = await query(`SELECT * FROM master_loading_ports WHERE id = $1`, [id]);
+    const [withNames] = await attachSapNames([refreshed.rows[0] ?? saved]);
 
-    res.json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
+    res.json({ success: true, data: { ...withNames, ...dhm } });
   } catch (error) {
+    if (respondSapNameConflict(error, res)) return;
     logger.error('Update master loading port error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to update master port' } });
   }
 };
+
+/** One uploaded row's VESSEL PORT (SAP) names (nothing when the row has no such column). */
+async function replaceRowSapNames(names: string[] | undefined, portId: string, portName: string): Promise<void> {
+  if (names === undefined || !portId) return;
+  await replaceSapNamesForPort(portId, portName, names);
+}
 
 export const bulkUploadMasterLoadingPorts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -446,6 +484,7 @@ export const bulkUploadMasterLoadingPorts = async (req: AuthRequest, res: Respon
         loading_rate_mt_per_hour,
         shipper,
       } = row;
+      const sapNames = parseSapNamesInput(row.vessel_port_sap);
 
       const portStr = typeof port === 'string' ? port.trim() : String(port ?? '').trim();
       if (!portStr) {
@@ -508,6 +547,7 @@ export const bulkUploadMasterLoadingPorts = async (req: AuthRequest, res: Respon
              WHERE id = $17`,
             updateValues
           );
+          await replaceRowSapNames(sapNames, String(existing.rows[0].id), portStr);
           updated += 1;
         } else {
           await query(
@@ -518,6 +558,8 @@ export const bulkUploadMasterLoadingPorts = async (req: AuthRequest, res: Respon
             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
             values
           );
+          const created = await query('SELECT id FROM master_loading_ports WHERE port = $1 LIMIT 1', [portStr]);
+          await replaceRowSapNames(sapNames, String(created.rows[0]?.id ?? ''), portStr);
           inserted += 1;
         }
       } catch (err: any) {
@@ -526,6 +568,7 @@ export const bulkUploadMasterLoadingPorts = async (req: AuthRequest, res: Respon
       }
     }
 
+    await refreshMasterPortIds();
     const failed = errors.length;
     res.json({
       success: true,
@@ -552,6 +595,7 @@ export const deleteMasterLoadingPort = async (req: AuthRequest, res: Response): 
       res.status(404).json({ success: false, error: { message: 'Master port not found' } });
       return;
     }
+    await refreshMasterPortIds();
     res.json({ success: true, data: { id: result.rows[0].id } });
   } catch (error) {
     logger.error('Delete master loading port error:', error);

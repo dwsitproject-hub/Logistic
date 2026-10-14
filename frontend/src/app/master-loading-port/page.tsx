@@ -55,7 +55,13 @@ interface MasterLoadingPort {
   loading_method: string | null
   loading_rate_mt_per_hour: number | null
   shipper: string | null
+  /** The SAP Vessel Port texts that stand for this port (one text, one port). */
+  vessel_port_sap?: string[]
 }
+
+/** Only a real Master Port (a uuid) carries VESSEL PORT (SAP) names; the list also holds port texts seen on shipments, which are not ports. */
+const IS_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const SAP_NAMES_PLACEHOLDER = 'One SAP Vessel Port text per line, e.g.\nEUP EDIBLE OIL BONTANG\nPABRIK WKSM'
 
 function portCell(value: string | number | null | undefined): string {
   if (value == null || value === '') return '-'
@@ -66,6 +72,7 @@ const PORT_COLUMNS: MasterListTableColumn<MasterLoadingPort>[] = [
   { id: 'code_klip', label: 'Port Code (KLIP)', getText: (row) => portCell(row.code_klip) },
   { id: 'code_dhm', label: 'Port Code (DHM)', getText: (row) => portCell(row.code_dhm) },
   { id: 'port', label: 'Port', getText: (row) => portCell(row.port) },
+  { id: 'vessel_port_sap', label: 'VESSEL PORT (SAP)', getText: (row) => portCell((row.vessel_port_sap ?? []).join('; ')) },
   dhmStatusListColumn<MasterLoadingPort>(),
 ]
 
@@ -76,7 +83,7 @@ export default function MasterLoadingPortPage() {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState('port')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const portColumns = useListColumnLayout('master-port.visibleColumns.v4', PORT_COLUMNS)
+  const portColumns = useListColumnLayout('master-port.visibleColumns.v5', PORT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterLoadingPort | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -134,7 +141,7 @@ export default function MasterLoadingPortPage() {
   const openEdit = (p: MasterLoadingPort) => {
     setEditing(p)
     setIsFormOpen(true)
-    setForm(p)
+    setForm({ ...p, vessel_port_sap: p.vessel_port_sap ?? [] })
   }
 
   const handleChange = (field: keyof MasterLoadingPort, value: any) => {
@@ -147,8 +154,12 @@ export default function MasterLoadingPortPage() {
         alert('Port is required')
         return
       }
-      const payload = {
+      // Only a real Master Port (a uuid) carries VESSEL PORT (SAP) names; one text per line, saved as the whole list.
+      const payload: { port: string; vessel_port_sap?: string[] } = {
         port: form.port,
+      }
+      if (isAdmin && (!editing || IS_UUID.test(editing.id))) {
+        payload.vessel_port_sap = (form.vessel_port_sap ?? []).map((v) => v.trim()).filter(Boolean)
       }
       const persist = (overwrite: boolean) => {
         const qs = overwrite ? '?dhmOverwrite=true' : ''
@@ -254,6 +265,8 @@ export default function MasterLoadingPortPage() {
           loading_method: get('loading method') || null,
           loading_rate_mt_per_hour: numOrNull(col(COL.P) || get('loading rate (mt/hour)') || get('loading rate (kg/hour)')),
           shipper: get('shipper') || null,
+          // optional column; several texts in one cell separated by ; or |
+          vessel_port_sap: get('vessel port (sap)') || undefined,
         }
       })
 
@@ -353,6 +366,20 @@ export default function MasterLoadingPortPage() {
                     value={form.port || ''}
                     onChange={(e) => handleChange('port', e.target.value)}
                   />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">VESSEL PORT (SAP)</label>
+                  <textarea
+                    className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:bg-slate-50"
+                    rows={4}
+                    placeholder={SAP_NAMES_PLACEHOLDER}
+                    value={(form.vessel_port_sap ?? []).join('\n')}
+                    disabled={!isAdmin || (!!editing && !IS_UUID.test(editing.id))}
+                    onChange={(e) => handleChange('vessel_port_sap', e.target.value.split(/\r?\n/))}
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    The texts SAP writes as a vessel port that belong to this port. A text can belong to one port only; it decides which Master Port a SAP transaction is shown under.
+                  </p>
                 </div>
               </div>
               <div className="flex justify-end gap-2">
