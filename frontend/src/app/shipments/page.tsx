@@ -251,6 +251,7 @@ import {
 } from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
+import { isMultiStoPo, poStoOutstandingHelpText } from '@/lib/poStoOutstanding'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { DEFAULT_SHIPMENTS_COMPACT_SORT, forgetShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
@@ -394,6 +395,8 @@ interface Shipment {
   quantity_receive?: number
   outstanding_quantity?: number
   outstanding_qty_planning?: number
+  /** Distinct SAP STOs on the row's PO. Above 1, outstanding_quantity is the PO's, reduced by every one of them. */
+  po_sto_count?: number | null
   /** Same Trade Cycle days as Contract Performance (Unplanned card only in UI). */
   trade_cycle_days?: number | null
   contract_qty?: number
@@ -4687,10 +4690,18 @@ function ShipmentsPageContent() {
         if (!qtyFieldsReady) return <QtyLoadingDots />
         const kg = shipmentListOutstandingKgForViewTable(s)
         return (
-          <span
-            className={`text-sm break-words tabular-nums ${outstandingQtyMtColorClass(kg)}`}
-          >
-            {formatSapOutstandingQtyMtDisplay(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+          <span className="inline-flex items-center gap-1">
+            <span
+              className={`text-sm break-words tabular-nums ${outstandingQtyMtColorClass(kg)}`}
+            >
+              {formatSapOutstandingQtyMtDisplay(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+            </span>
+            {isMultiStoPo(s.po_sto_count) ? (
+              <FieldHelp
+                text={poStoOutstandingHelpText(s.po_sto_count, s.incoterm)}
+                className="text-blue-500 hover:text-blue-700"
+              />
+            ) : null}
           </span>
         )
       }

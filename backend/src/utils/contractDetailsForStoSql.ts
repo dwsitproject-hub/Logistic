@@ -5,9 +5,8 @@ import {
   sqlStoScopedDeliveredKgSql,
   sqlStoScopedReceiveKgSql,
 } from './contractLogisticsStoDetailSql';
-import { sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { shipmentOutstandingQtyExpr } from './shipmentOutstandingQtySql';
-import { sqlShipmentListOsBaseQtyExpr } from './shipmentListQtySql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
 import { sqlLatestSpdB2bCte, sqlB2bChildExcludeWhere } from './shippingPerformanceStoMetricsSql';
 
@@ -91,8 +90,13 @@ function sqlPoSapStoCountExpr(contractNumberExpr: string, poNumberExpr: string):
 }
 
 /**
- * STO-scoped OS actual — contract qty minus STO-scoped fulfilled (incoterm-aware).
- * Parallel multi-STO POs use STO Qty as base (same as Shipments View Table).
+ * OS Qty (actual) of one PO line - the same figure the Shipments View Table shows for it.
+ *
+ * One STO on the PO: Contract Qty minus that STO's fulfilled (Delivery / Receive by incoterm), as before.
+ *
+ * Several parallel STOs on the PO: the PO-level OS - Contract Qty minus the TOTAL Delivery / Receive of every STO of the PO, by the PO's incoterm (the qty_move
+ * figure the status cards, Contracts and the table use). This used to take the STO's own Qty as the base, so one STO of a 2,500 MT PO read OS 143 MT (its STO Qty,
+ * less nothing) beside a Contract Qty of 2,500 MT, and the PO's other STOs were invisible in the figure. The STO Qty is not a base for OS any more.
  */
 function stoScopedOutstandingActualSql(opts: {
   contractQtyExpr: string;
@@ -100,15 +104,9 @@ function stoScopedOutstandingActualSql(opts: {
   contractNumberExpr: string;
   stoKeyExpr: string;
   poNumberExpr: string;
-  stoQtyExpr: string;
 }): string {
-  const osBase = sqlShipmentListOsBaseQtyExpr({
-    poStoCountExpr: sqlPoSapStoCountExpr(opts.contractNumberExpr, opts.poNumberExpr),
-    stoQtyExpr: opts.stoQtyExpr,
-    contractQtyExpr: opts.contractQtyExpr,
-  });
-  return shipmentOutstandingQtyExpr({
-    stoQtyExpr: `COALESCE((${osBase}), 0)`,
+  const singleSto = shipmentOutstandingQtyExpr({
+    stoQtyExpr: `COALESCE((${opts.contractQtyExpr})::numeric, 0)`,
     receiveExpr: stoScopedReceiveKgSql(
       opts.contractNumberExpr,
       opts.contractQtyExpr,
@@ -124,6 +122,16 @@ function stoScopedOutstandingActualSql(opts: {
     ),
     incotermExpr: opts.incotermExpr,
   });
+  const poLevel = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: opts.contractQtyExpr,
+    incotermExpr: opts.incotermExpr,
+    contractNumberExpr: opts.contractNumberExpr,
+  });
+  return `CASE
+    WHEN COALESCE((${sqlPoSapStoCountExpr(opts.contractNumberExpr, opts.poNumberExpr)})::int, 1) > 1
+      THEN (${poLevel})
+    ELSE (${singleSto})
+  END`;
 }
 
 /**
@@ -245,21 +253,14 @@ export function buildContractDetailsForStoSql(): string {
 
   const plStoMatch = (alias: string) => stoMatchForContract(alias, 'pl.contract_number');
 
-  const plSapStoQty = sqlPoStoSapQtyKg({
-    contractNumberExpr: 'pl.contract_number',
-    poNumberExpr: `COALESCE(pl.po_number, '')`,
-    contractQtyExpr: 'pl.contract_qty',
-    stoKeyExpr: '$1::text',
-  });
-
   const plOutstandingActual = stoScopedOutstandingActualSql({
     contractQtyExpr: 'pl.contract_qty',
     incotermExpr: 'pl.incoterm',
     contractNumberExpr: 'pl.contract_number',
     stoKeyExpr: '$1::text',
     poNumberExpr: 'pl.po_number',
-    stoQtyExpr: plSapStoQty,
   });
+  const plPoStoCount = `COALESCE((${sqlPoSapStoCountExpr('pl.contract_number', 'pl.po_number')})::int, 1)`;
 
   const plDeliveredKg = stoScopedDeliveredKgSql(
     'pl.contract_number',
@@ -289,13 +290,6 @@ export function buildContractDetailsForStoSql(): string {
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1)`;
 
-  const socSapStoQty = sqlPoStoSapQtyKg({
-    contractNumberExpr: 'soc.contract_number',
-    poNumberExpr: socPoNumberExpr,
-    contractQtyExpr: socContractQtyExpr,
-    stoKeyExpr: '$1::text',
-  });
-
   const socStoMatch = (alias: string) => stoMatchForContract(alias, 'soc.contract_number');
 
   const socOutstandingActual = stoScopedOutstandingActualSql({
@@ -304,8 +298,8 @@ export function buildContractDetailsForStoSql(): string {
     contractNumberExpr: 'soc.contract_number',
     stoKeyExpr: '$1::text',
     poNumberExpr: socPoNumberExpr,
-    stoQtyExpr: socSapStoQty,
   });
+  const socPoStoCount = `COALESCE((${sqlPoSapStoCountExpr('soc.contract_number', socPoNumberExpr)})::int, 1)`;
 
   const socDeliveredKg = stoScopedDeliveredKgSql(
     'soc.contract_number',
@@ -424,6 +418,7 @@ export function buildContractDetailsForStoSql(): string {
       ),
       po_lines AS (
         SELECT
+          c.id AS contract_row_id,
           c.contract_id AS contract_number,
           NULLIF(TRIM(c.po_number), '') AS po_number,
           c.quantity_ordered AS contract_qty,
@@ -445,6 +440,14 @@ export function buildContractDetailsForStoSql(): string {
           WHERE c.contract_id = cc.contract_number
             AND UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIXED', 'MIX')
         )
+      ),
+      /*
+       * The qty_move figures (total Delivery / Receive of every STO of a contract, B2B children overlaid) the PO-level OS reads. The snapshot the status cards, Contracts and
+       * the View Table read, by primary key; NOT MATERIALIZED so each lookup stays a key lookup instead of a scan of the CTE.
+       */
+      qty_move AS NOT MATERIALIZED (
+        SELECT contract_number, quantity_delivery_trucking, quantity_delivery_vessel, quantity_receive, quantity_delivery
+        FROM contract_qty_move_snapshot
       ),
       /*
        * Defined HERE, not at the top, and scoped to the contracts this query can actually join to.
@@ -469,6 +472,9 @@ export function buildContractDetailsForStoSql(): string {
         COALESCE(pl.contract_qty, 0) AS contract_qty,
         ${plOutstandingActual} AS outstanding_qty_actual,
         ${plOutstandingActual} AS outstanding_qty,
+        ${plPoStoCount} AS po_sto_count,
+        pl.contract_row_id,
+        pl.incoterm AS incoterm,
         ${plDeliveredKg} AS quantity_delivered,
         ${plReceiveKg} AS quantity_receive,
         ${sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'plan')} AS quantity_shipment_plan,
@@ -513,6 +519,9 @@ export function buildContractDetailsForStoSql(): string {
         ${socContractQtyExpr} AS contract_qty,
         ${socOutstandingActual} AS outstanding_qty_actual,
         ${socOutstandingActual} AS outstanding_qty,
+        ${socPoStoCount} AS po_sto_count,
+        NULL::uuid AS contract_row_id,
+        (SELECT c.incoterm FROM contracts c WHERE c.contract_id = soc.contract_number LIMIT 1) AS incoterm,
         ${socDeliveredKg} AS quantity_delivered,
         ${socReceiveKg} AS quantity_receive,
         ${sqlSiblingShipmentKlipQtyExpr('soc.contract_number', 'plan')} AS quantity_shipment_plan,

@@ -19,6 +19,41 @@ describe('sqlSiblingShipmentKlipQtyExpr', () => {
   });
 });
 
+describe('buildContractDetailsForStoSql OS Qty of a PO line', () => {
+  const sql = buildContractDetailsForStoSql();
+  const flat = sql.replace(/\s+/g, ' ');
+
+  it('several STOs on the PO: the PO-level OS (Contract Qty less the TOTAL Delivery/Receive of every STO, by incoterm), as the View Table shows it', () => {
+    // the qty_move figures come from the snapshot by primary key
+    expect(flat).toContain('qty_move AS NOT MATERIALIZED');
+    expect(flat).toContain('FROM contract_qty_move_snapshot');
+    expect(flat).toContain('SELECT qm.quantity_receive FROM qty_move qm WHERE qm.contract_number = pl.contract_number');
+    // chosen per PO line by the number of distinct SAP STOs of the PO
+    expect(flat).toContain('FROM sap_processed_data spd_cnt');
+    expect(flat).toContain(')::int, 1) > 1 THEN');
+  });
+
+  it('the STO\'s own Qty is not a base for OS any more', () => {
+    expect(flat).not.toContain('sqlShipmentListOsBaseQtyExpr');
+    expect(flat).not.toContain('sap_sto_qty');
+    // a single STO still reads Contract Qty less that STO's fulfilled
+    expect(flat).toContain('COALESCE((pl.contract_qty)::numeric, 0)');
+  });
+
+  it('tells the page how many STOs the PO has and which contract row to ask for their list', () => {
+    expect(flat).toContain('AS po_sto_count');
+    expect(flat).toContain('pl.contract_row_id');
+    expect(flat).toContain('NULL::uuid AS contract_row_id');
+    expect(flat).toContain('c.id AS contract_row_id');
+  });
+
+  it('both UNION arms carry the same OS and count columns', () => {
+    expect(flat.match(/ AS po_sto_count/g)?.length).toBe(2);
+    expect(flat.match(/ AS incoterm,/g)?.length).toBe(2);
+    expect(flat.match(/ AS outstanding_qty_actual/g)?.length).toBe(2);
+  });
+});
+
 describe('buildContractDetailsForStoSql', () => {
   it('discovers contracts by sto_number and returns one row per PO line', () => {
     const sql = buildContractDetailsForStoSql();
@@ -34,7 +69,6 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('raw_quantity_delivery_vessel');
     expect(sql).toContain("~ '^(OP-|MNL-|MSEA-)'");
     expect(sql).toContain("'Operation ID'");
-    expect(sql).not.toContain('qty_move');
     expect(sql).toContain('po_number::text');
     expect(sql).toContain('UNION ALL');
     expect(sql).toContain("IN ('SEA', 'MIXED', 'MIX')");

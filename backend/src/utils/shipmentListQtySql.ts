@@ -359,6 +359,8 @@ export function shipmentListPageQtySelectSql(spAlias = 'sp'): string {
         ${sapDelivery} AS quantity_delivered_sap,
         sm.planning_qty AS planning_qty,
         sm.outstanding_qty_planning AS outstanding_qty_planning,
+        -- distinct SAP STOs on the row's PO: above 1 the OS below is the PO's, reduced by the Delivery / Receive of ALL of them (the page says so next to the figure)
+        COALESCE((sm.po_sto_count)::int, 1) AS po_sto_count,
         CASE
           WHEN COALESCE((sm.po_sto_count)::int, 1) > 1
             THEN (${poLevelOutstanding})

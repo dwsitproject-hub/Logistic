@@ -64,6 +64,8 @@ import { formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import api from '@/lib/api'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
+import { isMultiStoPo } from '@/lib/poStoOutstanding'
+import { PoStoOutstandingHelp } from '@/components/shared/PoStoOutstandingHelp'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { resolveKlipPortInputValue, resolveKlipPortNameFromRow, resolveSapPortNameFromRow } from '@/lib/loadingPortDisplay'
 import { hasShipmentPlanQtyEdits, hasVesselPortsQuantityUserEdits, quantityKgValuesEqual } from '@/lib/vesselPortsQuantityEdits'
@@ -586,6 +588,11 @@ type ShipmentDetailRow = {
   quantity_receive_klip: number | null
   /** SAP Vessel OA Budget (IDR/KG) for this PO line. */
   vessel_oa_budget_sap: number | null
+  /** Distinct SAP STOs on the PO: above 1, outstanding_qty_actual is the PO's (reduced by the other STOs too). */
+  po_sto_count: number
+  /** Contract row id, to list the PO's STOs next to the OS Qty. Null for a SAP-only contract. */
+  contract_row_id: string | null
+  incoterm: string
 }
 
 async function fetchContractValidateEnrichment(contractNumber: string): Promise<{
@@ -641,6 +648,9 @@ function contractDetailRowFromApi(
     quantity_delivered_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_delivered_klip)),
     quantity_receive_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_receive_klip)),
     vessel_oa_budget_sap: parseApiNumber(d.vessel_oa_budget_sap),
+    po_sto_count: Math.max(1, Math.trunc(parseApiNumber(d.po_sto_count) ?? 1)),
+    contract_row_id: String(d.contract_row_id ?? '').trim() || null,
+    incoterm: String(d.incoterm ?? '').trim(),
   }
 }
 
@@ -692,6 +702,9 @@ async function buildContractDetailRows(
         quantity_delivered_klip: null,
         quantity_receive_klip: null,
         vessel_oa_budget_sap: null,
+        po_sto_count: 1,
+        contract_row_id: null,
+        incoterm: '',
       }
     })
   }
@@ -2508,7 +2521,7 @@ export function EditShipmentModal({
                           <span title="SAP STO-scoped receive quantity">Receive Qty (SAP)</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Contract qty minus STO-scoped SAP receive/delivery (incoterm-aware) — same as Shipping Performance">
+                          <span title="Contract Qty minus the Delivery / Receive of the PO (by Incoterm). When the PO has several STOs, the total of all of them - the same OS Qty as the Shipments View Table.">
                             OS Qty
                           </span>
                         </TableHead>
@@ -2563,7 +2576,17 @@ export function EditShipmentModal({
                               <MtQtyReadOnly valueKg={row.quantity_receive_sap} />
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              <MtQtyReadOnly valueKg={row.outstanding_qty_actual} />
+                              <div className="flex items-center justify-end gap-1">
+                                {isMultiStoPo(row.po_sto_count) ? (
+                                  <PoStoOutstandingHelp
+                                    stoCount={row.po_sto_count}
+                                    incoterm={row.incoterm}
+                                    contractRowId={row.contract_row_id}
+                                    currentSto={stoNumber}
+                                  />
+                                ) : null}
+                                <MtQtyReadOnly valueKg={row.outstanding_qty_actual} />
+                              </div>
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {readOnly ? (
@@ -2651,6 +2674,12 @@ export function EditShipmentModal({
                   Grand Total Delivered / Received Qty (Klip) is the STO total shown on Shipments View Table.
                   One PO with several STOs: each shipment row is that STO only.
                 </p>
+                {detailRows.some((row) => isMultiStoPo(row.po_sto_count)) ? (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    OS Qty of a PO with several STOs is the PO&apos;s: Contract Qty less the total Delivery / Receive of all its STOs, the same as the Shipments View Table.
+                    Hover the (i) beside it to see each STO&apos;s Delivery | Receive.
+                  </p>
+                ) : null}
 
                 {vesselCapacityMt != null && vesselCapacityMt > 0 && (
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
