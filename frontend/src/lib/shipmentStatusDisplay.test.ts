@@ -1,6 +1,7 @@
 import {
   formatShipmentStatusLabel,
   shipmentStatusBadgeClass,
+  shipmentStatusBadgeLayout,
   shipmentStatusLabelLines,
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from './shipmentStatusDisplay'
@@ -51,5 +52,27 @@ describe('shipmentStatusLabelLines', () => {
   it('keeps other statuses as a single line', () => {
     expect(shipmentStatusLabelLines('LOADING')).toEqual(['Loading'])
     expect(shipmentStatusLabelLines('ARRIVED_LP')).toEqual(['Arrived LP'])
+  })
+})
+
+describe('shipmentStatusBadgeLayout', () => {
+  it('a status that is too long for the Shipping Performance column (Completed Loading) is two lines inside its chip, not clipped', () => {
+    const layout = shipmentStatusBadgeLayout('COMPLETED_LOADING')
+    expect(layout.lines).toEqual(['Completed', 'Loading'])
+    expect(layout.className).toContain('whitespace-normal')
+    expect(layout.className).toContain('h-auto')
+    expect(layout.className).not.toContain('whitespace-nowrap')
+  })
+
+  it('every other status stays on one line and never wraps', () => {
+    for (const key of Object.keys(SHIPMENT_STATUS_DISPLAY_LABELS).filter((k) => k !== 'COMPLETED_LOADING')) {
+      const layout = shipmentStatusBadgeLayout(key)
+      expect(layout.lines).toHaveLength(1)
+      expect(layout.className).toContain('whitespace-nowrap')
+    }
+  })
+
+  it('no status gives an empty chip', () => {
+    expect(shipmentStatusBadgeLayout(null).lines.length).toBeGreaterThan(0)
   })
 })

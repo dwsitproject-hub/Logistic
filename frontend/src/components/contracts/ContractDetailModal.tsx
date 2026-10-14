@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { X } from 'lucide-react'
+import { drawnPortLabel } from '@/lib/dischargePortFilter'
+import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import api from '@/lib/api'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, formatRupiah } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -438,6 +440,8 @@ export function ContractDetailModal({
   /** Raise z-index when opened above vessel/shipment modals (z-[60]). */
   stacked?: boolean
 }) {
+  // read-only port fields below are drawn as their Master Port when the map has one, else as SAP / KLIP wrote them
+  const portResolver = useDischargePortResolver()
   const cycleHelp = showMonthDeliveryEnd
     ? {
         outstanding: FIELD_HELP.contractPerfOutstandingQty,
@@ -1794,8 +1798,8 @@ export function ContractDetailModal({
                     <StoDetailField label="Status" value={String(stoDetailData.status ?? '-')} />
                     <StoDetailField label="Contract(s)" value={String(stoDetailData.contract_numbers ?? '-')} />
                     <StoDetailField label="Vessel Name" value={String(stoDetailData.vessel_name ?? '-')} />
-                    <StoDetailField label="Port of Loading" value={String(stoDetailData.port_of_loading ?? '-')} />
-                    <StoDetailField label="Port of Discharge" value={String(stoDetailData.port_of_discharge ?? '-')} />
+                    <StoDetailField label="Port of Loading" value={drawnPortLabel(String(stoDetailData.port_of_loading ?? '-'), portResolver)} />
+                    <StoDetailField label="Port of Discharge" value={drawnPortLabel(String(stoDetailData.port_of_discharge ?? '-'), portResolver)} />
                     <StoDetailField label="Product" value={String(stoDetailData.product ?? '-')} />
                   </StoDetailSection>
 

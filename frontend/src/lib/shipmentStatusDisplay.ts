@@ -53,6 +53,18 @@ export function shipmentStatusLabelLines(status: string | null | undefined): str
   return [formatShipmentStatusLabel(status)]
 }
 
+/**
+ * How a status chip is laid out in a narrow table column: the label split into lines, and the classes that keep it whole. A status that fits (Planned, Arrived LP) stays
+ * on one line and never wraps; "Completed Loading" is two lines inside its chip instead of being clipped at the cell edge.
+ */
+export function shipmentStatusBadgeLayout(status: string | null | undefined): { lines: string[]; className: string } {
+  const lines = shipmentStatusLabelLines(status)
+  return {
+    lines,
+    className: lines.length > 1 ? 'h-auto whitespace-normal leading-tight text-center' : 'whitespace-nowrap shrink-0',
+  }
+}
+
 /** Tailwind badge classes aligned with Shipments list status chips. */
 export function shipmentStatusBadgeClass(status: string | null | undefined): string {
   switch (normalizeShipmentStatusKey(status)) {

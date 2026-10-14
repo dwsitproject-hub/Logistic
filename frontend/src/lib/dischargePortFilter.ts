@@ -48,6 +48,11 @@ export function masterPortLabel(value: unknown, resolver?: DischargePortResolver
   return resolver.get(spellingIdentity(label)) ?? null;
 }
 
+/** A port text as a read-only field DRAWS it: its Master Port when it has one, else the original text (a "-" or an empty value stays as it is). */
+export function drawnPortLabel(value: string, resolver?: DischargePortResolver | null): string {
+  return masterPortLabel(value, resolver) ?? value
+}
+
 /** The label a row is DRAWN under: its Master Port, else its own text, else Blank. */
 export function dischargePortLabel(value: unknown, resolver?: DischargePortResolver | null): string {
   const label = cleanDischargePortLabel(value)

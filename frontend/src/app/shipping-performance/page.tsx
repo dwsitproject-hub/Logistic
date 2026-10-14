@@ -76,7 +76,7 @@ import {
   TC_VESSEL_PERF_TOOLTIPS,
   TC_VESSEL_TOP_RANK_METRIC_LABELS,
 } from '@/lib/shipmentTcPerformanceLabels'
-import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
+import { shipmentStatusBadgeClass, shipmentStatusBadgeLayout } from '@/lib/shipmentStatusDisplay'
 import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
@@ -3368,14 +3368,20 @@ function ShippingPerformancePageContent() {
                                 </span>
                               )
                             } else if (key === 'status') {
+                              const statusLayout = shipmentStatusBadgeLayout(rawValue ? String(rawValue) : null)
                               cellContent = rawValue ? (
                                 <Badge
-                                  className={cn(
-                                    'text-xs whitespace-nowrap shrink-0',
-                                    shipmentStatusBadgeClass(String(rawValue)),
-                                  )}
+                                  className={cn('text-xs', statusLayout.className, shipmentStatusBadgeClass(String(rawValue)))}
                                 >
-                                  {formatShipmentStatusLabel(String(rawValue))}
+                                  {statusLayout.lines.length > 1 ? (
+                                    <span className="inline-block text-center leading-tight">
+                                      {statusLayout.lines[0]}
+                                      <br />
+                                      {statusLayout.lines[1]}
+                                    </span>
+                                  ) : (
+                                    statusLayout.lines[0]
+                                  )}
                                 </Badge>
                               ) : (
                                 <span className="text-sm text-gray-400">-</span>

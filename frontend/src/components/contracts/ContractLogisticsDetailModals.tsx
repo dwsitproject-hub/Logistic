@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { X, Pencil } from 'lucide-react'
 import api from '@/lib/api'
+import { drawnPortLabel } from '@/lib/dischargePortFilter'
+import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { formatDateDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
@@ -289,6 +291,8 @@ export function ContractShipmentDetailModal({
   contractId: string | null
   onClose: () => void
 }) {
+  // the read-only port fields are drawn as their Master Port when the map has one, else as SAP / KLIP wrote them
+  const portResolver = useDischargePortResolver()
   const [loading, setLoading] = useState(false)
   const [rows, setRows] = useState<ShipmentRow[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -431,8 +435,8 @@ export function ContractShipmentDetailModal({
                       <Field label="Vessel code" value={formatVesselCodeDisplay(selected.vessel_code)} />
                       <Field label="Voyage" value={selected.voyage_no} />
                       <Field label="Vessel owner" value={selected.vessel_owner} />
-                      <Field label="Port of loading" value={selected.port_of_loading} />
-                      <Field label="Port of discharge" value={selected.port_of_discharge} />
+                      <Field label="Port of loading" value={drawnPortLabel(selected.port_of_loading, portResolver)} />
+                      <Field label="Port of discharge" value={drawnPortLabel(selected.port_of_discharge, portResolver)} />
                       <Field label="Quantity shipped" value={fmtNum(selected.quantity_shipped)} />
                     </div>
                   </div>

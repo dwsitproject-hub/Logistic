@@ -109,3 +109,16 @@ describe('applyOilLossGlobalFilters with a discharge port', () => {
     ).toEqual(['keep'])
   })
 })
+
+describe('Oil Loss discharge port: a trucking row is not at a port', () => {
+  const resolver = createDischargePortResolver([{ identity: 'BONTANG', canonical: 'PORT BONTANG' }])
+  it('a truck row is never found by a picked port and is not offered; a vessel row is', () => {
+    const truckRow = { transport_mode: 'LAND', unloading_location: 'PORT BONTANG' }
+    const seaRow = { transport_mode: 'SEA', unloading_location: 'PORT BONTANG' }
+    expect(matchesOilLossDischargePortFilter(truckRow, ['PORT BONTANG'], resolver)).toBe(false)
+    expect(matchesOilLossDischargePortFilter(seaRow, ['PORT BONTANG'], resolver)).toBe(true)
+    expect(matchesOilLossDischargePortFilter(truckRow, [], resolver)).toBe(true)
+    expect(oilLossDischargePortOptions([truckRow, seaRow], [], resolver)).toEqual(['PORT BONTANG'])
+    expect(oilLossDischargePortOptions([truckRow], [], resolver)).toEqual([])
+  })
+})
