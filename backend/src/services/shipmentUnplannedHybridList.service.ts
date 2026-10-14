@@ -39,6 +39,8 @@ export interface UnplannedHybridListContext {
     dateTo?: unknown;
     contract?: unknown;
     plants: string[];
+    /** Toolbar Discharge Port filter; a backlog contract has no port, so any pick leaves the backlog arms out. */
+    dischargePorts?: string[];
     /** Toolbar Source filter; applied to the contract backlog arms. */
     sourceType?: string;
   };

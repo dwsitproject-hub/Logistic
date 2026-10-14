@@ -250,6 +250,7 @@ import {
   shouldApplyOperationalTruncateTooltip,
 } from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
+import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
 import { DEFAULT_SHIPMENTS_COMPACT_SORT, forgetShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
@@ -1112,13 +1113,18 @@ function ShipmentsPageContent() {
   /** Debounce Product / Group Plant so multi-select does not fire a cold fetch per click. */
   const debouncedSelectedProducts = useDebouncedValue(selectedProducts, 400)
   const debouncedSelectedGroupPlants = useDebouncedValue(selectedGroupPlants, 400)
+  /** Discharge Port is a plain per-visit filter (no user default), shipment-level on the server. */
+  const [selectedDischargePorts, setSelectedDischargePorts] = useState<string[]>([])
+  const [availableDischargePorts, setAvailableDischargePorts] = useState<string[]>([])
+  const debouncedSelectedDischargePorts = useDebouncedValue(selectedDischargePorts, 400)
   const scopeSummaryRequestKey = useMemo(
     () =>
       JSON.stringify({
         p: [...debouncedSelectedProducts].sort(),
         g: [...debouncedSelectedGroupPlants].sort(),
+        d: [...debouncedSelectedDischargePorts].sort(),
       }),
-    [debouncedSelectedProducts, debouncedSelectedGroupPlants],
+    [debouncedSelectedProducts, debouncedSelectedGroupPlants, debouncedSelectedDischargePorts],
   )
 
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
@@ -1389,6 +1395,7 @@ function ShipmentsPageContent() {
       selectedProducts: debouncedSelectedProducts,
       selectedSuppliers,
       selectedGroupPlants: debouncedSelectedGroupPlants,
+      selectedDischargePorts: debouncedSelectedDischargePorts,
       lateIndicatorFilter,
       charterTypeFilter,
       sourceTypeFilter,
@@ -1413,6 +1420,7 @@ function ShipmentsPageContent() {
       debouncedSelectedProducts,
       selectedSuppliers,
       debouncedSelectedGroupPlants,
+      debouncedSelectedDischargePorts,
       lateIndicatorFilter,
       charterTypeFilter,
       sourceTypeFilter,
@@ -1633,6 +1641,42 @@ function ShipmentsPageContent() {
     [resetPageForGlobalFilter, handleGroupPlantsChange],
   )
 
+  const onDischargePortsChangeWithPageReset = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      setSelectedDischargePorts(values)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  /**
+   * The Discharge Port list: the page's own shipments' ports (one entry per port whatever its spelling) plus Blank for shipments with none.
+   * Loaded on its own so a failure here cannot empty the other filter lists, which share one Promise.all above.
+   */
+  useEffect(() => {
+    let cancelled = false
+    api
+      .get('/contracts/filter-options/discharge-ports')
+      .then((res) => {
+        if (cancelled) return
+        const ports = (res.data?.data?.dischargePorts || []) as string[]
+        setAvailableDischargePorts(dischargePortOptionsFrom(Array.isArray(ports) ? ports : [], []))
+      })
+      .catch((e) => {
+        if (cancelled) return
+        console.error('Failed to fetch discharge port options:', e)
+        setAvailableDischargePorts([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  /** Blank is offered last, and what is picked stays listed even if the options have not loaded. */
+  const dischargePortDropdownOptions = useMemo(
+    () => dischargePortOptionsFrom([...availableDischargePorts, ''], selectedDischargePorts),
+    [availableDischargePorts, selectedDischargePorts],
+  )
+
   const onSuppliersChangeWithPageReset = useCallback(
     (values: string[]) => {
       resetPageForGlobalFilter()
@@ -1811,6 +1855,9 @@ function ShipmentsPageContent() {
     }
     if (debouncedSelectedGroupPlants.length > 0) {
       debouncedSelectedGroupPlants.forEach((p) => params.append('plant', p))
+    }
+    if (debouncedSelectedDischargePorts.length > 0) {
+      debouncedSelectedDischargePorts.forEach((p) => params.append('dischargePort', p))
     }
     params.append('sortKey', sortKey)
     params.append('sortDir', sortDir)
@@ -2506,6 +2553,7 @@ function ShipmentsPageContent() {
       selectedProducts,
       selectedSuppliers,
       selectedGroupPlants,
+      selectedDischargePorts,
     }),
     [
       dateFrom,
@@ -2515,6 +2563,7 @@ function ShipmentsPageContent() {
       selectedProducts,
       selectedSuppliers,
       selectedGroupPlants,
+      selectedDischargePorts,
     ],
   )
 
@@ -3551,6 +3600,7 @@ function ShipmentsPageContent() {
     viewFilterValue !== '' ||
     viewOption !== 'all' ||
     selectedGroupPlants.length > 0 ||
+    selectedDischargePorts.length > 0 ||
     selectedIncoterms.length > 0 ||
     selectedProducts.length > 0 ||
     selectedSuppliers.length > 0 ||
@@ -3570,6 +3620,7 @@ function ShipmentsPageContent() {
     setViewOption('all')
     setViewFilterValue('')
     resetUserScopeFilters()
+    setSelectedDischargePorts([])
     setSelectedIncoterms([])
     setSelectedSuppliers([])
     setShipmentPeriod('YTD')
@@ -6535,6 +6586,18 @@ function ShipmentsPageContent() {
             emptyMessage="No region/plant values"
             uppercaseOptionLabels
           />
+          <SearchableMultiSelect
+            label="Discharge Port"
+            hideLabel
+            portalMenu
+            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            options={dischargePortDropdownOptions}
+            selected={selectedDischargePorts}
+            onChange={onDischargePortsChangeWithPageReset}
+            placeholder="Discharge Port"
+            emptyMessage="No discharge ports"
+            uppercaseOptionLabels
+          />
         </HeaderFilterSlot>
         <ShipmentsGlobalFiltersSection
           searchDraft={searchDraft}
@@ -6560,6 +6623,8 @@ function ShipmentsPageContent() {
           availableGroupPlants={availableGroupPlants}
           selectedGroupPlants={selectedGroupPlants}
           onGroupPlantsChange={onGroupPlantsChangeWithPageReset}
+          selectedDischargePorts={selectedDischargePorts}
+          onDischargePortsChange={onDischargePortsChangeWithPageReset}
           dateFrom={dateFrom}
           dateTo={dateTo}
           onDateFromChange={onGlobalDateFromChange}

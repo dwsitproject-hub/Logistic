@@ -12,18 +12,22 @@
  * STO, and 298 of 10,477 STOs span contracts with different suppliers - so those are split before
  * being offered.
  */
+import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
 import {
   normalizeScopeGroupKey,
+  rowDischargePort,
   rowMatchesToolbarMultiFilters,
   scopeGroupKeyParts,
 } from '@/lib/globalScopeFilters'
 import { applyShippingPerfSourceProductFilter } from '@/lib/shippingPerformanceScopeFilters'
+import type { ShippingPerformancePortSource } from '@/lib/shippingPerformancePorts'
 
 export interface ShippingPerfFilterSelections {
   selectedSources: string[]
   selectedProducts: string[]
   selectedIncoterms: string[]
   selectedGroupPlants: string[]
+  selectedDischargePorts: string[]
   selectedSuppliers: string[]
   selectedSupplierGroups: string[]
   selectedPlanningStatuses: string[]
@@ -34,11 +38,13 @@ export interface ShippingPerfAvailableValues {
   products: string[]
   incoterms: string[]
   groupPlants: string[]
+  /** Offered with Blank last (rows with no discharge port), unlike Region/Plant, which has no Blank option. */
+  dischargePorts: string[]
   suppliers: string[]
   supplierGroups: string[]
 }
 
-type Row = {
+type Row = ShippingPerformancePortSource & {
   source_type?: unknown
   product?: unknown
   incoterm?: unknown
@@ -54,6 +60,7 @@ const EMPTY: ShippingPerfFilterSelections = {
   selectedProducts: [],
   selectedIncoterms: [],
   selectedGroupPlants: [],
+  selectedDischargePorts: [],
   selectedSuppliers: [],
   selectedSupplierGroups: [],
   selectedPlanningStatuses: [],
@@ -69,6 +76,7 @@ function rowsPassing<T extends Row>(rows: T[], sel: ShippingPerfFilterSelections
     rowMatchesToolbarMultiFilters(row, {
       selectedIncoterms: sel.selectedIncoterms,
       selectedGroupPlants: sel.selectedGroupPlants,
+      selectedDischargePorts: sel.selectedDischargePorts,
       selectedSuppliers: sel.selectedSuppliers,
       selectedGroups: sel.selectedSupplierGroups,
       selectedPlanningStatuses: sel.selectedPlanningStatuses,
@@ -99,6 +107,10 @@ export function shippingPerfAvailableValues<T extends Row>(
     incoterms: distinct(without('selectedIncoterms').map((r) => normalizeScopeGroupKey(r.incoterm))),
     groupPlants: distinct(
       without('selectedGroupPlants').map((r) => normalizeScopeGroupKey(r.plant_site)),
+    ),
+    dischargePorts: dischargePortOptionsFrom(
+      without('selectedDischargePorts').map((r) => rowDischargePort(r)),
+      selections.selectedDischargePorts ?? [],
     ),
     suppliers: distinct(
       without('selectedSuppliers').flatMap((r) => (r.supplier ? scopeGroupKeyParts(r.supplier) : [])),

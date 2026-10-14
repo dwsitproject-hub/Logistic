@@ -748,6 +748,7 @@ function applyGlobalFiltersToRows(
     selectedIncoterms: string[]
     selectedProducts: string[]
     selectedGroupPlants: string[]
+    selectedDischargePorts?: string[]
     selectedSuppliers: string[]
     selectedSupplierGroups: string[]
     /** 'Planned' / 'Unplanned'. Both selected, or neither, is no filter. */
@@ -1495,6 +1496,7 @@ function ShippingPerformancePageContent() {
   const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
   const [selectedSupplierGroups, setSelectedSupplierGroups] = useState<string[]>([])
   const [selectedPlanningStatuses, setSelectedPlanningStatuses] = useState<string[]>([])
+  const [selectedDischargePorts, setSelectedDischargePorts] = useState<string[]>([])
   const {
     selectedProducts,
     selectedGroupPlants,
@@ -1774,6 +1776,7 @@ function ShippingPerformancePageContent() {
         selectedProducts,
         selectedIncoterms,
         selectedGroupPlants,
+        selectedDischargePorts,
         selectedSuppliers,
         selectedSupplierGroups,
         selectedPlanningStatuses,
@@ -1784,6 +1787,7 @@ function ShippingPerformancePageContent() {
       selectedProducts,
       selectedIncoterms,
       selectedGroupPlants,
+      selectedDischargePorts,
       selectedSuppliers,
       selectedSupplierGroups,
       selectedPlanningStatuses,
@@ -1816,6 +1820,8 @@ function ShippingPerformancePageContent() {
       narrowFilterOptions(availableGroupPlants, spAvailableValues.groupPlants, selectedGroupPlants),
     [availableGroupPlants, spAvailableValues, selectedGroupPlants],
   )
+  /** Every discharge port the other filters leave, plus Blank for cargo with none; the picks stay listed. */
+  const narrowedDischargePortOptions = spAvailableValues.dischargePorts
   const narrowedSupplierGroupOptions = useMemo(
     () =>
       narrowFilterOptions(
@@ -1845,6 +1851,7 @@ function ShippingPerformancePageContent() {
         selectedIncoterms,
         selectedProducts,
         selectedGroupPlants,
+        selectedDischargePorts,
         selectedSuppliers,
         selectedSupplierGroups,
         selectedPlanningStatuses,
@@ -1864,6 +1871,7 @@ function ShippingPerformancePageContent() {
     if (
       selectedIncoterms.length === 0 &&
       selectedGroupPlants.length === 0 &&
+      selectedDischargePorts.length === 0 &&
       selectedSuppliers.length === 0 &&
       selectedSupplierGroups.length === 0 &&
       selectedPlanningStatuses.length === 0
@@ -1874,6 +1882,7 @@ function ShippingPerformancePageContent() {
       rowMatchesToolbarMultiFilters(row, {
         selectedIncoterms,
         selectedGroupPlants,
+        selectedDischargePorts,
         selectedSuppliers,
         selectedGroups: selectedSupplierGroups,
         selectedPlanningStatuses,
@@ -1884,6 +1893,7 @@ function ShippingPerformancePageContent() {
     selectedIncoterms,
     selectedProducts,
     selectedGroupPlants,
+    selectedDischargePorts,
     selectedSuppliers,
     selectedSupplierGroups,
     selectedPlanningStatuses,
@@ -1903,6 +1913,7 @@ function ShippingPerformancePageContent() {
       selectedIncoterms,
       selectedProducts,
       selectedGroupPlants,
+      selectedDischargePorts,
       selectedSuppliers,
       selectedSupplierGroups,
       selectedPlanningStatuses,
@@ -1917,6 +1928,7 @@ function ShippingPerformancePageContent() {
     selectedIncoterms,
     selectedProducts,
     selectedGroupPlants,
+    selectedDischargePorts,
     selectedSuppliers,
     selectedSupplierGroups,
     selectedPlanningStatuses,
@@ -1995,6 +2007,7 @@ function ShippingPerformancePageContent() {
     if (selectedSources.length > 0) parts.push(selectedSources.join(', '))
     if (selectedProducts.length > 0) parts.push(selectedProducts.join(', '))
     if (selectedGroupPlants.length > 0) parts.push(selectedGroupPlants.join(', '))
+    if (selectedDischargePorts.length > 0) parts.push(`Discharge ${selectedDischargePorts.join(', ')}`)
     if (selectedVessels.length > 0) parts.push(selectedVessels.join(', '))
     if (selectedIncoterms.length > 0) parts.push(selectedIncoterms.join(', '))
     if (statusFilter === 'Open' || statusFilter === 'Closed') parts.push(statusFilter)
@@ -2007,6 +2020,7 @@ function ShippingPerformancePageContent() {
     selectedSources,
     selectedProducts,
     selectedGroupPlants,
+    selectedDischargePorts,
     selectedSuppliers,
     selectedSupplierGroups,
     selectedPlanningStatuses,
@@ -2023,13 +2037,14 @@ function ShippingPerformancePageContent() {
       ? [
           selectedIncoterms.join('\0'),
           selectedGroupPlants.join('\0'),
+          selectedDischargePorts.join('\0'),
           selectedVessels.join('\0'),
           statusFilter,
           dateFrom,
           dateTo,
           searchTerm,
         ].join('|')
-      : [selectedIncoterms.join('\0'), selectedGroupPlants.join('\0')].join('|'),
+      : [selectedIncoterms.join('\0'), selectedGroupPlants.join('\0'), selectedDischargePorts.join('\0')].join('|'),
   ].join('::')
 
   useEffect(() => {
@@ -2155,6 +2170,7 @@ function ShippingPerformancePageContent() {
     setSelectedSuppliers([])
     setSelectedSupplierGroups([])
     setSelectedPlanningStatuses([])
+    setSelectedDischargePorts([])
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
   }, [resetUserScopeFilters])
@@ -2459,6 +2475,21 @@ function ShippingPerformancePageContent() {
             emptyMessage="No region/plant values"
             uppercaseOptionLabels
           />
+          <SearchableMultiSelect
+            label="Discharge Port"
+            hideLabel
+            portalMenu
+            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            options={narrowedDischargePortOptions}
+            selected={selectedDischargePorts}
+            onChange={(values) => {
+              setSelectedDischargePorts(values)
+              setCurrentPage(1)
+            }}
+            placeholder="Discharge Port"
+            emptyMessage="No discharge ports"
+            uppercaseOptionLabels
+          />
         </HeaderFilterSlot>
         <ListFilterPanel
           onReset={resetPerfSelections}
@@ -2466,6 +2497,7 @@ function ShippingPerformancePageContent() {
             performancePeriod !== 'YTD' ||
             !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo) ||
             selectedGroupPlants.length > 0 ||
+            selectedDischargePorts.length > 0 ||
             selectedSources.length > 0 ||
             selectedIncoterms.length > 0 ||
             selectedSupplierGroups.length > 0 ||
@@ -2498,6 +2530,10 @@ function ShippingPerformancePageContent() {
               : []),
             ...selectionChips('Region/Plant', selectedGroupPlants, (values) => {
               handleGroupPlantsChange(values)
+              setCurrentPage(1)
+            }),
+            ...selectionChips('Discharge Port', selectedDischargePorts, (values) => {
+              setSelectedDischargePorts(values)
               setCurrentPage(1)
             }),
             ...selectionChips('Source', selectedSources, (values) => {

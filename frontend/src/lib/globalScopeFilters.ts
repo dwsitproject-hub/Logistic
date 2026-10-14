@@ -1,4 +1,6 @@
 /** Shared helpers for Incoterm / Product / Group Plant toolbar filters across list & performance pages. */
+import { matchesDischargePortSelection } from '@/lib/dischargePortFilter'
+import { resolveShippingPerfDischargePort, type ShippingPerformancePortSource } from '@/lib/shippingPerformancePorts'
 
 export type ToolbarMultiFilterState = {
   selectedIncoterms: string[]
@@ -6,6 +8,8 @@ export type ToolbarMultiFilterState = {
   selectedSuppliers?: string[]
   selectedGroups?: string[]
   selectedGroupPlants: string[]
+  /** The port the cargo is discharged at (not the Region/Plant): the row's resolved discharge port, SAP first (lib/dischargePortFilter.ts). */
+  selectedDischargePorts?: string[]
   /**
    * 'Planned' / 'Unplanned'. Planned means scheduled and still running - up to but not including
    * completed, never cancelled - so a finished row belongs to neither value. Selecting both is
@@ -126,8 +130,13 @@ export function scopeGroupKeyParts(value: unknown): string[] {
   return parts.length > 0 ? parts : ['Blank']
 }
 
+/** The discharge port a Shipping Performance row shows (SAP Vessel Discharge Port, then the KLIP shipment's), or '' when it has none. */
+export function rowDischargePort(row: ShippingPerformancePortSource): string {
+  return resolveShippingPerfDischargePort(row) ?? ''
+}
+
 export function rowMatchesToolbarMultiFilters(
-  row: {
+  row: ShippingPerformancePortSource & {
     incoterm?: unknown
     product?: unknown
     supplier?: unknown
@@ -160,6 +169,9 @@ export function rowMatchesToolbarMultiFilters(
   }
   if (filters.selectedGroupPlants && filters.selectedGroupPlants.length > 0) {
     if (!valueInRegionSiteList(row.group_plant ?? row.plant_site, filters.selectedGroupPlants)) return false
+  }
+  if (filters.selectedDischargePorts && filters.selectedDischargePorts.length > 0) {
+    if (!matchesDischargePortSelection(rowDischargePort(row), filters.selectedDischargePorts)) return false
   }
   if (filters.selectedPlanningStatuses && filters.selectedPlanningStatuses.length === 1) {
     const st = String(row.status ?? '').trim().toUpperCase()
@@ -205,7 +217,8 @@ export function hasToolbarMultiSelection(filters: Partial<ToolbarMultiFilterStat
     (filters.selectedProducts?.length ?? 0) > 0 ||
     (filters.selectedGroups?.length ?? 0) > 0 ||
     (filters.selectedSuppliers?.length ?? 0) > 0 ||
-    (filters.selectedGroupPlants?.length ?? 0) > 0
+    (filters.selectedGroupPlants?.length ?? 0) > 0 ||
+    (filters.selectedDischargePorts?.length ?? 0) > 0
   )
 }
 

@@ -10,6 +10,10 @@ import {
   type PipelineDailySummaryFilterInput,
 } from './pipelineDailySummary.service';
 import { parseColumnFiltersQuery, shipmentEffectiveStatusExpr } from '../utils/shipmentListFilters';
+import {
+  parseDischargePortParam,
+  resolveDischargePortSelectionKey,
+} from '../utils/shipmentDischargePortSql';
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { computePerfTradeCycleDaysForRow } from './latePerformance.service';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
@@ -197,6 +201,8 @@ export function buildShipmentListFilterCacheKey(input: {
   sto?: unknown;
   contract?: unknown;
   plants: string[];
+  /** Absent or empty for no Discharge Port filter, which keeps every existing cache key unchanged. */
+  dischargePorts?: string[];
   globalSearch: string;
   colFilters: Record<string, unknown>;
   lateIndicator?: string;
@@ -229,6 +235,8 @@ export function buildShipmentListCacheKey(input: {
   sto?: unknown;
   contract?: unknown;
   plants: string[];
+  /** Absent or empty for no Discharge Port filter, which keeps every existing cache key unchanged. */
+  dischargePorts?: string[];
   globalSearch: string;
   colFilters: Record<string, unknown>;
   lateIndicator?: string;
@@ -257,6 +265,9 @@ export function buildShipmentListCacheKey(input: {
     sto: input.sto != null ? String(input.sto) : '',
     contract: input.contract != null ? String(input.contract) : '',
     plants: [...input.plants].sort(),
+    ...(input.dischargePorts && input.dischargePorts.length > 0
+      ? { dischargePorts: resolveDischargePortSelectionKey(input.dischargePorts) }
+      : {}),
     globalSearch: input.globalSearch,
     columnFilters: stableColumnFiltersKey(input.colFilters),
     lateIndicator: input.lateIndicator != null ? String(input.lateIndicator) : '',
@@ -594,8 +605,9 @@ export async function loadShipmentOutstandingQtyForRequest(
     const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+    const dischargePorts = parseDischargePortParam((req.query as { dischargePort?: unknown }).dischargePort);
     const sourceType = (req.query as { sourceType?: string }).sourceType;
-    const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants, sourceType });
+    const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants, dischargePorts, sourceType });
     let idx = scope.params.length + 1;
     const g = appendUnplannedContractBacklogGlobalSearch(globalSearch, idx);
     idx = g.nextIndex;
@@ -713,8 +725,9 @@ export async function loadShipmentAttentionInsightsForRequest(
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const dischargePorts = parseDischargePortParam((req.query as { dischargePort?: unknown }).dischargePort);
   const sourceType = (req.query as { sourceType?: string }).sourceType;
-  const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants, sourceType });
+  const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants, dischargePorts, sourceType });
   let idx = scope.params.length + 1;
   const g = appendUnplannedContractBacklogGlobalSearch(globalSearch, idx);
   idx = g.nextIndex;
@@ -831,10 +844,12 @@ export function buildShipmentPipelineDailyFilterInput(req: AuthRequest): Pipelin
   const etaDischargeParam = (req.query as { etaDischarge?: string }).etaDischarge;
   const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const dischargePorts = parseDischargePortParam((req.query as { dischargePort?: unknown }).dischargePort);
   return {
     dateFrom: dateFrom != null ? String(dateFrom) : undefined,
     dateTo: dateTo != null ? String(dateTo) : undefined,
     plants,
+    dischargePorts,
     globalSearch,
     colFilters,
     lateIndicator: lateIndicatorParam != null ? String(lateIndicatorParam) : undefined,

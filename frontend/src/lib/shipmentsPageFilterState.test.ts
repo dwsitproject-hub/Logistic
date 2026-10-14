@@ -13,6 +13,7 @@ describe('shipmentsPageFilterState', () => {
     selectedIncoterms: ['CIF', 'FOB'],
     selectedProducts: ['PALM'],
     selectedGroupPlants: ['TP'],
+    selectedDischargePorts: [] as string[],
     lateIndicatorFilter: 'ALL',
     charterTypeFilter: 'ALL',
     // Required on ShipmentsGlobalFilterScope; the fixture predated it, so every key this test
@@ -31,6 +32,23 @@ describe('shipmentsPageFilterState', () => {
     expect(key).toContain('"q":"vessel"')
     expect(key).toContain('FOB')
     expect(key).toContain('CIF')
+  })
+
+  /*
+   * The list refetches when this key changes. A Discharge Port left out of it would leave the table and the cards on the old rows while the box
+   * reads "1 selected".
+   */
+  it('a Discharge Port pick changes the key, in any order, and no pick leaves it as the pick-less key', () => {
+    const none = buildShipmentsGlobalScopeKey(baseScope)
+    const bontang = buildShipmentsGlobalScopeKey({ ...baseScope, selectedDischargePorts: ['BONTANG'] })
+    expect(bontang).not.toBe(none)
+    expect(buildShipmentsGlobalScopeKey({ ...baseScope, selectedDischargePorts: ['DUMAI', 'BONTANG'] })).toBe(
+      buildShipmentsGlobalScopeKey({ ...baseScope, selectedDischargePorts: ['BONTANG', 'DUMAI'] }),
+    )
+    expect(buildShipmentsGlobalScopeKey({ ...baseScope, selectedDischargePorts: [] })).toBe(none)
+    expect(
+      buildShipmentsListQueryKey({ ...baseScope, selectedDischargePorts: ['BONTANG'], pipelineStage: 'ALL', page: 1, sortKey: 'created_at', sortDir: 'desc' }),
+    ).not.toBe(buildShipmentsListQueryKey({ ...baseScope, pipelineStage: 'ALL', page: 1, sortKey: 'created_at', sortDir: 'desc' }))
   })
 
   it('buildShipmentsListQueryKey layers pipeline stage and pagination', () => {

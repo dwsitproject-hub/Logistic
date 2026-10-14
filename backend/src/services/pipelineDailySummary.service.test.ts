@@ -41,6 +41,17 @@ describe('isPipelineDailySummaryEligible', () => {
     ).toBe(false);
   });
 
+  /**
+   * Shipments Discharge Port filter: no daily snapshot has a port dimension, so a pick must be answered live. Reading a snapshot would show the
+   * unfiltered cards and list under a filter that reads "1 selected" - the same failure the Region/Plant guard exists for.
+   */
+  it('rejects a Discharge Port filter, even for a caller that allows the plant filter', () => {
+    const filters = { dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: [] as string[], dischargePorts: ['BONTANG'] };
+    expect(isPipelineDailySummaryEligible(filters)).toBe(false);
+    expect(isPipelineDailySummaryEligible(filters, { allowPlantFilter: true })).toBe(false);
+    expect(isPipelineDailySummaryEligible({ ...filters, dischargePorts: [] })).toBe(true);
+  });
+
   it('rejects it whatever the spelling, since the fix is not about case', () => {
     for (const plant of ['Bontang', 'BONTANG', 'TANJUNG PURA', 'PALEMBANG']) {
       expect(

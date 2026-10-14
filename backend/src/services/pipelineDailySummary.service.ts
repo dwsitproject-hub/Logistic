@@ -47,6 +47,11 @@ export interface PipelineDailySummaryScope {
 }
 
 export interface PipelineDailySummaryFilterInput extends PipelineDailySummaryScope {
+  /**
+   * Shipments Discharge Port toolbar filter. Neither daily snapshot has a port dimension (grain: group_plant, contract_date, product, incoterm; and
+   * shipment_list_stage_snapshot has no port column), so any pick makes the request ineligible and it is answered live.
+   */
+  dischargePorts?: string[];
   globalSearch?: string;
   colFilters?: ColumnFilterPayload;
   lateIndicator?: string;
@@ -204,6 +209,7 @@ export function isPipelineDailySummaryEligible(
   if (options?.allowPlantFilter !== true && pipelineDailySummaryScopeHasPlantFilter(filters)) {
     return false;
   }
+  if (Array.isArray(filters.dischargePorts) && filters.dischargePorts.length > 0) return false;
   if (String(filters.globalSearch ?? '').trim()) return false;
   if (hasColumnFilters(filters.colFilters)) return false;
   if (

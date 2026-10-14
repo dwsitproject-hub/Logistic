@@ -151,6 +151,11 @@ export interface PrePlannedGlobalScopeFilters {
   selectedProducts: readonly string[];
   selectedSuppliers: readonly string[];
   selectedGroupPlants: readonly string[];
+  /**
+   * Discharge Port toolbar filter. A pre-planned group is a set of contracts with no shipment yet, so it has no discharge port: any pick leaves
+   * every group out, the same as the contract backlog the server leaves out.
+   */
+  selectedDischargePorts?: readonly string[];
 }
 
 function normScopeValue(value: unknown): string {
@@ -183,6 +188,7 @@ export function filterPrePlannedGroupsByGlobalScope(
   scope: PrePlannedGlobalScopeFilters,
 ): PrePlannedGroup[] {
   const searchTerm = normScopeValue(scope.searchTerm);
+  if (scope.selectedDischargePorts && scope.selectedDischargePorts.length > 0) return [];
 
   return groups.filter((group) => {
     if (

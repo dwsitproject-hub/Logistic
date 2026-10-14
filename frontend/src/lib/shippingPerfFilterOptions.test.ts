@@ -13,10 +13,53 @@ const NONE = {
   selectedProducts: [],
   selectedIncoterms: [],
   selectedGroupPlants: [],
+  selectedDischargePorts: [],
   selectedSuppliers: [],
   selectedSupplierGroups: [],
   selectedPlanningStatuses: [],
 }
+
+describe('Shipping Performance Discharge Port filter', () => {
+  const rows = [
+    { product: 'CPO', incoterm: 'FOB', plant_site: 'BONTANG', supplier: 'SUP A', port_of_discharge: 'PORT BONTANG', status: 'PLANNED' },
+    // same port, other spelling and carried by the SAP side: SAP is the port the table shows
+    { product: 'PK', incoterm: 'CIF', plant_site: 'BONTANG', supplier: 'SUP B', sap_vessel_discharge_port: 'Bontang', port_of_discharge: 'DUMAI', status: 'SAILED' },
+    { product: 'CPO', incoterm: 'CIF', plant_site: 'BATAM', supplier: 'SUP C', port_of_discharge: 'KIJING', status: 'PLANNED' },
+    { product: 'UCO', incoterm: 'FOB', plant_site: 'BATAM', supplier: 'SUP D', port_of_discharge: 'Blank', status: 'PLANNED' },
+  ]
+
+  it('offers each port once, spelling variants as one, with Blank last', () => {
+    expect(shippingPerfAvailableValues(rows, NONE).dischargePorts).toEqual(['KIJING', 'PORT BONTANG', 'Blank'])
+  })
+
+  it('a picked port narrows the OTHER lists, by the port the table shows (SAP first)', () => {
+    const v = shippingPerfAvailableValues(rows, { ...NONE, selectedDischargePorts: ['BONTANG'] })
+    expect(v.products).toEqual(['CPO', 'PK'])
+    expect(v.incoterms).toEqual(['CIF', 'FOB'])
+    expect(v.groupPlants).toEqual(['BONTANG'])
+    expect(v.suppliers).toEqual(['SUP A', 'SUP B'])
+  })
+
+  it('does not narrow the port list by its own filter', () => {
+    const v = shippingPerfAvailableValues(rows, { ...NONE, selectedDischargePorts: ['KIJING'] })
+    expect(v.dischargePorts).toEqual(['KIJING', 'PORT BONTANG', 'Blank'])
+  })
+
+  it('the other filters narrow the port list', () => {
+    expect(shippingPerfAvailableValues(rows, { ...NONE, selectedGroupPlants: ['BATAM'] }).dischargePorts).toEqual(['KIJING', 'Blank'])
+    expect(shippingPerfAvailableValues(rows, { ...NONE, selectedProducts: ['PK'] }).dischargePorts).toEqual(['BONTANG'])
+  })
+
+  it('keeps a picked port listed when the other filters leave it no row', () => {
+    const v = shippingPerfAvailableValues(rows, { ...NONE, selectedDischargePorts: ['TANJUNG PURA'], selectedGroupPlants: ['BATAM'] })
+    expect(v.dischargePorts).toEqual(['KIJING', 'TANJUNG PURA', 'Blank'])
+  })
+
+  it('Blank finds the rows with no port', () => {
+    const v = shippingPerfAvailableValues(rows, { ...NONE, selectedDischargePorts: ['Blank'] })
+    expect(v.products).toEqual(['UCO'])
+  })
+})
 
 describe('shippingPerfAvailableValues', () => {
   it('offers everything when nothing is selected', () => {

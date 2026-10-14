@@ -4,6 +4,7 @@ import {
   isOilLossPageIncoterm,
   matchesOilLossModeFilter,
 } from '@/lib/oilLossEligibility'
+import { matchesOilLossDischargePortFilter } from '@/lib/oilLossDischargePort'
 import { matchesOilLossLoadingPortFilter } from '@/lib/oilLossLoadingPort'
 import { valueInRegionSiteList } from '@/lib/globalScopeFilters'
 
@@ -154,6 +155,7 @@ export type ApplyOilLossGlobalFiltersInput = {
   period: OilLossGlobalPeriodKey
   selectedProducts?: string[]
   selectedLoadingPorts?: string[]
+  selectedDischargePorts?: string[]
   selectedGroupPlants?: string[]
   selectedModes?: string[]
   selectedIncoterms?: string[]
@@ -163,12 +165,13 @@ export type ApplyOilLossGlobalFiltersInput = {
   referenceDate?: Date
 }
 
-/** SSOT pipeline for Oil Loss Section 1 (R1-Loss), the drilldown and the table: FOB only, then period, region/plant, product and loading port. */
+/** SSOT pipeline for Oil Loss Section 1 (R1-Loss), the drilldown and the table: FOB only, then period, region/plant, discharge port, product and loading port. */
 export function applyOilLossGlobalFilters({
   rows,
   period,
   selectedProducts = [],
   selectedLoadingPorts = [],
+  selectedDischargePorts = [],
   selectedGroupPlants = [],
   selectedModes = [],
   selectedIncoterms = [],
@@ -189,6 +192,7 @@ export function applyOilLossGlobalFilters({
     }
     if (!matchesOilLossGlobalIncotermFilter(row)) return false
     if (!matchesOilLossLoadingPortFilter(row, selectedLoadingPorts)) return false
+    if (!matchesOilLossDischargePortFilter(row, selectedDischargePorts)) return false
     if (!matchesOilLossGlobalProductsMultiFilter(row, selectedProducts)) return false
     const d = resolveRowDate(row)
     if (!d) return false

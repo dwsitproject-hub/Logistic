@@ -12,15 +12,20 @@
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import { shipmentPageExcludeB2bChildCond } from './shipmentPagePipelineSql';
 
+/** The page's own contract scope as conditions on `c` (contracts) and `l` (contract_latest_spd_snapshot): shared by every Shipments filter-options query. */
+export function shipmentPageOptionsScopeSql(): string {
+  return `COALESCE(c.sap_presence, 'PRESENT') = 'PRESENT'
+      AND ${buildShipmentPageSeaIncotermScopeSql('c')}
+      AND ${shipmentPageExcludeB2bChildCond('l')}`;
+}
+
 export function buildShipmentProductOptionsSql(): string {
   return `
     SELECT DISTINCT TRIM(c.product) AS product
     FROM contracts c
     LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
     WHERE NULLIF(TRIM(c.product), '') IS NOT NULL
-      AND COALESCE(c.sap_presence, 'PRESENT') = 'PRESENT'
-      AND ${buildShipmentPageSeaIncotermScopeSql('c')}
-      AND ${shipmentPageExcludeB2bChildCond('l')}
+      AND ${shipmentPageOptionsScopeSql()}
     ORDER BY product`;
 }
 

@@ -47,6 +47,8 @@ export interface ShipmentsGlobalFilterScope {
   selectedIncoterms: readonly string[]
   selectedProducts: readonly string[]
   selectedGroupPlants: readonly string[]
+  /** The port the cargo is discharged at (not the Region/Plant); sent as repeated `dischargePort` params. */
+  selectedDischargePorts: readonly string[]
   lateIndicatorFilter: string
   charterTypeFilter: string
   sourceTypeFilter: string
@@ -78,6 +80,7 @@ export function buildShipmentsGlobalScopeKey(scope: ShipmentsGlobalFilterScope):
     inc: sortedKey(scope.selectedIncoterms),
     prod: sortedKey(scope.selectedProducts),
     plant: sortedKey(scope.selectedGroupPlants),
+    dport: sortedKey(scope.selectedDischargePorts),
     late: scope.lateIndicatorFilter,
     charter: scope.charterTypeFilter,
     source: scope.sourceTypeFilter,

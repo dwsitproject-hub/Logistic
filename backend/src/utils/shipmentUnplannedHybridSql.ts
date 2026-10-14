@@ -1269,12 +1269,19 @@ export function buildUnplannedContractToolbarScope(input: {
   dateTo?: unknown;
   contract?: unknown;
   plants: string[];
+  /**
+   * Toolbar Discharge Port filter. A backlog contract has no shipment yet, so it has no port: with a port picked every backlog arm is left out
+   * (the table count in the controller does the same with its own FALSE).
+   */
+  dischargePorts?: string[];
   /** Toolbar Source filter (Interco / 3rd Party / All). Contract-level, so the backlog arms (no shipment row yet) must honour it too. */
   sourceType?: string;
 }): { sql: string; params: unknown[] } {
   const parts: string[] = [];
   const params: unknown[] = [];
   let cp = 1;
+
+  if (input.dischargePorts && input.dischargePorts.length > 0) parts.push('FALSE');
 
   if (input.dateFrom) {
     parts.push(`c.contract_date >= $${cp}`);

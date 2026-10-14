@@ -42,6 +42,8 @@ export interface ShipmentsGlobalFiltersSectionProps {
   availableGroupPlants: string[]
   selectedGroupPlants: string[]
   onGroupPlantsChange: (values: string[]) => void
+  selectedDischargePorts: string[]
+  onDischargePortsChange: (values: string[]) => void
   dateFrom: string
   dateTo: string
   onDateFromChange: (iso: string) => void
@@ -83,6 +85,8 @@ export function ShipmentsGlobalFiltersSection({
   availableGroupPlants,
   selectedGroupPlants,
   onGroupPlantsChange,
+  selectedDischargePorts,
+  onDischargePortsChange,
   dateFrom,
   dateTo,
   onDateFromChange,
@@ -120,6 +124,7 @@ export function ShipmentsGlobalFiltersSection({
         ...selectionChips('Product', selectedProducts, onProductsChange),
         ...selectionChips('Supplier', selectedSuppliers, onSuppliersChange),
         ...selectionChips('Region/Plant', selectedGroupPlants, onGroupPlantsChange),
+        ...selectionChips('Discharge Port', selectedDischargePorts, onDischargePortsChange),
         ...(dateRangeActive && onResetDateRange
           ? [{
               id: 'contract-date',

@@ -167,7 +167,12 @@ import { TRUCKING_REALIZATIONS_JOIN } from '../utils/truckingRealizationSql';
 import { SQL_B2B_PARTIES_FOR_ORIGIN_PO } from '../utils/b2bPartiesForContractSql';
 import { resolveStoListMilestoneDates } from '../utils/contractStoListMilestoneDates';
 import { incotermsForScope, parseFilterOptionScope } from '../utils/filterOptionScopes';
-import { ALL_CONTRACT_PRODUCT_OPTIONS_SQL, buildShipmentProductOptionsSql } from '../utils/shipmentProductOptionsSql';
+import {
+  ALL_CONTRACT_PRODUCT_OPTIONS_SQL,
+  buildShipmentProductOptionsSql,
+  shipmentPageOptionsScopeSql,
+} from '../utils/shipmentProductOptionsSql';
+import { buildShipmentDischargePortOptionsSql } from '../utils/shipmentDischargePortSql';
 
 export { B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL };
 
@@ -1335,6 +1340,23 @@ export const getContractFilterProducts = async (req: AuthRequest, res: Response)
   } catch (error) {
     logger.error('Get contract product filter options error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch product filter options' } });
+  }
+};
+
+/**
+ * Discharge Port options of the Shipments page: the named discharge ports of the page's own shipments (utils/shipmentDischargePortSql.ts), one entry per spelling.
+ * The page lists a port once whatever its spelling and adds Blank itself.
+ */
+export const getContractFilterDischargePorts = async (_req: AuthRequest, res: Response) => {
+  try {
+    const dischargePorts = await ttlMemo('filter-options:shipment-discharge-ports', 5 * 60 * 1000, async () => {
+      const r = await query(buildShipmentDischargePortOptionsSql(shipmentPageOptionsScopeSql()));
+      return r.rows.map((x: { label: string }) => String(x.label));
+    });
+    return res.json({ success: true, data: { dischargePorts } });
+  } catch (error) {
+    logger.error('Get shipment discharge port filter options error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch discharge port filter options' } });
   }
 };
 

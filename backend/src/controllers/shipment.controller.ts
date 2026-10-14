@@ -200,6 +200,7 @@ import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql
 import { ttlMemo } from '../utils/ttlMemo';
 import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from '../utils/groupPlantSql';
 import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
+import { buildShipmentDischargePortFilter, parseDischargePortParam } from '../utils/shipmentDischargePortSql';
 import {
   sqlB2bEndingDischargeDestExpr,
   sqlB2bOriginEndingChildLateralJoin,
@@ -575,6 +576,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     // the query so filter builders and cache keys all see one canonical value.
     await applyContractFilterAlias(req.query as Record<string, unknown>);
     const { status, vessel, port, delayed, sto, contract, plant, page = 1, limit = 10 } = req.query;
+    /** Discharge Port toolbar filter: shipment-level (see utils/shipmentDischargePortSql.ts); leaves the contract backlog out. */
+    const dischargePorts = parseDischargePortParam((req.query as { dischargePort?: unknown }).dischargePort);
     const { dateFrom, dateTo } = parseOptionalStrictDateRange({
       dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
       dateTo: (req.query as { dateTo?: unknown }).dateTo,
@@ -842,6 +845,16 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       contractScopeParts.push(plantSql);
       coreParams.push(...groupPlantFilter.params);
       cp = groupPlantFilter.nextIndex;
+    }
+
+    const dischargePortFilter = buildShipmentDischargePortFilter(dischargePorts, cp);
+    if (dischargePortFilter.sql) {
+      relevantContractWhereParts.push(dischargePortFilter.sql);
+      shipmentBaseWhereParts.push(dischargePortFilter.sql);
+      // a contract with no shipment has no port: the backlog counts (Unplanned table count here, the other arms through buildUnplannedContractToolbarScope) are left out
+      contractScopeParts.push('FALSE');
+      coreParams.push(...dischargePortFilter.params);
+      cp = dischargePortFilter.nextIndex;
     }
 
     const contractToolbarFilter = appendContractScopeToolbarFilters(colFilters, cp);
@@ -1153,6 +1166,7 @@ ${vlpLateralJoins}
       sto,
       contract,
       plants,
+      dischargePorts,
       globalSearch,
       colFilters,
       lateIndicator: lateIndicatorParam,
@@ -1364,7 +1378,7 @@ ${vlpLateralJoins}
       toolbarOuterParams,
       skipSapJoin: true,
       filterCacheKey: shipmentListFilterCacheKey,
-      contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
+      contractScope: { dateFrom, dateTo, contract, plants, dischargePorts, sourceType: sourceTypeParam },
       globalSearch,
       colFilters,
     });
@@ -1372,21 +1386,21 @@ ${vlpLateralJoins}
       countUnplannedHybridBreakdown(section1UnplannedHybridCtx);
     const loadSection1PreplannedBreakdown = () =>
       countPreplannedContracts({
-        contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
+        contractScope: { dateFrom, dateTo, contract, plants, dischargePorts, sourceType: sourceTypeParam },
         globalSearch,
         colFilters,
         cacheKey: `${shipmentListFilterCacheKey}:preplanned-breakdown`,
       });
     const loadSection1CompletedBreakdown = () =>
       countCompletedContractBacklog({
-        contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
+        contractScope: { dateFrom, dateTo, contract, plants, dischargePorts, sourceType: sourceTypeParam },
         globalSearch,
         colFilters,
         cacheKey: `${shipmentListFilterCacheKey}:completed-backlog`,
       });
     const loadSection1CancelledBreakdown = () =>
       countCancelledContractBacklog({
-        contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
+        contractScope: { dateFrom, dateTo, contract, plants, dischargePorts, sourceType: sourceTypeParam },
         globalSearch,
         colFilters,
         cacheKey: `${shipmentListFilterCacheKey}:cancelled-backlog`,
@@ -1589,6 +1603,7 @@ ${vlpLateralJoins}
         sto,
         contract,
         plants,
+        dischargePorts,
         globalSearch,
         colFilters,
         lateIndicator: lateIndicatorParam,
@@ -1658,6 +1673,7 @@ ${vlpLateralJoins}
               dateTo,
               contract,
               plants,
+              dischargePorts,
               sourceType: sourceTypeParam,
             },
             globalSearch,
@@ -1741,6 +1757,7 @@ ${vlpLateralJoins}
             dateTo,
             contract,
             plants,
+            dischargePorts,
             sourceType: sourceTypeParam,
           },
           globalSearch,
@@ -1802,7 +1819,7 @@ ${vlpLateralJoins}
 
       if (isPreplannedListRequest(status)) {
         const preplanned = await resolvePreplannedContractsList(req, {
-          contractScope: { dateFrom, dateTo, contract, plants, sourceType: sourceTypeParam },
+          contractScope: { dateFrom, dateTo, contract, plants, dischargePorts, sourceType: sourceTypeParam },
           globalSearch,
           colFilters,
           cacheKey: `${shipmentListFilterCacheKey}:preplanned-breakdown`,
@@ -1874,6 +1891,7 @@ ${vlpLateralJoins}
               dateTo,
               contract,
               plants,
+              dischargePorts,
               sourceType: sourceTypeParam,
             },
             globalSearch,
@@ -1952,6 +1970,7 @@ ${vlpLateralJoins}
               dateTo,
               contract,
               plants,
+              dischargePorts,
               sourceType: sourceTypeParam,
             },
             globalSearch,

@@ -299,6 +299,27 @@ describe('GR-closed contract backlog', () => {
   });
 });
 
+describe('buildUnplannedContractToolbarScope discharge port filter', () => {
+  it('leaves the whole contract backlog out when a port is picked: a contract with no shipment has no port', () => {
+    const scope = buildUnplannedContractToolbarScope({ plants: [], dischargePorts: ['BONTANG'] });
+    expect(scope.sql).toBe('AND FALSE');
+    expect(scope.params).toEqual([]);
+  });
+
+  it('keeps the other scope parts and their parameter numbering', () => {
+    const scope = buildUnplannedContractToolbarScope({ plants: [], dateFrom: '2026-01-01', dischargePorts: ['BONTANG'] });
+    expect(scope.sql).toContain('FALSE');
+    expect(scope.sql).toContain('c.contract_date >= $1');
+    expect(scope.sql.match(/^AND /g)?.length).toBe(1);
+    expect(scope.params).toEqual(['2026-01-01']);
+  });
+
+  it('changes nothing when no port is picked', () => {
+    expect(buildUnplannedContractToolbarScope({ plants: [], dischargePorts: [] }).sql).toBe('');
+    expect(buildUnplannedContractToolbarScope({ plants: [] }).sql).toBe('');
+  });
+});
+
 describe('buildUnplannedContractToolbarScope source filter', () => {
   it('applies the toolbar Source filter to the contract rows of the backlog arms', () => {
     const interco = buildUnplannedContractToolbarScope({ plants: [], sourceType: 'Interco' });

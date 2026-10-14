@@ -9,6 +9,7 @@ import {
   getB2bPartiesForContract,
   getContractFilterIncoterms,
   getContractFilterProducts,
+  getContractFilterDischargePorts,
   getContractFilterOptionsAvailable,
   getContractFilterGroupPlants,
   getContractFilterMasterGroupPlants,
@@ -84,6 +85,7 @@ router.get('/late-performance', getLatePerformance);
 router.get('/filter-options/available', getContractFilterOptionsAvailable);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
 router.get('/filter-options/products', getContractFilterProducts);
+router.get('/filter-options/discharge-ports', getContractFilterDischargePorts);
 router.get('/filter-options/group-plants', getContractFilterGroupPlants);
 router.get('/filter-options/master-group-plants', getContractFilterMasterGroupPlants);
 router.get('/filter-options/b2b-flags', getContractFilterB2bFlags);
