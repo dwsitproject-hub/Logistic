@@ -221,6 +221,11 @@ export const MASTER_VESSEL_SORT_COLUMNS: Record<string, string> = {
   heating: 'heating',
   lambung_type: 'lambung_type',
   terms: 'terms',
+  // the vessel sheet's columns L-O (migration 240); LOA is stored as text, so it sorts as a number
+  vessel_draft: 'vessel_draft',
+  vessel_length_overall: `NULLIF(regexp_replace(vessel_length_overall, '[^0-9.]', '', 'g'), '')::numeric`,
+  vessel_hull_type: 'vessel_hull_type',
+  vessel_registration_year: 'vessel_registration_year',
   dhm_status: `(dhm_id IS NOT NULL OR NULLIF(BTRIM(dhm_code), '') IS NOT NULL)`,
   klip_transaction: MASTER_VESSEL_KLIP_TRANSACTION_SQL,
   // vessel_pair_latest is joined in the list query only (the count query has no sort).

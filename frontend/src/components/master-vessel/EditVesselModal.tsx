@@ -26,6 +26,11 @@ export interface MasterVesselFormData {
   heating: boolean | null
   lambung_type: string | null
   terms: string | null
+  /** The vessel sheet's Draft, LOA, Hull Type (BAJA, DECK BARGE ...) and Registration Year (migration 240). */
+  vessel_draft?: number | string | null
+  vessel_length_overall?: string | null
+  vessel_hull_type?: string | null
+  vessel_registration_year?: number | null
   dhm_id?: string | null
   dhm_code?: string | null
   /** System-issued KLIP code (KVSL-0001). Read-only: the database generates it. */
@@ -65,6 +70,10 @@ const emptyForm = (): Partial<MasterVesselFormData & { vessel_code_input?: strin
   heating: null,
   lambung_type: '',
   terms: '',
+  vessel_draft: null,
+  vessel_length_overall: '',
+  vessel_hull_type: '',
+  vessel_registration_year: null,
 })
 
 export function EditVesselModal({
@@ -125,6 +134,10 @@ export function EditVesselModal({
         heating: form.heating,
         lambung_type: form.lambung_type ? String(form.lambung_type).toUpperCase() : null,
         terms: form.terms || null,
+        vessel_draft: form.vessel_draft === '' || form.vessel_draft == null ? null : form.vessel_draft,
+        vessel_length_overall: form.vessel_length_overall ? String(form.vessel_length_overall).trim() : null,
+        vessel_hull_type: form.vessel_hull_type ? String(form.vessel_hull_type).toUpperCase() : null,
+        vessel_registration_year: form.vessel_registration_year,
       }
       setSaving(true)
       const overwriteQs = ''
@@ -354,6 +367,44 @@ export function EditVesselModal({
                   </option>
                 ))}
               </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Hull Type</label>
+              <Input
+                value={form.vessel_hull_type || ''}
+                onChange={(e) => handleChange('vessel_hull_type', e.target.value)}
+                placeholder="BAJA, DECK BARGE, DOUBLE HULL ..."
+                disabled={readOnly}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Registration Year</label>
+              <Input
+                type="number"
+                value={form.vessel_registration_year ?? ''}
+                onChange={(e) =>
+                  handleChange('vessel_registration_year', e.target.value === '' ? null : Number(e.target.value))
+                }
+                disabled={readOnly}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Draft (m)</label>
+              <Input
+                inputMode="decimal"
+                value={form.vessel_draft ?? ''}
+                onChange={(e) => handleChange('vessel_draft', e.target.value === '' ? null : e.target.value)}
+                disabled={readOnly}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">LOA (m)</label>
+              <Input
+                inputMode="decimal"
+                value={form.vessel_length_overall ?? ''}
+                onChange={(e) => handleChange('vessel_length_overall', e.target.value)}
+                disabled={readOnly}
+              />
             </div>
           </div>
         </div>

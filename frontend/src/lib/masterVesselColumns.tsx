@@ -6,24 +6,30 @@ import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import type { MasterVesselFormData } from '@/components/master-vessel/EditVesselModal'
 import { masterVesselDhmStatusLabel } from '@/lib/masterVesselDhmStatus'
 
+/**
+ * The Master Vessel table shows the columns of the vessel master sheet ("Vessel - Klip (Final Validation)", columns A-P, Ryan 2026-10-15),
+ * in its order and under its headers, plus KLIP's own code and status columns (Vessel Code KLIP / DHM, Klip Transaction, DHM Status).
+ * Owner Group, Year and Paired With are not in the sheet and are no longer columns; their data stays in the database.
+ */
 export type MasterVesselColumnId =
   | 'vessel_code'
-  | 'vessel_codes_sap'
   | 'dhm_code'
+  | 'pair_code'
   | 'vessel_name'
-  | 'vessel_capacity_mt'
-  | 'vessel_owner'
-  | 'vessel_owner_group'
+  | 'klip_transaction'
   | 'sap_vendor_code'
+  | 'vessel_owner'
+  | 'vessel_capacity_mt'
   | 'vessel_type'
-  | 'year_of_creation'
   | 'heating'
   | 'lambung_type'
   | 'terms'
+  | 'vessel_draft'
+  | 'vessel_length_overall'
+  | 'vessel_hull_type'
+  | 'vessel_registration_year'
+  | 'vessel_codes_sap'
   | 'dhm_status'
-  | 'klip_transaction'
-  | 'pair_code'
-  | 'pair_partner_name'
 
 export type MasterVesselRow = MasterVesselFormData & { id: string }
 
@@ -47,44 +53,54 @@ export function formatVesselCapacity(value: unknown): string {
   return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
 }
 
+/** Draft / LOA in metres: "21.34" -> "21.34", "79" -> "79"; a value that is not a number is shown as it is. */
+export function formatVesselMetres(value: unknown): string {
+  if (value == null || String(value).trim() === '') return '-'
+  const n = Number(String(value).trim().replace(',', '.'))
+  if (!Number.isFinite(n)) return String(value)
+  return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
 export function getMasterVesselCellText(colId: MasterVesselColumnId, row: MasterVesselRow): string {
   switch (colId) {
     case 'vessel_code':
       // The KLIP code, not the legacy vessel_code column. Every vessel has one and it never
       // changes, so unlike the old code there is nothing to hide behind formatVesselCodeDisplay.
       return row.vessel_code_klip || '-'
-    case 'vessel_codes_sap':
-      return row.vessel_codes_sap || '-'
     case 'dhm_code':
       return row.dhm_code || '-'
+    case 'pair_code':
+      return row.pair_code || '-'
     case 'vessel_name':
       return row.vessel_name || '-'
-    case 'vessel_capacity_mt':
-      return formatVesselCapacity(row.vessel_capacity_mt)
-    case 'vessel_owner':
-      return row.vessel_owner || '-'
-    case 'vessel_owner_group':
-      return row.vessel_owner_group || '-'
+    case 'klip_transaction':
+      return row.klip_transaction ? 'Yes' : 'No'
     case 'sap_vendor_code':
       return row.sap_vendor_code || '-'
+    case 'vessel_owner':
+      return row.vessel_owner || '-'
+    case 'vessel_capacity_mt':
+      return formatVesselCapacity(row.vessel_capacity_mt)
     case 'vessel_type':
       return row.vessel_type || '-'
-    case 'year_of_creation':
-      return row.year_of_creation != null ? String(row.year_of_creation) : '-'
     case 'heating':
       return row.heating == null ? '-' : row.heating ? 'Yes' : 'No'
     case 'lambung_type':
       return row.lambung_type || '-'
     case 'terms':
       return row.terms || '-'
+    case 'vessel_draft':
+      return formatVesselMetres(row.vessel_draft)
+    case 'vessel_length_overall':
+      return formatVesselMetres(row.vessel_length_overall)
+    case 'vessel_hull_type':
+      return row.vessel_hull_type || '-'
+    case 'vessel_registration_year':
+      return row.vessel_registration_year != null ? String(row.vessel_registration_year) : '-'
+    case 'vessel_codes_sap':
+      return row.vessel_codes_sap || '-'
     case 'dhm_status':
       return masterVesselDhmStatusLabel(row)
-    case 'klip_transaction':
-      return row.klip_transaction ? 'Yes' : 'No'
-    case 'pair_code':
-      return row.pair_code || '-'
-    case 'pair_partner_name':
-      return row.pair_partner_name || '-'
     default:
       return '-'
   }
@@ -92,25 +108,33 @@ export function getMasterVesselCellText(colId: MasterVesselColumnId, row: Master
 
 const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
   vessel_code: 112,
-  vessel_codes_sap: 168,
   dhm_code: 132,
+  pair_code: 104,
   vessel_name: 176,
-  vessel_capacity_mt: 112,
-  vessel_owner: 128,
-  vessel_owner_group: 128,
+  klip_transaction: 120,
   sap_vendor_code: 120,
+  vessel_owner: 160,
+  vessel_capacity_mt: 112,
   vessel_type: 96,
-  year_of_creation: 72,
   heating: 80,
   lambung_type: 104,
   terms: 104,
+  vessel_draft: 96,
+  vessel_length_overall: 96,
+  vessel_hull_type: 120,
+  vessel_registration_year: 120,
+  vessel_codes_sap: 168,
   dhm_status: 108,
-  klip_transaction: 120,
-  pair_code: 104,
-  pair_partner_name: 176,
 }
 
 export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 112
+
+const textColumn = (id: MasterVesselColumnId, label: string): MasterVesselColumnMeta => ({
+  id,
+  label,
+  getCellText: (row) => getMasterVesselCellText(id, row),
+  render: (row) => masterVesselCell(getMasterVesselCellText(id, row)),
+})
 
 export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
   {
@@ -120,93 +144,10 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
     render: (row) => <MasterCodeBadge kind="klip" value={getMasterVesselCellText('vessel_code', row)} />,
   },
   {
-    // A vessel can hold several: SAP issues a code per tug/barge combination, so BG. AS MARINA 12
-    // carries four. The cell shows them all and the title attribute keeps them readable when the
-    // column is narrow.
-    id: 'vessel_codes_sap',
-    label: 'Vessel Code (SAP)',
-    getCellText: (row) => getMasterVesselCellText('vessel_codes_sap', row),
-    render: (row) => <MasterCodeBadge kind="sap" value={getMasterVesselCellText('vessel_codes_sap', row)} />,
-  },
-  {
     id: 'dhm_code',
     label: 'Vessel Code (DHM)',
     getCellText: (row) => getMasterVesselCellText('dhm_code', row),
     render: (row) => <MasterCodeBadge kind="dhm" value={getMasterVesselCellText('dhm_code', row)} />,
-  },
-  {
-    id: 'vessel_name',
-    label: 'Vessel Name',
-    getCellText: (row) => getMasterVesselCellText('vessel_name', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('vessel_name', row)),
-  },
-  {
-    id: 'vessel_capacity_mt',
-    label: 'Capacity (MT)',
-    getCellText: (row) => getMasterVesselCellText('vessel_capacity_mt', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('vessel_capacity_mt', row)),
-  },
-  {
-    id: 'vessel_owner',
-    label: 'Owner',
-    getCellText: (row) => getMasterVesselCellText('vessel_owner', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('vessel_owner', row)),
-  },
-  {
-    id: 'vessel_owner_group',
-    label: 'Owner Group',
-    getCellText: (row) => getMasterVesselCellText('vessel_owner_group', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('vessel_owner_group', row)),
-  },
-  {
-    id: 'sap_vendor_code',
-    // The SHIPOWNER's code in SAP, not the vessel's - it sat next to "Vessel Code" and was read
-    // as one. Now that a real Vessel Code (SAP) column exists, the label has to separate them.
-    label: 'SAP Vendor Code (Owner)',
-    getCellText: (row) => getMasterVesselCellText('sap_vendor_code', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('sap_vendor_code', row)),
-  },
-  {
-    id: 'vessel_type',
-    label: 'Vessel Type',
-    getCellText: (row) => getMasterVesselCellText('vessel_type', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('vessel_type', row)),
-  },
-  {
-    id: 'year_of_creation',
-    label: 'Year',
-    getCellText: (row) => getMasterVesselCellText('year_of_creation', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('year_of_creation', row)),
-  },
-  {
-    id: 'heating',
-    label: 'Heating',
-    getCellText: (row) => getMasterVesselCellText('heating', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('heating', row)),
-  },
-  {
-    id: 'lambung_type',
-    label: 'Lambung Type',
-    getCellText: (row) => getMasterVesselCellText('lambung_type', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('lambung_type', row)),
-  },
-  {
-    id: 'terms',
-    label: 'Charter Type',
-    getCellText: (row) => getMasterVesselCellText('terms', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('terms', row)),
-  },
-  {
-    id: 'dhm_status',
-    label: 'DHM Status',
-    getCellText: (row) => getMasterVesselCellText('dhm_status', row),
-    render: (row) => masterVesselCell(<DhmStatusBadge row={row} />),
-  },
-  {
-    id: 'klip_transaction',
-    label: 'Klip Transaction',
-    getCellText: (row) => getMasterVesselCellText('klip_transaction', row),
-    render: (row) => masterVesselCell(<KlipTransactionBadge value={row.klip_transaction} />),
   },
   {
     // The pair SAP used most recently, not a fixed assignment: a barge can change tug.
@@ -215,11 +156,39 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
     getCellText: (row) => getMasterVesselCellText('pair_code', row),
     render: (row) => <MasterCodeBadge kind="pair" value={getMasterVesselCellText('pair_code', row)} />,
   },
+  textColumn('vessel_name', 'Nama Vessel'),
   {
-    id: 'pair_partner_name',
-    label: 'Paired With',
-    getCellText: (row) => getMasterVesselCellText('pair_partner_name', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('pair_partner_name', row)),
+    id: 'klip_transaction',
+    label: 'Klip Transaction',
+    getCellText: (row) => getMasterVesselCellText('klip_transaction', row),
+    render: (row) => masterVesselCell(<KlipTransactionBadge value={row.klip_transaction} />),
+  },
+  // The SHIPOWNER's code in SAP (the sheet's Company Code), not the vessel's.
+  textColumn('sap_vendor_code', 'Company Code'),
+  textColumn('vessel_owner', 'Vessel Owner (Company Name)'),
+  textColumn('vessel_capacity_mt', 'Vessel Capacity'),
+  textColumn('vessel_type', 'Vessel Type'),
+  textColumn('heating', 'Heating'),
+  textColumn('lambung_type', 'Type Lambung'),
+  textColumn('terms', 'Charter Type'),
+  textColumn('vessel_draft', 'Vessel Draft'),
+  textColumn('vessel_length_overall', 'Vessel LOA'),
+  textColumn('vessel_hull_type', 'Vessel Hull Type'),
+  textColumn('vessel_registration_year', 'Vessel Registration Year'),
+  {
+    // A vessel can hold several: SAP issues a code per tug/barge combination, so BG. AS MARINA 12
+    // carries four. The cell shows them all and the title attribute keeps them readable when the
+    // column is narrow.
+    id: 'vessel_codes_sap',
+    label: 'Vessel Code SAP',
+    getCellText: (row) => getMasterVesselCellText('vessel_codes_sap', row),
+    render: (row) => <MasterCodeBadge kind="sap" value={getMasterVesselCellText('vessel_codes_sap', row)} />,
+  },
+  {
+    id: 'dhm_status',
+    label: 'DHM Status',
+    getCellText: (row) => getMasterVesselCellText('dhm_status', row),
+    render: (row) => masterVesselCell(<DhmStatusBadge row={row} />),
   },
 ]
 
