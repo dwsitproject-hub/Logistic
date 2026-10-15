@@ -197,6 +197,15 @@ export function planSheetReplace(
   const codeRows = new Map<string, number>();
   for (const s of sheetRows) for (const c of s.codes) codeRows.set(c, (codeRows.get(c) ?? 0) + 1);
 
+  // which sheet row owns a code, and which codes a master holds: of two masters with one name, the one holding ANOTHER row's code
+  // is that other vessel under a stale name (DHM's sync once renamed MED PACIFIC back to BG. PACIFIC STAR 3), so it is taken last
+  const codeOwnerRow = new Map<string, number>();
+  for (const s of sheetRows) for (const c of s.codes) if ((codeRows.get(c) ?? 0) === 1) codeOwnerRow.set(c, s.row);
+  const heldCodes = new Map<string, string[]>();
+  for (const [code, id] of codeHolder) heldCodes.set(id, [...(heldCodes.get(id) ?? []), code]);
+  const holdsOtherRowsCode = (m: MasterSnapshot, row: number) =>
+    (heldCodes.get(m.id) ?? []).some((c) => codeOwnerRow.has(c) && codeOwnerRow.get(c) !== row);
+
   const claimed = new Map<string, SheetVessel>(); // master id -> sheet row that became it
   const normInSheet = new Map<string, SheetVessel>();
   const rows: RowPlan[] = [];
@@ -223,17 +232,24 @@ export function planSheetReplace(
     const free = (list: MasterSnapshot[] | undefined) => (list ?? []).filter((m) => !claimed.has(m.id) && !roleClash(role, m));
     let master: MasterSnapshot | undefined;
     let matchedBy: RowPlan['matchedBy'];
-    const exact = free(byName.get(sheet.name));
+    const foreignLast = (a: MasterSnapshot, b: MasterSnapshot) =>
+      Number(holdsOtherRowsCode(a, sheet.row)) - Number(holdsOtherRowsCode(b, sheet.row));
+    const exact = free(byName.get(sheet.name)).sort(foreignLast);
     if (exact.length > 0) {
       master = exact[0];
       matchedBy = 'name';
     } else {
-      const normHits = free(byNorm.get(norm)).sort((a, b) => Number(b.code_status === 'OFFICIAL') - Number(a.code_status === 'OFFICIAL'));
+      const normHits = free(byNorm.get(norm)).sort(
+        (a, b) => foreignLast(a, b) || Number(b.code_status === 'OFFICIAL') - Number(a.code_status === 'OFFICIAL'),
+      );
       if (normHits.length > 0) {
         master = normHits[0];
         matchedBy = 'norm';
       } else {
-        const twins = free(byLoose.get(looseVesselKey(norm)));
+        const allTwins = free(byLoose.get(looseVesselKey(norm)));
+        // several spellings of one ship: the one holding this row's own SAP code is it
+        const codedTwins = allTwins.filter((m) => (heldCodes.get(m.id) ?? []).some((c) => codeOwnerRow.get(c) === sheet.row));
+        const twins = allTwins.length > 1 && codedTwins.length === 1 ? codedTwins : allTwins;
         if (twins.length === 1) {
           master = twins[0];
           matchedBy = 'twin';

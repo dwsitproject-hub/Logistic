@@ -183,6 +183,28 @@ describe('planSheetReplace', () => {
     expect(plan.pairs[0].reason).toContain('konflik');
   });
 
+  it('of two masters with the sheet name, the one holding another row\'s code is left for that row', () => {
+    const stale = master('BG. PACIFIC STAR 3'); // MED PACIFIC under a stale name, created first
+    const real = master('BG. PACIFIC STAR 3');
+    const plan = planSheetReplace(
+      [sheet(1, 'BG. PACIFIC STAR 3', { H: 'Barge' }), sheet(2, 'MED PACIFIC', { P: 'MMEDPA' })],
+      [stale, real],
+      new Map([['MMEDPA', stale.id]]),
+    );
+    expect(plan.rows.map((r) => [r.sheet.name, r.action, r.master?.id])).toEqual([
+      ['BG. PACIFIC STAR 3', 'update', real.id],
+      ['MED PACIFIC', 'update', stale.id],
+    ]);
+  });
+
+  it('of several spelling twins, the one holding the row\'s own code is taken; the other is merged into it', () => {
+    const coded = master('MT. ASIKE 01');
+    const other = master('MT. ASIKE 01');
+    const plan = planSheetReplace([sheet(1, 'MT. ASIKE I', { H: 'Tanker', P: 'MASIKE' })], [other, coded], new Map([['MASIKE', coded.id]]));
+    expect(plan.rows[0]).toMatchObject({ action: 'update', matchedBy: 'twin', master: coded });
+    expect(plan.retire).toEqual([expect.objectContaining({ master: other, action: 'repoint' })]);
+  });
+
   it('lists the codes more than one sheet row claims, so a merged twin does not hand them out', () => {
     const plan = planSheetReplace([sheet(1, 'A', { P: 'MX' }), sheet(2, 'B', { P: 'MX, MY' })], [], new Map());
     expect(plan.sharedCodes).toEqual(['MX']);
