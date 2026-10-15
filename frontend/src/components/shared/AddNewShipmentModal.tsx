@@ -28,6 +28,8 @@ import {
   X,
 } from 'lucide-react'
 import api from '@/lib/api'
+import { drawnPortLabel } from '@/lib/dischargePortFilter'
+import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import {
   areAllSelectionKeysCif,
   blockSelectionKeysAllCif,
@@ -428,6 +430,8 @@ export function AddNewShipmentModal({
   prePlannedGroupId = null,
   prefilledVessel = null,
 }: AddNewShipmentModalProps) {
+  // the read-only discharge port is drawn as its Master Port when the map has one; the value that is saved stays what SAP wrote
+  const portResolver = useDischargePortResolver()
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
   const canEditShipment = canEditPermission(perms, 'data.shipments')
@@ -2822,7 +2826,8 @@ export function AddNewShipmentModal({
                     <span className="ml-1 text-gray-500 text-xs">(from SAP)</span>
                   </label>
                   <Input
-                    value={newShipment.portOfDischarge}
+                    value={drawnPortLabel(newShipment.portOfDischarge, portResolver)}
+                    title={drawnPortLabel(newShipment.portOfDischarge, portResolver) !== newShipment.portOfDischarge ? `SAP: ${newShipment.portOfDischarge}` : undefined}
                     readOnly
                     disabled
                     placeholder="Filled from SAP when a PO is added"

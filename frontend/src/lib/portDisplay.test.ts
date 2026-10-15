@@ -4,6 +4,7 @@ import { displayPortLabel, masterPortOf, normalizeListPortIdentity, setPortDispl
 import { resolveShipmentListDischargePorts } from '@/lib/shipmentListPorts'
 import { applySection3PortDisplay, displayShippingPerfDischargePort, displayShippingPerfLoadingPort, type ShippingPerformancePortSource } from '@/lib/shippingPerformancePorts'
 import { shippingPerfCellTooltipText } from '@/lib/shippingPerformanceTableUi'
+import { oilLossDrawnUnloadingLocation } from '@/lib/oilLossDischargePort'
 import { resolveShipmentListLoadingPorts } from '@/lib/shipmentListPorts'
 
 const displayed = (row: ShippingPerformancePortSource) => applySection3PortDisplay(row).discharge_port
@@ -85,7 +86,7 @@ describe('Shipping Performance section 3 discharge port is drawn as its Master P
     expect(displayed({ sap_vessel_discharge_port: 'EUP EDIBLE OIL BONTANG', port_of_discharge: 'PORT DUMAI' })).toBe('EUP EDIBLE OIL BONTANG')
   })
 })
-describe('the table cells draw the same port as applySection3PortDisplay (the SP cell recomputed the raw text before)', () => {
+describe('the table cells draw the same port as applySection3PortDisplay (the SP cell recomputed the raw text before); loading stays as written', () => {
   it('discharge: the cell function and the tooltip give the Master Port, else the original text', () => {
     setPortDisplayResolver(resolver)
     const row = { sap_vessel_discharge_port: 'EUP EDIBLE OIL BONTANG' }
@@ -94,28 +95,43 @@ describe('the table cells draw the same port as applySection3PortDisplay (the SP
     expect(displayShippingPerfDischargePort({ sap_vessel_discharge_port: 'EUP TRADING PLANT' })).toBe('EUP TRADING PLANT')
   })
 
-  it('loading: a SAP text that is a Master Port name or one of its SAP names is drawn as the port; a mill nobody mapped stays as SAP wrote it', () => {
+  it('loading ports are NOT read through the Master Port (mills and depots as much as ports): drawn as SAP / KLIP wrote them, even with a map', () => {
     setPortDisplayResolver(resolver)
-    expect(displayShippingPerfLoadingPort({ sap_vessel_loading_port_1: 'PORT OF BONEMANJING' })).toBe('PORT BONE MANJING')
-    expect(displayShippingPerfLoadingPort({ sap_vessel_loading_port_1: 'Port Asike' })).toBe('PORT ASIKE')
+    expect(displayShippingPerfLoadingPort({ sap_vessel_loading_port_1: 'PORT OF BONEMANJING' })).toBe('PORT OF BONEMANJING')
+    expect(displayShippingPerfLoadingPort({ sap_vessel_loading_port_1: 'Port Asike' })).toBe('Port Asike')
     expect(displayShippingPerfLoadingPort({ sap_vessel_loading_port_1: 'PKS MAJU KALIMANTAN' })).toBe('PKS MAJU KALIMANTAN')
-    expect(shippingPerfCellTooltipText('loading_port', { sap_vessel_loading_port_1: 'PORT OF BONEMANJING' } as never)).toBe('PORT BONE MANJING')
-    expect(applySection3PortDisplay<ShippingPerformancePortSource>({ sap_vessel_loading_port_1: 'PORT OF BONEMANJING' }).loading_port).toBe('PORT BONE MANJING')
+    expect(shippingPerfCellTooltipText('loading_port', { sap_vessel_loading_port_1: 'PORT OF BONEMANJING' } as never)).toBe('PORT OF BONEMANJING')
+    expect(applySection3PortDisplay<ShippingPerformancePortSource>({ sap_vessel_loading_port_1: 'PORT OF BONEMANJING' }).loading_port).toBe('PORT OF BONEMANJING')
   })
 
-  it('loading: the first text that has a Master Port wins over a first text that has none', () => {
+  it('loading keeps its order: the SAP Vessel Loading Port first, then what KLIP holds', () => {
     setPortDisplayResolver(resolver)
-    expect(displayShippingPerfLoadingPort({ sap_vessel_loading_port_1: 'PKS MAJU KALIMANTAN', port_of_loading: 'PORT ASIKE' })).toBe('PORT ASIKE')
+    expect(displayShippingPerfLoadingPort({ sap_vessel_loading_port_1: 'PKS MAJU KALIMANTAN', port_of_loading: 'PORT ASIKE' })).toBe('PKS MAJU KALIMANTAN')
+    expect(displayShippingPerfLoadingPort({ port_of_loading: 'PORT ASIKE' })).toBe('PORT ASIKE')
   })
 
   it('without a map nothing changes', () => {
     expect(displayShippingPerfLoadingPort({ sap_vessel_loading_port_1: 'PORT OF BONEMANJING' })).toBe('PORT OF BONEMANJING')
   })
 
-  it('Shipments list loading ports are drawn as Master Ports too, one entry per port, unmapped texts as they are', () => {
+  it('Shipments list loading ports are drawn as they are; only the discharge ports are Master Ports', () => {
     setPortDisplayResolver(resolver)
     const row = (over: Record<string, unknown>) => over as Parameters<typeof resolveShipmentListLoadingPorts>[0]
-    expect(resolveShipmentListLoadingPorts(row({ loading_ports_klip: 'PORT OF BONEMANJING, PKS MAJU KALIMANTAN' }))).toBe('PORT BONE MANJING, PKS MAJU KALIMANTAN')
-    expect(resolveShipmentListLoadingPorts(row({ loading_ports_klip: 'Port Asike, PORT ASIKE' }))).toBe('PORT ASIKE')
+    expect(resolveShipmentListLoadingPorts(row({ loading_ports_klip: 'PORT OF BONEMANJING, PKS MAJU KALIMANTAN' }))).toBe('PORT OF BONEMANJING, PKS MAJU KALIMANTAN')
+    expect(resolveShipmentListLoadingPorts(row({ loading_ports_klip: 'Port Asike, PORT ASIKE' }))).toBe('Port Asike')
+  })
+})
+
+describe('Oil Loss unloading location is drawn as a Master Port for a vessel row only', () => {
+  it('a vessel row\'s discharge port is the Master Port when it has one, a truck row\'s location and an unmapped text stay as they are', () => {
+    setPortDisplayResolver(resolver)
+    expect(oilLossDrawnUnloadingLocation({ transport_mode: 'SEA', unloading_location: 'EUP EDIBLE OIL BONTANG' })).toBe('PORT BONTANG')
+    expect(oilLossDrawnUnloadingLocation({ transport_mode: 'LAND', unloading_location: 'EUP EDIBLE OIL BONTANG' })).toBe('EUP EDIBLE OIL BONTANG')
+    expect(oilLossDrawnUnloadingLocation({ transport_mode: 'SEA', unloading_location: 'EUP TRADING PLANT' })).toBe('EUP TRADING PLANT')
+    expect(oilLossDrawnUnloadingLocation({ transport_mode: 'SEA', unloading_location: '' })).toBeNull()
+  })
+
+  it('without a map nothing changes', () => {
+    expect(oilLossDrawnUnloadingLocation({ transport_mode: 'SEA', unloading_location: 'EUP EDIBLE OIL BONTANG' })).toBe('EUP EDIBLE OIL BONTANG')
   })
 })

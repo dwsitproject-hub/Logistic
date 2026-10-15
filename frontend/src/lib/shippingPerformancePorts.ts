@@ -65,23 +65,18 @@ export function resolveShippingPerfLoadingPort(row: ShippingPerformancePortSourc
   )
 }
 
-/** Every usable loading port text of a row, in the order the table prefers them: the SAP Vessel Loading Port, then the KLIP shipment's. */
-export function loadingPortCandidates(row: ShippingPerformancePortSource): string[] {
-  return [row.sap_vessel_loading_port_1, row.port_of_loading, row.vlp_loading_port_name, row.loading_port].flatMap((candidate) => {
-    const name = pickShippingPortName(candidate)
-    return name ? [name] : []
-  })
-}
-
 /** The first text that has a Master Port, drawn as that Master Port; when none has one, the first text as it is (the original SAP / KLIP value). */
 function drawnPort(candidates: string[]): string | null {
   const master = candidates.map((text) => masterPortOf(text)).find((label): label is string => label !== null)
   return master ?? candidates[0] ?? null
 }
 
-/** The loading port the table DRAWS: its Master Port when it has one, else the original text. */
+/**
+ * The loading port the table DRAWS: the SAP Vessel Loading Port, then the KLIP shipment's, as they were written. Loading texts are mills and depots as much as ports, so
+ * they are not read through the Master Port (only the discharge port is).
+ */
 export function displayShippingPerfLoadingPort(row: ShippingPerformancePortSource): string | null {
-  return drawnPort(loadingPortCandidates(row))
+  return resolveShippingPerfLoadingPort(row)
 }
 
 /** The discharge port the table DRAWS: its Master Port when it has one (the first text that does, the one the filter reads), else the original text. */

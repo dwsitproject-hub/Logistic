@@ -63,6 +63,8 @@ import {
 import { formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import api from '@/lib/api'
+import { drawnPortLabel } from '@/lib/dischargePortFilter'
+import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { isMultiStoPo } from '@/lib/poStoOutstanding'
 import { PoStoOutstandingHelp } from '@/components/shared/PoStoOutstandingHelp'
@@ -446,7 +448,10 @@ function ModalPortKlipSapLabel({
   portRow,
   shipmentInfo,
   sequence,
+  textDisplay,
 }: {
+  /** How the port text is DRAWN (a discharge port as its Master Port); the loading ports are not passed one and stay as written. Display only. */
+  textDisplay?: (text: string) => string
   portRow:
     | {
         port_name?: unknown
@@ -472,10 +477,10 @@ function ModalPortKlipSapLabel({
   return (
     <div className="min-w-0">
       <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
-        <span>{klip || '—'}</span>
+        <span>{klip ? (textDisplay ? textDisplay(klip) : klip) : '—'}</span>
         <KlipSapSourceBadge provenance={provenance} />
       </div>
-      {showFooter ? <KlipSapReferenceFooter sapValue={sap} format="text" /> : null}
+      {showFooter ? <KlipSapReferenceFooter sapValue={sap} format="text" textDisplay={textDisplay} /> : null}
     </div>
   )
 }
@@ -801,6 +806,9 @@ export function EditShipmentModal({
   stacked = false,
   onShipmentChanged,
 }: EditShipmentModalProps) {
+  // the read-only discharge port is drawn as its Master Port when the map has one (display only; loading ports stay as written)
+  const portResolver = useDischargePortResolver()
+  const drawDischargePort = useCallback((text: string) => drawnPortLabel(text, portResolver), [portResolver])
   const perms = usePermissions()
   const canEditShipment = canEditPermission(perms, 'data.shipments')
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
@@ -2320,6 +2328,7 @@ export function EditShipmentModal({
                     shipmentInfo,
                   )}
                   format="text"
+                  textDisplay={drawDischargePort}
                 />
               </div>
 
@@ -3157,6 +3166,7 @@ export function EditShipmentModal({
                         <ModalPortKlipSapLabel
                           portRow={dischargePortRow ?? { is_discharge_port: true }}
                           shipmentInfo={shipmentInfo}
+                          textDisplay={drawDischargePort}
                         />
                       </div>
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">

@@ -195,7 +195,7 @@ export function applyOilLossGlobalFilters({
       return false
     }
     if (!matchesOilLossGlobalIncotermFilter(row)) return false
-    if (!matchesOilLossLoadingPortFilter(row, selectedLoadingPorts, dischargePortResolver)) return false
+    if (!matchesOilLossLoadingPortFilter(row, selectedLoadingPorts)) return false
     if (!matchesOilLossDischargePortFilter(row, selectedDischargePorts, dischargePortResolver)) return false
     if (!matchesOilLossGlobalProductsMultiFilter(row, selectedProducts)) return false
     const d = resolveRowDate(row)

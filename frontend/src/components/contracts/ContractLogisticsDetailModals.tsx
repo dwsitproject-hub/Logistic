@@ -435,7 +435,7 @@ export function ContractShipmentDetailModal({
                       <Field label="Vessel code" value={formatVesselCodeDisplay(selected.vessel_code)} />
                       <Field label="Voyage" value={selected.voyage_no} />
                       <Field label="Vessel owner" value={selected.vessel_owner} />
-                      <Field label="Port of loading" value={drawnPortLabel(selected.port_of_loading, portResolver)} />
+                      <Field label="Port of loading" value={selected.port_of_loading} />
                       <Field label="Port of discharge" value={drawnPortLabel(selected.port_of_discharge, portResolver)} />
                       <Field label="Quantity shipped" value={fmtNum(selected.quantity_shipped)} />
                     </div>

@@ -27,9 +27,9 @@ import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 import { formatOilLossAvgMt, formatOilLossAvgPct, formatOilLossMtFromKg, formatOilLossPct } from '@/lib/oilLossFormat'
 import { filterOilLossPageRows } from '@/lib/oilLossEligibility'
-import { oilLossDischargePortOptions } from '@/lib/oilLossDischargePort'
+import { oilLossDischargePortOptions, oilLossDrawnUnloadingLocation } from '@/lib/oilLossDischargePort'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
-import { oilLossDrawnLocation, oilLossLoadingPortOptions } from '@/lib/oilLossLoadingPort'
+import { oilLossLoadingPortOptions } from '@/lib/oilLossLoadingPort'
 import { setPortDisplayResolver } from '@/lib/portDisplay'
 import { filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import {
@@ -580,10 +580,10 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       label: 'Loading Location',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('loading_location' in r ? oilLossDrawnLocation(r, 'loading_location') : '') || '',
+      getSortValue: (r) => ('loading_location' in r ? r.loading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {formatOperationalTableTextDisplay('loading_location' in r ? oilLossDrawnLocation(r, 'loading_location') : null, '-')}
+          {formatOperationalTableTextDisplay('loading_location' in r ? r.loading_location : null, '-')}
         </span>
       ),
     },
@@ -592,10 +592,10 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       label: 'Unloading Location',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('unloading_location' in r ? oilLossDrawnLocation(r, 'unloading_location') : '') || '',
+      getSortValue: (r) => ('unloading_location' in r ? oilLossDrawnUnloadingLocation(r) : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {formatOperationalTableTextDisplay('unloading_location' in r ? oilLossDrawnLocation(r, 'unloading_location') : null, '-')}
+          {formatOperationalTableTextDisplay('unloading_location' in r ? oilLossDrawnUnloadingLocation(r) : null, '-')}
         </span>
       ),
     },
@@ -836,10 +836,10 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       label: 'Loading Location',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('loading_location' in r ? oilLossDrawnLocation(r, 'loading_location') : '') || '',
+      getSortValue: (r) => ('loading_location' in r ? r.loading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {formatOperationalTableTextDisplay('loading_location' in r ? oilLossDrawnLocation(r, 'loading_location') : null, '-')}
+          {formatOperationalTableTextDisplay('loading_location' in r ? r.loading_location : null, '-')}
         </span>
       ),
     },
@@ -848,10 +848,10 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       label: 'Unloading Location',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('unloading_location' in r ? oilLossDrawnLocation(r, 'unloading_location') : '') || '',
+      getSortValue: (r) => ('unloading_location' in r ? oilLossDrawnUnloadingLocation(r) : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {formatOperationalTableTextDisplay('unloading_location' in r ? oilLossDrawnLocation(r, 'unloading_location') : null, '-')}
+          {formatOperationalTableTextDisplay('unloading_location' in r ? oilLossDrawnUnloadingLocation(r) : null, '-')}
         </span>
       ),
     },
@@ -1728,8 +1728,8 @@ export default function OilLossPage() {
     [rows, globalPeriod, selectedProducts, selectedDischargePorts, dischargePortResolver, selectedGroupPlants, dateFrom, dateTo],
   )
   const loadingPortDropdownOptions = useMemo(
-    () => oilLossLoadingPortOptions(loadingPortListRows, selectedLoadingPorts, dischargePortResolver),
-    [loadingPortListRows, selectedLoadingPorts, dischargePortResolver],
+    () => oilLossLoadingPortOptions(loadingPortListRows, selectedLoadingPorts),
+    [loadingPortListRows, selectedLoadingPorts],
   )
   /** The rows every filter but Discharge Port leaves in, so picking a port never hides the other ports from the list. */
   const dischargePortListRows = useMemo(

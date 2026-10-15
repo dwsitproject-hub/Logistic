@@ -7,12 +7,31 @@ import {
   realDischargePicks,
   type DischargePortResolver,
 } from '@/lib/dischargePortFilter'
-import { isOilLossTruckRow } from '@/lib/oilLossLoadingPort'
+import { displayPortLabel } from '@/lib/portDisplay'
 
 /** What a row with no discharge port is listed as in the other Oil Loss groupings. It is not a pick of the filter. */
 export const OIL_LOSS_BLANK_DISCHARGE_PORT = BLANK_DISCHARGE_PORT
 
 type DischargePortRow = Pick<OilLossSourceRow, 'unloading_location'> & Partial<Pick<OilLossSourceRow, 'transport_mode'>>
+
+/**
+ * A trucking row's unloading_location is a plant or a location, not a port (Trucking is out of the Master Port mapping); only a row that is not a truck row is read as a
+ * port. A row with no mode is read as a vessel row, as every row before this rule was.
+ */
+export function isOilLossTruckRow(row: { transport_mode?: string | null }): boolean {
+  return String(row.transport_mode ?? '').trim().toUpperCase() === 'LAND'
+}
+
+/**
+ * The unloading location of an Oil Loss row as the table DRAWS it: a vessel row's discharge port as its Master Port when it has one, else as SAP wrote it; a trucking
+ * row's location as it is. Nothing (an empty text) stays null so the cell keeps its "-". The LOADING location is not mapped: loading texts are mills and depots as much as
+ * ports, and stay as SAP wrote them.
+ */
+export function oilLossDrawnUnloadingLocation(row: { transport_mode?: string | null; unloading_location?: string | null }): string | null {
+  const text = String(row.unloading_location ?? '').trim()
+  if (!text) return null
+  return isOilLossTruckRow(row) ? text : displayPortLabel(text)
+}
 
 /**
  * The discharge port of an Oil Loss row, as one label (what "the same port" means, and the Master Port mapping, are in lib/dischargePortFilter.ts).

@@ -160,7 +160,7 @@ describe('oilLossGlobalFilters', () => {
     expect(applyOilLossGlobalFilters({ rows, period: 'YTD' }).map((r) => r.id)).toEqual(['fob'])
   })
 
-  it('applyOilLossGlobalFilters filters by loading port by its spelling without the map, case-insensitively; Blank is no pick and a row with no port is found by none', () => {
+  it('applyOilLossGlobalFilters filters by loading port, case-insensitively, with Blank for a row that has none', () => {
     const rows = [
       row({ id: 'a', loading_location: 'POM KENDAWANGAN' }),
       row({ id: 'b', loading_location: ' pom  kendawangan ' }),
@@ -171,8 +171,7 @@ describe('oilLossGlobalFilters', () => {
       applyOilLossGlobalFilters({ rows, period: 'YTD', selectedLoadingPorts }).map((r) => r.id)
     expect(ids([])).toEqual(['a', 'b', 'c', 'd'])
     expect(ids(['Pom Kendawangan'])).toEqual(['a', 'b'])
-    expect(ids(['PORT TELUK TAPANG', 'Blank'])).toEqual(['c'])
-    expect(ids(['Blank'])).toEqual(['a', 'b', 'c', 'd'])
+    expect(ids(['PORT TELUK TAPANG', 'Blank'])).toEqual(['c', 'd'])
   })
 
   it('loading port, product and region/plant combine (AND), so the cards, drilldown and table see one row set', () => {

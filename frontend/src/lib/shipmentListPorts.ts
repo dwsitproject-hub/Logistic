@@ -100,7 +100,7 @@ function pickPortByGrStatus(klip: string, sap: string, closed: boolean): string 
 /** Resolved loading ports for list table (comma-separated when multiple). */
 export function resolveShipmentListLoadingPorts(row: ShipmentListPortSource): string {
   const closed = isContractSapClosedFlag(row.is_contract_sap_closed)
-  return asMasterPorts(pickPortByGrStatus(resolveKlipLoadingPorts(row), resolveSapLoadingPorts(row), closed))
+  return pickPortByGrStatus(resolveKlipLoadingPorts(row), resolveSapLoadingPorts(row), closed)
 }
 
 /**

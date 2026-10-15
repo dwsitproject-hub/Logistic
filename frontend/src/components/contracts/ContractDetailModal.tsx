@@ -1798,7 +1798,7 @@ export function ContractDetailModal({
                     <StoDetailField label="Status" value={String(stoDetailData.status ?? '-')} />
                     <StoDetailField label="Contract(s)" value={String(stoDetailData.contract_numbers ?? '-')} />
                     <StoDetailField label="Vessel Name" value={String(stoDetailData.vessel_name ?? '-')} />
-                    <StoDetailField label="Port of Loading" value={drawnPortLabel(String(stoDetailData.port_of_loading ?? '-'), portResolver)} />
+                    <StoDetailField label="Port of Loading" value={String(stoDetailData.port_of_loading ?? '-')} />
                     <StoDetailField label="Port of Discharge" value={drawnPortLabel(String(stoDetailData.port_of_discharge ?? '-'), portResolver)} />
                     <StoDetailField label="Product" value={String(stoDetailData.product ?? '-')} />
                   </StoDetailSection>

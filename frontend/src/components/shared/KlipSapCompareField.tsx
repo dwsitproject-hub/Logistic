@@ -91,17 +91,23 @@ export function KlipSapReferenceFooter({
   format,
   delta,
   source = 'sap',
+  textDisplay,
 }: {
   /** The reference value shown - SAP's by default, JPS's when `source` is 'jps'. */
   sapValue: unknown
   format: KlipSapCompareFormat
   delta?: string | null
   source?: 'sap' | 'jps'
+  /** How a TEXT value is drawn (a port as its Master Port). Display only: nothing is compared or saved through it. */
+  textDisplay?: (text: string) => string
 }) {
+  const shown = formatKlipSapDisplayValue(sapValue, format)
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
       <KlipSapSourceBadge provenance={source} />
-      <span>{formatKlipSapDisplayValue(sapValue, format)}</span>
+      <span title={textDisplay && format === 'text' && textDisplay(shown) !== shown ? `SAP: ${shown}` : undefined}>
+        {textDisplay && format === 'text' ? textDisplay(shown) : shown}
+      </span>
       {delta ? (
         <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
           Δ {delta}
@@ -153,6 +159,11 @@ type KlipSapCompareFieldProps = {
   /** Who the data records as having written the value, when the backend knows. Beats inference. */
   source?: KlipSapRecordedSource | null
   hidden?: boolean
+  /**
+   * How a TEXT value is DRAWN - the shown KLIP value and the SAP reference - e.g. a discharge port as its Master Port (the raw SAP text is the tooltip of the reference).
+   * Display only: provenance and mismatch still compare the raw values, and a field that is edited keeps its own control.
+   */
+  textDisplay?: (text: string) => string
 }
 
 export function KlipSapCompareField({
@@ -170,6 +181,7 @@ export function KlipSapCompareField({
   jpsValue,
   source,
   hidden = false,
+  textDisplay,
 }: KlipSapCompareFieldProps) {
   if (hidden) return null
 
@@ -218,7 +230,11 @@ export function KlipSapCompareField({
       />
     ) : (
       <ModalReadonlyTextInput
-        value={formatKlipSapDisplayValue(klipValue, format)}
+        value={
+          textDisplay && format === 'text'
+            ? textDisplay(formatKlipSapDisplayValue(klipValue, format))
+            : formatKlipSapDisplayValue(klipValue, format)
+        }
         compact={compact}
         className={format === 'number' ? 'text-right tabular-nums' : undefined}
       />
@@ -235,7 +251,7 @@ export function KlipSapCompareField({
         {control}
       </KlipSapValueWithBadge>
       {showFooter ? (
-        <KlipSapReferenceFooter sapValue={sapValue} format={format} delta={delta} />
+        <KlipSapReferenceFooter sapValue={sapValue} format={format} delta={delta} textDisplay={textDisplay} />
       ) : null}
       {showJpsFooter ? (
         <KlipSapReferenceFooter sapValue={jpsValue} format={format} delta={jpsDelta} source="jps" />
