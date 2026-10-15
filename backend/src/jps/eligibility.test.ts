@@ -11,29 +11,37 @@ async function sqlOf(): Promise<string> {
   return String(vi.mocked(query).mock.calls[0]![0]);
 }
 
-describe('findEligibleStos: which port a plant-named discharge port resolves to', () => {
+async function callOf(): Promise<[string, unknown[]]> {
+  vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 0 } as any);
+  await findEligibleStos('BONTANG', 10);
+  const call = vi.mocked(query).mock.calls[0]!;
+  return [String(call[0]), call[1] as unknown[]];
+}
+
+describe('findEligibleStos: the port code comes from the Master Port the discharge port text resolves to', () => {
   beforeEach(() => vi.mocked(query).mockReset());
 
-  // SAP writes the destination PLANT in Vessel Discharge Port on 46% of rows (EUP EDIBLE OIL BONTANG ...),
-  // and Master Port holds only real ports. Those STOs were all held until the alias lookup existed.
-  it('falls back to discharge_port_aliases only when no Master Port carries the name', async () => {
+  // SAP writes the destination PLANT in Vessel Discharge Port on 46% of rows (EUP EDIBLE OIL BONTANG ...), and Master Port holds only real ports. Since migration 237
+  // each Master Port carries the SAP texts that stand for it (VESSEL PORT (SAP)) and the shipment carries the id of the port its text resolves to.
+  it('reads the Master Port by the id stored on the shipment, else on its active discharge leg, and no longer by name or alias', async () => {
     const sql = await sqlOf();
-    expect(sql).toContain('FROM discharge_port_aliases dpa');
-    expect(sql).toContain('WHERE matched.port IS NULL');
-    // a Master Port that carries the name wins; the alias route is the ELSE branch of the same CASE
-    expect(sql).toContain('CASE WHEN matched.port IS NOT NULL');
-    expect(sql).toContain('THEN CASE WHEN COALESCE(matched.dhm_is_deleted, FALSE) THEN NULL ELSE matched.code_dhm END');
-    expect(sql).toContain('ELSE CASE WHEN COALESCE(via_alias.dhm_is_deleted, FALSE) THEN NULL ELSE via_alias.code_dhm END');
+    const port = sql.slice(sql.indexOf('port AS ('), sql.indexOf('vessel AS ('));
+    expect(port).toContain('s.discharge_master_port_id');
+    expect(port).toContain('v.master_port_id');
+    expect(port).toContain('LEFT JOIN master_loading_ports mp ON mp.id = dp.id');
+    // SQL comments name the old table; only the statement itself matters here
+    const statement = sql.replace(/--[^\n]*/g, '');
+    expect(statement).not.toContain('discharge_port_aliases');
+    expect(statement).not.toContain('via_alias');
   });
 
-  it('takes the port named "PORT <site>" and nothing looser', async () => {
+  it('a Master Port deleted in DHM gives no code and says so (port_deleted)', async () => {
     const sql = await sqlOf();
-    expect(sql).toContain("= 'PORT ' || regexp_replace(upper(btrim(st.site_name))");
-    // "the Site's only port" picked PORT KUMAI for BEKASI, so there is no such fallback
-    expect(sql).not.toMatch(/COUNT\(\*\) OVER/);
+    expect(sql).toContain('CASE WHEN COALESCE(mp.dhm_is_deleted, FALSE) THEN NULL ELSE mp.code_dhm END');
+    expect(sql).toContain('COALESCE(mp.dhm_is_deleted, FALSE)');
   });
 
-  it('keeps Master Port free of plant names: the alias lookup reads Master Port, never writes it', async () => {
+  it('keeps Master Port free of plant names: the lookup reads Master Port, never writes it', async () => {
     const sql = await sqlOf();
     expect(sql).not.toMatch(/INSERT INTO master_loading_ports/i);
   });
@@ -41,23 +49,64 @@ describe('findEligibleStos: which port a plant-named discharge port resolves to'
 
 // A shipment planned by hand keeps its discharge port as a vessel_loading_ports row (is_discharge_port) and leaves
 // shipments.port_of_discharge NULL, so the port was never found and the STO was held on every sweep.
-describe('findEligibleStos: the discharge port name', () => {
+describe('findEligibleStos: the discharge port of a shipment', () => {
   beforeEach(() => vi.mocked(query).mockReset());
 
-  it('reads the discharge port row when the shipment column is empty', async () => {
+  it('reads the active discharge leg when the shipment has no Master Port of its own', async () => {
     const sql = await sqlOf();
     expect(sql).toContain('FROM vessel_loading_ports v');
     expect(sql).toContain('COALESCE(v.is_discharge_port, FALSE) IS TRUE');
-    expect(sql).toContain("NULLIF(BTRIM(s.port_of_discharge), ''),");
+    expect(sql).toContain('COALESCE(v.is_cancelled, FALSE) IS NOT TRUE');
   });
 
-  it('matches Master Port and the aliases on that name, never on the bare column', async () => {
+  it('never matches on the bare text column: only the stored Master Port ids count', async () => {
     const sql = await sqlOf();
     const port = sql.slice(sql.indexOf('port AS ('), sql.indexOf('vessel AS ('));
-    // SQL comments mention the column by name; only the statement itself matters here
-    const bare = port.replace(/--[^\n]*/g, '').replace(/NULLIF\(BTRIM\(s\.port_of_discharge\), ''\),/, '');
+    const bare = port.replace(/--[^\n]*/g, '');
     expect(bare).not.toContain('s.port_of_discharge');
-    expect(port).toContain('dp.name');
+    expect(bare).not.toContain('dp.name');
+  });
+});
+
+// Only the discharge port the integration is switched on for is submitted: PORT BONTANG for now (Ryan, 2026-10-14).
+describe('findEligibleStos: only the configured discharge Master Port', () => {
+  beforeEach(() => vi.mocked(query).mockReset());
+
+  it('asks for PORT BONTANG by default, as ONE bound parameter after the others, resolved to its Master Port id', async () => {
+    const [sql, params] = await callOf();
+    expect(params).toEqual(['BONTANG', 10, false, 0, 'PORT BONTANG']);
+    expect(sql).toContain('$5::text IS NULL');
+    expect(sql).toContain('= klip_resolve_master_port_id($5::text)');
+  });
+
+  it('the port of an eligible shipment is the Master Port its text resolves to: its own id, else its active discharge leg', async () => {
+    const sql = await sqlOf();
+    const eligible = sql.slice(sql.indexOf('WITH eligible AS ('), sql.indexOf('port AS ('));
+    expect(eligible).toContain('s.discharge_master_port_id');
+    expect(eligible).toContain('v.master_port_id');
+    expect(eligible).toContain("COALESCE(v.is_discharge_port, FALSE) IS TRUE");
+    // the region/site rule is still there: the port restriction only narrows it
+    expect(eligible).toContain('UPPER(TRIM(COALESCE(l.discharge_destination');
+  });
+
+  it('ALL or an empty value lifts the restriction (the parameter is NULL and the arm is true)', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    await findEligibleStos('BONTANG', 10, { dischargePort: 'ALL' });
+    expect(vi.mocked(query).mock.calls[0][1]).toEqual(['BONTANG', 10, false, 0, null]);
+    vi.mocked(query).mockClear();
+    await findEligibleStos('BONTANG', 10, { dischargePort: '  ' });
+    expect(vi.mocked(query).mock.calls[0][1]).toEqual(['BONTANG', 10, false, 0, null]);
+  });
+
+  it('another port can be named; amending by STO key keeps the rule and numbers the port after the three it binds', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    await findEligibleStos('BONTANG', 10, { dischargePort: 'port kijing' });
+    expect(vi.mocked(query).mock.calls[0][1]).toEqual(['BONTANG', 10, false, 0, 'port kijing']);
+    vi.mocked(query).mockClear();
+    await findEligibleStos('BONTANG', 10, { stoKeys: ['1006019385'] });
+    const [sql, params] = vi.mocked(query).mock.calls[0] as [string, unknown[]];
+    expect(params).toEqual(['BONTANG', 10, ['1006019385'], 'PORT BONTANG']);
+    expect(sql).toContain('klip_resolve_master_port_id($4::text)');
   });
 });
 
@@ -84,10 +133,10 @@ describe('findEligibleStos: masters deleted in DHM give no code', () => {
   it('port: a deleted Master Port resolves to no code, a live one is preferred, and the reason is exposed', async () => {
     const sql = await sqlOf();
     const port = sql.slice(sql.indexOf('port AS ('), sql.indexOf('vessel AS ('));
-    expect(port).toContain('COALESCE(matched.dhm_is_deleted, FALSE) THEN NULL ELSE matched.code_dhm');
-    expect(port).toContain('COALESCE(via_alias.dhm_is_deleted, FALSE) THEN NULL ELSE via_alias.code_dhm');
-    expect(port).toContain('COALESCE(mp.dhm_is_deleted, FALSE),');
-    expect(port).toContain('ORDER BY COALESCE(sp.dhm_is_deleted, FALSE)');
+    expect(port).toContain('CASE WHEN COALESCE(mp.dhm_is_deleted, FALSE) THEN NULL ELSE mp.code_dhm END');
+    expect(port).toContain('COALESCE(mp.dhm_is_deleted, FALSE)');
+    // a live Master Port is already preferred when the id is resolved (klip_resolve_master_port_id); a shipment with no port sorts last
+    expect(port).toContain('CASE WHEN mp.id IS NULL THEN 1 ELSE 0 END');
     expect(port).toContain('AS port_deleted');
   });
 

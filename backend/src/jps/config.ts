@@ -43,6 +43,14 @@ export function jpsRegionSite(): string {
   return String(integrationEnv('JPS_REGION_SITE') || 'BONTANG').trim().toUpperCase();
 }
 
+/**
+ * The Master Port a shipment must discharge at to be submitted. For now only PORT BONTANG: a second port would need its own DataHub port code and its own go-ahead.
+ * "ALL" lifts the restriction. Compared as a Master Port (klip_resolve_master_port_id), so "BONTANG" and "PORT BONTANG" are the same setting.
+ */
+export function jpsDischargePort(): string {
+  return String(integrationEnv('JPS_DISCHARGE_PORT') || 'PORT BONTANG').trim().toUpperCase();
+}
+
 export function jpsRequestTimeoutMs(): number {
   const n = Number(integrationEnv('JPS_TIMEOUT_MS'));
   return Number.isFinite(n) && n > 0 ? n : 30_000;

@@ -71,6 +71,12 @@ export const INTEGRATIONS: IntegrationDef[] = [
         help: 'Shown once by JPS when the webhook endpoint is registered; begins with whsec_. KLIP receives at /api/jps/webhooks.',
       },
       { key: 'JPS_REGION_SITE', label: 'Region / site', kind: 'text' },
+      {
+        key: 'JPS_DISCHARGE_PORT',
+        label: 'Discharge port (Master Port)',
+        kind: 'text',
+        help: 'Only shipments whose discharge port is this Master Port are submitted (default PORT BONTANG). Type ALL to lift the restriction.',
+      },
       { key: 'JPS_SWEEP_CRON', label: 'Sweep schedule (cron)', kind: 'cron', requiresRestart: true },
       { key: 'JPS_TIMEOUT_MS', label: 'Request timeout (ms)', kind: 'integer', min: 1000 },
       {

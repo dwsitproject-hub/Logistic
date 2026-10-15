@@ -6,6 +6,7 @@
  *   Region/Site = BONTANG
  *     AND ATC Loading filled          (SAP import or a KLIP edit - one expression, both paths)
  *     AND no discharge ATA at all     (arrival, berthed, start, complete)
+ *     AND discharge port = the configured Master Port (PORT BONTANG for now; 2026-10-14)
  *     AND status not COMPLETED/CANCELLED
  *     AND ETA discharge arrival filled  (JPS requires `eta`)
  *     AND no row in jps_shipping_instructions
@@ -20,7 +21,7 @@
 import { query } from '../database/connection';
 import { sqlResolveMasterVesselIdFromShipment } from '../utils/masterVesselCanonicalSql';
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
-import { jpsDocumentDownloadUrl } from './config';
+import { jpsDischargePort, jpsDocumentDownloadUrl } from './config';
 import type { JpsCargoSource, JpsShipmentSource } from './mapper';
 
 /**
@@ -76,6 +77,12 @@ export interface FindEligibleOptions {
    * amending it would be pointless anyway.
    */
   stoKeys?: string[];
+  /**
+   * The Master Port a shipment must discharge at. Default: jpsDischargePort() (PORT BONTANG). "ALL" (or an empty value) lifts the restriction. The shipment's port is the
+   * Master Port its discharge port text resolves to (shipments.discharge_master_port_id, else its discharge leg's master_port_id; migration 237), so a plant name such
+   * as EUP EDIBLE OIL BONTANG that is a VESSEL PORT (SAP) name of PORT BONTANG counts, and a text with no Master Port does not.
+   */
+  dischargePort?: string;
 }
 
 export async function findEligibleStos(
@@ -118,6 +125,9 @@ export async function findEligibleStos(
   const params: unknown[] = byKeys
     ? [regionSite, limit, options.stoKeys]
     : [regionSite, limit, options.retryFailed === true, Math.trunc(options.retryFailedAfterMs ?? 0)];
+  const wantedPort = String(options.dischargePort ?? jpsDischargePort()).trim();
+  params.push(wantedPort === '' || wantedPort.toUpperCase() === 'ALL' ? null : wantedPort);
+  const portParam = `$${params.length}`;
 
   const result = await query(
     `
@@ -141,89 +151,59 @@ export async function findEligibleStos(
         AND eff.ata_disch_complete IS NULL
         AND COALESCE(s.status, '') NOT IN ('COMPLETED', 'CANCELLED')
         AND s.eta_discharge_arrival IS NOT NULL
+        -- only the configured discharge Master Port: the one the shipment's discharge port text resolves to (its own id, else its active discharge leg's)
+        AND (
+          ${portParam}::text IS NULL
+          OR COALESCE(
+               s.discharge_master_port_id,
+               (SELECT v.master_port_id FROM vessel_loading_ports v
+                 WHERE v.shipment_id = s.id
+                   AND COALESCE(v.is_discharge_port, FALSE) IS TRUE
+                   AND COALESCE(v.is_cancelled, FALSE) IS NOT TRUE
+                   AND v.master_port_id IS NOT NULL
+                 ORDER BY v.port_sequence DESC
+                 LIMIT 1)
+             ) = klip_resolve_master_port_id(${portParam}::text)
+        )
       GROUP BY 1
     ),
     port AS (
-      -- Discharge port name on the shipment, matched to Master Port. "BONTANG" and "PORT BONTANG"
-      -- are the same row. The latest named port wins; its code_dhm is what JPS calls port_hub_code.
-      -- Local rows have no code_dhm yet — that column is filled on SIT — so a local submit is held.
-      -- A Master Port deleted in DHM (dhm_is_deleted) resolves to no code, like a port with none: JPS no longer knows it,
-      -- so sending its old hub code would only be refused. port_deleted tells the two apart for the hold reason.
+      -- The Master Port the shipment discharges at: the Master Port its discharge port text resolves to (migration 237, kept by trigger on
+      -- shipments.discharge_master_port_id and vessel_loading_ports.master_port_id; the shipment's own id wins, else its active discharge leg's - the Edit Shipment modal
+      -- keeps the discharge port of a shipment planned by hand as a leg and leaves the column NULL). A plant name such as EUP EDIBLE OIL BONTANG reaches PORT BONTANG
+      -- through that port's VESSEL PORT (SAP) names; discharge_port_aliases is no longer read. Its code_dhm is what JPS calls port_hub_code.
+      -- Local rows have no code_dhm yet - that column is filled on SIT - so a local submit is held.
+      -- A Master Port deleted in DHM (dhm_is_deleted) gives no code, like a port with none: JPS no longer knows it, so sending its old hub code would only be refused.
+      -- port_deleted tells the two apart for the hold reason.
       SELECT e.sto_key,
              (ARRAY_AGG(
-                CASE WHEN matched.port IS NOT NULL
-                     THEN CASE WHEN COALESCE(matched.dhm_is_deleted, FALSE) THEN NULL ELSE matched.code_dhm END
-                     ELSE CASE WHEN COALESCE(via_alias.dhm_is_deleted, FALSE) THEN NULL ELSE via_alias.code_dhm END
-                END
+                CASE WHEN COALESCE(mp.dhm_is_deleted, FALSE) THEN NULL ELSE mp.code_dhm END
                 ORDER BY
-                  CASE WHEN NULLIF(BTRIM(dp.name), '') IS NULL THEN 1 ELSE 0 END,
+                  CASE WHEN mp.id IS NULL THEN 1 ELSE 0 END,
                   s.updated_at DESC NULLS LAST))[1] AS port_hub_code,
              (ARRAY_AGG(
-                COALESCE(matched.dhm_is_deleted, via_alias.dhm_is_deleted, FALSE)
+                COALESCE(mp.dhm_is_deleted, FALSE)
                 ORDER BY
-                  CASE WHEN NULLIF(BTRIM(dp.name), '') IS NULL THEN 1 ELSE 0 END,
+                  CASE WHEN mp.id IS NULL THEN 1 ELSE 0 END,
                   s.updated_at DESC NULLS LAST))[1] AS port_deleted
       FROM eligible e
       INNER JOIN shipments s ON TRUE
       INNER JOIN contracts c ON c.id = s.contract_id
       LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
-      -- The discharge port name. shipments.port_of_discharge is empty for a shipment planned by hand (MNL-): the Edit
-      -- Shipment modal keeps its discharge port as a vessel_loading_ports row with is_discharge_port = true, and the
-      -- shipment's own column stays NULL, so BG. AS WARRIOR 2 (EUP EDIBLE OIL BONTANG in the modal) was held as "no DHM
-      -- code on Master Port" on every sweep. The shipment's own column still wins when it is filled.
       LEFT JOIN LATERAL (
         SELECT COALESCE(
-          NULLIF(BTRIM(s.port_of_discharge), ''),
-          (SELECT NULLIF(BTRIM(v.port_name), '')
+          s.discharge_master_port_id,
+          (SELECT v.master_port_id
              FROM vessel_loading_ports v
             WHERE v.shipment_id = s.id
               AND COALESCE(v.is_discharge_port, FALSE) IS TRUE
-              AND NULLIF(BTRIM(v.port_name), '') IS NOT NULL
+              AND COALESCE(v.is_cancelled, FALSE) IS NOT TRUE
+              AND v.master_port_id IS NOT NULL
             ORDER BY v.port_sequence DESC
             LIMIT 1)
-        ) AS name
+        ) AS id
       ) dp ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT mp.port, mp.code_dhm, mp.dhm_is_deleted
-        FROM master_loading_ports mp
-        WHERE NULLIF(BTRIM(dp.name), '') IS NOT NULL
-          AND (
-            regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
-              = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
-            OR regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
-              = 'PORT ' || regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
-            OR 'PORT ' || regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
-              = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
-          )
-        ORDER BY
-          COALESCE(mp.dhm_is_deleted, FALSE),
-          CASE
-            WHEN regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
-              = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
-            THEN 0 ELSE 1
-          END,
-          length(mp.port)
-        LIMIT 1
-      ) matched ON TRUE
-      LEFT JOIN LATERAL (
-        -- No Master Port has that name. SAP often writes the destination PLANT there (EUP EDIBLE OIL BONTANG:
-        -- 46% of the rows on the 28 Sep export), so look the name up in discharge_port_aliases, take its Site,
-        -- and use the port named "PORT <site>". Only that exact name: a Site can have many ports (BONTANG has
-        -- 24) and "the Site's only port" picked PORT KUMAI for BEKASI. No alias, no such port, or a port with
-        -- no DHM code: NULL, and the STO is held. Master Port itself stays free of plant names.
-        SELECT sp.code_dhm, sp.dhm_is_deleted
-        FROM discharge_port_aliases dpa
-        INNER JOIN master_sites st ON st.id = dpa.site_id
-        INNER JOIN master_loading_ports sp
-          ON regexp_replace(upper(btrim(sp.port)), '\\s+', ' ', 'g')
-             = 'PORT ' || regexp_replace(upper(btrim(st.site_name)), '\\s+', ' ', 'g')
-        WHERE matched.port IS NULL
-          AND NULLIF(BTRIM(dp.name), '') IS NOT NULL
-          AND regexp_replace(upper(btrim(dpa.alias_name)), '\\s+', ' ', 'g')
-              = regexp_replace(upper(btrim(dp.name)), '\\s+', ' ', 'g')
-        ORDER BY COALESCE(sp.dhm_is_deleted, FALSE)
-        LIMIT 1
-      ) via_alias ON TRUE
+      LEFT JOIN master_loading_ports mp ON mp.id = dp.id
       WHERE ${STO_KEY_SQL} = e.sto_key
       GROUP BY e.sto_key
     ),
