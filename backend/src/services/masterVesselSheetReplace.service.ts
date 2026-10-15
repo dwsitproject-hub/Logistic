@@ -17,9 +17,9 @@ import { looseVesselKey } from './vesselMasterLoad.service';
  *   twin      the same letters and digits (looseVesselKey: "TOLLANDAK II" / "TOL LANDAK II"), one candidate only
  *   code      the master that holds one of the row's SAP codes
  *   create    none of the above
- * A master two sheet rows would become is given to the first; the second is a conflict. Two sheet rows with the same normalised name (a tug
- * and a barge such as TB. PACIFIC STAR I / BG. PACIFIC STAR 1) cannot both be OFFICIAL (uq_master_vessels_normalized_name_official): the
- * second is reported, not guessed.
+ * A master two sheet rows would become is given to the first; the second is a conflict. Two sheet rows with the same normalised name AND
+ * role cannot both be OFFICIAL (uq_master_vessels_normalized_name_role_official, migration 242): the second is reported, not guessed. A tug
+ * and a barge may share a base name (TB. PACIFIC STAR I / BG. PACIFIC STAR 1).
  *
  * A sheet value replaces the stored one; an EMPTY sheet cell leaves the stored value alone unless `blankClears` (the sheet's owner, company
  * code and capacity are blank on a third of the rows). DHM columns are never touched: the DHM cutover is a separate step.
@@ -208,16 +208,17 @@ export function planSheetReplace(
     const ownCodes = sheet.codes.filter((c) => (codeRows.get(c) ?? 0) === 1);
     const reasons: string[] = [];
 
-    const earlier = normInSheet.get(norm);
+    const nameRoleKey = `${norm}|${role ?? ''}`;
+    const earlier = normInSheet.get(nameRoleKey);
     if (earlier) {
       rows.push({
         sheet, role, action: 'conflict', codes: [], sharedCodes, reasons: [
-          `nama ternormalisasi sama dengan baris ${earlier.row} (${earlier.name}); dua vessel OFFICIAL tidak boleh punya nama ternormalisasi yang sama`,
+          `nama ternormalisasi dan peran sama dengan baris ${earlier.row} (${earlier.name}); kemungkinan vessel yang sama ditulis dua kali`,
         ],
       });
       continue;
     }
-    normInSheet.set(norm, sheet);
+    normInSheet.set(nameRoleKey, sheet);
 
     const free = (list: MasterSnapshot[] | undefined) => (list ?? []).filter((m) => !claimed.has(m.id) && !roleClash(role, m));
     let master: MasterSnapshot | undefined;
@@ -481,9 +482,10 @@ export async function applySheetReplace(client: PoolClient, plan: ReplacePlan, o
             }
           }
           const ins = await client.query(
-            `INSERT INTO master_vessels (vessel_code, vessel_name, normalized_vessel_name, code_status)
-             VALUES ($1, $2, $3, $4) RETURNING id::text`,
-            [code, r.sheet.name, norm, freeCode ? 'OFFICIAL' : 'PROVISIONAL'],
+            // the role goes in with the row: the official-name index is per role (migration 242)
+            `INSERT INTO master_vessels (vessel_code, vessel_name, normalized_vessel_name, code_status, vessel_role)
+             VALUES ($1, $2, $3, $4, $5) RETURNING id::text`,
+            [code, r.sheet.name, norm, freeCode ? 'OFFICIAL' : 'PROVISIONAL', r.role],
           );
           id = ins.rows[0].id;
           await client.query(`UPDATE master_vessels SET ${attrs} WHERE id = $1`, [id, ...attrParams(r)]);
@@ -506,7 +508,8 @@ export async function applySheetReplace(client: PoolClient, plan: ReplacePlan, o
              FROM (SELECT unnest($2::text[]) AS code) c
             WHERE mv.id = $1 AND upper(mv.vessel_code) LIKE 'TMP-%'
               AND NOT EXISTS (SELECT 1 FROM master_vessels o WHERE o.vessel_code = c.code AND o.id <> mv.id)
-              AND NOT EXISTS (SELECT 1 FROM master_vessels o WHERE o.code_status = 'OFFICIAL' AND o.normalized_vessel_name = mv.normalized_vessel_name AND o.id <> mv.id)
+              AND NOT EXISTS (SELECT 1 FROM master_vessels o WHERE o.code_status = 'OFFICIAL' AND o.normalized_vessel_name = mv.normalized_vessel_name
+                                AND COALESCE(o.vessel_role, '') = COALESCE(mv.vessel_role, '') AND o.id <> mv.id)
             RETURNING mv.id`,
           [id, r.codes.map((c) => c.code)],
         );

@@ -96,9 +96,21 @@ describe('planSheetReplace', () => {
     expect(plan.rows[0].action).toBe('create');
   });
 
-  it('two sheet rows with one normalised name: the second is a conflict, not a guess', () => {
+  it('a tug and a barge may share a base name (migration 242): both are loaded', () => {
     const plan = planSheetReplace(
       [sheet(1, 'BG. PACIFIC STAR 1', { H: 'Barge' }), sheet(2, 'TB. PACIFIC STAR I', { H: 'Tug Boat' })],
+      [],
+      new Map(),
+    );
+    expect(plan.rows.map((r) => [r.action, r.role])).toEqual([
+      ['create', 'BG'],
+      ['create', 'TB'],
+    ]);
+  });
+
+  it('two sheet rows with one normalised name AND role: the second is a conflict, not a guess', () => {
+    const plan = planSheetReplace(
+      [sheet(1, 'TB. HADI 1', { H: 'Tug Boat' }), sheet(2, 'TB. HADI I', { H: 'Tug Boat' })],
       [],
       new Map(),
     );
@@ -160,14 +172,14 @@ describe('planSheetReplace', () => {
   it('a pair whose member is a reported conflict is incomplete, not a failure', () => {
     const plan = planSheetReplace(
       [
-        sheet(1, 'BG. PACIFIC STAR 1', { H: 'Barge' }),
-        sheet(2, 'TB. PACIFIC STAR I', { A: 'TBG-119', H: 'Tug Boat' }),
-        sheet(3, 'BG. OTHER', { A: 'TBG-119', H: 'Barge' }),
+        sheet(1, 'TB. HADI 1', { H: 'Tug Boat' }),
+        sheet(2, 'TB. HADI I', { A: 'TBG-046', H: 'Tug Boat' }),
+        sheet(3, 'BG. MARINI I', { A: 'TBG-046', H: 'Barge' }),
       ],
       [],
       new Map(),
     );
-    expect(plan.pairs).toEqual([expect.objectContaining({ pairCode: 'TBG-119', ok: false })]);
+    expect(plan.pairs).toEqual([expect.objectContaining({ pairCode: 'TBG-046', ok: false })]);
     expect(plan.pairs[0].reason).toContain('konflik');
   });
 
