@@ -4,6 +4,7 @@ import {
   buildStoLinkedContractNumbersSql,
   buildStoLinkedPoNumbersSql,
   buildStoLinkedSuppliersSql,
+  contractIdOnStoSql,
   contractsOnStoSubquery,
 } from './stoLinkedContractSql';
 
@@ -35,7 +36,9 @@ describe('stoLinkedContractSql', () => {
     // keep them UNIONed, and keep the sto_number predicate in its index-matching form.
     const grouped = buildGroupedStoTrimExpr('sb.sto_key');
     const sql = contractsOnStoSubquery(grouped);
-    expect(sql).toContain('WHERE cc.id IN (');
+    // = ANY(ARRAY(...)), not IN (...): the IN form hashed the whole contracts table once per row (6 x 996 Seq Scans, 33.3 s on the summary).
+    expect(sql).toContain('WHERE cc.id = ANY(ARRAY(');
+    expect(sql).not.toContain('WHERE cc.id IN (');
     expect(sql).not.toContain('EXISTS (');
     expect(sql.split('UNION').length - 1).toBe(4);
     for (const branch of [
@@ -74,5 +77,23 @@ describe('stoLinkedContractSql', () => {
     expect(sql).toContain('STRING_AGG(DISTINCT cc.supplier');
     expect(sql).toContain('contract_stos');
     expect(sql).toContain('g.suppliers');
+  });
+});
+
+describe('contractIdOnStoSql', () => {
+  it('tests a contract number against the STO contracts as an array, so they are evaluated once and read by index', () => {
+    const grouped = buildGroupedStoTrimExpr('g.sto_key');
+    const sql = contractIdOnStoSql('cc.contract_id', grouped);
+    expect(sql.startsWith('cc.contract_id = ANY(ARRAY(')).toBe(true);
+    expect(sql).toContain(contractsOnStoSubquery(grouped));
+    expect(sql).not.toMatch(/cc\.contract_id IN \(/);
+  });
+
+  it('every aggregate over the STO contracts uses it, none the IN form', () => {
+    const grouped = buildGroupedStoTrimExpr('g.sto_key');
+    for (const sql of [buildStoLinkedPoNumbersSql(grouped), buildStoLinkedSuppliersSql(grouped)]) {
+      expect(sql).toContain(contractIdOnStoSql('cc.contract_id', grouped));
+      expect(sql).not.toMatch(/cc\.contract_id IN \(/);
+    }
   });
 });

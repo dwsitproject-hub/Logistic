@@ -5,6 +5,20 @@ import {
   buildShippingPerfViewTableQtySelectSql,
 } from './shippingPerformanceStoMetricsSql';
 
+describe('sto_shipment_klip joins the STO status after the key is worked out', () => {
+  it('computes the key in a fenced subquery and joins perf_sto_status on (contract, key) outside it', () => {
+    const sql = buildShippingPerfStoMetricsCte();
+    const cte = sql.slice(sql.indexOf('sto_shipment_klip AS ('), sql.indexOf('sto_metrics AS ('));
+    const fence = cte.indexOf('OFFSET 0\n            ) ks');
+    const join = cte.indexOf('LEFT JOIN perf_sto_status pss_raw');
+    // inline, the join needed shipments AND contracts and was planned as shipments x perf_sto_status, filtered afterwards (2.4 M pairs)
+    expect(fence).toBeGreaterThan(-1);
+    expect(join).toBeGreaterThan(fence);
+    expect(cte).toContain('ON pss_raw.contract_uuid = ks.contract_uuid');
+    expect(cte).toContain('AND pss_raw.sto_key = TRIM((ks.sto_key)::text)');
+  });
+});
+
 describe('shippingPerformanceStoMetricsSql', () => {
   it('computes actual outstanding from Contract Qty with Open/Close KLIP overlay', () => {
     const sql = buildShippingPerfStoMetricsCte();
