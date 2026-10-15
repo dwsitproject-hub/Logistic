@@ -117,6 +117,12 @@ export const SHIPMENT_LIST_PERF_STO_KEYS_CTE = `
  */
 function buildPerfStoStatusCte(): string {
   const key = shippingPerfStoMetricsKeyExpr('c', 's');
+  /*
+   * The key is worked out per shipment FIRST (keyed, fenced by OFFSET 0), filtered to the page's keys, and only the rows that pass go on to
+   * the status expression. Written as one WHERE, `<key of s and c> IN (perf_sto_keys)` was planned as shipments x perf_sto_keys and filtered
+   * after the join to contracts: 2,665,390 pairs to keep 2,402, 4.4 s of the Shipping Performance statement on the dev copy. The status is
+   * read off the same (contract, key) as before - it depends on nothing else - so the rows are the same.
+   */
   return `
       perf_sto_status AS MATERIALIZED (
         SELECT DISTINCT ON (x.contract_uuid, x.sto_key)
@@ -126,12 +132,18 @@ function buildPerfStoStatusCte(): string {
         FROM (
           SELECT
             c.id AS contract_uuid,
-            TRIM((${key})::text) AS sto_key,
+            k0.sto_key,
             (${sqlContractImportStatusForStoExpr('c', key)}) AS import_status
-          FROM shipments s
-          INNER JOIN contracts c ON c.id = s.contract_id
-          WHERE NULLIF(TRIM((${key})::text), '') IS NOT NULL
-            AND TRIM((${key})::text) IN (SELECT k.sto_key FROM perf_sto_keys k)
+          FROM (
+            SELECT s.id AS shipment_uuid, c.id AS contract_uuid, TRIM((${key})::text) AS sto_key
+            FROM shipments s
+            INNER JOIN contracts c ON c.id = s.contract_id
+            WHERE NULLIF(TRIM((${key})::text), '') IS NOT NULL
+            OFFSET 0
+          ) k0
+          INNER JOIN shipments s ON s.id = k0.shipment_uuid
+          INNER JOIN contracts c ON c.id = k0.contract_uuid
+          WHERE k0.sto_key IN (SELECT k.sto_key FROM perf_sto_keys k)
         ) x
       )`;
 }
