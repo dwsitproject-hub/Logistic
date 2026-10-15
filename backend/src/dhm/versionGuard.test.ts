@@ -137,6 +137,35 @@ describe('the guard in front of every write', () => {
   });
 });
 
+describe('vessel tombstones from the pull', () => {
+  beforeEach(() => queryMock.mockReset());
+
+  it('only mark the row linked by dhm_id: no name or attribute is written and nothing is inserted', async () => {
+    queryMock.mockImplementation(async (sql: string) => {
+      if (/SELECT MAX\(v\) AS v FROM/.test(sql)) return { rows: [{ v: 2 }] };
+      if (/RETURNING id/.test(sql)) return { rows: [{ id: 'local-1' }] };
+      return { rows: [] };
+    });
+    const tomb = { ...record(3, { Vessel_Name: 'BG. PACIFIC STAR 3' }), isDeleted: true };
+    expect(await applyDhmVesselRecord(tomb)).toEqual({ id: 'local-1', created: false, skipped: 'deleted' });
+    const w = writes();
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain('dhm_is_deleted = true');
+    expect(w[0]).toContain('WHERE dhm_id = $1::uuid');
+    expect(w[0]).not.toContain('vessel_name');
+  });
+
+  it('of a vessel KLIP no longer has, create nothing', async () => {
+    queryMock.mockImplementation(async (sql: string) => {
+      if (/SELECT MAX\(v\) AS v FROM/.test(sql)) return { rows: [{ v: null }] };
+      return { rows: [] };
+    });
+    const tomb = { ...record(3, { Vessel_Name: 'MSC GINA' }), isDeleted: true };
+    expect(await applyDhmVesselRecord(tomb)).toEqual({ id: '', created: false, skipped: 'deleted' });
+    expect(writes().some((sql) => /INSERT/i.test(sql))).toBe(false);
+  });
+});
+
 describe('deletes: the guard is inside the UPDATE', () => {
   beforeEach(() => queryMock.mockReset());
 

@@ -83,11 +83,26 @@ async function findLocalVesselId(record: DhmRecord): Promise<string | null> {
 export async function applyDhmVesselRecord(
   record: DhmRecord,
   options: DhmApplyOptions = {},
-): Promise<{ id: string; created: boolean; skipped?: 'stale' }> {
+): Promise<{ id: string; created: boolean; skipped?: 'stale' | 'deleted' }> {
   // A vessel DHM delivered at an older version than the replica holds is left alone (see versionGuard.ts).
   if (!(await shouldApplyDhmRecord('vessel', record, options))) {
     const known = await query(`SELECT id FROM master_vessels WHERE dhm_id = $1::uuid LIMIT 1`, [record.id]);
     return { id: String(known.rows[0]?.id ?? ''), created: false, skipped: 'stale' };
+  }
+  // A DHM tombstone only marks the link. KLIP is the vessel source (Ryan, 2026-10-15): when DHM soft-deleted its whole vessel
+  // catalog, the pull handed back every record with its OLD name, which renamed vessels the vessel sheet had just loaded
+  // (MED PACIFIC -> BG. PACIFIC STAR 3) and would re-insert archived ones. So a tombstone finds its row by dhm_id only (a
+  // match by code or name could hit another vessel), never writes the name or attributes, and never creates a row.
+  if (record.isDeleted) {
+    const marked = await query(
+      `UPDATE master_vessels
+          SET dhm_is_deleted = true, dhm_version = COALESCE($2, dhm_version), dhm_updated_at = COALESCE($3::timestamptz, dhm_updated_at),
+              updated_at = CURRENT_TIMESTAMP
+        WHERE dhm_id = $1::uuid
+        RETURNING id`,
+      [record.id, record.version ?? null, record.updatedAt || null],
+    );
+    return { id: String(marked.rows[0]?.id ?? ''), created: false, skipped: 'deleted' };
   }
   const mapped = fromDhmVesselData(record.data);
   const existingId = await findLocalVesselId(record);
