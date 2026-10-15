@@ -160,6 +160,8 @@ export interface ReplacePlan {
   retire: RetirePlan[];
   pairs: PairPlan[];
   skippedSheetRows: number[];
+  /** Codes more than one sheet row lists: nobody gets them, not even through a merged twin. */
+  sharedCodes: string[];
 }
 
 const isTugType = (t: string | null | undefined) => /^TUG/i.test(String(t ?? '').trim());
@@ -273,13 +275,30 @@ export function planSheetReplace(
   // masters the sheet does not have
   const takenOverBy = new Map<string, SheetVessel>(); // master id -> sheet vessel taking one of its codes
   for (const r of rows) for (const c of r.codes) if (c.from && !takenOverBy.has(c.from.id)) takenOverBy.set(c.from.id, r.sheet);
+  // the same letters and digits as exactly one loaded sheet vessel ("BG. JAYA SEJAHTERA I" / "BG. JAYASEJAHTERA I"): the same ship
+  const loadedByLoose = new Map<string, RowPlan[]>();
+  for (const r of rows) {
+    if (r.action === 'conflict') continue;
+    const k = looseVesselKey(normalizeVesselName(r.sheet.name));
+    if (k) loadedByLoose.set(k, [...(loadedByLoose.get(k) ?? []), r]);
+  }
+  const twinOf = (m: MasterSnapshot): SheetVessel | undefined => {
+    const hits = (loadedByLoose.get(looseVesselKey(m.normalized_vessel_name)) ?? []).filter((r) => !roleClash(r.role, m));
+    return hits.length === 1 ? hits[0].sheet : undefined;
+  };
   const retire: RetirePlan[] = [];
   for (const m of masters) {
     if (claimed.has(m.id)) continue;
+    const twin = twinOf(m);
     if (m.klip_origin) {
       retire.push({ master: m, action: 'keep', reason: 'dibuat lewat Add New Vessel di KLIP (klip_origin)' });
     } else if (m.shipments > 0 && takenOverBy.has(m.id)) {
       retire.push({ master: m, action: 'repoint', target: takenOverBy.get(m.id), reason: `${m.shipments} shipment pindah ke vessel sheet yang mengambil kode SAP-nya` });
+    } else if (twin) {
+      retire.push({
+        master: m, action: 'repoint', target: twin,
+        reason: `ejaan lain dari ${twin.name} (huruf dan angka sama): ${m.shipments} shipment dan kode SAP-nya pindah ke sana`,
+      });
     } else if (m.shipments > 0) {
       retire.push({ master: m, action: 'keep', reason: `dipakai ${m.shipments} shipment dan tidak ada vessel sheet yang menggantikannya` });
     } else {
@@ -290,17 +309,24 @@ export function planSheetReplace(
   // pairs
   const groups = new Map<string, SheetVessel[]>();
   for (const s of sheetRows) if (s.pairId) groups.set(s.pairId, [...(groups.get(s.pairId) ?? []), s]);
+  const conflictRows = new Set(rows.filter((r) => r.action === 'conflict').map((r) => r.sheet.row));
   const pairs: PairPlan[] = [...groups.entries()].map(([pairCode, members]) => {
     const tbs = members.filter((m) => sheetRole(m) === 'TB');
     const bgs = members.filter((m) => sheetRole(m) !== 'TB');
-    if (tbs.length === 1 && bgs.length === 1) return { pairCode, tb: tbs[0], bg: bgs[0], ok: true };
+    if (tbs.length === 1 && bgs.length === 1) {
+      // a member the sheet itself holds back (a conflict, reported above) cannot be paired yet: incomplete, not a failure of the run
+      const held = [tbs[0], bgs[0]].find((m) => conflictRows.has(m.row));
+      if (held) return { pairCode, tb: tbs[0], bg: bgs[0], ok: false, reason: `${held.name} (baris ${held.row}) konflik, belum dimuat` };
+      return { pairCode, tb: tbs[0], bg: bgs[0], ok: true };
+    }
     return {
       pairCode, tb: tbs[0] ?? null, bg: bgs[0] ?? null, ok: false,
       reason: `Pair ID dipakai ${members.length} baris (${tbs.length} tugboat, ${bgs.length} lainnya); butuh tepat satu TB dan satu BG`,
     };
   });
 
-  return { rows, retire, pairs, skippedSheetRows: [] };
+  const sharedCodes = [...codeRows.entries()].filter(([, n]) => n > 1).map(([c]) => c);
+  return { rows, retire, pairs, skippedSheetRows: [], sharedCodes };
 }
 
 export async function loadMasterSnapshot(client: Pick<PoolClient, 'query'>): Promise<{ masters: MasterSnapshot[]; codeHolder: Map<string, string> }> {
@@ -387,6 +413,22 @@ export async function applySheetReplace(client: PoolClient, plan: ReplacePlan, o
           if (!target) throw new Error('vessel tujuan belum termuat');
           const moved = await client.query(`UPDATE shipments SET master_vessel_id = $2 WHERE master_vessel_id = $1`, [t.master.id, target]);
           res.repointedShipments += moved.rowCount ?? 0;
+          // its remaining SAP codes go along, so a SAP row with one still finds the vessel; a code several sheet rows list stays nobody's
+          const codes = await client.query(
+            `UPDATE master_vessel_code_aliases SET master_vessel_id = $2, is_primary = false, updated_at = CURRENT_TIMESTAMP
+              WHERE master_vessel_id = $1 AND NOT (upper(trim(vessel_code)) = ANY($3::text[]))`,
+            [t.master.id, target, plan.sharedCodes],
+          );
+          res.codesMoved += codes.rowCount ?? 0;
+          // its own primary code, when no alias row carries it yet and it is no placeholder
+          const own = await client.query(
+            `INSERT INTO master_vessel_code_aliases (master_vessel_id, vessel_code, source, namespace, is_primary)
+             SELECT $2, upper(trim(mv.vessel_code)), 'vessel_sheet', 'SAP', false FROM master_vessels mv
+              WHERE mv.id = $1 AND upper(mv.vessel_code) NOT LIKE 'TMP-%' AND NOT (upper(trim(mv.vessel_code)) = ANY($3::text[]))
+             ON CONFLICT (vessel_code) DO NOTHING`,
+            [t.master.id, target, plan.sharedCodes],
+          );
+          res.codesMoved += own.rowCount ?? 0;
         }
         await client.query(
           `INSERT INTO master_vessels_archive (id, vessel_name, reason, vessel_row, code_aliases, pairs)

@@ -149,12 +149,39 @@ describe('planSheetReplace', () => {
     ]);
   });
 
+  it('an unclaimed spelling twin of a loaded sheet vessel is merged into it (shipments and codes follow), not kept', () => {
+    const sheetVessel = master('BG. JAYASEJAHTERA I');
+    const twin = master('BG. JAYA SEJAHTERA I', { shipments: 2 });
+    const plan = planSheetReplace([sheet(1, 'BG. JAYASEJAHTERA I', { H: 'Barge' })], [sheetVessel, twin], new Map());
+    expect(plan.rows[0]).toMatchObject({ action: 'update', master: sheetVessel });
+    expect(plan.retire).toEqual([expect.objectContaining({ master: twin, action: 'repoint', target: plan.rows[0].sheet })]);
+  });
+
+  it('a pair whose member is a reported conflict is incomplete, not a failure', () => {
+    const plan = planSheetReplace(
+      [
+        sheet(1, 'BG. PACIFIC STAR 1', { H: 'Barge' }),
+        sheet(2, 'TB. PACIFIC STAR I', { A: 'TBG-119', H: 'Tug Boat' }),
+        sheet(3, 'BG. OTHER', { A: 'TBG-119', H: 'Barge' }),
+      ],
+      [],
+      new Map(),
+    );
+    expect(plan.pairs).toEqual([expect.objectContaining({ pairCode: 'TBG-119', ok: false })]);
+    expect(plan.pairs[0].reason).toContain('konflik');
+  });
+
+  it('lists the codes more than one sheet row claims, so a merged twin does not hand them out', () => {
+    const plan = planSheetReplace([sheet(1, 'A', { P: 'MX' }), sheet(2, 'B', { P: 'MX, MY' })], [], new Map());
+    expect(plan.sharedCodes).toEqual(['MX']);
+  });
+
   it('a pair needs exactly one tug and one barge', () => {
     const plan = planSheetReplace(
       [
-        sheet(1, 'TB. A', { A: 'TBG-1', H: 'Tug Boat' }),
-        sheet(2, 'BG. A', { A: 'TBG-1', H: 'Barge' }),
-        sheet(3, 'BG. B', { A: 'TBG-2', H: 'Barge' }),
+        sheet(1, 'TB. ALPHA', { A: 'TBG-1', H: 'Tug Boat' }),
+        sheet(2, 'BG. BETA', { A: 'TBG-1', H: 'Barge' }),
+        sheet(3, 'BG. GAMMA', { A: 'TBG-2', H: 'Barge' }),
       ],
       [],
       new Map(),
