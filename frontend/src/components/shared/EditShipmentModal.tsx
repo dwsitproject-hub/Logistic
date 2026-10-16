@@ -789,8 +789,11 @@ export type EditShipmentModalProps = {
   enableAtaQualityEditInView?: boolean
   /** Raise z-index when opened above contract detail modal. */
   stacked?: boolean
-  /** Called after PO attach so parent can refresh Shipments list. */
-  onShipmentChanged?: () => void
+  /**
+   * Called after PO attach or a save so the parent can refresh its list. After a save that changed SFAL / SFBD it carries what was saved (kg), so a page that shows
+   * them (Oil Loss) can draw the new figure at once instead of waiting for its snapshot to be rebuilt.
+   */
+  onShipmentChanged?: (saved?: { sfalKg: number | null; sfbdKg: number | null }) => void
 }
 
 export function EditShipmentModal({
@@ -1873,7 +1876,7 @@ export function EditShipmentModal({
         }
         void loadActivityLog(shipmentId)
         void loadShipmentRemarks(shipmentId)
-        onShipmentChanged?.()
+        onShipmentChanged?.(hasSfalSfbdEdits ? { sfalKg: sfalQty, sfbdKg: sfbdQty } : undefined)
         return
       }
 
@@ -1914,7 +1917,7 @@ export function EditShipmentModal({
 
       setNotification({ type: 'success', message: 'Shipment updated successfully.' })
       invalidateMissingEtaAlertCache()
-      onShipmentChanged?.()
+      onShipmentChanged?.(hasSfalSfbdEdits ? { sfalKg: sfalQty, sfbdKg: sfbdQty } : undefined)
       onClose()
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Failed to save shipment'

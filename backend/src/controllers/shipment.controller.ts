@@ -3391,6 +3391,18 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    if (updateData.sfal_qty !== undefined || updateData.sfbd_qty !== undefined) {
+      // Oil Loss serves a snapshot that every shipment edit rebuilds in full (minutes). Put the saved SFAL / SFBD on its row now: in the memory copy the page is served
+      // from (instant), and in the snapshot table (skipped while a rebuild runs). Before invalidateShipmentsListCache(), which starts the rebuild and locks the table.
+      try {
+        const { patchCachedOilLossSfalSfbd } = await import('../services/oilLoss.service');
+        patchCachedOilLossSfalSfbd(shipmentId, updated.sfal_qty, updated.sfbd_qty);
+        const { patchOilLossSnapshotSfalSfbd } = await import('../services/oilLossSnapshot.service');
+        await patchOilLossSnapshotSfalSfbd(shipmentId);
+      } catch (err) {
+        logger.warn('Oil loss SFAL/SFBD patch failed - the rebuild will bring the value', { err, shipmentId });
+      }
+    }
     invalidateShipmentsListCache();
     invalidateShippingPerformanceRowCache();
     try {

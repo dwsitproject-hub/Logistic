@@ -31,6 +31,7 @@ import { oilLossDischargePortOptions, oilLossDrawnUnloadingLocation } from '@/li
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { oilLossLoadingPortOptions } from '@/lib/oilLossLoadingPort'
 import { setPortDisplayResolver } from '@/lib/portDisplay'
+import { applyOilLossSfalSfbdPatch, type OilLossSfalSfbdPatch } from '@/lib/oilLossSfalPatch'
 import { filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import {
   buildOilLossSummaryForDateRange,
@@ -234,24 +235,6 @@ function formatOilLossSfalSfbdCell(kg: number | null | undefined): ReactNode {
     return <span className="text-sm text-gray-400">-</span>
   }
   return <span className="text-sm tabular-nums">{formatQtyMtFromKg(kg)}</span>
-}
-
-const OIL_LOSS_SFAL_REFRESH_COLUMN_IDS = new Set(['quantity_sfal', 'quantity_sfbd', 'r1', 'r2', 'r3'])
-
-function oilLossRowIncludesSto(row: OilLossTableRow, sto: string): boolean {
-  if (row.id === `sto:${sto}`) return true
-  const stoNumber = 'sto_number' in row ? row.sto_number : null
-  return String(stoNumber ?? '')
-    .split(',')
-    .some((token) => token.trim() === sto)
-}
-
-function OilLossQtyRefreshPlaceholder() {
-  return (
-    <span className="inline-flex items-center text-gray-400" title="Updating">
-      <Loader2 className="h-4 w-4 animate-spin" aria-label="Updating" />
-    </span>
-  )
 }
 
 function renderROilLossCell(kg: number | null): ReactNode {
@@ -1281,8 +1264,6 @@ export default function OilLossPage() {
 
   const oilLossReloadRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const oilLossSnapshotAtRef = useRef<string | null>(null)
-  const [pendingSfalSto, setPendingSfalSto] = useState<string | null>(null)
-
   const reloadOilLoss = useCallback(async (options?: { force?: boolean; quiet?: boolean }) => {
     const quiet = options?.quiet === true
     const cacheKey = buildCacheKey('GET', '/oil-loss')
@@ -1338,9 +1319,10 @@ export default function OilLossPage() {
     }
   }, [reloadOilLoss])
 
-  const reloadOilLossAfterShipmentEdit = useCallback(() => {
+  const reloadOilLossAfterShipmentEdit = useCallback((saved?: OilLossSfalSfbdPatch) => {
     const sto = viewShipmentModal?.editStoNumber?.trim() || null
-    setPendingSfalSto(sto)
+    // the edited SFAL / SFBD is on screen at once; the snapshot that is rebuilt in the background carries the same edit and replaces the rows when it commits
+    if (saved && sto) setRows((prev) => applyOilLossSfalSfbdPatch(prev, sto, saved))
     setViewShipmentModal(null)
     if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
     const baseline = oilLossSnapshotAtRef.current
@@ -1349,7 +1331,6 @@ export default function OilLossPage() {
     const stop = () => {
       if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
       oilLossReloadRef.current = null
-      setPendingSfalSto(null)
     }
     const pull = async () => {
       if (pulling) return
@@ -2542,12 +2523,7 @@ export default function OilLossPage() {
                                         row as unknown as Record<string, unknown>,
                                       )
                                     : null
-                                  const cellContent =
-                                    pendingSfalSto &&
-                                    OIL_LOSS_SFAL_REFRESH_COLUMN_IDS.has(col.id) &&
-                                    oilLossRowIncludesSto(row, pendingSfalSto)
-                                      ? <OilLossQtyRefreshPlaceholder />
-                                      : col.render(row)
+                                  const cellContent = col.render(row)
                                   return (
                                     <td
                                       key={col.id}

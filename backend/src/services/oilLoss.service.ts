@@ -50,6 +50,28 @@ function withSnapshotFreshness(
   };
 }
 
+/**
+ * Put a saved SFAL / SFBD on the row of the in-memory payload the page is served from, without a query and without a lock: instant, and it holds through a rebuild
+ * that is still running (the rows the rebuild commits are built after the edit). The row's id is the shipment row View Shipment opens; no row, no change.
+ * Quantities are kg; null or 0 is no quantity, as in the snapshot (NULLIF(sfal_qty, 0)).
+ */
+export function patchCachedOilLossSfalSfbd(shipmentId: string, sfalKg: unknown, sfbdKg: unknown): boolean {
+  if (!cached) return false;
+  const id = String(shipmentId ?? '').trim();
+  const kg = (v: unknown): number | null => {
+    const n = v == null || v === '' ? null : Number(v);
+    return n == null || !Number.isFinite(n) || n === 0 ? null : n;
+  };
+  let hit = false;
+  const rows = cached.payload.rows.map((row) => {
+    if (String(row.id ?? '') !== id || String(row.transport_mode ?? '').toUpperCase() !== 'SEA') return row;
+    hit = true;
+    return { ...row, quantity_sfal: kg(sfalKg), quantity_sfbd: kg(sfbdKg) };
+  });
+  if (hit) cached = { ...cached, payload: { ...cached.payload, rows } };
+  return hit;
+}
+
 /** Fill memory from the snapshot table. No-op until the snapshot has been built once. */
 export async function rememberOilLossPayloadFromSnapshot(): Promise<OilLossPayload | null> {
   const payload = await loadOilLossPayloadFromSnapshot();

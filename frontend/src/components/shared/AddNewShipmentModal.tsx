@@ -403,7 +403,7 @@ export type AddNewShipmentModalProps = {
   /** Raise z-index when opened above Contract Detail (z-50 / z-70). */
   stacked?: boolean
   /** Refresh Shipments list after Edit modal attaches a PO (without closing modal). */
-  onShipmentChanged?: () => void
+  onShipmentChanged?: (saved?: { sfalKg: number | null; sfbdKg: number | null }) => void
   /** When accepting a pre-planned group, link group on shipment create. */
   prePlannedGroupId?: string | null
   /** Vessel fields pre-filled when opening from Vessel Idle row action. */

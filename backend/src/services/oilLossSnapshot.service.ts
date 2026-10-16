@@ -131,6 +131,59 @@ export async function refreshOilLossSnapshotIfNeeded(): Promise<void> {
   await refreshOilLossSnapshot();
 }
 
+/**
+ * Put a shipment's saved SFAL / SFBD on its Oil Loss row at once.
+ *
+ * A shipment edit marks the snapshot stale and rebuilds ALL of it (about 5 minutes on the dev copy, 10,310 rows), and until that commits the page serves the old
+ * quantities - so a saved SFAL / SFBD seemed not to have changed. A vessel row's SFAL / SFBD is the SFAL / SFBD of the shipment row its View Shipment opens (the
+ * primary row of the STO group, whose id is the snapshot row's id; oilLossVesselCompletedSql.ts), and nothing else in the row depends on them (gain / loss is
+ * received - delivery), so one UPDATE is exact. It matches nothing when the edited shipment is not the primary row of its group; the rebuild that is already scheduled
+ * covers that. A rebuild holds the table's rows locked for minutes (one transaction: DELETE, then INSERT), so while one is running this does nothing at all (the memory
+ * copy is patched separately and the rebuild is followed by another one), and otherwise it gives up after 3 s instead of waiting behind a lock.
+ * Call it BEFORE the edit schedules its rebuild. Returns whether a row was changed.
+ */
+export async function patchOilLossSnapshotSfalSfbd(shipmentId: string): Promise<boolean> {
+  const id = String(shipmentId ?? '').trim();
+  if (!id || refreshInFlight) return false;
+  const client = await getClient();
+  let changed = false;
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL lock_timeout = '3s'`);
+    const res = await client.query(
+      `UPDATE ${OIL_LOSS_SNAPSHOT_TABLE} o
+       SET quantity_sfal = NULLIF(s.sfal_qty, 0),
+           quantity_sfbd = NULLIF(s.sfbd_qty, 0)
+       FROM shipments s
+       WHERE s.id = $1::uuid
+         AND o.id = s.id
+         AND o.transport_mode = 'SEA'`,
+      [id],
+    );
+    await client.query('COMMIT');
+    changed = (res.rowCount ?? 0) > 0;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // connection may already be unusable
+    }
+    logger.warn('Oil loss snapshot SFAL/SFBD patch skipped - the rebuild will bring the value', { err, shipmentId: id });
+    return false;
+  } finally {
+    client.release();
+  }
+  if (changed) {
+    try {
+      const { rememberOilLossPayloadFromSnapshot } = await import('./oilLoss.service');
+      await rememberOilLossPayloadFromSnapshot();
+    } catch (err) {
+      logger.warn('Oil loss memory cache fill after SFAL/SFBD patch failed', { err });
+    }
+  }
+  return changed;
+}
+
 /** Mark stale and rebuild once per debounce window. The page keeps serving the last snapshot. */
 export function scheduleOilLossSnapshotRefresh(): void {
   void markOilLossSnapshotStale().catch((err) => {
