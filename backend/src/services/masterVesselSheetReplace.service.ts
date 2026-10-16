@@ -204,8 +204,21 @@ export function planSheetReplace(
   for (const s of sheetRows) for (const c of s.codes) if ((codeRows.get(c) ?? 0) === 1) codeOwnerRow.set(c, s.row);
   const heldCodes = new Map<string, string[]>();
   for (const [code, id] of codeHolder) heldCodes.set(id, [...(heldCodes.get(id) ?? []), code]);
-  const holdsOtherRowsCode = (m: MasterSnapshot, row: number) =>
-    (heldCodes.get(m.id) ?? []).some((c) => codeOwnerRow.has(c) && codeOwnerRow.get(c) !== row);
+  // a combo pair's SAP code now belongs to the barge: the tug that held it is still that tug, not a stale name
+  const partnerRows = new Map<number, Set<number>>();
+  const sheetByName = new Map(sheetRows.map((s) => [s.name, s]));
+  const pairMembers = explicitPairs
+    ? explicitPairs.map((p) => [sheetByName.get(uppercaseText(p.tb) ?? ''), sheetByName.get(uppercaseText(p.bg) ?? '')])
+    : [...sheetRows.reduce((g, s) => (s.pairId ? g.set(s.pairId, [...(g.get(s.pairId) ?? []), s]) : g), new Map<string, SheetVessel[]>()).values()];
+  for (const members of pairMembers) {
+    for (const a of members) for (const b of members) {
+      if (a && b && a.row !== b.row) partnerRows.set(a.row, (partnerRows.get(a.row) ?? new Set()).add(b.row));
+    }
+  }
+  const foreign = (c: string, row: number) =>
+    codeOwnerRow.has(c) && codeOwnerRow.get(c) !== row && !partnerRows.get(row)?.has(codeOwnerRow.get(c)!);
+  const holdsOtherRowsCode = (m: MasterSnapshot, row: number) => (heldCodes.get(m.id) ?? []).some((c) => foreign(c, row));
+  const holdsOwnCode = (m: MasterSnapshot, row: number) => (heldCodes.get(m.id) ?? []).some((c) => codeOwnerRow.get(c) === row);
 
   const claimed = new Map<string, SheetVessel>(); // master id -> sheet row that became it
   const normInSheet = new Map<string, SheetVessel>();
@@ -232,16 +245,18 @@ export function planSheetReplace(
 
     // A master that holds SAP codes of other sheet rows and none of this row's is another vessel under a stale name (DHM's sync renamed
     // the master of BG. ASL 78's code MELIZ-ASL to "TB. BEATRICE 01" on SIT): it is no match by name; the row owning its code takes it over.
+    // A pair partner's code does not count: the tug of "TB. AS MARINA 9 / BG. AS MARINA 12" held MMARINA9, which the barge now owns.
     const staleName = (m: MasterSnapshot) => {
       const sheetCodes = (heldCodes.get(m.id) ?? []).filter((c) => codeOwnerRow.has(c));
-      return sheetCodes.length > 0 && sheetCodes.every((c) => codeOwnerRow.get(c) !== sheet.row);
+      return sheetCodes.length > 0 && sheetCodes.every((c) => foreign(c, sheet.row));
     };
     const free = (list: MasterSnapshot[] | undefined) =>
       (list ?? []).filter((m) => !claimed.has(m.id) && !roleClash(role, m) && !staleName(m));
     let master: MasterSnapshot | undefined;
     let matchedBy: RowPlan['matchedBy'];
-    const foreignLast = (a: MasterSnapshot, b: MasterSnapshot) =>
-      Number(holdsOtherRowsCode(a, sheet.row)) - Number(holdsOtherRowsCode(b, sheet.row));
+    // of several masters with the name: the one holding this row's own code first, one holding another row's code last
+    const rank = (m: MasterSnapshot) => (holdsOwnCode(m, sheet.row) ? 0 : holdsOtherRowsCode(m, sheet.row) ? 2 : 1);
+    const foreignLast = (a: MasterSnapshot, b: MasterSnapshot) => rank(a) - rank(b);
     const exact = free(byName.get(sheet.name)).sort(foreignLast);
     if (exact.length > 0) {
       master = exact[0];
@@ -483,11 +498,18 @@ export async function applySheetReplace(client: PoolClient, plan: ReplacePlan, o
   // 1. the unused ones go first, so a sheet vessel renamed to their spelling does not trip the unique OFFICIAL name
   for (const t of plan.retire) if (t.action === 'archive') await retireOne(t);
 
-  // 2. the sheet's vessels
+  // 2. the sheet's vessels; a master retired in step 3 that has the vessel's name first stops being OFFICIAL, or it would trip the
+  // unique OFFICIAL name before it is gone (SIT 2026-10-16: two "BG. ARCINDO 2", one with the SAP code and one without)
+  const retiringIds = plan.retire.filter((t) => t.action === 'repoint').map((t) => t.master.id);
   for (const r of plan.rows) {
     if (r.action === 'conflict') continue;
     try {
       await savepoint(client, async () => {
+        await client.query(
+          `UPDATE master_vessels SET code_status = 'PROVISIONAL', updated_at = CURRENT_TIMESTAMP
+            WHERE id::text = ANY($1::text[]) AND code_status = 'OFFICIAL' AND normalized_vessel_name = $2`,
+          [retiringIds, normalizeVesselName(r.sheet.name)],
+        );
         let id: string;
         if (r.action === 'update') {
           id = r.master!.id;

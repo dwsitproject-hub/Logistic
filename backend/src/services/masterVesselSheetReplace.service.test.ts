@@ -246,6 +246,27 @@ describe('planSheetReplace', () => {
     ]);
   });
 
+  it('a tug whose combo code the barge of its pair now owns is still that tug, matched by name', () => {
+    const tug = master('TB. AS MARINA 9', { vessel_role: 'TB', vessel_code: 'MMARINA9' });
+    const plan = planSheetReplace(
+      [sheet(1, 'BG. AS MARINA 12', { H: 'Barge', P: 'MMARINA9' }), sheet(2, 'TB. AS MARINA 9', { H: 'Tug Boat' })],
+      [tug],
+      new Map([['MMARINA9', tug.id]]),
+      [{ pairCode: 'TBG-010', tb: 'TB. AS MARINA 9', bg: 'BG. AS MARINA 12' }],
+    );
+    expect(plan.rows[1]).toMatchObject({ action: 'update', matchedBy: 'name', master: tug });
+    expect(plan.rows[0]).toMatchObject({ action: 'create', codes: [{ code: 'MMARINA9', from: tug }] });
+    expect(plan.retire).toEqual([]);
+  });
+
+  it('of two masters with the same name, the one holding the own code of the row is taken', () => {
+    const bare = master('BG. ARCINDO 2');
+    const coded = master('BG. ARCINDO 2', { vessel_role: 'BG', vessel_code: 'MARCIN1' });
+    const plan = planSheetReplace([sheet(1, 'BG. ARCINDO 2', { H: 'Barge', P: 'MARCIN1' })], [bare, coded], new Map([['MARCIN1', coded.id]]));
+    expect(plan.rows[0]).toMatchObject({ action: 'update', master: coded });
+    expect(plan.retire).toEqual([expect.objectContaining({ master: bare, action: 'repoint' })]);
+  });
+
   it('lists the codes more than one sheet row claims, so a merged twin does not hand them out', () => {
     const plan = planSheetReplace([sheet(1, 'A', { P: 'MX' }), sheet(2, 'B', { P: 'MX, MY' })], [], new Map());
     expect(plan.sharedCodes).toEqual(['MX']);
