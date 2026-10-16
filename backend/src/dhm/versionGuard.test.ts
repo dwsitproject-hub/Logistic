@@ -166,6 +166,35 @@ describe('vessel tombstones from the pull', () => {
   });
 });
 
+describe('live vessel records from the pull (KLIP is the vessel source)', () => {
+  beforeEach(() => queryMock.mockReset());
+
+  it('refresh only the dhm link of the row known by dhm_id or dhm_code: no name, no attribute', async () => {
+    queryMock.mockImplementation(async (sql: string) => {
+      if (/SELECT MAX(v) AS v FROM/.test(sql)) return { rows: [{ v: 2 }] };
+      if (/RETURNING mv.id/.test(sql)) return { rows: [{ id: 'local-1' }] };
+      return { rows: [] };
+    });
+    expect(await applyDhmVesselRecord(record(3, { Vessel_Name: 'BG. AGENA', code: 'VSL-0003' }))).toEqual({ id: 'local-1', created: false });
+    const w = writes();
+    expect(w).toHaveLength(1);
+    expect(w[0]).not.toMatch(/vessel_name|vessel_capacity_mt|vessel_type|INSERT/);
+  });
+
+  it('a vessel only DHM has is not inserted, and nothing is matched by SAP code or name', async () => {
+    queryMock.mockImplementation(async (sql: string) => {
+      if (/SELECT MAX(v) AS v FROM/.test(sql)) return { rows: [{ v: null }] };
+      return { rows: [] };
+    });
+    expect(await applyDhmVesselRecord(record(1, { Vessel_Name: 'BG. ANAK LAUT 289', Vessel_Code_SAP: 'MLAUT289' }))).toEqual({
+      id: '', created: false, skipped: 'unlinked',
+    });
+    const sqls = queryMock.mock.calls.map((c) => String(c[0]));
+    expect(sqls.some((q) => /INSERT/i.test(q))).toBe(false);
+    expect(sqls.some((q) => /normalized_vessel_name|upper(trim(vessel_code))/.test(q))).toBe(false);
+  });
+});
+
 describe('deletes: the guard is inside the UPDATE', () => {
   beforeEach(() => queryMock.mockReset());
 

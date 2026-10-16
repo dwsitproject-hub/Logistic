@@ -467,11 +467,11 @@ export async function applySheetReplace(client: PoolClient, plan: ReplacePlan, o
             [t.master.id, target, plan.sharedCodes],
           );
           res.codesMoved += codes.rowCount ?? 0;
-          // its own primary code, when no alias row carries it yet and it is no placeholder
+          // its own primary code, when no alias row carries it yet and it is a SAP code (no TMP- placeholder, no DHM VSL- code)
           const own = await client.query(
             `INSERT INTO master_vessel_code_aliases (master_vessel_id, vessel_code, source, namespace, is_primary)
              SELECT $2, upper(trim(mv.vessel_code)), 'vessel_sheet', 'SAP', false FROM master_vessels mv
-              WHERE mv.id = $1 AND upper(mv.vessel_code) NOT LIKE 'TMP-%' AND NOT (upper(trim(mv.vessel_code)) = ANY($3::text[]))
+              WHERE mv.id = $1 AND upper(mv.vessel_code) NOT LIKE 'TMP-%' AND upper(mv.vessel_code) NOT LIKE 'VSL-%' AND NOT (upper(trim(mv.vessel_code)) = ANY($3::text[]))
              ON CONFLICT (vessel_code) DO NOTHING`,
             [t.master.id, target, plan.sharedCodes],
           );
