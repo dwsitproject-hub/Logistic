@@ -159,6 +159,13 @@ async function ensureAlias(
   return Boolean(result.rows[0]?.inserted);
 }
 
+/**
+ * SAP (the import and the Shipments list's SAP vessel backfill) never renames a vessel KLIP already has and only fills its empty
+ * attributes: the Master Vessel sheet is the vessel source (Ryan, 2026-10-16). A shipment row pairing code MSERASI with the text
+ * "BG. SERASI 17" renamed BG. SERASI VII back after every sheet load, from nothing more than opening the Shipments page.
+ */
+const sapKeepsMaster = (input: ResolveMasterVesselInput) => (input.source ?? 'manual') === 'sap_import';
+
 async function updateMasterAttributes(
   run: QueryFn,
   id: string,
@@ -166,17 +173,21 @@ async function updateMasterAttributes(
   vesselName: string,
 ): Promise<void> {
   if (!input.updateAttributes) return;
+  const keep = sapKeepsMaster(input);
+  const text = (col: string, p: string) =>
+    keep ? `${col} = COALESCE(NULLIF(trim(${col}), ''), NULLIF(trim(${p}), ''))` : `${col} = COALESCE(NULLIF(trim(${p}), ''), ${col})`;
+  const value = (col: string, p: string) => (keep ? `${col} = COALESCE(${col}, ${p})` : `${col} = COALESCE(${p}, ${col})`);
   await run(
     `UPDATE master_vessels SET
-       vessel_name = COALESCE(NULLIF(trim($2), ''), vessel_name),
-       normalized_vessel_name = COALESCE(NULLIF(trim($3), ''), normalized_vessel_name),
-       vessel_owner = COALESCE(NULLIF(trim($4), ''), vessel_owner),
-       vessel_capacity_mt = COALESCE($5, vessel_capacity_mt),
-       vessel_type = COALESCE(NULLIF(trim($6), ''), vessel_type),
-       sap_vendor_code = COALESCE(NULLIF(trim($7), ''), sap_vendor_code),
-       heating = COALESCE($8, heating),
-       lambung_type = COALESCE(NULLIF(trim($9), ''), lambung_type),
-       terms = COALESCE(NULLIF(trim($10), ''), terms),
+       ${keep ? "vessel_name = COALESCE(NULLIF(trim(vessel_name), ''), NULLIF(trim($2), ''), vessel_name)" : "vessel_name = COALESCE(NULLIF(trim($2), ''), vessel_name)"},
+       ${keep ? "normalized_vessel_name = COALESCE(NULLIF(normalized_vessel_name, ''), NULLIF(trim($3), ''), normalized_vessel_name)" : "normalized_vessel_name = COALESCE(NULLIF(trim($3), ''), normalized_vessel_name)"},
+       ${text('vessel_owner', '$4')},
+       ${value('vessel_capacity_mt', '$5')},
+       ${text('vessel_type', '$6')},
+       ${text('sap_vendor_code', '$7')},
+       ${value('heating', '$8')},
+       ${text('lambung_type', '$9')},
+       ${text('terms', '$10')},
        code_status = CASE
          WHEN $11 = 'OFFICIAL' THEN 'OFFICIAL'
          WHEN code_status = 'PROVISIONAL' THEN 'PROVISIONAL'
@@ -236,7 +247,7 @@ export async function resolveMasterVessel(
   if (officialCode) {
     const byAlias = await findMasterByAliasCode(run, officialCode);
     if (byAlias) {
-      const displayName = pickPreferredVesselDisplayName(byAlias.vessel_name, vesselName);
+      const displayName = sapKeepsMaster(input) ? byAlias.vessel_name : pickPreferredVesselDisplayName(byAlias.vessel_name, vesselName);
       await updateMasterAttributes(run, byAlias.id, input, displayName);
       return {
         master_vessel_id: byAlias.id,
@@ -254,7 +265,7 @@ export async function resolveMasterVessel(
     const byCode = await findMasterByPrimaryCode(run, officialCode);
     if (byCode) {
       await ensureAlias(run, byCode.id, officialCode, source, true);
-      const displayName = pickPreferredVesselDisplayName(byCode.vessel_name, vesselName);
+      const displayName = sapKeepsMaster(input) ? byCode.vessel_name : pickPreferredVesselDisplayName(byCode.vessel_name, vesselName);
       await updateMasterAttributes(run, byCode.id, input, displayName);
       return {
         master_vessel_id: byCode.id,
@@ -273,7 +284,7 @@ export async function resolveMasterVessel(
     if (officialCode && officialCode !== byNorm.vessel_code.toUpperCase()) {
       aliasAdded = await ensureAlias(run, byNorm.id, officialCode, source, false);
     }
-    const displayName = pickPreferredVesselDisplayName(byNorm.vessel_name, vesselName);
+    const displayName = sapKeepsMaster(input) ? byNorm.vessel_name : pickPreferredVesselDisplayName(byNorm.vessel_name, vesselName);
     await updateMasterAttributes(run, byNorm.id, input, displayName);
 
     // Promote provisional to official when we get an official code
@@ -289,7 +300,7 @@ export async function resolveMasterVessel(
            code_status = 'OFFICIAL',
            updated_at = CURRENT_TIMESTAMP
          WHERE id = $4`,
-        [officialCode, displayName, norm, byNorm.id],
+        [officialCode, displayName, sapKeepsMaster(input) ? byNorm.normalized_vessel_name : norm, byNorm.id],
       );
       await ensureAlias(run, byNorm.id, officialCode, source, true);
       if (byNorm.vessel_code.toUpperCase() !== officialCode) {
