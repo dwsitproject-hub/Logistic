@@ -41,6 +41,14 @@ describe('shipmentListRowContractQtySql', () => {
     expect(sql).toContain('contract_stos cs');
     expect(sql).toContain('sp.sto_key');
   });
+
+  it('drops a B2B child whose origin is on the same row, so one cargo is not summed twice (STO 1006019951: 8,100 -> 4,050 MT)', () => {
+    const sql = shipmentListRowContractQtySql('sp');
+    expect(sql).toContain('WITH row_contract_ids AS');
+    expect(sql).toContain("UPPER(TRIM(COALESCE(lsx.b2b_flag_raw, ''))) = 'B2B'");
+    expect(sql).toContain('TRIM(ox.po_number::text) = TRIM(lsx.contract_reference_po_raw)');
+    expect(sql).toContain('ox.id IN (SELECT id FROM row_contract_ids)');
+  });
 });
 
 describe('sqlShipmentListOsBaseQtyExpr', () => {

@@ -52,6 +52,33 @@ export function shipmentListRowContractQtySql(spAlias = 'sp'): string {
  * `<alias>.contract_numbers`. Exposed so a card can count each of those contracts ONCE across rows instead of once per row.
  */
 export function shipmentListRowContractIdsSql(spAlias = 'sp'): string {
+  /*
+   * A B2B child is dropped when its origin is on the same row. The row shows a B2B child shipment under its origin
+   * (shipmentB2bOriginSql), so contract_numbers carries the ORIGIN while the STO branches below find the CHILD - the same cargo
+   * twice. Production STO 1006019951 (2026-10-16): origins 9191000035 + 9330000046 (4,050 MT) and their children 1001031407 +
+   * 1001031409 (4,050 MT) read Contract Qty 8,100 MT and OS 4,591 MT instead of 4,050 / 541. A child whose origin is not on the
+   * row stays, so no row loses its Contract Qty.
+   */
+  return `
+          WITH row_contract_ids AS (${shipmentListRowContractIdsUnionSql(spAlias)}
+          )
+          SELECT r.id
+          FROM row_contract_ids r
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM contracts cx
+            INNER JOIN contract_latest_spd_snapshot lsx ON lsx.contract_number = cx.contract_id
+            INNER JOIN contracts ox
+              ON TRIM(ox.po_number::text) = TRIM(lsx.contract_reference_po_raw)
+             AND ox.id <> cx.id
+            WHERE cx.id = r.id
+              AND UPPER(TRIM(COALESCE(lsx.b2b_flag_raw, ''))) = 'B2B'
+              AND NULLIF(TRIM(lsx.contract_reference_po_raw), '') IS NOT NULL
+              AND ox.id IN (SELECT id FROM row_contract_ids)
+          )`;
+}
+
+function shipmentListRowContractIdsUnionSql(spAlias: string): string {
   const groupedSto = `NULLIF(TRIM(${spAlias}.sto_key::text), '')`;
   return `
           SELECT ca.id

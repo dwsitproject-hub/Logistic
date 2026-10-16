@@ -54,6 +54,15 @@ describe('buildContractDetailsForStoSql OS Qty of a PO line', () => {
   });
 });
 
+describe('buildContractDetailsForStoSql B2B origin line', () => {
+  it('carries the Delivery / Receive its B2B children booked on this STO, and its OS follows', () => {
+    const sql = buildContractDetailsForStoSql();
+    expect(sql).toContain('INNER JOIN latest_spd_b2b chb ON chb.contract_number = ch.contract_number');
+    expect(sql).toContain('TRIM(chb.contract_reference_po) = TRIM(pl.po_number)');
+    expect(sql).toContain('ch.contract_number <> pl.contract_number');
+  });
+});
+
 describe('buildContractDetailsForStoSql', () => {
   it('discovers contracts by sto_number and returns one row per PO line', () => {
     const sql = buildContractDetailsForStoSql();
