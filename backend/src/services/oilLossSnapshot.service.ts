@@ -1,6 +1,7 @@
 import { getClient, query } from '../database/connection';
 import logger from '../utils/logger';
 import { buildOilLossGainSql, buildOilLossMainSql } from '../utils/oilLossQuerySql';
+import { canonicalVesselName } from '../utils/sapVesselFields';
 import type { OilLossPayload } from './oilLoss.service';
 
 export const OIL_LOSS_SNAPSHOT_TABLE = 'oil_loss_snapshot';
@@ -268,6 +269,23 @@ async function rebuildOilLossSnapshot(): Promise<void> {
   logger.info('Oil loss snapshot refreshed', { rowCount, durationMs, gainCount });
 }
 
+/**
+ * A vessel row draws a vessel that has no Master Vessel the way the Shipments list does (mergeShipmentVesselFromSapRow -> canonicalVesselName): a SAP
+ * tug / barge pair is cut to the cargo-carrying barge ("TB. ELIZABETH / BG. ASL 78" -> "BG. ASL 78") and every name is upper case. The SQL already put
+ * the Master Vessel's name where there is one; this covers the rest, at read time, so it needs no rebuild of the snapshot. A trucking row (no vessel
+ * name; its transporter is a company) and a row that is not SEA are left as they are.
+ */
+export function canonicalizeOilLossVesselName(row: Record<string, unknown>): Record<string, unknown> {
+  if (String(row.transport_mode ?? '').toUpperCase() !== 'SEA') return row;
+  const name = String(row.vessel_name ?? '').trim();
+  if (!name) return row;
+  const canonical = canonicalVesselName(name);
+  if (!canonical) return row;
+  const transporterIsTheVessel = String(row.transporter ?? '').trim() === name;
+  if (canonical === row.vessel_name && (!transporterIsTheVessel || canonical === row.transporter)) return row;
+  return { ...row, vessel_name: canonical, transporter: transporterIsTheVessel ? canonical : row.transporter };
+}
+
 export async function loadOilLossPayloadFromSnapshot(): Promise<OilLossPayload | null> {
   const meta = await readOilLossSnapshotMeta();
   if (!meta?.refreshedAt) return null;
@@ -277,7 +295,7 @@ export async function loadOilLossPayloadFromSnapshot(): Promise<OilLossPayload |
      ORDER BY gain_loss_amount ASC NULLS LAST, id ASC`,
   );
   return {
-    rows: res.rows as Record<string, unknown>[],
+    rows: (res.rows as Record<string, unknown>[]).map(canonicalizeOilLossVesselName),
     gainRow: {
       total_gain_kg: meta.totalGainKg,
       gain_count: meta.gainCount,
