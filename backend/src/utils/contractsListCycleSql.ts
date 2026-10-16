@@ -87,6 +87,8 @@ export function sqlContractEveryStoDischargedExpr(
  * Completed on Shipping Performance - 4,000 MT of the 4,843 MT the two pages differed by on production. This looks at vessel STOs only:
  * - a vessel STO is a contract_stos line whose type is not T, or any line one of the PO's non-cancelled shipments sits on (production
  *   2026-10-16: 1014003290's STO 1016011456 is typed T but carries BG. PRIMA SAMUDRA VIII, PLANNED - ignoring it closed the PO early);
+ * - a shipment sits on the STO its shipment_id names; the contract row's STO places only a shipment without one of its own (1004031778:
+ *   its COMPLETED shipment 1006020383 was also read as finishing its other STO 1006020605, still PLANNED);
  * - it is finished when a non-cancelled shipment on it has an ATC (override, own column, discharge leg) or status COMPLETED
  *   (1014003256: BG. ELANG JAWA 1 COMPLETED with no ATC recorded);
  * - a B2B origin's vessel STOs and shipments are its children's (origin 9194100035's cargo moved on child 1004031407's STO).
@@ -119,7 +121,7 @@ export function sqlContractVesselStosFinishedExpr(contractNumberExpr: string): s
                   AND (
                     TRIM(COALESCE(s_on.shipment_id::text, '')) = TRIM(cvs.sto_number::text)
                     OR TRIM(COALESCE(s_on.shipment_id::text, '')) LIKE TRIM(cvs.sto_number::text) || '-%'
-                    OR TRIM(COALESCE(c_on.sto_number::text, '')) = TRIM(cvs.sto_number::text)
+                    OR (TRIM(COALESCE(c_on.sto_number::text, '')) = TRIM(cvs.sto_number::text) AND TRIM(COALESCE(s_on.shipment_id::text, '')) !~ '^[0-9]{8,}')
                   )
               ))`;
   return `(
@@ -135,7 +137,7 @@ export function sqlContractVesselStosFinishedExpr(contractNumberExpr: string): s
           AND (
             TRIM(COALESCE(s_vf.shipment_id::text, '')) = vs.sto
             OR TRIM(COALESCE(s_vf.shipment_id::text, '')) LIKE vs.sto || '-%'
-            OR TRIM(COALESCE(c_vf.sto_number::text, '')) = vs.sto
+            OR (TRIM(COALESCE(c_vf.sto_number::text, '')) = vs.sto AND TRIM(COALESCE(s_vf.shipment_id::text, '')) !~ '^[0-9]{8,}')
           )
           AND (
             UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED'
@@ -170,7 +172,7 @@ export function buildVesselStosFinishedCte(name: string, scopeSubquery: string):
               AND (
                 TRIM(COALESCE(s_vf.shipment_id::text, '')) = l0.sto
                 OR TRIM(COALESCE(s_vf.shipment_id::text, '')) LIKE l0.sto || '-%'
-                OR TRIM(COALESCE(c_vf.sto_number::text, '')) = l0.sto
+                OR (TRIM(COALESCE(c_vf.sto_number::text, '')) = l0.sto AND TRIM(COALESCE(s_vf.shipment_id::text, '')) !~ '^[0-9]{8,}')
               )
               AND (
                 UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED'
@@ -195,7 +197,7 @@ export function buildVesselStosFinishedCte(name: string, scopeSubquery: string):
                   AND (
                     TRIM(COALESCE(s_on.shipment_id::text, '')) = TRIM(cvs.sto_number::text)
                     OR TRIM(COALESCE(s_on.shipment_id::text, '')) LIKE TRIM(cvs.sto_number::text) || '-%'
-                    OR TRIM(COALESCE(c_on.sto_number::text, '')) = TRIM(cvs.sto_number::text)
+                    OR (TRIM(COALESCE(c_on.sto_number::text, '')) = TRIM(cvs.sto_number::text) AND TRIM(COALESCE(s_on.shipment_id::text, '')) !~ '^[0-9]{8,}')
                   )
               ))
             UNION
@@ -217,7 +219,7 @@ export function buildVesselStosFinishedCte(name: string, scopeSubquery: string):
                   AND (
                     TRIM(COALESCE(s_on.shipment_id::text, '')) = TRIM(cvs.sto_number::text)
                     OR TRIM(COALESCE(s_on.shipment_id::text, '')) LIKE TRIM(cvs.sto_number::text) || '-%'
-                    OR TRIM(COALESCE(c_on.sto_number::text, '')) = TRIM(cvs.sto_number::text)
+                    OR (TRIM(COALESCE(c_on.sto_number::text, '')) = TRIM(cvs.sto_number::text) AND TRIM(COALESCE(s_on.shipment_id::text, '')) !~ '^[0-9]{8,}')
                   )
               ))
           ) l0
