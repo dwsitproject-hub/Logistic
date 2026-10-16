@@ -140,13 +140,23 @@ describe('planSheetReplace', () => {
   it('a master claimed by an earlier row is not taken again through its code: the later row is created and the code moves', () => {
     const holder = master('BG. HOLDER');
     const plan = planSheetReplace(
-      [sheet(1, 'BG. HOLDER'), sheet(2, 'BG. SOMEONE ELSE', { P: 'MHOLD' })],
+      [sheet(1, 'BG. HOLDER', { P: 'MOWN' }), sheet(2, 'BG. SOMEONE ELSE', { P: 'MHOLD' })],
       [holder],
-      new Map([['MHOLD', holder.id]]),
+      new Map([['MHOLD', holder.id], ['MOWN', holder.id]]),
     );
     expect(plan.rows.map((r) => r.action)).toEqual(['update', 'create']);
     expect(plan.rows[1].codes).toEqual([{ code: 'MHOLD', from: holder }]);
     expect(plan.retire).toEqual([]);
+  });
+
+  it('a master holding only another row\'s code goes to that row even when its name is a sheet row without codes', () => {
+    const holder = master('BG. HOLDER');
+    const plan = planSheetReplace(
+      [sheet(1, 'BG. HOLDER'), sheet(2, 'BG. SOMEONE ELSE', { P: 'MHOLD' })],
+      [holder],
+      new Map([['MHOLD', holder.id]]),
+    );
+    expect(plan.rows.map((r) => [r.action, r.matchedBy])).toEqual([['create', undefined], ['update', 'code']]);
   });
 
   it('a master the sheet does not have: a KLIP-added one and one still used are kept, an unused one is archived', () => {
@@ -203,6 +213,37 @@ describe('planSheetReplace', () => {
     const plan = planSheetReplace([sheet(1, 'MT. ASIKE I', { H: 'Tanker', P: 'MASIKE' })], [other, coded], new Map([['MASIKE', coded.id]]));
     expect(plan.rows[0]).toMatchObject({ action: 'update', matchedBy: 'twin', master: coded });
     expect(plan.retire).toEqual([expect.objectContaining({ master: other, action: 'repoint' })]);
+  });
+
+  it('a master renamed to another vessel (holding only another row\'s code) is no name match: the code owner takes its shipments', () => {
+    const stale = master('TB. BEATRICE 01', { shipments: 15 }); // really BG. ASL 78, renamed by a DHM sync
+    const asl = master('BG. ASL 78');
+    const plan = planSheetReplace(
+      [sheet(1, 'TB. BEATRICE 01', { H: 'Tug Boat' }), sheet(2, 'BG. ASL 78', { H: 'Barge', P: 'MELIZ-ASL' })],
+      [stale, asl],
+      new Map([['MELIZ-ASL', stale.id]]),
+    );
+    expect(plan.rows.map((r) => [r.sheet.name, r.action, r.master?.id])).toEqual([
+      ['TB. BEATRICE 01', 'create', undefined],
+      ['BG. ASL 78', 'update', asl.id],
+    ]);
+    expect(plan.retire).toEqual([expect.objectContaining({ master: stale, action: 'repoint', target: plan.rows[1].sheet })]);
+  });
+
+  it('explicit pairs let one barge be in two pairs', () => {
+    const plan = planSheetReplace(
+      [sheet(1, 'BG. CIPTA JAYA X', { H: 'Barge' }), sheet(2, 'TB. BAHTERA 7', { H: 'Tug Boat' }), sheet(3, 'TB. MAS LINES 1003', { H: 'Tug Boat' })],
+      [],
+      new Map(),
+      [
+        { pairCode: 'TBG-002', tb: 'TB. BAHTERA 7', bg: 'BG. CIPTA JAYA X' },
+        { pairCode: 'TBG-144', tb: 'TB. MAS LINES 1003', bg: 'BG. CIPTA JAYA X' },
+      ],
+    );
+    expect(plan.pairs.map((p) => [p.pairCode, p.ok, p.tb?.name, p.bg?.name])).toEqual([
+      ['TBG-002', true, 'TB. BAHTERA 7', 'BG. CIPTA JAYA X'],
+      ['TBG-144', true, 'TB. MAS LINES 1003', 'BG. CIPTA JAYA X'],
+    ]);
   });
 
   it('lists the codes more than one sheet row claims, so a merged twin does not hand them out', () => {

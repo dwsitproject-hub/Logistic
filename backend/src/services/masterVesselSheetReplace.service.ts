@@ -179,6 +179,7 @@ export function planSheetReplace(
   sheetRows: ReadonlyArray<SheetVessel>,
   masters: ReadonlyArray<MasterSnapshot>,
   codeHolder: ReadonlyMap<string, string>,
+  explicitPairs?: ReadonlyArray<{ pairCode: string; tb: string; bg: string }>,
 ): ReplacePlan {
   const byId = new Map(masters.map((m) => [m.id, m]));
   const byName = new Map<string, MasterSnapshot[]>();
@@ -229,7 +230,14 @@ export function planSheetReplace(
     }
     normInSheet.set(nameRoleKey, sheet);
 
-    const free = (list: MasterSnapshot[] | undefined) => (list ?? []).filter((m) => !claimed.has(m.id) && !roleClash(role, m));
+    // A master that holds SAP codes of other sheet rows and none of this row's is another vessel under a stale name (DHM's sync renamed
+    // the master of BG. ASL 78's code MELIZ-ASL to "TB. BEATRICE 01" on SIT): it is no match by name; the row owning its code takes it over.
+    const staleName = (m: MasterSnapshot) => {
+      const sheetCodes = (heldCodes.get(m.id) ?? []).filter((c) => codeOwnerRow.has(c));
+      return sheetCodes.length > 0 && sheetCodes.every((c) => codeOwnerRow.get(c) !== sheet.row);
+    };
+    const free = (list: MasterSnapshot[] | undefined) =>
+      (list ?? []).filter((m) => !claimed.has(m.id) && !roleClash(role, m) && !staleName(m));
     let master: MasterSnapshot | undefined;
     let matchedBy: RowPlan['matchedBy'];
     const foreignLast = (a: MasterSnapshot, b: MasterSnapshot) =>
@@ -323,9 +331,16 @@ export function planSheetReplace(
     }
   }
 
-  // pairs
+  // pairs: the sheet's explicit list (one barge may be in several pairs), otherwise the rows sharing a Pair ID
   const groups = new Map<string, SheetVessel[]>();
-  for (const s of sheetRows) if (s.pairId) groups.set(s.pairId, [...(groups.get(s.pairId) ?? []), s]);
+  if (explicitPairs) {
+    const byNameSheet = new Map(sheetRows.map((s) => [s.name, s]));
+    for (const p of explicitPairs) {
+      groups.set(p.pairCode, [byNameSheet.get(uppercaseText(p.tb) ?? ''), byNameSheet.get(uppercaseText(p.bg) ?? '')].filter((s): s is SheetVessel => Boolean(s)));
+    }
+  } else {
+    for (const s of sheetRows) if (s.pairId) groups.set(s.pairId, [...(groups.get(s.pairId) ?? []), s]);
+  }
   const conflictRows = new Set(rows.filter((r) => r.action === 'conflict').map((r) => r.sheet.row));
   const pairs: PairPlan[] = [...groups.entries()].map(([pairCode, members]) => {
     const tbs = members.filter((m) => sheetRole(m) === 'TB');

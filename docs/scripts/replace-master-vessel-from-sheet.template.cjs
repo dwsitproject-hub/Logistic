@@ -20,6 +20,8 @@ const path = require('path');
 const dist = (p) => require(path.join(process.cwd(), 'dist', p));
 
 const SHEET_ROWS = __ROWS__;
+// the pairs of the sheet (combo SAP names only): one barge may be in several
+const SHEET_PAIRS = __PAIRS__;
 
 async function main() {
   const apply = process.argv.includes('--apply');
@@ -35,7 +37,7 @@ async function main() {
   try {
     await client.query('BEGIN');
     const { masters, codeHolder } = await svc.loadMasterSnapshot(client);
-    const plan = svc.planSheetReplace(sheet, masters, codeHolder);
+    const plan = svc.planSheetReplace(sheet, masters, codeHolder, SHEET_PAIRS);
     const result = await svc.applySheetReplace(client, plan, { blankClears });
 
     const count = (list, key) => list.reduce((m, x) => ((m[x[key]] = (m[x[key]] || 0) + 1), m), {});
