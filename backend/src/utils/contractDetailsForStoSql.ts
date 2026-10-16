@@ -104,16 +104,19 @@ function stoScopedOutstandingActualSql(opts: {
   contractNumberExpr: string;
   stoKeyExpr: string;
   poNumberExpr: string;
+  /** The line's Delivery / Receive when it is not just its own STO-scoped SAP figure (a B2B origin: its children's). */
+  receiveExpr?: string;
+  deliveryExpr?: string;
 }): string {
   const singleSto = shipmentOutstandingQtyExpr({
     stoQtyExpr: `COALESCE((${opts.contractQtyExpr})::numeric, 0)`,
-    receiveExpr: stoScopedReceiveKgSql(
+    receiveExpr: opts.receiveExpr ?? stoScopedReceiveKgSql(
       opts.contractNumberExpr,
       opts.contractQtyExpr,
       opts.stoKeyExpr,
       opts.poNumberExpr,
     ),
-    deliveryExpr: stoScopedDeliveredKgSql(
+    deliveryExpr: opts.deliveryExpr ?? stoScopedDeliveredKgSql(
       opts.contractNumberExpr,
       opts.contractQtyExpr,
       opts.stoKeyExpr,
@@ -253,29 +256,55 @@ export function buildContractDetailsForStoSql(): string {
 
   const plStoMatch = (alias: string) => stoMatchForContract(alias, 'pl.contract_number');
 
-  const plOutstandingActual = stoScopedOutstandingActualSql({
-    contractQtyExpr: 'pl.contract_qty',
-    incotermExpr: 'pl.incoterm',
-    contractNumberExpr: 'pl.contract_number',
-    stoKeyExpr: '$1::text',
-    poNumberExpr: 'pl.po_number',
-  });
   const plPoStoCount = `COALESCE((${sqlPoSapStoCountExpr('pl.contract_number', 'pl.po_number')})::int, 1)`;
 
-  const plDeliveredKg = stoScopedDeliveredKgSql(
+  /*
+   * A B2B origin line carries what its children moved on this STO. The modal lists the origin (children are hidden, as on the
+   * View Table), but SAP books the STO's Delivery / Receive on the CHILD: production STO 1006019951 (2026-10-16) showed origins
+   * 9191000035 / 9330000046 with Delivery 0 and OS = Contract Qty, while children 1001031407 / 1001031409 held 2,337.789 and
+   * 1,171.146 MT. The children are among po_lines (found through contract_stos), so their figure is read from there.
+   */
+  const plOwnDeliveredKg = stoScopedDeliveredKgSql(
     'pl.contract_number',
     'pl.contract_qty',
     '$1::text',
     'pl.po_number',
     'pl.incoterm',
   );
-
-  const plReceiveKg = stoScopedReceiveKgSql(
+  const plOwnReceiveKg = stoScopedReceiveKgSql(
     'pl.contract_number',
     'pl.contract_qty',
     '$1::text',
     'pl.po_number',
   );
+  const childLines = (valueSql: string) => `(
+          SELECT SUM(${valueSql})
+          FROM po_lines ch
+          INNER JOIN latest_spd_b2b chb ON chb.contract_number = ch.contract_number
+          WHERE chb.b2b_flag = 'B2B'
+            AND chb.contract_reference_po IS NOT NULL
+            AND TRIM(chb.contract_reference_po) = TRIM(pl.po_number)
+            AND ch.contract_number <> pl.contract_number
+        )`;
+  const childDeliveredKg = childLines(
+    stoScopedDeliveredKgSql('ch.contract_number', 'ch.contract_qty', '$1::text', 'ch.po_number', 'ch.incoterm'),
+  );
+  const childReceiveKg = childLines(stoScopedReceiveKgSql('ch.contract_number', 'ch.contract_qty', '$1::text', 'ch.po_number'));
+  const overlay = (own: string, child: string) => `(
+          CASE WHEN (${child}) IS NOT NULL THEN COALESCE((${own})::numeric, 0) + (${child}) ELSE (${own}) END
+        )`;
+  const plDeliveredKg = overlay(plOwnDeliveredKg, childDeliveredKg);
+  const plReceiveKg = overlay(plOwnReceiveKg, childReceiveKg);
+
+  const plOutstandingActual = stoScopedOutstandingActualSql({
+    contractQtyExpr: 'pl.contract_qty',
+    incotermExpr: 'pl.incoterm',
+    contractNumberExpr: 'pl.contract_number',
+    stoKeyExpr: '$1::text',
+    poNumberExpr: 'pl.po_number',
+    receiveExpr: plReceiveKg,
+    deliveryExpr: plDeliveredKg,
+  });
 
   const socContractQtyExpr = `COALESCE((
           SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
