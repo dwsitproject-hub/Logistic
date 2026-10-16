@@ -22,7 +22,7 @@ import {
 } from '../services/contractLatestSpdSnapshot.service';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
 import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
-import { sqlContractEveryStoDischargedExpr } from '../utils/contractsListCycleSql';
+import { buildVesselStosFinishedCte, sqlContractEveryStoDischargedExpr } from '../utils/contractsListCycleSql';
 import {
   sqlContractImportStatusIsClosedExpr,
   sqlContractEffectivelyDoneExpr,
@@ -317,6 +317,7 @@ export function buildLatePerformanceRowSetSql(opts: {
       ${opts.contractsQtyMoveCte},
       ${opts.contractsStoAggCte},
       ${sqlActiveSeaStoSiblingContractIdsCte('active_sea_sto_sibling_ids', 'contract_scope')},
+      ${buildVesselStosFinishedCte('vessel_sto_done', 'SELECT contract_id FROM contract_scope').trim()},
       base AS MATERIALIZED (
         SELECT
           c.contract_id,
@@ -350,6 +351,8 @@ ${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS 
             'c.contract_id',
             '(array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1]',
           )} AS all_stos_discharged,
+          -- every vessel STO has a finished shipment: finishes the PO on its own (Ryan 2026-10-16; same as Shipping Performance)
+          BOOL_OR(vsd.vessel_stos_finished) AS vessel_stos_finished,
           MAX(${sqlIncotermQuantityDeliveryCase(
             contractEffectiveIncotermExpr('c'),
             'qm.quantity_delivery_trucking',
@@ -380,6 +383,7 @@ ${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS 
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
+        LEFT JOIN vessel_sto_done vsd ON vsd.contract_id = c.contract_id
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
         ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         INNER JOIN canonical_contract cc ON cc.contract_id = c.contract_id
@@ -664,7 +668,8 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
    * same shape the live path builds with its projection.
    */
   const snapshotBaseSql = `
-      WITH base AS (
+      WITH ${buildVesselStosFinishedCte('vessel_sto_done', `SELECT contract_id FROM ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE}`).trim()},
+      base AS (
         /*
          * sto_count comes from the STO aggregate rather than the snapshot, which does not store it.
          * It decides whether an ATC may finish the PO: on a multi-STO PO the ATC is a MAX across
@@ -672,9 +677,10 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
          * contract_sto_agg_snapshot is one small row per contract, so this is a cheap join and
          * needs no snapshot rebuild.
          */
-        SELECT cps.*, sa.sto_count
+        SELECT cps.*, sa.sto_count, vsd.vessel_stos_finished
         FROM ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE} cps
         LEFT JOIN contract_sto_agg_snapshot sa ON sa.contract_number = cps.contract_id
+        LEFT JOIN vessel_sto_done vsd ON vsd.contract_id = cps.contract_id
         WHERE 1=1
         ${snapshotDateWhere}${snapshotPresenceWhere}
       )
@@ -705,6 +711,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           atcExpr: 'base.last_ata_vessel_complete_discharge',
           stoCountExpr: 'base.sto_count',
           everyStoDischargedExpr: 'base.all_stos_discharged',
+          vesselStosFinishedExpr: 'base.vessel_stos_finished',
         }),
       )}`;
     } else if (sqlStatusNorm === 'Close' || sqlStatusNorm === 'CLOSE') {
@@ -716,6 +723,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           atcExpr: 'base.last_ata_vessel_complete_discharge',
           stoCountExpr: 'base.sto_count',
           everyStoDischargedExpr: 'base.all_stos_discharged',
+          vesselStosFinishedExpr: 'base.vessel_stos_finished',
         }),
       )}`;
     } else {
