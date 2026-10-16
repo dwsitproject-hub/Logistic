@@ -5,6 +5,33 @@ import {
   buildShippingPerfViewTableQtySelectSql,
 } from './shippingPerformanceStoMetricsSql';
 
+describe('sto_shipment_klip joins the STO status after the key is worked out', () => {
+  it('computes the key in a fenced subquery and joins perf_sto_status on (contract, key) outside it', () => {
+    const sql = buildShippingPerfStoMetricsCte();
+    const cte = sql.slice(sql.indexOf('sto_shipment_klip AS ('), sql.indexOf('sto_metrics AS ('));
+    const fence = cte.indexOf('OFFSET 0\n            ) ks');
+    const join = cte.indexOf('LEFT JOIN perf_sto_status pss_raw');
+    // inline, the join needed shipments AND contracts and was planned as shipments x perf_sto_status, filtered afterwards (2.4 M pairs)
+    expect(fence).toBeGreaterThan(-1);
+    expect(join).toBeGreaterThan(fence);
+    expect(cte).toContain('ON pss_raw.contract_uuid = ks.contract_uuid');
+    expect(cte).toContain('AND pss_raw.sto_key = TRIM((ks.sto_key)::text)');
+  });
+});
+
+describe('perf_sto_status filters by the page keys after the key is worked out', () => {
+  it('computes the key in a fenced subquery, filters it against perf_sto_keys, and only then runs the status expression', () => {
+    const sql = buildShippingPerfStoMetricsCte();
+    const cte = sql.slice(sql.indexOf('perf_sto_status AS MATERIALIZED ('), sql.indexOf('all_sto_contract_links AS ('));
+    const fence = cte.indexOf('OFFSET 0\n          ) k0');
+    const filter = cte.indexOf('WHERE k0.sto_key IN (SELECT k.sto_key FROM perf_sto_keys k)');
+    // as one WHERE on the key of s and c, the planner paired every shipment with every page key (2.67 M pairs to keep 2,402)
+    expect(fence).toBeGreaterThan(-1);
+    expect(filter).toBeGreaterThan(fence);
+    expect(cte).not.toMatch(/TRIM\(\(.*\)::text\) IN \(SELECT k\.sto_key FROM perf_sto_keys k\)/s);
+  });
+});
+
 describe('shippingPerformanceStoMetricsSql', () => {
   it('computes actual outstanding from Contract Qty with Open/Close KLIP overlay', () => {
     const sql = buildShippingPerfStoMetricsCte();

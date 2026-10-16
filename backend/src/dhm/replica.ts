@@ -83,98 +83,49 @@ async function findLocalVesselId(record: DhmRecord): Promise<string | null> {
 export async function applyDhmVesselRecord(
   record: DhmRecord,
   options: DhmApplyOptions = {},
-): Promise<{ id: string; created: boolean; skipped?: 'stale' }> {
+): Promise<{ id: string; created: boolean; skipped?: 'stale' | 'deleted' | 'unlinked' }> {
   // A vessel DHM delivered at an older version than the replica holds is left alone (see versionGuard.ts).
   if (!(await shouldApplyDhmRecord('vessel', record, options))) {
     const known = await query(`SELECT id FROM master_vessels WHERE dhm_id = $1::uuid LIMIT 1`, [record.id]);
     return { id: String(known.rows[0]?.id ?? ''), created: false, skipped: 'stale' };
   }
-  const mapped = fromDhmVesselData(record.data);
-  const existingId = await findLocalVesselId(record);
-  const vesselName = uppercaseText(mapped.vessel_name) || 'UNKNOWN VESSEL';
-  const norm = normalizeVesselName(vesselName);
-  const sapCode = uppercaseText(mapped.vessel_code_sap);
-  const dhmCode = mapped.dhm_code || null;
-  const vesselCode = sapCode || dhmCode || `VSL-UNKNOWN`;
-  const codeStatus = sapCode ? 'OFFICIAL' : 'OFFICIAL';
-
-  if (existingId) {
-    await query(
+  // A DHM tombstone only marks the link. KLIP is the vessel source (Ryan, 2026-10-15): when DHM soft-deleted its whole vessel
+  // catalog, the pull handed back every record with its OLD name, which renamed vessels the vessel sheet had just loaded
+  // (MED PACIFIC -> BG. PACIFIC STAR 3) and would re-insert archived ones. So a tombstone finds its row by dhm_id only (a
+  // match by code or name could hit another vessel), never writes the name or attributes, and never creates a row.
+  if (record.isDeleted) {
+    const marked = await query(
       `UPDATE master_vessels
-       SET vessel_name = COALESCE($2, vessel_name),
-           normalized_vessel_name = COALESCE($3, normalized_vessel_name),
-           vessel_capacity_mt = COALESCE($4, vessel_capacity_mt),
-           heating = COALESCE($5, heating),
-           vessel_type = COALESCE($6, vessel_type),
-           lambung_type = COALESCE($7, lambung_type),
-           terms = COALESCE($8, terms),
-           dhm_id = $9::uuid,
-           dhm_code = $10,
-           dhm_version = $11,
-           dhm_updated_at = $12::timestamptz,
-           dhm_is_deleted = $13,
-           dhm_payload = $14::jsonb,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1`,
-      [
-        existingId,
-        vesselName,
-        norm,
-        mapped.vessel_capacity_mt,
-        mapped.heating,
-        mapped.vessel_type,
-        mapped.lambung_type,
-        mapped.terms,
-        record.id,
-        dhmCode,
-        record.version,
-        record.updatedAt || null,
-        record.isDeleted,
-        JSON.stringify(record.data ?? {}),
-      ],
+          SET dhm_is_deleted = true, dhm_version = COALESCE($2, dhm_version), dhm_updated_at = COALESCE($3::timestamptz, dhm_updated_at),
+              updated_at = CURRENT_TIMESTAMP
+        WHERE dhm_id = $1::uuid
+        RETURNING id`,
+      [record.id, record.version ?? null, record.updatedAt || null],
     );
-    return { id: existingId, created: false };
+    return { id: String(marked.rows[0]?.id ?? ''), created: false, skipped: 'deleted' };
   }
-
-  const inserted = await query(
-    `INSERT INTO master_vessels (
-       vessel_code, vessel_name, normalized_vessel_name, vessel_capacity_mt,
-       heating, vessel_type, lambung_type, terms, code_status,
-       dhm_id, dhm_code, dhm_version, dhm_updated_at, dhm_is_deleted, dhm_payload
-     ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9,
-       $10::uuid, $11, $12, $13::timestamptz, $14, $15::jsonb
-     )
-     ON CONFLICT (vessel_code) DO UPDATE SET
-       vessel_name = COALESCE(EXCLUDED.vessel_name, master_vessels.vessel_name),
-       normalized_vessel_name = COALESCE(EXCLUDED.normalized_vessel_name, master_vessels.normalized_vessel_name),
-       dhm_id = EXCLUDED.dhm_id,
-       dhm_code = EXCLUDED.dhm_code,
-       dhm_version = EXCLUDED.dhm_version,
-       dhm_updated_at = EXCLUDED.dhm_updated_at,
-       dhm_is_deleted = EXCLUDED.dhm_is_deleted,
-       dhm_payload = EXCLUDED.dhm_payload,
-       updated_at = CURRENT_TIMESTAMP
-     RETURNING id`,
-    [
-      vesselCode,
-      vesselName,
-      norm,
-      mapped.vessel_capacity_mt,
-      mapped.heating,
-      mapped.vessel_type,
-      mapped.lambung_type,
-      mapped.terms,
-      codeStatus,
-      record.id,
-      dhmCode,
-      record.version,
-      record.updatedAt || null,
-      record.isDeleted,
-      JSON.stringify(record.data ?? {}),
-    ],
+  // A live record only refreshes the link too (Ryan, 2026-10-16). The pull used to match a DHM record by SAP code or name and
+  // overwrite that KLIP vessel with DHM's name and attributes, or insert DHM's copy: after DHM renumbered its codes it shifted
+  // 61 SIT names alphabetically (BG. ANAK LAUT 289 became BG. AGENA) and inserted 79 duplicates of sheet vessels in two minutes.
+  // KLIP pushes every vessel and the push writes the link, so the pull touches only the row it knows by dhm_id (or dhm_code),
+  // writes only the dhm_* fields, and leaves a vessel only DHM has out of KLIP.
+  const dhmCode = fromDhmVesselData(record.data).dhm_code || null;
+  const linked = await query(
+    `UPDATE master_vessels mv
+        SET dhm_id = $1::uuid,
+            dhm_code = CASE WHEN $2::text IS NULL OR EXISTS (SELECT 1 FROM master_vessels o WHERE o.dhm_code = $2 AND o.id <> mv.id)
+                            THEN mv.dhm_code ELSE $2 END,
+            dhm_version = $3, dhm_updated_at = $4::timestamptz, dhm_is_deleted = false, dhm_payload = $5::jsonb,
+            updated_at = CURRENT_TIMESTAMP
+      WHERE mv.id = (SELECT id FROM master_vessels
+                      WHERE dhm_id = $1::uuid OR ($2::text IS NOT NULL AND dhm_code = $2)
+                      ORDER BY (dhm_id = $1::uuid) DESC NULLS LAST LIMIT 1)
+        AND NOT EXISTS (SELECT 1 FROM master_vessels o WHERE o.dhm_id = $1::uuid AND o.id <> mv.id)
+      RETURNING mv.id`,
+    [record.id, dhmCode, record.version, record.updatedAt || null, JSON.stringify(record.data ?? {})],
   );
-  return { id: String(inserted.rows[0].id), created: true };
+  if (!linked.rows[0]?.id) return { id: '', created: false, skipped: 'unlinked' };
+  return { id: String(linked.rows[0].id), created: false };
 }
 
 export async function markDhmWebhookDelivery(deliveryId: string): Promise<boolean> {

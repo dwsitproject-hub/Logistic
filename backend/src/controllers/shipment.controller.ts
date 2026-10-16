@@ -250,7 +250,7 @@ import {
   buildStoLinkedContractNumbersSql,
   buildStoLinkedPoNumbersSql,
   buildStoLinkedSuppliersSql,
-  contractsOnStoSubquery,
+  contractIdOnStoSql,
 } from '../utils/stoLinkedContractSql';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
@@ -738,7 +738,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
                    SELECT NULLIF(TRIM(COALESCE(l2.contract_ext_no_raw, '')), '') AS v
                    FROM contracts cc
                    LEFT JOIN latest_spd_contract l2 ON l2.contract_number = cc.contract_id
-                   WHERE cc.contract_id IN (${contractsOnStoSubquery(groupedStoFromRow)})
+                   WHERE ${contractIdOnStoSql('cc.contract_id', groupedStoFromRow)}
                  ) ext
                  WHERE v IS NOT NULL AND v != ''),
                 g.contract_ext_no_from_join

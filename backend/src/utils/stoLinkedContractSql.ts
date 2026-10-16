@@ -38,6 +38,14 @@ export function buildGroupedStoTrimExpr(stoKeySql: string): string {
  *
  * B2B children are then mapped to their origin contract (Reff PO -> origin.po_number) instead of
  * dropped, exactly as before. `OFFSET 0` is an optimizer fence kept from the original.
+ *
+ * `cc.id = ANY(ARRAY(<union>))`, not `cc.id IN (<union>)`: this subquery runs once per list row, and
+ * the IN form was planned as a Hash Join that hashed the whole contracts table (18,751 rows) on every
+ * row to keep about two. ARRAY() evaluates the small union first and the ids are then read by primary
+ * key. Same rows: IN and = ANY agree for every element, and a NULL id matches nothing in both. On the
+ * Shipments summary statement of the dev copy (996 rows, this subquery four times per row): 33.3 s ->
+ * 4.6 s, byte-identical result. Callers that test `contract_id` against this subquery use the same
+ * form (contractIdOnStoSql).
  */
 export function contractsOnStoSubquery(groupedStoExpr: string): string {
   return `
@@ -45,7 +53,7 @@ export function contractsOnStoSubquery(groupedStoExpr: string): string {
     FROM (
       SELECT cc.id, cc.contract_id, cc.contract_type
       FROM contracts cc
-      WHERE cc.id IN (
+      WHERE cc.id = ANY(ARRAY(
           SELECT cs_k.contract_id
           FROM contract_stos cs_k
           WHERE TRIM(cs_k.sto_number::text) = ${groupedStoExpr}
@@ -77,7 +85,7 @@ export function contractsOnStoSubquery(groupedStoExpr: string): string {
           FROM shipments sh_id
           WHERE COALESCE(sh_id.status, '') <> 'CANCELLED'
             AND NULLIF(TRIM(sh_id.shipment_id::text), '') = ${groupedStoExpr}
-      )
+      ))
         AND cc.contract_id IS NOT NULL
         AND TRIM(cc.contract_id) != ''
       OFFSET 0
@@ -103,6 +111,14 @@ export function contractsOnStoSubquery(groupedStoExpr: string): string {
     WHERE ch_spd.flag IS DISTINCT FROM 'B2B'
        OR ch_spd.reff IS NULL
        OR b2b_o.contract_id IS NOT NULL`;
+}
+
+/**
+ * `<contractIdExpr>` is one of the contracts on the STO (contractsOnStoSubquery), as `= ANY(ARRAY(...))`: the IN form hashed the whole
+ * contracts table once per row, the array form evaluates the few contract numbers first and reads them by index.
+ */
+export function contractIdOnStoSql(contractIdExpr: string, groupedStoExpr: string): string {
+  return `${contractIdExpr} = ANY(ARRAY(${contractsOnStoSubquery(groupedStoExpr)}))`;
 }
 
 export function buildStoLinkedContractNumbersSql(
@@ -139,7 +155,7 @@ export function buildStoLinkedPoNumbersSql(
             COALESCE(
               (SELECT STRING_AGG(DISTINCT cc.po_number, ', ' ORDER BY cc.po_number)
                FROM contracts cc
-               WHERE cc.contract_id IN (${contractsOnStoSubquery(groupedStoExpr)})
+               WHERE ${contractIdOnStoSql('cc.contract_id', groupedStoExpr)}
                  AND cc.po_number IS NOT NULL AND TRIM(cc.po_number) != ''),
               ${elseBranch}
             )
@@ -180,7 +196,7 @@ export function buildStoLinkedSuppliersSql(
             COALESCE(
               (SELECT STRING_AGG(DISTINCT cc.supplier, ', ' ORDER BY cc.supplier)
                FROM contracts cc
-               WHERE cc.contract_id IN (${contractsOnStoSubquery(groupedStoExpr)})
+               WHERE ${contractIdOnStoSql('cc.contract_id', groupedStoExpr)}
                  AND cc.supplier IS NOT NULL AND TRIM(cc.supplier) != ''),
               ${elseBranch}
             )

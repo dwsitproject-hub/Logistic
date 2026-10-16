@@ -36,6 +36,26 @@ const normalizeTerms = (value: unknown): string | null => {
 const normalizeHeating = (value: unknown): boolean =>
   typeof value === 'boolean' ? value : value === 'Yes' || value === 'YES';
 
+/**
+ * Draft, LOA, Hull Type and Registration Year (the vessel sheet's columns L, M, N, O; migration 240), as [draft, loa, hullType, year], each
+ * NULL when the body does not carry it so an update leaves it alone. `vessel_hull_type` on purpose: the body's `hull_type` means Vessel Type.
+ */
+export function sheetDimensionValues(body: Record<string, unknown>): [number | null, string | null, string | null, number | null] {
+  const num = (v: unknown): number | null => {
+    if (v == null || String(v).trim() === '') return null;
+    const n = Number(String(v).trim().replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  };
+  const year = num(body.vessel_registration_year);
+  const loa = num(body.vessel_length_overall);
+  return [
+    num(body.vessel_draft),
+    loa != null ? String(loa) : null,
+    uppercaseText(body.vessel_hull_type),
+    year != null && Number.isInteger(year) && year >= 1900 && year <= 2100 ? year : null,
+  ];
+}
+
 function pickVesselType(body: Record<string, unknown>): string | null {
   return uppercaseText(body.vessel_type ?? body.hull_type);
 }
@@ -73,6 +93,7 @@ export const listMasterVessels = async (req: AuthRequest, res: Response): Promis
       SELECT master_vessels.id, vessel_code, vessel_code_klip, vessel_name, vessel_capacity_mt, vessel_owner,
              vessel_owner_group, vessel_type, sap_vendor_code, code_status, year_of_creation,
              heating, lambung_type, terms, dhm_id, dhm_code,
+             vessel_draft, vessel_length_overall, vessel_hull_type, vessel_registration_year,
              master_vessels.created_at, master_vessels.updated_at,
              ${MASTER_VESSEL_SAP_CODES_SQL} AS vessel_codes_sap,
              ${MASTER_VESSEL_KLIP_TRANSACTION_SQL} AS klip_transaction,
@@ -219,6 +240,19 @@ export const createMasterVessel = async (req: AuthRequest, res: Response): Promi
     if (resolved.created) {
       await query(`UPDATE master_vessels SET klip_origin = TRUE WHERE id = $1`, [resolved.master_vessel_id]);
     }
+    // the sheet's columns resolveMasterVessel does not know (migration 240): written when the form sends them
+    const extra = sheetDimensionValues(body);
+    if (extra.some((v) => v !== null)) {
+      await query(
+        `UPDATE master_vessels SET
+           vessel_draft = COALESCE($2, vessel_draft),
+           vessel_length_overall = COALESCE($3, vessel_length_overall),
+           vessel_hull_type = COALESCE($4, vessel_hull_type),
+           vessel_registration_year = COALESCE($5, vessel_registration_year)
+         WHERE id = $1`,
+        [resolved.master_vessel_id, ...extra],
+      );
+    }
 
     const fetchResult = await query(`SELECT * FROM master_vessels WHERE id = $1`, [
       resolved.master_vessel_id,
@@ -274,6 +308,10 @@ export const updateMasterVessel = async (req: AuthRequest, res: Response): Promi
         heating = COALESCE($10, heating),
         lambung_type = COALESCE($11, lambung_type),
         terms = COALESCE($12, terms),
+        vessel_draft = COALESCE($14, vessel_draft),
+        vessel_length_overall = COALESCE($15, vessel_length_overall),
+        vessel_hull_type = COALESCE($16, vessel_hull_type),
+        vessel_registration_year = COALESCE($17, vessel_registration_year),
         code_status = CASE
           WHEN $1 IS NOT NULL AND upper(trim($1)) NOT LIKE 'TMP-%' THEN 'OFFICIAL'
           ELSE code_status
@@ -299,6 +337,7 @@ export const updateMasterVessel = async (req: AuthRequest, res: Response): Promi
       body.lambung_type != null ? uppercaseText(body.lambung_type) : null,
       body.terms !== undefined ? normalizeTerms(body.terms) : null,
       id,
+      ...sheetDimensionValues(body),
     ]);
 
     if (result.rows.length === 0) {

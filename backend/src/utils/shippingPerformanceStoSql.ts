@@ -3,7 +3,7 @@
  */
 
 import { sqlSumDailyDeliverablesKg } from './dailyDeliverablesSql';
-import { buildStoLinkedPoNumbersSql, contractsOnStoSubquery } from './stoLinkedContractSql';
+import { buildStoLinkedPoNumbersSql, contractIdOnStoSql } from './stoLinkedContractSql';
 
 /** True when users planned via Add Shipment / Edit Shipment (operation, calendar, or manual id). */
 export function shippingPerfHasKlipPlanningSql(shipmentAlias = 's'): string {
@@ -189,7 +189,7 @@ export function sqlShippingPerfStoLinkedContractQty(stoKeyExpr: string): string 
   return `(
     SELECT COALESCE(SUM(cc.quantity_ordered::numeric), 0)
     FROM contracts cc
-    WHERE cc.contract_id IN (${contractsOnStoSubquery(stoKeyExpr)})
+    WHERE ${contractIdOnStoSql('cc.contract_id', stoKeyExpr)}
   )`;
 }
 
@@ -204,7 +204,7 @@ export function sqlShippingPerfStoLevelStoQtyKg(stoKeyExpr: string): string {
     FROM contracts cc
     LEFT JOIN sap_processed_data spd ON TRIM(spd.contract_number) = TRIM(cc.contract_id)
       AND ${SPD_STO_MATCH_EXPR(stoKeyExpr)}
-    WHERE cc.contract_id IN (${contractsOnStoSubquery(stoKeyExpr)})
+    WHERE ${contractIdOnStoSql('cc.contract_id', stoKeyExpr)}
   )`;
 }
 
@@ -222,7 +222,7 @@ export function sqlShippingPerfStoLevelFulfilledKg(stoKeyExpr: string): string {
     FROM contracts cc
     INNER JOIN sap_processed_data spd ON TRIM(spd.contract_number) = TRIM(cc.contract_id)
       AND ${SPD_STO_MATCH_EXPR(stoKeyExpr)}
-    WHERE cc.contract_id IN (${contractsOnStoSubquery(stoKeyExpr)})
+    WHERE ${contractIdOnStoSql('cc.contract_id', stoKeyExpr)}
   )`;
 }
 

@@ -117,6 +117,12 @@ export const SHIPMENT_LIST_PERF_STO_KEYS_CTE = `
  */
 function buildPerfStoStatusCte(): string {
   const key = shippingPerfStoMetricsKeyExpr('c', 's');
+  /*
+   * The key is worked out per shipment FIRST (keyed, fenced by OFFSET 0), filtered to the page's keys, and only the rows that pass go on to
+   * the status expression. Written as one WHERE, `<key of s and c> IN (perf_sto_keys)` was planned as shipments x perf_sto_keys and filtered
+   * after the join to contracts: 2,665,390 pairs to keep 2,402, 4.4 s of the Shipping Performance statement on the dev copy. The status is
+   * read off the same (contract, key) as before - it depends on nothing else - so the rows are the same.
+   */
   return `
       perf_sto_status AS MATERIALIZED (
         SELECT DISTINCT ON (x.contract_uuid, x.sto_key)
@@ -126,12 +132,18 @@ function buildPerfStoStatusCte(): string {
         FROM (
           SELECT
             c.id AS contract_uuid,
-            TRIM((${key})::text) AS sto_key,
+            k0.sto_key,
             (${sqlContractImportStatusForStoExpr('c', key)}) AS import_status
-          FROM shipments s
-          INNER JOIN contracts c ON c.id = s.contract_id
-          WHERE NULLIF(TRIM((${key})::text), '') IS NOT NULL
-            AND TRIM((${key})::text) IN (SELECT k.sto_key FROM perf_sto_keys k)
+          FROM (
+            SELECT s.id AS shipment_uuid, c.id AS contract_uuid, TRIM((${key})::text) AS sto_key
+            FROM shipments s
+            INNER JOIN contracts c ON c.id = s.contract_id
+            WHERE NULLIF(TRIM((${key})::text), '') IS NOT NULL
+            OFFSET 0
+          ) k0
+          INNER JOIN shipments s ON s.id = k0.shipment_uuid
+          INNER JOIN contracts c ON c.id = k0.contract_uuid
+          WHERE k0.sto_key IN (SELECT k.sto_key FROM perf_sto_keys k)
         ) x
       )`;
 }
@@ -298,19 +310,38 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
             raw.klip_recv,
             raw.is_closed
           FROM (
+            /*
+             * The STO key is worked out per shipment FIRST (fenced by OFFSET 0), and only then joined to perf_sto_status on (contract, key).
+             * Joined inline (perfStoStatusJoinSql), the condition needs both shipments and contracts, and the planner paired every shipment with
+             * every perf_sto_status row and then filtered: 2,426,020 pairs to keep 2,218, ~10 s of the Shipping Performance statement on the
+             * dev copy. Same condition as perfStoStatusJoinSql (contract_uuid = c.id AND sto_key = TRIM(key::text)), so the same rows.
+             */
             SELECT
-              ${shippingPerfStoMetricsKeyExpr('c', 's')} AS sto_key,
-              TRIM(c.contract_id) AS contract_id,
-              COALESCE(s.quantity_delivered_klip, 0)::numeric AS klip_del,
-              COALESCE(s.actual_vessel_qty_receive, 0)::numeric AS klip_recv,
+              ks.sto_key,
+              ks.contract_id,
+              ks.klip_del,
+              ks.klip_recv,
               (${perfStoIsClosedFromJoin('pss_raw')}) AS is_closed,
-              s.updated_at,
-              s.created_at
-            FROM shipments s
-            INNER JOIN contracts c ON c.id = s.contract_id
-            ${perfStoStatusJoinSql('pss_raw')}
-            WHERE COALESCE(s.status, '') <> 'CANCELLED'
-              AND ${shippingPerfStoMetricsKeyExpr('c', 's')} IS NOT NULL
+              ks.updated_at,
+              ks.created_at
+            FROM (
+              SELECT
+                ${shippingPerfStoMetricsKeyExpr('c', 's')} AS sto_key,
+                c.id AS contract_uuid,
+                TRIM(c.contract_id) AS contract_id,
+                COALESCE(s.quantity_delivered_klip, 0)::numeric AS klip_del,
+                COALESCE(s.actual_vessel_qty_receive, 0)::numeric AS klip_recv,
+                s.updated_at,
+                s.created_at
+              FROM shipments s
+              INNER JOIN contracts c ON c.id = s.contract_id
+              WHERE COALESCE(s.status, '') <> 'CANCELLED'
+                AND ${shippingPerfStoMetricsKeyExpr('c', 's')} IS NOT NULL
+              OFFSET 0
+            ) ks
+            LEFT JOIN perf_sto_status pss_raw
+              ON pss_raw.contract_uuid = ks.contract_uuid
+             AND pss_raw.sto_key = TRIM((ks.sto_key)::text)
           ) raw
           INNER JOIN perf_sto_keys psk ON psk.sto_key = raw.sto_key
           ORDER BY raw.sto_key, raw.contract_id, raw.updated_at DESC NULLS LAST, raw.created_at DESC NULLS LAST
