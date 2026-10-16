@@ -14,6 +14,11 @@
  * STO-scoped SAP kilograms View Shipment shows as Delivered Qty (SAP) and Receive Qty (SAP), summed across those POs.
  * SFAL and SFBD are the opened shipment's fields (the primary row of the STO group), including when that row is null.
  * A sibling PO that has a value must not fill the blank. The modal stores kilograms.
+ *
+ * The vessel is drawn the way the Shipments page draws it (sqlShipmentListDisplayVesselName): the Master Vessel the opened shipment resolves to
+ * (by its code or the SAP code, the master id, or the normalised name), else, GR Close: the SAP name then KLIP's; not closed: KLIP's then SAP's.
+ * The raw shipments.vessel_name of the opened row used to be drawn, so one vessel appeared under several spellings in the drilldown and as
+ * several rows of By Transporter ("Mel 02" / "BG. MEL 02"), and a row with a blank KLIP name stayed blank although SAP names the vessel.
  */
 
 import {
@@ -34,12 +39,34 @@ import {
   sqlShipmentListB2bOriginContractJoins,
   sqlShipmentListExecutionCsStoJoin,
 } from './shipmentB2bOriginSql';
-import { buildShipmentPageSeaRowScopeSql, shipmentListSeaStoKeyExpr } from './shipmentStoTypeSql';
+import {
+  buildShipmentPageSeaRowScopeSql,
+  sapStoNumberKeyExpr,
+  shipmentListSeaStoKeyExpr,
+} from './shipmentStoTypeSql';
+import { sqlMasterVesselLateralJoin } from './masterVesselDisplaySql';
+import { sqlSapVesselNameFromSpdJsonb, sqlShipmentListDisplayVesselName } from './sapVesselFields';
 import { SHIPMENT_ATA_OVERRIDES_JOIN, sqlJpsAtaWhileOpen } from './shipmentAtaOverrideSql';
 import { shipmentListContractOsWithinBandExpr } from './shipmentListFilters';
 import { contractsOnStoSubquery } from './stoLinkedContractSql';
 
 const LIST_STO_KEY_SQL = shipmentListSeaStoKeyExpr('c', 'l', 's');
+
+/** The SAP vessel code of a sap_processed_data row (the same fields SAP_VESSEL_CODE_FROM_SK_SQL reads, on `spd`). */
+const SAP_VESSEL_CODE_FROM_SPD_SQL = `NULLIF(TRIM(COALESCE(
+  spd.data->'shipment'->>'vessel_code',
+  spd.data->'vessel'->>'vessel_code',
+  spd.data->'raw'->>'Vessel Code',
+  spd.data->'raw'->>'vessel code'
+)), '')`;
+
+/** The vessel name as the Shipments list draws it; needs the `mv`, `sv` and `sp` joins of vessel_rows. */
+const VESSEL_DISPLAY_NAME_SQL = sqlShipmentListDisplayVesselName(
+  'mv.vessel_name_master',
+  'sv.vessel_name_sap',
+  'COALESCE(sp.vessel_name, g.vessel_name)',
+  'g.is_gr_closed',
+);
 
 /** SFAL/SFBD of the same row View Shipment opens. Null stays null. */
 function sqlOpenedShipmentQty(fieldExpr: string): string {
@@ -210,6 +237,25 @@ export function buildOilLossVesselCompletedCtes(): string {
         FROM vessel_contract_qty
         GROUP BY sto_key
       ),
+      vessel_sap_vessel AS MATERIALIZED (
+        -- MATERIALIZED on purpose: referenced once, so it was folded into the vessel_rows join, and the planner (which sees vessel_status as 1 row) then ran
+        -- it as the inner side of a nested loop - the SAP lookup repeated for every vessel row, about 70 s more on a rebuild of the dev copy.
+        -- the vessel SAP names on the STO, the fallback of the display name below: ONE SAP row, picked as the Shipments list does
+        -- (sap_vessel_pick): a row naming both vessel and code first, then the newest - never a name of one row beside a code of another
+        SELECT DISTINCT ON (g.sto_key)
+          g.sto_key,
+          ${sqlSapVesselNameFromSpdJsonb('spd.data')} AS vessel_name_sap,
+          ${SAP_VESSEL_CODE_FROM_SPD_SQL} AS vessel_code_sap
+        FROM vessel_status g
+        JOIN sap_processed_data spd ON ${sapStoNumberKeyExpr('spd')} = TRIM(g.sto_key::text)
+        ORDER BY
+          g.sto_key,
+          (CASE
+            WHEN ${sqlSapVesselNameFromSpdJsonb('spd.data')} IS NOT NULL
+             AND ${SAP_VESSEL_CODE_FROM_SPD_SQL} IS NOT NULL
+            THEN 0 ELSE 1 END),
+          spd.created_at DESC NULLS LAST
+      ),
       vessel_rows AS (
         SELECT
           g.id,
@@ -225,13 +271,13 @@ export function buildOilLossVesselCompletedCtes(): string {
           COALESCE(g.product, '') AS product,
           COALESCE(g.group_name, '') AS group_name,
           g.plant_site,
-          COALESCE(g.vessel_name, '') AS vessel_name,
+          COALESCE(${VESSEL_DISPLAY_NAME_SQL}, '') AS vessel_name,
           g.contract_date,
           g.contract_date AS operation_date,
           COALESCE(g.incoterm, '') AS incoterm,
           g.plant_site AS group_plant,
           vq.quantity_contract AS quantity_contract,
-          COALESCE(g.vessel_name, '') AS transporter,
+          COALESCE(${VESSEL_DISPLAY_NAME_SQL}, '') AS transporter,
           COALESCE(g.loading_location, '') AS loading_location,
           COALESCE(g.unloading_location, '') AS unloading_location,
           'COMPLETED'::text AS status,
@@ -258,5 +304,13 @@ export function buildOilLossVesselCompletedCtes(): string {
           END AS gain_loss_percentage
         FROM vessel_status g
         LEFT JOIN vessel_qty vq ON vq.sto_key = g.sto_key
+        LEFT JOIN shipments sp ON sp.id = g.id
+        LEFT JOIN vessel_sap_vessel sv ON sv.sto_key = g.sto_key
+        ${sqlMasterVesselLateralJoin(
+          'COALESCE(sp.vessel_code, sv.vessel_code_sap)',
+          'COALESCE(sp.vessel_name, sv.vessel_name_sap)',
+          'mv',
+          'sp.master_vessel_id',
+        )}
       )`;
 }

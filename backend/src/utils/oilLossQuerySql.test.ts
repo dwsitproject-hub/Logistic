@@ -8,6 +8,7 @@ import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
 import { contractsOnStoSubquery } from './stoLinkedContractSql';
 import { shipmentEffectiveStatusExpr, shipmentListContractOsWithinBandExpr } from './shipmentListFilters';
 import { deriveShipmentStatus } from './shipmentStatus';
+import { sqlShipmentListDisplayVesselName } from './sapVesselFields';
 import { shipmentListSeaStoKeyExpr } from './shipmentStoTypeSql';
 import {
   SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC,
@@ -86,6 +87,25 @@ describe('vessel completed population', () => {
     expect(sql).not.toContain('spd_fig');
     expect(sql).not.toContain('actual_vessel_qty_receive');
     expect(sql).not.toContain('vlp_load_first');
+  });
+
+  it('draws the vessel the way the Shipments list does: Master Vessel, else the SAP row picked per STO, else KLIP (never the raw name alone)', () => {
+    const sql = buildOilLossVesselCompletedCtes();
+    const flat = collapseSql(sql);
+    const display = sqlShipmentListDisplayVesselName(
+      'mv.vessel_name_master',
+      'sv.vessel_name_sap',
+      'COALESCE(sp.vessel_name, g.vessel_name)',
+      'g.is_gr_closed',
+    );
+    // the vessel and its transporter (the same thing for a vessel row) share one expression
+    expect(flat.split(collapseSql(display)).length - 1).toBe(2);
+    expect(flat).toContain('vessel_sap_vessel');
+    expect(flat).toContain('SELECT DISTINCT ON (g.sto_key)');
+    expect(flat).toContain('LEFT JOIN vessel_sap_vessel sv ON sv.sto_key = g.sto_key');
+    expect(flat).toContain('sp.master_vessel_id');
+    expect(flat).not.toContain("COALESCE(g.vessel_name, '') AS vessel_name");
+    expect(flat).not.toContain("COALESCE(g.vessel_name, '') AS transporter");
   });
 
   it('leaves the loss filter on the trucking branch only', async () => {
