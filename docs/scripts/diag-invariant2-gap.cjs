@@ -191,6 +191,22 @@ const contractsOf = (row) =>
   await describe(classA, 'CLASS A - what the contracts CP counts and SP has no row for ARE:');
   await describe(classB, 'CLASS B - what the contracts SP lists only as Completed / Cancelled ARE:');
 
+  // --explain: for A / B / D, what each page's done-rule saw. CP: sqlContractEffectivelyDoneExpr's inputs on the CP row (OS in the zero band,
+  // or an ATC that finishes the PO - with several STOs only when every STO discharged). SP: every row the contract appears on.
+  if (process.argv.includes('--explain')) {
+    const pick = (row, re) => Object.fromEntries(Object.entries(row || {}).filter(([k, v]) => re.test(k) && v !== null && v !== undefined && v !== ''));
+    const cpKeys = /^(contract_id|po_number|status|import_status|outstanding_quantity|last_ata_vessel_complete_discharge|sto_count|all_stos_discharged|incoterm|quantity_ordered|quantity_delivery|quantity_receive)$/;
+    const spKeys = /^(sto|sto_number|sto_key|status|contract_number|po_number|vessel_name|outstanding|ata_discharge_complete|ata_|atc|is_unplanned_backlog|po_sto_count|incoterm)/;
+    const cpAll = new Map((await loadLatePerformanceRows(cpFilters)).map((r) => [String(r.contract_id), r]));
+    for (const [title, arr] of [['A', classA], ['B', classB], ['D', classD]]) {
+      for (const x of arr) {
+        console.log('\n--- ' + title + ' ' + x.c + '  ' + mt(x.kg) + ' MT');
+        console.log('  CP: ' + JSON.stringify(pick(cpAll.get(x.c), cpKeys)));
+        spRows.filter((r) => contractsOf(r).includes(x.c)).forEach((r) => console.log('  SP: ' + JSON.stringify(pick(r, spKeys))));
+      }
+    }
+  }
+
   if (classC.length > 0) {
     console.log('');
     console.log('CLASS C - largest differences on contracts both pages count On Going (SP - CP):');
