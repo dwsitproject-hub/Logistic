@@ -85,7 +85,8 @@ export function sqlContractEveryStoDischargedExpr(
  * The sto_count guard above counts every STO SAP lists, trucking (T) STOs included, which never get a vessel ATC: PS23 POs
  * 1014003263/74/79/88 (one vessel STO 1016011410, discharged 2026-10-15, plus 1-3 T STOs each) stayed Open on Contract Performance and
  * Completed on Shipping Performance - 4,000 MT of the 4,843 MT the two pages differed by on production. This looks at vessel STOs only:
- * - a vessel STO is a contract_stos line whose type is not T;
+ * - a vessel STO is a contract_stos line whose type is not T, or any line one of the PO's non-cancelled shipments sits on (production
+ *   2026-10-16: 1014003290's STO 1016011456 is typed T but carries BG. PRIMA SAMUDRA VIII, PLANNED - ignoring it closed the PO early);
  * - it is finished when a non-cancelled shipment on it has an ATC (override, own column, discharge leg) or status COMPLETED
  *   (1014003256: BG. ELANG JAWA 1 COMPLETED with no ATC recorded);
  * - a B2B origin's vessel STOs and shipments are its children's (origin 9194100035's cargo moved on child 1004031407's STO).
@@ -111,7 +112,16 @@ export function sqlContractVesselStosFinishedExpr(contractNumberExpr: string): s
         INNER JOIN contracts cvk ON cvk.id = cvs.contract_id
         WHERE cvk.contract_id IN ${executing}
           AND NULLIF(TRIM(cvs.sto_number::text), '') IS NOT NULL
-          AND UPPER(TRIM(COALESCE(cvs.sto_type, ''))) <> 'T'`;
+          AND (UPPER(TRIM(COALESCE(cvs.sto_type, ''))) <> 'T' OR EXISTS (
+                SELECT 1 FROM shipments s_on INNER JOIN contracts c_on ON c_on.id = s_on.contract_id
+                WHERE c_on.contract_id = cvk.contract_id
+                  AND UPPER(TRIM(COALESCE(s_on.status, ''))) <> 'CANCELLED'
+                  AND (
+                    TRIM(COALESCE(s_on.shipment_id::text, '')) = TRIM(cvs.sto_number::text)
+                    OR TRIM(COALESCE(s_on.shipment_id::text, '')) LIKE TRIM(cvs.sto_number::text) || '-%'
+                    OR TRIM(COALESCE(c_on.sto_number::text, '')) = TRIM(cvs.sto_number::text)
+                  )
+              ))`;
   return `(
     EXISTS (${vesselStos})
     AND NOT EXISTS (
@@ -178,7 +188,16 @@ export function buildVesselStosFinishedCte(name: string, scopeSubquery: string):
             INNER JOIN contracts cvk ON cvk.id = cvs.contract_id
             WHERE cvk.contract_id IN (${scopeSubquery})
               AND NULLIF(TRIM(cvs.sto_number::text), '') IS NOT NULL
-              AND UPPER(TRIM(COALESCE(cvs.sto_type, ''))) <> 'T'
+              AND (UPPER(TRIM(COALESCE(cvs.sto_type, ''))) <> 'T' OR EXISTS (
+                SELECT 1 FROM shipments s_on INNER JOIN contracts c_on ON c_on.id = s_on.contract_id
+                WHERE c_on.contract_id = cvk.contract_id
+                  AND UPPER(TRIM(COALESCE(s_on.status, ''))) <> 'CANCELLED'
+                  AND (
+                    TRIM(COALESCE(s_on.shipment_id::text, '')) = TRIM(cvs.sto_number::text)
+                    OR TRIM(COALESCE(s_on.shipment_id::text, '')) LIKE TRIM(cvs.sto_number::text) || '-%'
+                    OR TRIM(COALESCE(c_on.sto_number::text, '')) = TRIM(cvs.sto_number::text)
+                  )
+              ))
             UNION
             SELECT DISTINCT co.contract_id, ch.contract_id, TRIM(cvs.sto_number::text)
             FROM contracts co
@@ -191,7 +210,16 @@ export function buildVesselStosFinishedCte(name: string, scopeSubquery: string):
             WHERE co.contract_id IN (${scopeSubquery})
               AND NULLIF(TRIM(co.po_number::text), '') IS NOT NULL
               AND NULLIF(TRIM(cvs.sto_number::text), '') IS NOT NULL
-              AND UPPER(TRIM(COALESCE(cvs.sto_type, ''))) <> 'T'
+              AND (UPPER(TRIM(COALESCE(cvs.sto_type, ''))) <> 'T' OR EXISTS (
+                SELECT 1 FROM shipments s_on INNER JOIN contracts c_on ON c_on.id = s_on.contract_id
+                WHERE c_on.contract_id = ch.contract_id
+                  AND UPPER(TRIM(COALESCE(s_on.status, ''))) <> 'CANCELLED'
+                  AND (
+                    TRIM(COALESCE(s_on.shipment_id::text, '')) = TRIM(cvs.sto_number::text)
+                    OR TRIM(COALESCE(s_on.shipment_id::text, '')) LIKE TRIM(cvs.sto_number::text) || '-%'
+                    OR TRIM(COALESCE(c_on.sto_number::text, '')) = TRIM(cvs.sto_number::text)
+                  )
+              ))
           ) l0
         ) links
         GROUP BY links.display_contract_id
