@@ -521,6 +521,8 @@ export function isContractEffectivelyDone(row: Record<string, unknown> | null | 
   if (!row) return false;
   const os = Number(row.outstanding_quantity);
   if (Number.isFinite(os) && os <= OUTSTANDING_QTY_ZERO_TOLERANCE_KG) return true;
+  // every vessel STO has a finished shipment (sqlContractVesselStosFinishedExpr); optional column, absent keeps the rules below
+  if (row.vessel_stos_finished === true) return true;
   const atc = row.last_ata_vessel_complete_discharge;
   if (atc == null || String(atc).trim() === '') return false;
   /*
@@ -602,6 +604,8 @@ export function sqlContractEffectivelyDoneExpr(opts: {
   stoCountExpr?: string;
   /** Overrides that guard when every one of those STOs has in fact discharged. */
   everyStoDischargedExpr?: string;
+  /** Every vessel STO has a finished shipment (sqlContractVesselStosFinishedExpr): done on its own, trucking STOs aside. */
+  vesselStosFinishedExpr?: string;
 }): string {
   const atcArm = sqlContractAtcFinishesExpr(
     opts.atcExpr,
@@ -611,7 +615,8 @@ export function sqlContractEffectivelyDoneExpr(opts: {
   return `(
     ((${opts.outstandingKgExpr}) IS NOT NULL
       AND (${opts.outstandingKgExpr})::numeric <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG})
-    OR ${atcArm}
+    OR ${atcArm}${opts.vesselStosFinishedExpr ? `
+    OR COALESCE((${opts.vesselStosFinishedExpr}), FALSE)` : ''}
   )`;
 }
 

@@ -168,7 +168,7 @@ export function sqlContractFinishedExpr(
            * string assertion in the tests still passed.
            */
           ...(options.everyStoDischarged
-            ? { everyStoDischargedExpr: `${alias}.all_stos_discharged` }
+            ? { everyStoDischargedExpr: `${alias}.all_stos_discharged`, vesselStosFinishedExpr: `${alias}.vessel_stos_finished` }
             : {}),
         })
       : undefined,

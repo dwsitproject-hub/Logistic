@@ -79,6 +79,126 @@ export function sqlContractEveryStoDischargedExpr(
 }
 
 /**
+ * Has every VESSEL STO of this PO a finished shipment? (Ryan, 2026-10-16: a finished shipment finishes the PO, and any OS left is a
+ * shortfall - the rule Shipping Performance already follows.)
+ *
+ * The sto_count guard above counts every STO SAP lists, trucking (T) STOs included, which never get a vessel ATC: PS23 POs
+ * 1014003263/74/79/88 (one vessel STO 1016011410, discharged 2026-10-15, plus 1-3 T STOs each) stayed Open on Contract Performance and
+ * Completed on Shipping Performance - 4,000 MT of the 4,843 MT the two pages differed by on production. This looks at vessel STOs only:
+ * - a vessel STO is a contract_stos line whose type is not T;
+ * - it is finished when a non-cancelled shipment on it has an ATC (override, own column, discharge leg) or status COMPLETED
+ *   (1014003256: BG. ELANG JAWA 1 COMPLETED with no ATC recorded);
+ * - a B2B origin's vessel STOs and shipments are its children's (origin 9194100035's cargo moved on child 1004031407's STO).
+ * One unfinished vessel STO keeps the PO open, so PO 1004030633 (STO 1006019438 discharged, 1006019958 still loading) stays Open. A PO
+ * with no vessel STO line returns false and keeps the older rule.
+ */
+export function sqlContractVesselStosFinishedExpr(contractNumberExpr: string): string {
+  const executing = `(
+        SELECT ${contractNumberExpr}
+        UNION
+        SELECT lch.contract_number
+        FROM contract_latest_spd_snapshot lch
+        WHERE UPPER(TRIM(COALESCE(lch.b2b_flag_raw, ''))) = 'B2B'
+          AND NULLIF(TRIM(lch.contract_reference_po_raw), '') IS NOT NULL
+          AND TRIM(lch.contract_reference_po_raw) IN (
+            SELECT TRIM(cpo.po_number::text) FROM contracts cpo
+            WHERE cpo.contract_id = ${contractNumberExpr} AND NULLIF(TRIM(cpo.po_number::text), '') IS NOT NULL
+          )
+      )`;
+  const vesselStos = `
+        SELECT TRIM(cvs.sto_number::text) AS sto, cvk.contract_id AS kc
+        FROM contract_stos cvs
+        INNER JOIN contracts cvk ON cvk.id = cvs.contract_id
+        WHERE cvk.contract_id IN ${executing}
+          AND NULLIF(TRIM(cvs.sto_number::text), '') IS NOT NULL
+          AND UPPER(TRIM(COALESCE(cvs.sto_type, ''))) <> 'T'`;
+  return `(
+    EXISTS (${vesselStos})
+    AND NOT EXISTS (
+      SELECT 1 FROM (${vesselStos}) vs
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM shipments s_vf
+        INNER JOIN contracts c_vf ON c_vf.id = s_vf.contract_id
+        WHERE c_vf.contract_id = vs.kc
+          AND UPPER(TRIM(COALESCE(s_vf.status, ''))) <> 'CANCELLED'
+          AND (
+            TRIM(COALESCE(s_vf.shipment_id::text, '')) = vs.sto
+            OR TRIM(COALESCE(s_vf.shipment_id::text, '')) LIKE vs.sto || '-%'
+            OR TRIM(COALESCE(c_vf.sto_number::text, '')) = vs.sto
+          )
+          AND (
+            UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED'
+            OR s_vf.ata_discharge_complete IS NOT NULL
+            OR EXISTS (SELECT 1 FROM shipment_ata_overrides o_vf WHERE o_vf.shipment_id = s_vf.id AND o_vf.ata_discharge_complete IS NOT NULL)
+            OR EXISTS (
+              SELECT 1 FROM vessel_loading_ports v_vf
+              WHERE v_vf.shipment_id = s_vf.id AND COALESCE(v_vf.is_discharge_port, FALSE) = TRUE AND v_vf.ata_loading_completed IS NOT NULL
+            )
+          )
+      )
+    )
+  )`;
+}
+
+/**
+ * Set-based form of sqlContractVesselStosFinishedExpr, for a whole row set at once: `<name>(contract_id, vessel_stos_finished)` for the
+ * contracts `scopeSubquery` returns. The per-contract form costs ~3.9 ms a contract (a scan of contract_latest_spd_snapshot for the B2B
+ * children each time), 117 s over the 14,806 sea contracts of the dev copy; this one joins once. Same rule, row for row.
+ */
+export function buildVesselStosFinishedCte(name: string, scopeSubquery: string): string {
+  return `
+      ${name} AS (
+        SELECT links.display_contract_id AS contract_id, BOOL_AND(links.finished) AS vessel_stos_finished
+        FROM (
+          SELECT l0.display_contract_id, l0.sto, EXISTS (
+            SELECT 1
+            FROM shipments s_vf
+            INNER JOIN contracts c_vf ON c_vf.id = s_vf.contract_id
+            WHERE c_vf.contract_id = l0.exec_contract_id
+              AND UPPER(TRIM(COALESCE(s_vf.status, ''))) <> 'CANCELLED'
+              AND (
+                TRIM(COALESCE(s_vf.shipment_id::text, '')) = l0.sto
+                OR TRIM(COALESCE(s_vf.shipment_id::text, '')) LIKE l0.sto || '-%'
+                OR TRIM(COALESCE(c_vf.sto_number::text, '')) = l0.sto
+              )
+              AND (
+                UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED'
+                OR s_vf.ata_discharge_complete IS NOT NULL
+                OR EXISTS (SELECT 1 FROM shipment_ata_overrides o_vf WHERE o_vf.shipment_id = s_vf.id AND o_vf.ata_discharge_complete IS NOT NULL)
+                OR EXISTS (
+                  SELECT 1 FROM vessel_loading_ports v_vf
+                  WHERE v_vf.shipment_id = s_vf.id AND COALESCE(v_vf.is_discharge_port, FALSE) = TRUE AND v_vf.ata_loading_completed IS NOT NULL
+                )
+              )
+          ) AS finished
+          FROM (
+            SELECT DISTINCT cvk.contract_id AS display_contract_id, cvk.contract_id AS exec_contract_id, TRIM(cvs.sto_number::text) AS sto
+            FROM contract_stos cvs
+            INNER JOIN contracts cvk ON cvk.id = cvs.contract_id
+            WHERE cvk.contract_id IN (${scopeSubquery})
+              AND NULLIF(TRIM(cvs.sto_number::text), '') IS NOT NULL
+              AND UPPER(TRIM(COALESCE(cvs.sto_type, ''))) <> 'T'
+            UNION
+            SELECT DISTINCT co.contract_id, ch.contract_id, TRIM(cvs.sto_number::text)
+            FROM contracts co
+            INNER JOIN contract_latest_spd_snapshot lch
+              ON UPPER(TRIM(COALESCE(lch.b2b_flag_raw, ''))) = 'B2B'
+             AND NULLIF(TRIM(lch.contract_reference_po_raw), '') IS NOT NULL
+             AND TRIM(lch.contract_reference_po_raw) = TRIM(co.po_number::text)
+            INNER JOIN contracts ch ON ch.contract_id = lch.contract_number AND ch.contract_id <> co.contract_id
+            INNER JOIN contract_stos cvs ON cvs.contract_id = ch.id
+            WHERE co.contract_id IN (${scopeSubquery})
+              AND NULLIF(TRIM(co.po_number::text), '') IS NOT NULL
+              AND NULLIF(TRIM(cvs.sto_number::text), '') IS NOT NULL
+              AND UPPER(TRIM(COALESCE(cvs.sto_type, ''))) <> 'T'
+          ) l0
+        ) links
+        GROUP BY links.display_contract_id
+      )`;
+}
+
+/**
  * Cycle / milestone fields for contracts list.
  * Use inside base CTE (array_agg contract id) or outer page slice (base.id / base.contract_id).
  */
