@@ -29,6 +29,8 @@ const KNOWN_INTERPOLATED_PARAMS: Record<string, number[]> = {
   'services/sapDataDistribution.service.ts::UPDATE shipments SET': [3, 4, 14, 15, 19, 21],
   // buildTruckingKlipProtectedSetSql(protectKlip)
   'services/sapDataDistribution.service.ts::UPDATE trucking_operations SET': [4, 5, 11],
+  // ATTRS_SQL(blankClears): the sheet's attributes, $2..$13
+  'services/masterVesselSheetReplace.service.ts::UPDATE master_vessels SET': [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
 };
 
 function listTsFiles(dir: string, out: string[] = []): string[] {
