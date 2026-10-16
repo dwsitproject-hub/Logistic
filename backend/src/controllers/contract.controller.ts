@@ -58,7 +58,7 @@ import {
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
 import {
-  sqlContractEveryStoDischargedExpr,
+  sqlContractEveryStoDischargedExpr, buildVesselStosFinishedCte,
   sqlLastAtaVesselCompleteDischargeForContract,
 } from '../utils/contractsListCycleSql';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
@@ -427,6 +427,16 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       ? 'MAX(cps.plant_site)'
       : `MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')})`;
 
+    // every vessel STO finished (sqlContractVesselStosFinishedExpr): only Contract Performance's Open/Close reads it, so only it builds it
+    const cpVesselStos = String((req.query as any).requireRegionSite || 'false') === 'true';
+    const cpVesselStosCteSql = cpVesselStos
+      ? `\n      ${buildVesselStosFinishedCte('vessel_sto_done', 'SELECT contract_id FROM contract_scope').trim()},`
+      : '';
+    const cpVesselStosColumnSql = cpVesselStos
+      ? 'BOOL_OR(vsd.vessel_stos_finished) AS vessel_stos_finished,'
+      : 'NULL::boolean AS vessel_stos_finished,';
+    const cpVesselStosJoinSql = cpVesselStos ? '\n        LEFT JOIN vessel_sto_done vsd ON vsd.contract_id = c.contract_id' : '';
+
     // contract_scope narrows contracts + sap_processed_data work when date / contract_id filters are present (default YTD on UI).
     let queryText = `
       WITH contract_scope AS (
@@ -437,9 +447,10 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       ),
       ${contractsLatestSpdCte},
       ${contractsQtyMoveCte},
-      ${contractsStoAggCte},
+      ${contractsStoAggCte},${cpVesselStosCteSql}
       base AS (
         SELECT
+          ${cpVesselStosColumnSql}
           c.contract_id,
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
           -- WITHDRAWN when every row of this contract's PO is gone from SAP. Surfaced so the
@@ -501,7 +512,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
-        LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
+        LEFT JOIN sto_agg s ON s.contract_number = c.contract_id${cpVesselStosJoinSql}
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id${cpSnapshotJoinSql}
         WHERE 1=1
         GROUP BY c.contract_id
@@ -537,6 +548,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
             ),
             stoCountExpr: 'base.sto_count',
             everyStoDischargedExpr: sqlContractEveryStoDischargedExpr('base.contract_id', 'base.sto_count'),
+            vesselStosFinishedExpr: 'base.vessel_stos_finished',
           })
         : undefined;
     if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
@@ -1536,8 +1548,10 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       ${contractsLatestSpdCte},
       ${contractsQtyMoveCte},
       ${contractsStoAggCte},
+      ${buildVesselStosFinishedCte('vessel_sto_done', 'SELECT contract_id FROM contract_scope').trim()},
       base AS (
         SELECT
+          BOOL_OR(vsd.vessel_stos_finished) AS vessel_stos_finished,
           c.contract_id,
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
           MAX(c.product) AS product,
@@ -1636,6 +1650,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
+        LEFT JOIN vessel_sto_done vsd ON vsd.contract_id = c.contract_id
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
         WHERE 1=1
         GROUP BY c.contract_id
@@ -1658,6 +1673,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             outstandingKgExpr: 'base.outstanding_quantity',
             atcExpr: 'base.last_ata_vessel_complete_discharge',
             stoCountExpr: 'base.sto_count',
+            vesselStosFinishedExpr: 'base.vessel_stos_finished',
           }),
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
@@ -1668,6 +1684,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             outstandingKgExpr: 'base.outstanding_quantity',
             atcExpr: 'base.last_ata_vessel_complete_discharge',
             stoCountExpr: 'base.sto_count',
+            vesselStosFinishedExpr: 'base.vessel_stos_finished',
           }),
         )}`;
       } else {
