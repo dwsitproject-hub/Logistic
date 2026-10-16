@@ -205,6 +205,22 @@ const contractsOf = (row) =>
         spRows.filter((r) => contractsOf(r).includes(x.c)).forEach((r) => console.log('  SP: ' + JSON.stringify(pick(r, spKeys))));
       }
     }
+    // the multi-contract On Going rows: the row's SP OS against the CP Open OS of its contracts, where they differ
+    console.log('\nMULTI-CONTRACT On Going rows where SP row OS <> sum of CP Open OS of its contracts:');
+    let multiDiff = 0;
+    for (const r of spRows.filter((x) => isOnGoing(x) && contractsOf(x).length > 1)) {
+      const spRowKg = shippingPerfOutstandingQtyKgForAggregate(r);
+      const cs = contractsOf(r);
+      const cpSum = cs.reduce((a, c) => a + (cp.has(c) ? cp.get(c).kg : 0), 0);
+      if (Math.abs(spRowKg - cpSum) < TOLERANCE_KG) continue;
+      multiDiff += spRowKg - cpSum;
+      console.log('\n  row ' + (r.sto_key || r.sto_number || '-') + '  ' + (r.vessel_name || '-') + '  ' + (r.status || '-') + '  SP ' + mt(spRowKg) + '  CP ' + mt(cpSum) + '  diff ' + mt(spRowKg - cpSum) + ' MT');
+      for (const c of cs) {
+        const row = cpAll.get(c);
+        console.log('    ' + c.padEnd(12) + (cp.has(c) ? 'CP Open ' + mt(cp.get(c).kg).padStart(7) : 'CP not Open    ') + '  ' + JSON.stringify(pick(row, /^(status|import_status|outstanding_quantity|last_ata_vessel_complete_discharge|sto_count|vessel_stos_finished)$/)));
+      }
+    }
+    console.log('\n  total of these rows: ' + mt(multiDiff) + ' MT');
   }
 
   if (classC.length > 0) {
