@@ -1,13 +1,18 @@
 /**
- * Vessel Oil Loss rows: one STO, several POs, same key as the Shipments list.
+ * Vessel Oil Loss rows: one STO, several POs, same key and same Completed rule as the Shipments list.
  *
- * Only shipments whose stored status is COMPLETED are members. Planned, Cancelled,
- * and every other status stay out of the group, the quantities, and R1–Loss.
- * A STO with no Completed shipment is not a row. A Completed STO with missing
- * R1–Loss quantities is still a row.
- * Qty Delivery and Qty Receive are the same STO-scoped SAP kilograms View Shipment
- * shows as Delivered Qty (SAP) and Receive Qty (SAP), summed across the STO's POs.
- * SFAL and SFBD are the opened shipment's fields, including when that row is null.
+ * An STO is a row when it is Completed the way the Shipments page decides it (shipmentEffectiveStatusExpr), and its
+ * members are the shipments of that STO that are not Cancelled:
+ *   1. GR Close first - GR PO or GR STO by incoterm, every contract of the STO (sqlIsContractSapClosedForStoExpr),
+ *   2. else ATC of the STO's own shipments filled,
+ *   3. else every contract's outstanding inside the zero band (contract_qty_move_snapshot).
+ * The stored shipments.status of a row is NOT the rule: it is written only by a SAP import, a save or a create, one row at a
+ * time, so a PO whose row never reached COMPLETED used to be dropped from a STO that SAP had closed for every PO.
+ *
+ * The POs of the row are the contracts linked to the STO (contractsOnStoSubquery - contract_stos, SAP rows, shipments), the
+ * ones the Shipments View Table lists, plus the contracts of the members. Qty Delivery and Qty Receive are the same
+ * STO-scoped SAP kilograms View Shipment shows as Delivered Qty (SAP) and Receive Qty (SAP), summed across those POs.
+ * SFAL and SFBD are the opened shipment's fields (the primary row of the STO group), including when that row is null.
  * A sibling PO that has a value must not fill the blank. The modal stores kilograms.
  */
 
@@ -15,6 +20,7 @@ import {
   sqlStoScopedDeliveredKgSql,
   sqlStoScopedReceiveKgSql,
 } from './contractLogisticsStoDetailSql';
+import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
 import { latestSpdDerivedSelectList } from './contractLatestSpdDerivedSql';
 import { sqlRegionSiteRawForContract } from './regionSiteSql';
 import { sqlShipmentB2bChildDischargePort } from './b2bChildDischargePortSql';
@@ -29,6 +35,9 @@ import {
   sqlShipmentListExecutionCsStoJoin,
 } from './shipmentB2bOriginSql';
 import { buildShipmentPageSeaRowScopeSql, shipmentListSeaStoKeyExpr } from './shipmentStoTypeSql';
+import { SHIPMENT_ATA_OVERRIDES_JOIN, sqlJpsAtaWhileOpen } from './shipmentAtaOverrideSql';
+import { shipmentListContractOsWithinBandExpr } from './shipmentListFilters';
+import { contractsOnStoSubquery } from './stoLinkedContractSql';
 
 const LIST_STO_KEY_SQL = shipmentListSeaStoKeyExpr('c', 'l', 's');
 
@@ -38,9 +47,33 @@ function sqlOpenedShipmentQty(fieldExpr: string): string {
   return `(array_agg(${fieldExpr} ORDER BY ${orderBy}) FILTER (WHERE s.id IS NOT NULL))[1]`;
 }
 
-/** Stored shipment status. This is the View Shipment badge, not the effective pipeline status. */
-export function sqlOilLossVesselCompletedStatus(alias: string): string {
-  return `UPPER(TRIM(COALESCE(${alias}.status, ''))) = 'COMPLETED'`;
+/** A shipment takes part in its STO unless it is Cancelled. Whether the STO is Completed is decided for the group. */
+export function sqlOilLossVesselMemberStatus(alias: string): string {
+  return `UPPER(TRIM(COALESCE(${alias}.status, ''))) NOT IN ('CANCELLED', 'CANCELED')`;
+}
+
+/**
+ * ATC of a shipment, as the Shipments list reads it (buildShipmentListAtaSelectSql): the JPS lane while the shipment is open,
+ * a manual override, the stored date, then the discharge port's own. Needs the `sao` and `vlp_d` joins of vesselMemberJoins().
+ */
+const ATC_SQL = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete')}, sao.ata_discharge_complete, s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)`;
+
+/** Own-STO only, like ata_vessel_complete_discharge_own_sto: a sibling STO's voyage must not complete this one. */
+const OWN_STO_ONLY_SQL = `NULLIF(TRIM(s.shipment_id::text), '') IS NULL
+            OR TRIM(s.shipment_id::text) = TRIM((${LIST_STO_KEY_SQL})::text)`;
+
+function vesselMemberJoins(): string {
+  return `
+        ${SHIPMENT_ATA_OVERRIDES_JOIN}
+        LEFT JOIN LATERAL (
+          SELECT vlp_df.ata_loading_completed::date AS vlp_disc_ata_lc
+          FROM vessel_loading_ports vlp_df
+          WHERE vlp_df.shipment_id = s.id
+            AND COALESCE(vlp_df.is_discharge_port, false) = true
+          ORDER BY vlp_df.port_sequence NULLS LAST, vlp_df.id
+          LIMIT 1
+        ) vlp_d ON TRUE
+        LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id`;
 }
 
 function vesselFromSql(extraJoins = ''): string {
@@ -51,7 +84,7 @@ function vesselFromSql(extraJoins = ''): string {
         ${extraJoins}
         WHERE ${buildShipmentPageSeaRowScopeSql('c', 'l', 's')}
           AND ${shipmentPageExcludeB2bChildCond('l')}
-          AND ${sqlOilLossVesselCompletedStatus('s')}`;
+          AND ${sqlOilLossVesselMemberStatus('s')}`;
 }
 
 /**
@@ -61,14 +94,14 @@ function vesselFromSql(extraJoins = ''): string {
 export function buildOilLossVesselCompletedCtes(): string {
   const plantExpr = sqlRegionSiteRawForContract('c.contract_id', 'c.po_number');
   const stoQtyOpts = {
-    contractNumberExpr: 'c.contract_id',
-    contractQtyExpr: 'COALESCE(c.quantity_ordered, 0)',
-    stoKeyExpr: LIST_STO_KEY_SQL,
-    poNumberExpr: 'c.po_number',
+    contractNumberExpr: 'c2.contract_id',
+    contractQtyExpr: 'COALESCE(c2.quantity_ordered, 0)',
+    stoKeyExpr: 'vsc.sto_key',
+    poNumberExpr: 'c2.po_number',
   };
   const sapDeliveredKg = `NULLIF(${sqlStoScopedDeliveredKgSql({
     ...stoQtyOpts,
-    incotermExpr: 'c.incoterm',
+    incotermExpr: 'c2.incoterm',
   })}, 0)`;
   const sapReceivedKg = `NULLIF(${sqlStoScopedReceiveKgSql(stoQtyOpts)}, 0)`;
 
@@ -103,8 +136,12 @@ export function buildOilLossVesselCompletedCtes(): string {
           -- the ending B2B child's port when a B2B origin's shipment has one (unless a user typed the port), else the shipment's own: the origin is the company in the middle
           COALESCE(MAX(${sqlShipmentB2bChildDischargePort('s', 'c')}), MAX(s.port_of_discharge)) AS unloading_location,
           ${sqlOpenedShipmentQty('NULLIF(s.sfal_qty, 0)')} AS shipment_sfal_kg,
-          ${sqlOpenedShipmentQty('NULLIF(s.sfbd_qty, 0)')} AS shipment_sfbd_kg
-        ${vesselFromSql()}
+          ${sqlOpenedShipmentQty('NULLIF(s.sfbd_qty, 0)')} AS shipment_sfbd_kg,
+          -- Completed, the way the Shipments page decides it (see the file header): GR Close, else ATC, else outstanding inside the zero band
+          BOOL_AND(COALESCE(${sqlIsContractSapClosedForStoExpr('c', LIST_STO_KEY_SQL)}, FALSE)) AS is_gr_closed,
+          MAX(${ATC_SQL}) FILTER (WHERE ${OWN_STO_ONLY_SQL}) AS atc_own_sto,
+          BOOL_AND(COALESCE(${shipmentListContractOsWithinBandExpr()}, FALSE)) AS is_os_within_band
+        ${vesselFromSql(vesselMemberJoins())}
         GROUP BY ${LIST_STO_KEY_SQL}
       ),
       vessel_status AS (
@@ -112,33 +149,64 @@ export function buildOilLossVesselCompletedCtes(): string {
         FROM vessel_base f
         WHERE COALESCE(f.sap_presence, 'PRESENT') = 'PRESENT'
           AND f.id IS NOT NULL
+          AND (COALESCE(f.is_gr_closed, FALSE) OR f.atc_own_sto IS NOT NULL OR COALESCE(f.is_os_within_band, FALSE))
+      ),
+      vessel_sto_contract AS (
+        -- the POs the Shipments View Table lists for the STO (linked by contract_stos / SAP / shipments) ...
+        SELECT g.sto_key, lc.contract_id
+        FROM vessel_status g
+        CROSS JOIN LATERAL (
+          ${contractsOnStoSubquery("NULLIF(TRIM(g.sto_key::text), '')")}
+        ) lc
+        WHERE lc.contract_id IS NOT NULL
+        UNION
+        -- ... plus the contracts of the member shipments themselves (a STO with no SAP link yet)
+        SELECT member.sto_key, member.contract_id
+        FROM (
+          SELECT
+            ${LIST_STO_KEY_SQL} AS sto_key,
+            NULLIF(TRIM(c.contract_id), '') AS contract_id
+          ${vesselFromSql()}
+        ) member
+        WHERE member.contract_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM vessel_status vs WHERE vs.sto_key = member.sto_key)
       ),
       vessel_contract_qty AS (
         SELECT DISTINCT ON (sto_key, contract_id)
           sto_key,
           contract_id,
+          po_number,
+          contract_ext_no,
           quantity_delivery,
           quantity_received,
           quantity_contract
         FROM (
           SELECT
-            ${LIST_STO_KEY_SQL} AS sto_key,
-            NULLIF(TRIM(c.contract_id), '') AS contract_id,
+            vsc.sto_key,
+            vsc.contract_id,
+            NULLIF(TRIM(c2.po_number::text), '') AS po_number,
+            NULLIF(TRIM(l2.contract_ext_no_raw), '') AS contract_ext_no,
             ${sapDeliveredKg} AS quantity_delivery,
             ${sapReceivedKg} AS quantity_received,
-            c.quantity_ordered AS quantity_contract,
-            s.updated_at
-          ${vesselFromSql()}
-        ) member
-        WHERE contract_id IS NOT NULL
-        ORDER BY sto_key, contract_id, updated_at DESC NULLS LAST
+            c2.quantity_ordered AS quantity_contract,
+            c2.created_at
+          FROM vessel_sto_contract vsc
+          JOIN contracts c2 ON c2.contract_id = vsc.contract_id
+          LEFT JOIN latest_spd_contract l2 ON l2.contract_number = c2.contract_id
+          -- a Cancelled contract is not a PO of the voyage: its quantity must not count (the SAP link still lists it)
+          WHERE UPPER(TRIM(COALESCE(c2.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
+        ) linked
+        ORDER BY sto_key, contract_id, created_at DESC NULLS LAST
       ),
       vessel_qty AS (
         SELECT
           sto_key,
           SUM(quantity_delivery) AS quantity_delivery,
           SUM(quantity_received) AS quantity_received,
-          SUM(quantity_contract) AS quantity_contract
+          SUM(quantity_contract) AS quantity_contract,
+          STRING_AGG(DISTINCT contract_id, ', ' ORDER BY contract_id) AS contract_number,
+          STRING_AGG(DISTINCT po_number, ', ' ORDER BY po_number) AS po_number,
+          STRING_AGG(DISTINCT contract_ext_no, ', ' ORDER BY contract_ext_no) AS contract_ext_no
         FROM vessel_contract_qty
         GROUP BY sto_key
       ),
@@ -148,10 +216,10 @@ export function buildOilLossVesselCompletedCtes(): string {
           'SEA'::text AS transport_mode,
           NULL::text AS sto_type,
           NULLIF(TRIM(g.operation_id), '') AS operation_id,
-          COALESCE(g.contract_number, '') AS contract_number,
-          COALESCE(g.contract_ext_no, '') AS contract_ext_no,
+          COALESCE(vq.contract_number, g.contract_number, '') AS contract_number,
+          COALESCE(vq.contract_ext_no, g.contract_ext_no, '') AS contract_ext_no,
           g.sto_key AS sto_number,
-          COALESCE(g.po_number, '') AS po_number,
+          COALESCE(vq.po_number, g.po_number, '') AS po_number,
           COALESCE(g.supplier, '') AS supplier,
           COALESCE(g.buyer, '') AS buyer,
           COALESCE(g.product, '') AS product,
