@@ -126,6 +126,13 @@ IMAGE_BEFORE="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null ||
 step "pulling"
 git pull --ff-only origin "$BRANCH"
 
+# data-release of the Downstream Hub SDK: Sentinel reads KLIP's code at THIS commit, so it has to be the commit the bundle is built from. docker-compose.frontend.yml
+# passes ${NEXT_PUBLIC_GIT_SHA:-} and nothing else set it, so the tag was built without a release. Set after the pull so it is the code just pulled; a shell value
+# wins over one in .env, so a stale NEXT_PUBLIC_GIT_SHA left in .env cannot pin an old release.
+NEXT_PUBLIC_GIT_SHA="$(git rev-parse --short HEAD)"
+export NEXT_PUBLIC_GIT_SHA
+printf '  SDK release (data-release): %s\n' "$NEXT_PUBLIC_GIT_SHA"
+
 step "building and starting $SERVICE"
 "${COMPOSE[@]}" up -d --build "$SERVICE"
 
