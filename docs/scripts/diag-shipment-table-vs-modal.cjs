@@ -21,6 +21,7 @@ const { contractsOnStoSubquery } = load('utils/stoLinkedContractSql');
 const { sapStoNumberKeyExpr } = load('utils/shipmentStoTypeSql');
 const { sqlB2bChildSpdDataExcludeWhere } = load('utils/b2bChildSql');
 const { sqlIsContractSapClosedForStoExpr } = load('utils/contractDeliveryStatus');
+const { shipmentListContractOsWithinBandExpr } = load('utils/shipmentListFilters');
 
 const arg = (name) => {
   const hit = process.argv.find((a) => a.startsWith('--' + name + '='));
@@ -91,6 +92,26 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
   const hydratedPos = [...new Set(spd.filter((r) => r.kept_after_b2b_exclude && r.po).map((r) => r.po))].sort();
   console.log('   -> ', hydratedPos.join(', ') || '(none)');
 
+  if (fastPos.some((p) => !hydratedPos.includes(p))) {
+    console.log("\n3b. Every SAP row of the PO(s) the hydrate lost, whatever its contract / STO (why were they not keyed to the group?)");
+    const lostPos = fastPos.filter((p) => !hydratedPos.includes(p));
+    const raw = await q(
+      `SELECT spd.id::text AS id, spd.created_at, spd.contract_number, spd.po_number, spd.sto_number,
+              spd.data->'raw'->>'Contract No' AS raw_contract_no, spd.data->'raw'->>'STO No.' AS raw_sto,
+              spd.data->'raw'->>'Delete PO Status' AS delete_status,
+              (${sapStoNumberKeyExpr('spd')}) AS sto_key_expr
+         FROM sap_processed_data spd
+        WHERE TRIM(COALESCE(spd.po_number, '')) = ANY($1::text[])
+           OR TRIM(COALESCE(spd.data->'raw'->>'PO No', '')) = ANY($1::text[])
+        ORDER BY spd.created_at DESC LIMIT 20`,
+      [lostPos],
+    );
+    for (const r of raw) {
+      console.log(`   spd=${r.id.slice(0, 8)} created=${day(r.created_at)} po=${r.po_number} contract_number=${r.contract_number || '(blank)'} raw_contract_no=${r.raw_contract_no || '(blank)'} sto=${r.sto_key_expr || '-'} delete_status=${r.delete_status || '-'}`);
+    }
+    if (!raw.length) console.log("   (no SAP row carries this PO at all)");
+  }
+
   const missing = fastPos.filter((p) => !hydratedPos.includes(p));
   console.log(
     '\n=> PO column: fast pass [' + fastPos.join(', ') + '], hydrate [' + hydratedPos.join(', ') + ']' +
@@ -105,6 +126,33 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
     [key, linkedContracts],
   );
   for (const f of flags) console.log(`   contract=${f.contract_id} po=${f.po_number} gr_closed_for_key=${f.gr_closed}`);
+
+  console.log('\n5. ATA that the table reads beyond shipments.*: overrides, loading/discharge port rows, JPS (any of these makes the group Completed)');
+  for (const m of members) {
+    const sao = await q('SELECT * FROM shipment_ata_overrides WHERE shipment_id = $1::uuid', [m.id]);
+    const vlp = await q(
+      `SELECT port_sequence, is_discharge_port, ata_arrival, ata_loading_completed, ata_sailed
+         FROM vessel_loading_ports WHERE shipment_id = $1::uuid ORDER BY port_sequence NULLS LAST`,
+      [m.id],
+    );
+    console.log(`   shipment ${m.id.slice(0, 8)} (po ${m.po_number}): overrides=${sao.length ? JSON.stringify(sao[0]) : '-'}`);
+    for (const v of vlp) {
+      console.log(`      port seq=${v.port_sequence} discharge=${v.is_discharge_port} ata_arrival=${day(v.ata_arrival)} ata_loading_completed=${day(v.ata_loading_completed)} ata_sailed=${day(v.ata_sailed)}`);
+    }
+    if (!vlp.length) console.log('      (no port rows)');
+  }
+
+  console.log('\n6. Snapshot behind "nothing left outstanding" (is_contract_os_within_band decides Completed for the whole group, BOOL_AND over its contracts)');
+  const snap = await q(
+    `SELECT c.contract_id, c.po_number, c.quantity_ordered, (qms.contract_number IS NOT NULL) AS has_snapshot,
+            (${shipmentListContractOsWithinBandExpr('c', 'qms')}) AS within_band
+       FROM contracts c LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id
+      WHERE c.contract_id = ANY($1::text[]) ORDER BY c.contract_id`,
+    [linkedContracts],
+  );
+  for (const r of snap) {
+    console.log(`   contract=${r.contract_id} po=${r.po_number} qty=${r.quantity_ordered} snapshot=${r.has_snapshot} os_within_band=${r.within_band}`);
+  }
 
   await connection.end?.();
 })().catch((e) => {
