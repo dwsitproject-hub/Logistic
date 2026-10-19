@@ -1,0 +1,125 @@
+================================================================================
+KLIP — Rilis PRODUCTION 2026-10-19 (branch main, tip f7a963f0)
+================================================================================
+Pelengkap docs/scripts/deploy-putty.txt (bagian B). Perintah deploy-nya sama; file ini
+menjelaskan APA YANG BERUBAH di rilis ini, APA YANG HARUS MUNCUL di output, dan cara
+memeriksa hasilnya.
+
+Isi rilis (main sudah sama dengan SIT):
+  1. Commercial Documents: kartu Berita Acara (BA), 4 kolom SAP OA (default tersembunyi),
+     izin upload per tipe dokumen di Role Management, Invoice + FP (Full Receive) tanpa OCR.
+  2. OS sejajar antara Contract Performance, Shipments, Shipping Performance
+     (filter Product/Supplier/Group/Source).
+  3. PO dengan satu baris cancelled dan satu aktif TIDAK cancelled; shipment/STO dengan
+     beberapa PO tidak ikut cancelled karena satu PO cancelled. Edit Shipment tidak lagi 400.
+  4. Layout: error React #418/#423 saat hydration.
+
+Migrasi baru: 244 dan 245 (dijalankan otomatis oleh compose up --build).
+  244  constraint document_type menerima 'berita_acara' (tidak ada yang dihapus).
+  245  menambah 9 permission data.commercial_documents.upload.<tipe>, menyalin akses
+       upload yang ada ke semua tipe, lalu MENGHAPUS baris role_permissions:
+         - DO        -> hanya LOGISTICS (+ADMIN)
+         - Bea Cukai -> hanya BC (+ADMIN)
+       Role lain yang selama ini bisa upload DO / Bea Cukai akan kehilangan akses itu.
+       Bisa diubah lagi lewat Role Management.
+
+Sebelum mulai:
+  [ ] Pengecekan SIT selesai: list Shipments terbuka, group multi-PO tidak CANCELLED,
+      Edit Shipment tanpa banner 400, Commercial Documents (kartu BA, kolom OA, upload
+      DO oleh role non-LOGISTICS ditolak), console browser bersih dari #423.
+  [ ] Tidak ada import SAP yang sedang berjalan.
+
+Aturan sama seperti biasa: jangan git stash di server, jangan migrasi dengan tangan,
+BACKEND dulu, baru FRONTEND.
+
+
+################################################################################
+1. PuTTY -> BACKEND PRODUCTION (ECS-DB, 8.215.56.98 port 1819)
+################################################################################
+
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod-backend.sh > /tmp/deploy-prod-backend.sh && bash /tmp/deploy-prod-backend.sh
+
+Yang harus muncul dan harus Anda lakukan:
+
+  a. Daftar migrasi yang akan jalan: 244_commercial_document_type_berita_acara.sql dan
+     245_commercial_document_upload_permissions.sql.
+
+  b. "MIGRATIONS THAT DELETE OR DROP DATA" menampilkan 245 (DELETE FROM role_permissions).
+     Skrip meminta konfirmasi backup. Jalankan di psql production:
+
+       CREATE TABLE role_permissions_bak_20261019 AS SELECT * FROM role_permissions;
+
+     lalu ketik di PuTTY:  BACKED-UP
+     (SKIP-BACKUP hanya kalau memang sengaja tanpa backup. Jawaban lain membatalkan deploy.)
+     Migrasi 244 hanya mengganti constraint (DROP/ADD CONSTRAINT), tidak menghapus data, jadi
+     tidak ikut ditanyakan.
+
+  c. "This deploys to PRODUCTION. Type the role name" -> ketik:  backend
+
+  d. Di bagian checks semua [ OK ]. Dua hal yang sudah diketahui:
+       - SAP auto-import cron / health bisa merah SESAAT tepat setelah deploy
+         (backend belum selesai start). Jalankan ulang pemeriksaan setelah 1-2 menit.
+       - "Crons registered" TIDAK boleh memuat "JPS sync cron scheduled"
+         (cron JPS dan DHM sengaja dibiarkan mati).
+
+
+################################################################################
+2. Verifikasi backend (read-only, tidak mengubah apa pun)
+################################################################################
+Masih di PuTTY ECS-DB, setelah backend 'healthy':
+
+cd /opt/klip && cat docs/scripts/verify-prod-release.cjs | docker exec -i klip-backend node -
+
+Harus berakhir "all checks passed". Skrip ini mencetak juga tabel "siapa boleh upload
+tiap tipe dokumen"; baca bagian DO dan Bea Cukai.
+
+  [FAIL] migrations 244 and 245 are recorded
+      Migrasi gagal saat boot. Lihat:
+        docker compose -f docker-compose.backend.yml logs --tail=300 backend | grep -i -A5 migration
+      Jangan deploy frontend.
+
+  [FAIL] DO / Bea Cukai
+      Migrasi 245 belum menjalankan bagian DELETE. Perbaiki lewat Role Management
+      (Data Access > Commercial Documents Upload: ...), bukan dengan SQL manual.
+
+  [FAIL] Shipments group status / primary-row ordering execute
+      Ada SQL baru yang gagal di database production. Jangan deploy frontend; kirim pesan
+      error-nya.
+
+
+################################################################################
+3. PuTTY -> FRONTEND PRODUCTION (ECS-App, 147.139.176.70 port 1818)
+################################################################################
+
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod-frontend.sh > /tmp/deploy-prod-frontend.sh && bash /tmp/deploy-prod-frontend.sh
+
+  Konfirmasi: ketik  frontend
+  Harus muncul: "every NEXT_PUBLIC_* in .env reaches the build" dan "did the image change -> changed".
+
+
+################################################################################
+4. Browser (Ctrl+Shift+R)
+################################################################################
+  [ ] Login, halaman terbuka tanpa "Loading..." menggantung; console tanpa error #418/#423.
+  [ ] Commercial Documents: kartu Berita Acara setelah Addendum Contract; kolom Vessel/Truck
+      OA Budget & Actual ada di pemilih kolom (default tersembunyi).
+  [ ] Modal Document Checking dengan role non-LOGISTICS: kartu DO terkunci
+      ("Your role cannot upload this document"). Invoice + FP (Full Receive) = upload biasa.
+  [ ] Roles > edit role: permission "Commercial Documents Upload: ..." terlihat di Data Access.
+  [ ] Shipments: shipment multi-PO dengan satu PO cancelled tidak berstatus Cancelled.
+      Edit Shipment untuk contoh itu tersimpan tanpa banner error.
+  [ ] OS di Contract Performance = Shipments = Shipping Performance untuk satu filter
+      Product / Group / Source.
+
+Catatan: cache list in-memory kedaluwarsa dalam ~1 jam atau pada simpan shipment berikutnya,
+jadi angka lama bisa terlihat sebentar setelah deploy.
+
+
+################################################################################
+5. Jika perlu mundur
+################################################################################
+  - Frontend / backend tanpa migrasi: deploy ulang commit sebelumnya dari main
+    (git revert di main lalu ulangi bagian 1 dan 3). Jangan reset --hard di server.
+  - Migrasi 245 salah menghapus akses: pulihkan baris yang hilang dari
+    role_permissions_bak_20261019 dengan daftar kolom eksplisit (jangan INSERT ... SELECT *),
+    atau atur ulang lewat Role Management. Tabel backup dihapus manual setelah 1-2 minggu.
