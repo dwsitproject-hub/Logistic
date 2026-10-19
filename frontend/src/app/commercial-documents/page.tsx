@@ -272,7 +272,12 @@ function CommercialDocumentsPageContent() {
     return [...visibleInMenu, ...hiddenCols]
   }, [visibleColumnIds])
 
+  // Only the newest list request may touch the table state: an upload aborts the one in flight and starts another, and the aborted one must not
+  // clear the new one's loading flags or write its rows over the newer answer.
+  const listFetchSeq = useRef(0)
+
   const fetchData = useCallback(async () => {
+    const seq = ++listFetchSeq.current
     setFetching(true)
     if (rowsLengthRef.current === 0) setLoading(true)
     try {
@@ -295,19 +300,24 @@ function CommercialDocumentsPageContent() {
       const url = `/commercial-documents?${params.toString()}`
       const cacheKey = buildCacheKey('GET', url)
       const { data } = await cachedGet(cacheKey, (signal) => api.get(url, { signal }).then((r) => r.data))
+      if (seq !== listFetchSeq.current) return
       const payload = data?.data
       setRows(payload?.rows || [])
       setTotalRows(payload?.pagination?.total ?? 0)
       setTotalPages(payload?.pagination?.totalPages ?? 1)
     } catch (err) {
       // A newer fetch replaced this one (cache invalidation after an upload aborts the in-flight request): nothing to report.
-      if ((err as { code?: string })?.code === 'ERR_CANCELED') return
+      const e = err as { code?: string; name?: string }
+      if (e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError') return
+      if (seq !== listFetchSeq.current) return
       // Callers start this with `void fetchData()`, so a rejection here would escape as an unhandled error. The api interceptor already logged it;
       // keep the rows on screen and say they may be out of date.
       setListError(true)
     } finally {
-      setLoading(false)
-      setFetching(false)
+      if (seq === listFetchSeq.current) {
+        setLoading(false)
+        setFetching(false)
+      }
     }
   }, [
     currentPage,
@@ -390,7 +400,10 @@ function CommercialDocumentsPageContent() {
     [dateFrom, dateTo, debouncedSearch, selectedIncoterms, selectedProducts, selectedSuppliers, selectedPlants],
   )
 
+  const summaryFetchSeq = useRef(0)
+
   const fetchSummary = useCallback(async () => {
+    const seq = ++summaryFetchSeq.current
     setSummaryLoading(true)
     try {
       const params = new URLSearchParams()
@@ -405,11 +418,16 @@ function CommercialDocumentsPageContent() {
       const url = `/commercial-documents/summary?${params.toString()}`
       const cacheKey = buildCacheKey('GET', url)
       const { data } = await cachedGet(cacheKey, (signal) => api.get(url, { signal }).then((r) => r.data))
+      if (seq !== summaryFetchSeq.current) return
       setSummary((data?.data?.summary as CommercialDocumentsSummary | undefined) ?? null)
-    } catch {
+    } catch (err) {
+      // Cancelled by a cache invalidation: a replacement request is already running, so keep the current cards instead of blanking them.
+      const e = err as { code?: string; name?: string }
+      if (e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError') return
+      if (seq !== summaryFetchSeq.current) return
       setSummary(null)
     } finally {
-      setSummaryLoading(false)
+      if (seq === summaryFetchSeq.current) setSummaryLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [summaryScopeSignature])
