@@ -155,6 +155,7 @@ function CommercialDocumentsPageContent() {
   const [rows, setRows] = useState<CommercialDocumentRow[]>([])
   const [loading, setLoading] = useState(true)
   const [fetching, setFetching] = useState(false)
+  const [listError, setListError] = useState(false)
   const [totalRows, setTotalRows] = useState(0)
   const [summary, setSummary] = useState<CommercialDocumentsSummary | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
@@ -275,6 +276,7 @@ function CommercialDocumentsPageContent() {
     setFetching(true)
     if (rowsLengthRef.current === 0) setLoading(true)
     try {
+      setListError(false)
       const params = new URLSearchParams()
       params.set('page', String(currentPage))
       params.set('limit', String(PAGE_SIZE))
@@ -297,6 +299,12 @@ function CommercialDocumentsPageContent() {
       setRows(payload?.rows || [])
       setTotalRows(payload?.pagination?.total ?? 0)
       setTotalPages(payload?.pagination?.totalPages ?? 1)
+    } catch (err) {
+      // A newer fetch replaced this one (cache invalidation after an upload aborts the in-flight request): nothing to report.
+      if ((err as { code?: string })?.code === 'ERR_CANCELED') return
+      // Callers start this with `void fetchData()`, so a rejection here would escape as an unhandled error. The api interceptor already logged it;
+      // keep the rows on screen and say they may be out of date.
+      setListError(true)
     } finally {
       setLoading(false)
       setFetching(false)
@@ -889,6 +897,17 @@ function CommercialDocumentsPageContent() {
           </div>
         </CardHeader>
         <CardContent>
+          {listError ? (
+            <div
+              role="alert"
+              className="mb-3 flex items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+            >
+              <span>Could not refresh the list - the rows below may be out of date.</span>
+              <button type="button" className="font-medium underline" onClick={() => void fetchData()}>
+                Retry
+              </button>
+            </div>
+          ) : null}
           <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
             <div className="border rounded-lg overflow-hidden">
             <div
