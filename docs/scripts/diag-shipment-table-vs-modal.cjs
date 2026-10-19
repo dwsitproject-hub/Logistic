@@ -21,6 +21,7 @@ const { contractsOnStoSubquery } = load('utils/stoLinkedContractSql');
 const { sapStoNumberKeyExpr } = load('utils/shipmentStoTypeSql');
 const { sqlB2bChildSpdDataExcludeWhere } = load('utils/b2bChildSql');
 const { sqlIsContractSapClosedForStoExpr } = load('utils/contractDeliveryStatus');
+const { sqlShipmentListPrimaryOrderBy } = load('utils/shipmentListPrimaryShipmentSql');
 const { shipmentListContractOsWithinBandExpr } = load('utils/shipmentListFilters');
 
 const arg = (name) => {
@@ -153,6 +154,26 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
   for (const r of snap) {
     console.log(`   contract=${r.contract_id} po=${r.po_number} qty=${r.quantity_ordered} snapshot=${r.has_snapshot} os_within_band=${r.within_band}`);
   }
+
+  console.log('\n7. Which member the table row opens in Edit Shipment (primary row of the group)');
+  const keyExpr = "$1::text";
+  const pick = async (label, overrideAlias) => {
+    const rows = await q(
+      `SELECT s.id::text AS id, c.po_number, s.shipment_id, s.status, (sao.ata_discharge_complete IS NOT NULL) AS has_override_atc
+         FROM shipments s
+         LEFT JOIN contracts c ON c.id = s.contract_id
+         LEFT JOIN shipment_ata_overrides sao ON sao.shipment_id = s.id
+        WHERE TRIM(COALESCE(s.operation_id, '')) = $1 OR TRIM(COALESCE(s.shipment_id::text, '')) = $1
+        ORDER BY ${sqlShipmentListPrimaryOrderBy(keyExpr, 'c', 'l', 's', undefined, overrideAlias)}`,
+      [key],
+    );
+    const first = rows[0];
+    console.log(`   ${label}: ${first ? first.id.slice(0, 8) + ' (po ' + first.po_number + ', status ' + first.status + ', override ATC ' + first.has_override_atc + ')' : '(none)'}`);
+    return rows;
+  };
+  const before = await pick('rule as deployed (raw shipments.ata_* only)', undefined);
+  await pick('rule with override ATA counted       ', 'sao');
+  for (const r of before) console.log(`      member ${r.id.slice(0, 8)} po=${r.po_number} shipment_id=${r.shipment_id}`);
 
   await connection.end?.();
 })().catch((e) => {
