@@ -46,7 +46,7 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
             COUNT(*)::int AS members,
             COUNT(*) FILTER (WHERE atc IS NOT NULL)::int AS with_atc,
             MAX(atc) AS group_atc,
-            JSON_AGG(JSON_BUILD_OBJECT('po', po_number, 'created', created_at, 'atc', atc) ORDER BY created_at) AS detail
+            JSON_AGG(JSON_BUILD_OBJECT('po', po_number, 'contract', contract_id, 'created', created_at, 'atc', atc) ORDER BY created_at) AS detail
        FROM m
       WHERE gkey IS NOT NULL
       GROUP BY gkey
@@ -72,17 +72,34 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
     }
   }
 
+  // Deliveries of every contract that sits in a group without an ATC of its own: the evidence of whether the voyage carried it.
+  const contractIds = [...new Set(rows.flatMap((g) => g.detail.filter((d) => !d.atc).map((d) => d.contract)).filter(Boolean))];
+  const snaps = contractIds.length
+    ? await q(
+        `SELECT contract_number, COALESCE(quantity_delivery_vessel, 0) AS vessel, COALESCE(quantity_delivery_trucking, 0) AS trucking, COALESCE(quantity_receive, 0) AS receive
+           FROM contract_qty_move_snapshot WHERE contract_number = ANY($1::text[])`,
+        [contractIds],
+      )
+    : [];
+  const snapBy = new Map(snaps.map((r) => [r.contract_number, r]));
+  const moved = (contract) => {
+    const r = snapBy.get(contract);
+    if (!r) return 'no snapshot (nothing delivered)';
+    const n = Number(r.vessel) + Number(r.trucking);
+    return `delivered ${n.toLocaleString('en-US')} kg, received ${Number(r.receive).toLocaleString('en-US')} kg`;
+  };
+
   console.log(`Groups with 2+ active members where some member has a discharge ATC and another has none: ${rows.length}`);
   console.log(`  with a LATE member (created after the group's ATC - the reported case): ${late}`);
   console.log(`  with an EARLY member (no ATC of its own, created before it - ATA probably saved on one member only): ${early}`);
 
   console.log('\nLATE members (a strict rule would, rightly, stop reading these groups as Completed):');
   for (const { g, lateOnes } of lateGroups.slice(0, 40)) {
-    console.log(`  ${g.gkey}  group ATC ${day(g.group_atc)}  late: ${lateOnes.map((d) => `po ${d.po} created ${day(d.created)}`).join('; ')}`);
+    console.log(`  ${g.gkey}  group ATC ${day(g.group_atc)}  late: ${lateOnes.map((d) => `po ${d.po} created ${day(d.created)} [${moved(d.contract)}]`).join('; ')}`);
   }
   console.log('\nEARLY members (a strict rule would wrongly un-complete these):');
   for (const { g, earlyOnes } of earlyGroups.slice(0, 40)) {
-    console.log(`  ${g.gkey}  group ATC ${day(g.group_atc)}  members ${g.members}, with ATC ${g.with_atc}; no ATC: ${earlyOnes.map((d) => `po ${d.po} created ${day(d.created)}`).join('; ')}`);
+    console.log(`  ${g.gkey}  group ATC ${day(g.group_atc)}  members ${g.members}, with ATC ${g.with_atc}; no ATC: ${earlyOnes.map((d) => `po ${d.po} created ${day(d.created)} [${moved(d.contract)}]`).join('; ')}`);
   }
 
   await connection.end?.();
