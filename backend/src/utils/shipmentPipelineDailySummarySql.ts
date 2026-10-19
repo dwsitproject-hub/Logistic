@@ -12,6 +12,7 @@ import { buildShipmentListAtaSelectSql, SHIPMENT_ATA_OVERRIDES_JOIN } from './sh
 import {
   shipmentEffectiveStatusExpr,
   shipmentListContractOsWithinBandExpr,
+  sqlShipmentGroupStatusAgg,
   sqlShipmentGroupStatusFloorAgg,
 } from './shipmentListFilters';
 import { sqlShipmentListPrimaryFieldAgg, sqlShipmentListPrimaryIdAgg } from './shipmentListPrimaryShipmentSql';
@@ -103,7 +104,7 @@ function buildShipmentDailyBaseCteSql(): string {
         SELECT
           ${listStoKeySql} AS sto_key,
           ${sqlShipmentListPrimaryIdAgg(listStoKeySql, 'c', 'l', 's', 'cs_sto')} AS id,
-          MAX(s.status) AS status,
+          ${sqlShipmentGroupStatusAgg('s')} AS status,
           -- Mixed persisted statuses on multi-contract STOs (diagnostic). Cards use MAX ATA.
           ${sqlShipmentGroupStatusFloorAgg('s')},
           -- SAP presence for the STO. MIN keeps the group WITHDRAWN only when every contract

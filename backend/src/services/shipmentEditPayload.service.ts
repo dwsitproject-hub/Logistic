@@ -6,11 +6,13 @@ import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
 import { SHIPMENT_LIST_JPS_SELECT_SQL } from '../utils/shipmentListStoJoinSql';
 import { sqlJpsAtaJsonExpr } from '../jps/scheduleAtaSql';
 import { query } from '../database/connection';
+import logger from '../utils/logger';
 import { getContractImportStatusForShipment } from '../utils/contractDeliveryStatus';
 import { deriveShipmentStatus, pickDisplayedShipmentStatus } from '../utils/shipmentStatus';
 import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
+import { contractsWithActiveSiblingShipment } from './shipmentPoAssignment.service';
 import { ttlMemo } from '../utils/ttlMemo';
 import {
   SHIPMENT_ATA_OVERRIDES_JOIN,
@@ -551,6 +553,26 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
   const contractDetails = lookupKey
     ? await loadContractDetailsForEdit(lookupKey, editContext.contract_numbers ?? '')
     : [];
+  /*
+   * Which PO rows can take a Delivered / Received / Plan quantity at all. The list also holds a PO whose shipment on this STO / operation was
+   * cancelled (found through the STO or an Add PO link): PUT /po-klip-qty answers 400 "No sibling shipment found" for it, and because the shipment
+   * header is saved before the quantities, the user was left with half a save and no remark. Left undefined when the lookup fails, which the modal
+   * reads as "editable", exactly as before.
+   */
+  if (lookupKey && contractDetails.length > 0) {
+    try {
+      const live = await contractsWithActiveSiblingShipment(
+        lookupKey,
+        shipmentUuid,
+        contractDetails.map((d) => String(d.contract_number ?? '')),
+      );
+      for (const d of contractDetails) {
+        d.klip_qty_editable = live.has(String(d.contract_number ?? '').trim());
+      }
+    } catch (err) {
+      logger.warn('Edit Shipment: could not check which PO rows have a live shipment', { err, shipmentUuid });
+    }
+  }
 
   const shipment = shipmentRes.rows[0] as Record<string, unknown>;
   mergeShipmentVesselFromSapRow(shipment, {

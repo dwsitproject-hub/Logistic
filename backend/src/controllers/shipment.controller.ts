@@ -155,6 +155,7 @@ import {
   appendShipmentViewOptionFilter,
   normalizeShipmentEtaBucketParam,
   parseColumnFiltersQuery,
+  sqlShipmentGroupStatusAgg,
   sqlShipmentGroupStatusFloorAgg,
   shipmentEffectiveStatusExpr,
 } from '../utils/shipmentListFilters';
@@ -1042,7 +1043,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.shortage) as shortage,
           MAX(s.difference_final_qty_vs_bl_qty) as difference_final_qty_vs_bl_qty,
           MAX(s.average_vessel_speed) as average_vessel_speed,
-          MAX(s.status) as status,
+          ${sqlShipmentGroupStatusAgg('s')} as status,
           -- Mixed persisted statuses on multi-contract STOs (diagnostic). Cards use MAX ATA.
           ${sqlShipmentGroupStatusFloorAgg('s')},
           MAX(s.sla_days) as sla_days,

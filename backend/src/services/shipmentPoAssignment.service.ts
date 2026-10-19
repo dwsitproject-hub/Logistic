@@ -527,6 +527,43 @@ async function findSiblingShipmentIdForContract(
   return id != null && String(id).trim() !== '' ? String(id).trim() : null;
 }
 
+/**
+ * Of these contracts, the ones that have a live (non-cancelled) shipment in the STO / operation group - the exact test batchSaveShipmentPoKlipQty
+ * applies before writing a PO's Delivered / Received / Shipment Plan Qty. A PO the modal lists without one (its shipment was cancelled, or it only
+ * rides the STO in SAP) cannot take a quantity, so the modal asks this first instead of letting the save fail with a 400.
+ */
+export async function contractsWithActiveSiblingShipment(
+  lookupKey: string,
+  anchorShipmentUuid: string,
+  contractNumbers: string[],
+): Promise<Set<string>> {
+  const wanted = [...new Set(contractNumbers.map((c) => String(c ?? '').trim()).filter(Boolean))];
+  if (wanted.length === 0 || !lookupKey) return new Set();
+  const groupMatch = sqlSiblingShipmentGroupMatchSql({
+    lookupKeySql: '$2::text',
+    contractNumberSql: 'wanted.cn',
+    anchorShipmentIdSql: '$3::uuid',
+  });
+  const result = await query(
+    `
+    SELECT wanted.cn AS contract_number
+    FROM unnest($1::text[]) AS wanted(cn)
+    WHERE EXISTS (
+      SELECT 1
+      FROM shipments s
+      INNER JOIN contracts c ON c.id = s.contract_id
+      WHERE COALESCE(s.status, '') <> 'CANCELLED'
+        AND TRIM(c.contract_id) = TRIM(wanted.cn)
+        AND (
+          ${groupMatch}
+        )
+    )
+    `,
+    [wanted, lookupKey, anchorShipmentUuid],
+  );
+  return new Set((result.rows as Array<{ contract_number: string }>).map((r) => String(r.contract_number).trim()));
+}
+
 /** Persist Delivered/Received Qty (KLIP) onto each sibling shipment (one contract/PO row). */
 export async function batchSaveShipmentPoKlipQty(args: {
   anchorShipmentUuid: string;

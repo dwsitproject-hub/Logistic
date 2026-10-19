@@ -44,6 +44,41 @@ describe('markSupersededDeletedPoLines', () => {
     expect(rows.map((r) => Boolean(r.supersededDeletedPoLine))).toEqual([true, false, true]);
   });
 
+  it('the open line of the PO has a BLANK Contract No while the deleted line names it: still one PO, the deleted line is set aside (PO 1001031718, 2026-10-13)', () => {
+    const open = line(null, '1001031718');
+    const deleted = line('1004031718', '1001031718', 'S');
+    expect(markSupersededDeletedPoLines([open, deleted])).toBe(1);
+    expect(deleted.supersededDeletedPoLine).toBe(true);
+    expect(open.supersededDeletedPoLine).toBeUndefined();
+  });
+
+  it('a blank Contract No does not depend on the order of the lines, and whitespace counts as blank', () => {
+    const deleted = line('1004031718', '1001031718', 'S');
+    const open = line('  ', '1001031718');
+    markSupersededDeletedPoLines([deleted, open]);
+    expect(deleted.supersededDeletedPoLine).toBe(true);
+  });
+
+  it('a deleted line with a blank Contract No next to an open named line is set aside too', () => {
+    const open = line('C1', 'P1');
+    const deleted = line(null, 'P1', 'S');
+    expect(markSupersededDeletedPoLines([open, deleted])).toBe(1);
+    expect(deleted.supersededDeletedPoLine).toBe(true);
+  });
+
+  it('every line deleted - one of them with a blank Contract No - the PO is still cancelled', () => {
+    const a = line(null, 'P1', 'S');
+    const b = line('C1', 'P1', 'S');
+    expect(markSupersededDeletedPoLines([a, b])).toBe(0);
+  });
+
+  it('one PO under two different contract numbers keeps the contract in the key, so the two are not mixed', () => {
+    const openC1 = line('C1', 'P1');
+    const deletedC2 = line('C2', 'P1', 'S');
+    expect(markSupersededDeletedPoLines([openC1, deletedC2])).toBe(0);
+    expect(deletedC2.supersededDeletedPoLine).toBeUndefined();
+  });
+
   it('is per Contract + PO: another PO or another contract is not affected', () => {
     const otherPo = line('C1', 'P2', 'S');
     const otherContract = line('C2', 'P1', 'S');

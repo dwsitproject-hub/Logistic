@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   sqlShipmentListPrimaryFieldAgg,
   sqlShipmentListPrimaryIdAgg,
+  sqlShipmentListPrimaryOrderBy,
 } from './shipmentListPrimaryShipmentSql';
+import { sqlShipmentGroupStatusAgg } from './shipmentListFilters';
 
 describe('shipmentListPrimaryShipmentSql', () => {
   it('prefers STO Type V and vessel_name in primary id agg', () => {
@@ -17,6 +19,17 @@ describe('shipmentListPrimaryShipmentSql', () => {
     expect(sql).toContain('s.shipment_id::text');
     expect(sql).toContain('s.ata_loading_complete IS NOT NULL');
     expect(sql).toContain('s.created_at DESC');
+  });
+
+  it('a cancelled member is the last choice for the primary row, ahead of every other rule', () => {
+    const order = sqlShipmentListPrimaryOrderBy().replace(/\s+/g, ' ');
+    const cancelledAt = order.indexOf("IN ('CANCELLED', 'CANCELED') THEN 1");
+    expect(cancelledAt).toBeGreaterThanOrEqual(0);
+    // before the STO type, the vessel name and created_at DESC, which is what used to pick the newest - cancelled - PO of a multi-PO shipment
+    expect(cancelledAt).toBeLessThan(order.indexOf("= 'V' THEN 0"));
+    expect(cancelledAt).toBeLessThan(order.lastIndexOf('created_at DESC')); // the clause, not the word in the SQL comment
+    expect(sqlShipmentListPrimaryIdAgg()).toContain("IN ('CANCELLED', 'CANCELED') THEN 1");
+    expect(sqlShipmentListPrimaryFieldAgg('s.vessel_name')).toContain("IN ('CANCELLED', 'CANCELED') THEN 1");
   });
 
   it('primary field agg uses the same ranking as primary id', () => {
@@ -34,5 +47,19 @@ describe('shipmentListPrimaryShipmentSql', () => {
     expect(nameSql).toContain('s.created_at DESC');
     expect(nameSql).toContain('ata_discharge_complete IS NOT NULL');
     expect(idSql).toContain('array_agg(s.id');
+  });
+});
+
+describe('a cancelled PO does not cancel a shipment that still has an active PO', () => {
+  it('the group status ignores cancelled members while any member is not cancelled', () => {
+    const sql = sqlShipmentGroupStatusAgg('s').replace(/\s+/g, ' ');
+    expect(sql).toContain("MAX(s.status) FILTER (WHERE UPPER(TRIM(COALESCE(s.status, ''))) NOT IN ('CANCELLED', 'CANCELED'))");
+    // ... and falls back to the plain MAX when every member is cancelled, so an all-cancelled shipment stays Cancelled
+    expect(sql).toMatch(/^COALESCE\(.*, MAX\(s\.status\) \)$/);
+  });
+
+  it('uses the alias it is given', () => {
+    expect(sqlShipmentGroupStatusAgg('sh')).toContain('MAX(sh.status)');
+    expect(sqlShipmentGroupStatusAgg('sh')).not.toContain('s.status,');
   });
 });

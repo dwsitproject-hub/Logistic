@@ -112,6 +112,7 @@ import {
   type LoadingAtaFields,
   type LoadingPortRef,
 } from '@/lib/editShipmentModalSave'
+import { klipQtyEditableFromApi, shipmentSaveErrorMessage } from '@/lib/shipmentEditSave'
 import { FieldHelp } from '@/components/FieldHelp'
 import { computeShipmentFreightBudgetIdrKg } from '@/lib/shipmentTcFreightBudget'
 import { computeShipmentR4ShortageMt } from '@/lib/shipmentTcR4Shortage'
@@ -573,6 +574,8 @@ function formatMetricReadOnly(value: number | null, unit?: string): string | nul
 
 type ShipmentDetailRow = {
   rowKey: string
+  /** False for a PO with no live shipment in this STO / operation group: its quantities cannot be saved (see klipQtyEditableFromApi). */
+  klip_qty_editable: boolean
   contract_number: string
   po_number: string
   supplier: string
@@ -640,6 +643,7 @@ function contractDetailRowFromApi(
   const osActual = parseApiNumber(d.outstanding_qty_actual ?? d.outstanding_qty) ?? 0
   return {
     rowKey: `${shipmentId}-${cn}-${po || 'po'}`,
+    klip_qty_editable: klipQtyEditableFromApi(d.klip_qty_editable),
     contract_number: cn,
     po_number: po,
     supplier: String(d.supplier ?? '').trim(),
@@ -694,6 +698,7 @@ async function buildContractDetailRows(
       const enriched = enrichments[i]
       return {
         rowKey: `${shipmentId}-${cn}`,
+        klip_qty_editable: true,
         contract_number: cn,
         po_number: enriched.po_number,
         supplier: enriched.supplier,
@@ -1920,8 +1925,7 @@ export function EditShipmentModal({
       onShipmentChanged?.(hasSfalSfbdEdits ? { sfalKg: sfalQty, sfbdKg: sfbdQty } : undefined)
       onClose()
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Failed to save shipment'
-      setNotification({ type: 'error', message: msg })
+      setNotification({ type: 'error', message: shipmentSaveErrorMessage(error) })
     } finally {
       setSaving(false)
     }
@@ -2555,8 +2559,9 @@ export function EditShipmentModal({
                         const qtyRow = qtyTableRows.find((r) => r.rowKey === row.rowKey)!
                         const deliveredKlipKg = resolveRowQty(qtyRow, 'quantity_delivered')
                         const receiveKlipKg = resolveRowQty(qtyRow, 'quantity_receive')
+                        const qtyLocked = !row.klip_qty_editable
                         return (
-                          <TableRow key={row.rowKey}>
+                          <TableRow key={row.rowKey} className={qtyLocked ? 'bg-gray-50/70' : undefined}>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {String(row.po_number || row.contract_number || '').trim() ? (
                                 <button
@@ -2571,6 +2576,14 @@ export function EditShipmentModal({
                               ) : (
                                 '—'
                               )}
+                              {qtyLocked ? (
+                                <span
+                                  className="block text-[10px] font-normal text-amber-700"
+                                  title="This PO has no active shipment on this STO / operation (its shipment was cancelled, or it is only linked in SAP), so a quantity cannot be saved for it here."
+                                >
+                                  No active shipment
+                                </span>
+                              ) : null}
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               <span className="line-clamp-2 text-gray-600">{row.supplier || '—'}</span>
@@ -2606,7 +2619,7 @@ export function EditShipmentModal({
                               ) : (
                                 <MtQtyInput
                                   valueKg={resolveRowQty(qtyRow, 'quantity_shipment_plan')}
-                                  disabled={!canModifyCoreSections}
+                                  disabled={!canModifyCoreSections || qtyLocked}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
                                       ...p,
@@ -2622,7 +2635,7 @@ export function EditShipmentModal({
                               ) : (
                                 <MtQtyInput
                                   valueKg={deliveredKlipKg}
-                                  disabled={!canModifyCoreSections}
+                                  disabled={!canModifyCoreSections || qtyLocked}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
                                       ...p,
@@ -2638,7 +2651,7 @@ export function EditShipmentModal({
                               ) : (
                                 <MtQtyInput
                                   valueKg={receiveKlipKg}
-                                  disabled={!canModifyCoreSections}
+                                  disabled={!canModifyCoreSections || qtyLocked}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
                                       ...p,

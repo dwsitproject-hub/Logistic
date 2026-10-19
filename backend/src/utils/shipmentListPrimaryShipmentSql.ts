@@ -22,6 +22,16 @@ export function sqlShipmentListPrimaryOrderBy(
     ? `UPPER(TRIM(COALESCE(NULLIF(TRIM(${contractStosAlias}.sto_type), ''), 'Z')))`
     : `'Z'`;
   return `
+    /*
+     * A cancelled member is the LAST choice. A shipment with several POs is one row here, and one PO's shipment can be cancelled while the others
+     * run (SAP deletes one line of a PO and the shipment of that line is cancelled): created_at DESC then made the newest member the primary row
+     * even when it was the cancelled one, so the row opened in Edit Shipment read Cancelled and its vessel / qty fields came from the cancelled PO.
+     * A group whose members are ALL cancelled is ranked as before.
+     */
+    CASE
+      WHEN UPPER(TRIM(COALESCE(${shipmentAlias}.status, ''))) IN ('CANCELLED', 'CANCELED') THEN 1
+      ELSE 0
+    END,
     CASE
       WHEN ${stoType} = 'V' THEN 0
       WHEN ${stoType} = 'T' THEN 2
@@ -51,6 +61,7 @@ export function sqlShipmentListPrimaryOrderBy(
 
 /**
  * When shipment list groups multiple DB rows under one STO, pick the primary shipment row:
+ * 0) a member that is not cancelled
  * 1) STO Type V (vessel) before T (trucking) / other
  * 2) row with vessel_name populated
  * 3) shipment_id matches the group STO key

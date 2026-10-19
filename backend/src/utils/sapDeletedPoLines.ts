@@ -10,6 +10,12 @@
  * set aside - not stored, not summed into quantities, and above all not allowed to cancel anything - and the open line
  * decides. Delete STO Status is a separate, per-STO flag and is not touched here.
  *
+ * The lines of a PO are found by PO No, not by Contract No + PO No. The export carries STO-level lines whose Contract No is BLANK
+ * (see sapDataDistribution upsertContract: those lines match the contract by PO), so the open line of a PO can have no contract
+ * number while its deleted line names one. Keyed by contract + PO the two never met: PO 1001031718 (open line with a blank Contract No,
+ * deleted line 1004031718) had its deleted line cancel the contract's shipment on 2026-10-13 although the PO was open. Only when the
+ * file gives one PO two DIFFERENT contract numbers is the contract kept in the key, as before.
+ *
  * Scope is one file: it decides between the lines the file holds. A deleted row stored by an EARLIER import under a
  * different STO is not touched by a later file, so it keeps its flag until it is re-imported.
  */
@@ -27,10 +33,26 @@ export interface DeletedPoLineCandidate {
   supersededDeletedPoLine?: boolean;
 }
 
-function poGroupKey(c: DeletedPoLineCandidate): string | null {
+function poGroupKey(c: DeletedPoLineCandidate, poHasSeveralContracts: ReadonlySet<string>): string | null {
   const po = String(c.poNumber ?? '').trim();
   if (!po) return null;
+  // One PO, one contract (blank counts as "not named"): the PO is the group.
+  if (!poHasSeveralContracts.has(po)) return po;
   return `${String(c.contractNumber ?? '').trim()}\u0000${po}`;
+}
+
+/** POs this file names with two or more different, non-blank contract numbers. */
+function posWithSeveralContracts(candidates: DeletedPoLineCandidate[]): Set<string> {
+  const contractsByPo = new Map<string, Set<string>>();
+  for (const c of candidates) {
+    const po = String(c.poNumber ?? '').trim();
+    const contract = String(c.contractNumber ?? '').trim();
+    if (!po || !contract) continue;
+    const set = contractsByPo.get(po);
+    if (set) set.add(contract);
+    else contractsByPo.set(po, new Set([contract]));
+  }
+  return new Set([...contractsByPo.entries()].filter(([, set]) => set.size > 1).map(([po]) => po));
 }
 
 /**
@@ -39,8 +61,9 @@ function poGroupKey(c: DeletedPoLineCandidate): string | null {
  */
 export function markSupersededDeletedPoLines<T extends DeletedPoLineCandidate>(candidates: T[]): number {
   const groups = new Map<string, T[]>();
+  const severalContracts = posWithSeveralContracts(candidates);
   for (const c of candidates) {
-    const key = poGroupKey(c);
+    const key = poGroupKey(c, severalContracts);
     if (!key) continue;
     const group = groups.get(key);
     if (group) group.push(c);

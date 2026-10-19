@@ -630,6 +630,21 @@ export function shipmentEffectiveStatusExpr(
 
 /** Aggregates for mixed persisted statuses on grouped STO rows (diagnostic / shipping-perf).
  *  Pipeline cards use MAX ATA via shipmentEffectiveStatusExpr, not this floor. */
+/**
+ * The stored status of a STO group row. MAX() of the member statuses, with cancelled members set aside while any member is not cancelled.
+ *
+ * Plain MAX(status) is text: 'CANCELLED' sorts above every status that starts with A (ARRIVED_LP, ARRIVED_DP), so a group holding one cancelled PO
+ * and one arrived PO read CANCELLED. More to the point, a cancelled PO must not cancel a shipment that still has an active PO. A group whose
+ * members are ALL cancelled stays CANCELLED.
+ */
+export function sqlShipmentGroupStatusAgg(shipmentAlias = 's'): string {
+  const s = shipmentAlias
+  return `COALESCE(
+      MAX(${s}.status) FILTER (WHERE UPPER(TRIM(COALESCE(${s}.status, ''))) NOT IN ('CANCELLED', 'CANCELED')),
+      MAX(${s}.status)
+    )`
+}
+
 export function sqlShipmentGroupStatusFloorAgg(shipmentAlias = 's'): string {
   const s = shipmentAlias
   const active = `${s}.id IS NOT NULL
