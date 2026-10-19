@@ -131,13 +131,13 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
   for (const m of members) {
     const sao = await q('SELECT * FROM shipment_ata_overrides WHERE shipment_id = $1::uuid', [m.id]);
     const vlp = await q(
-      `SELECT port_sequence, is_discharge_port, ata_arrival, ata_loading_completed, ata_sailed
+      `SELECT port_sequence, is_discharge_port, ata_vessel_arrival, ata_loading_completed, ata_vessel_sailed
          FROM vessel_loading_ports WHERE shipment_id = $1::uuid ORDER BY port_sequence NULLS LAST`,
       [m.id],
     );
     console.log(`   shipment ${m.id.slice(0, 8)} (po ${m.po_number}): overrides=${sao.length ? JSON.stringify(sao[0]) : '-'}`);
     for (const v of vlp) {
-      console.log(`      port seq=${v.port_sequence} discharge=${v.is_discharge_port} ata_arrival=${day(v.ata_arrival)} ata_loading_completed=${day(v.ata_loading_completed)} ata_sailed=${day(v.ata_sailed)}`);
+      console.log(`      port seq=${v.port_sequence} discharge=${v.is_discharge_port} ata_arrival=${day(v.ata_vessel_arrival)} ata_loading_completed=${day(v.ata_loading_completed)} ata_sailed=${day(v.ata_vessel_sailed)}`);
     }
     if (!vlp.length) console.log('      (no port rows)');
   }
