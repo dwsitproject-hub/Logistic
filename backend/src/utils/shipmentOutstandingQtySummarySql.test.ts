@@ -14,6 +14,7 @@ import {
   sqlShipmentIncotermIsCfr,
   sqlShipmentOutstandingActiveStagePredicate,
   sqlShipmentSourceIsInterco,
+  sqlShipmentExecutionOsPerContractCtes,
   sqlShipmentSourceIsThirdParty,
 } from './shipmentOutstandingQtySummarySql'
 
@@ -33,6 +34,33 @@ describe('OS-completed rule on shipment execution rows', () => {
     expect(sql).toMatch(/= 'CANCELLED' THEN effective_status/);
     // Applied where OS already exists, so it costs nothing extra.
     expect(sql).toContain('execution_os_raw');
+  });
+});
+
+describe('the OS of a STO row counts only the contracts that pass the contract-level filters of the toolbar', () => {
+  const scope = 'AND c.product::text = ANY($3::text[]) AND c.contract_date >= $1';
+
+  it('adds one EXISTS over the split-out contract, using the toolbar predicates as they are', () => {
+    const sql = sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true, contractScopeSql: scope });
+    const flat = sql.replace(/\s+/g, ' ');
+    expect(flat).toContain('AND EXISTS ( SELECT 1 FROM contracts c WHERE c.contract_id = TRIM(cn) AND c.product::text = ANY($3::text[]) AND c.contract_date >= $1 )');
+    // it sits in the CTE that splits contract_numbers, before the closed-contract test, so it filters the contracts and not the rows
+    expect(flat.indexOf('c.product::text = ANY($3::text[])')).toBeGreaterThan(flat.indexOf('execution_os_contracts AS'));
+    expect(flat.indexOf('c.product::text = ANY($3::text[])')).toBeLessThan(flat.indexOf('execution_os_ranked AS'));
+  });
+
+  it('adds nothing when the toolbar has no contract-level filter, so the unfiltered card is what it was', () => {
+    const none = sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true });
+    const empty = sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true, contractScopeSql: '' });
+    expect(none).toBe(empty);
+    expect(none.replace(/\s+/g, ' ')).not.toContain('c.contract_id = TRIM(cn) AND');
+  });
+
+  it('is passed through the OS card query', async () => {
+    const sql = (await buildShipmentOutstandingQtyExecutionAggregateQuery('WITH shipment_base AS (SELECT 1)', ' AND TRUE', [], null, scope)).text;
+    expect(sql.replace(/\s+/g, ' ')).toContain('c.contract_id = TRIM(cn) AND c.product::text = ANY($3::text[])');
+    const plain = (await buildShipmentOutstandingQtyExecutionAggregateQuery('WITH shipment_base AS (SELECT 1)', ' AND TRUE', [], null)).text;
+    expect(plain.replace(/\s+/g, ' ')).not.toContain('c.product::text = ANY');
   });
 });
 

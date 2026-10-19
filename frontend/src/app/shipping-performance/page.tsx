@@ -159,6 +159,12 @@ import {
   type PerformancePeriodKey,
 } from '@/lib/performancePeriodFilters'
 import {
+  collapseContractScopeRows,
+  expandContractScopeRows,
+  uniqueContractScopeParents,
+  type ShippingPerfContractScopeGroup,
+} from '@/lib/shippingPerfContractScope'
+import {
   addDistinctShippingPerfStoKey,
   applyShippingPerfCardFilter,
   countUniqueShippingPerfStoKeys,
@@ -183,6 +189,14 @@ interface ShippingPerformanceRow {
    * it, which quietly put every figure on the legacy fallback.
    */
   outstanding_qty_aggregate?: number | null
+  /**
+   * Set by the backend on a STO row whose contracts differ in product / supplier / group / source /
+   * incoterm / site / date: the contracts grouped by identical attributes, each with the outstanding
+   * awarded for it. See lib/shippingPerfContractScope.
+   */
+  contract_scope?: ShippingPerfContractScopeGroup[] | null
+  /** Client-side only: the STO row a per-contract scope row was made from. */
+  scope_parent?: ShippingPerformanceRow
   incoterm?: string | null
   product?: string | null
   /** contracts.source_type — used by client-only Source toggle (Interco / 3rd Party). */
@@ -843,7 +857,7 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
    * enlarge the denominator without touching the numerator and shrink every delay figure simply
    * because something has not been planned yet.
    */
-  const voyageRows = rows.filter((row) => !shippingPerfRowIsUnplannedBacklog(row))
+  const voyageRows = uniqueContractScopeParents(rows.filter((row) => !shippingPerfRowIsUnplannedBacklog(row)))
 
   for (const row of rows) {
     addDistinctContractIds(contracts, row.contract_number)
@@ -1633,8 +1647,14 @@ function ShippingPerformancePageContent() {
   // Step A: exclude UNPLANNED at base — single source of truth for Sections 1–3.
   // Materialize LP/DP flow rate here so every downstream consumer (table render, sort,
   // By-Vessel averaging) reads a real row field.
+  /*
+   * A STO row that spans contracts of different product / supplier / group / source is split into one
+   * row per contract group HERE, so every filter below picks contracts and not the whole STO. Rows
+   * that do not differ pass through. The table, By Vessel and vessel history put them back with
+   * collapseContractScopeRows - see lib/shippingPerfContractScope.
+   */
   const baseFilteredRows = useMemo(
-    () => materializeFlowRates(excludeUnplannedShippingRows(rows)),
+    () => expandContractScopeRows(materializeFlowRates(excludeUnplannedShippingRows(rows))),
     [rows],
   )
 
@@ -1920,9 +1940,9 @@ function ShippingPerformancePageContent() {
   /** Vessel history — Open + Close in toolbar scope; ignores summary card & status filter. */
   const vesselHistorySourceRows = useMemo(() => {
     if (!SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) {
-      return scopeFilteredRows.map(applySection3PortDisplay)
+      return collapseContractScopeRows(scopeFilteredRows).map(applySection3PortDisplay)
     }
-    return applyGlobalFiltersToRows(scopeFilteredRows, {
+    return collapseContractScopeRows(applyGlobalFiltersToRows(scopeFilteredRows, {
       selectedIncoterms,
       selectedProducts,
       selectedGroupPlants,
@@ -1936,7 +1956,7 @@ function ShippingPerformancePageContent() {
       dateFrom,
       dateTo,
       searchTerm,
-    }).map(applySection3PortDisplay)
+    })).map(applySection3PortDisplay)
   }, [
     scopeFilteredRows,
     selectedIncoterms,
@@ -2335,9 +2355,14 @@ function ShippingPerformancePageContent() {
   ])
 
   /** Section 3 only — resolve port columns (shipment operation → SAP fallback) before sort/render. */
+  const drilldownStoRows = useMemo(
+    () => collapseContractScopeRows(drilldownFilteredRows),
+    [drilldownFilteredRows],
+  )
+
   const section3DisplayRows = useMemo(
-    () => drilldownFilteredRows.map(applySection3PortDisplay),
-    [drilldownFilteredRows, dischargePortResolver],
+    () => drilldownStoRows.map(applySection3PortDisplay),
+    [drilldownStoRows, dischargePortResolver],
   )
 
   // Step D: apply Section 3 sorting
@@ -2957,7 +2982,7 @@ function ShippingPerformancePageContent() {
                   </span>
                   <span className="whitespace-nowrap tabular-nums text-gray-700">
                     <span className="font-semibold">
-                      {(tableViewMode === 'all' ? drilldownFilteredRows.length : tableRows.length).toLocaleString('en-US')}
+                      {(tableViewMode === 'all' ? drilldownStoRows.length : tableRows.length).toLocaleString('en-US')}
                     </span>{' '}
                     {tableViewMode === 'all' ? 'shipments' : `vessel${tableRows.length === 1 ? '' : 's'}`}
                   </span>

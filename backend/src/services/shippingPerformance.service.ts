@@ -23,6 +23,7 @@ import {
   applyContractGrainOutstanding,
   contractNumbersOf,
   loadContractExecutionOutstandingKg,
+  loadContractScopeAttributes,
 } from './shippingPerfContractGrainOs.service';
 import { shippingPerfOutstandingQtyKgForAggregate } from '../utils/shippingPerformanceOutstandingAgg';
 import {
@@ -1390,7 +1391,22 @@ function refreshShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
           CONTRACT_GRAIN_OS_TIMEOUT_MS,
           'contract-grain outstanding',
         );
-        applyContractGrainOutstanding(shipmentRows, contractOsKg);
+        /*
+         * The attributes of every contract, so the page can tell a CPO contract from a POME one on the
+         * same STO, and a relabelled B2B contract from the child's supplier (see attachContractScope). Guarded on its own: if
+         * it fails the rows simply carry no contract_scope and the page behaves as it did.
+         */
+        let contractAttrs: Awaited<ReturnType<typeof loadContractScopeAttributes>> | undefined;
+        try {
+          contractAttrs = await withRefreshTimeout(
+            loadContractScopeAttributes(contractNumbers),
+            CONTRACT_GRAIN_OS_TIMEOUT_MS,
+            'contract scope attributes',
+          );
+        } catch (err) {
+          logger.error('Shipping Performance contract scope attributes failed - rows carry no contract_scope', { err });
+        }
+        applyContractGrainOutstanding(shipmentRows, contractOsKg, contractAttrs);
         // Re-stamp so the corrected rows carry a full TTL rather than inheriting a used one.
         ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
       } catch (err) {

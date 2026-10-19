@@ -264,6 +264,7 @@ export function applyShipmentStatusVesselZeroGuards(
 export async function buildShipmentStatusCardQtyExecutionAggregateQuery(
   shipmentBaseCteSql: string,
   toolbarOuterSql: string,
+  contractScopeSql?: string,
 ): Promise<string> {
   return `
     ${shipmentBaseCteSql},
@@ -285,7 +286,7 @@ export async function buildShipmentStatusCardQtyExecutionAggregateQuery(
       FROM shipment_page sp
     ),
     ${sqlShipmentContractQtyOncePerContractCtes('enriched')},
-    ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true })}
+    ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true, contractScopeSql })}
     SELECT
       ${sqlShipmentContractQtyOnceSelect()},
       0::numeric AS unplanned_execution_outstanding_qty,

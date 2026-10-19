@@ -892,6 +892,13 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const shipmentBaseWhereSql = shipmentBaseWhereParts.join(' AND ');
     const contractScopeSql =
       contractScopeParts.length > 0 ? `AND ${contractScopeParts.join(' AND ')}` : '';
+    /**
+     * The same predicates for the OUTSTANDING of a STO row's contracts (sqlShipmentExecutionOsPerContractCtes): a contract the row carries counts only when
+     * it passes them. Without the Discharge Port one - a port is a property of the shipment, and a contract with a shipment is matched by that, not by the
+     * SAP port the backlog arm uses.
+     */
+    const osContractScopeParts = contractScopeParts.filter((part) => part !== dischargePortFilter.contractSql);
+    const osContractScopeSql = osContractScopeParts.length > 0 ? `AND ${osContractScopeParts.join(' AND ')}` : '';
 
     /**
      * `latest_spd_contract` picks the newest SAP row per contract. Reading it from
@@ -1420,6 +1427,7 @@ ${vlpLateralJoins}
         innerParams,
         toolbarOuterParams,
         filterCacheKey: shipmentListFilterCacheKey,
+        contractScopeSql: osContractScopeSql,
       });
 
     const loadSection1StatusCardQty = (backlogParts: ShipmentStatusCardQtyBacklogParts) =>
@@ -1430,6 +1438,7 @@ ${vlpLateralJoins}
           innerParams,
           toolbarOuterParams,
           filterCacheKey: shipmentListFilterCacheKey,
+          contractScopeSql: osContractScopeSql,
         },
         backlogParts,
       );
@@ -1458,6 +1467,7 @@ ${vlpLateralJoins}
       toolbarOuterSql: section1SummaryFilterSql,
       summaryScopeCte,
       summaryEnrichedFrom,
+      contractScopeSql: osContractScopeSql,
     });
     /** Live stage counts + vessel names for daily overlay (same ATA ladder as list). */
     const liveStageCountsQuery = buildShipmentPipelineLiveStageCountsQuery({

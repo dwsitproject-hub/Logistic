@@ -1,6 +1,9 @@
 import { getClient } from '../database/connection';
 import { sqlContractExecutionOutstandingKgExpr } from '../utils/contractExecutionOutstandingSql';
-import { sqlContractHasResolvedRegionSiteExpr } from '../utils/regionSiteSql';
+import {
+  sqlContractHasResolvedRegionSiteExpr,
+  sqlRegionSiteDisplayForContract,
+} from '../utils/regionSiteSql';
 import { resolveContractsQtyMoveCte } from './contractQtyMoveSnapshot.service';
 import {
   isShipmentActiveStage,
@@ -239,6 +242,7 @@ export async function loadContractExecutionOutstandingKg(
 export function applyContractGrainOutstanding<T extends ContractGrainOsRow>(
   rows: T[],
   contractOsKg: Map<string, number>,
+  contractAttrs?: Map<string, ContractScopeAttrs>,
 ): T[] {
   const winnerByContract = new Map<string, { row: T; rank: number }>();
 
@@ -257,13 +261,182 @@ export function applyContractGrainOutstanding<T extends ContractGrainOsRow>(
   }
 
   const awarded = new Map<T, number>();
+  const awardedContracts = new Map<T, Map<string, number>>();
   for (const [contract, { row }] of winnerByContract) {
-    awarded.set(row, (awarded.get(row) ?? 0) + (contractOsKg.get(contract) ?? 0));
+    const kg = contractOsKg.get(contract) ?? 0;
+    awarded.set(row, (awarded.get(row) ?? 0) + kg);
+    const held = awardedContracts.get(row) ?? new Map<string, number>();
+    held.set(contract, kg);
+    awardedContracts.set(row, held);
   }
 
   for (const row of rows) {
     if (row.is_unplanned_backlog === true) continue;
     row.outstanding_qty_aggregate = awarded.get(row) ?? 0;
+    if (contractAttrs) attachContractScope(row, awardedContracts.get(row), contractAttrs);
   }
   return rows;
+}
+
+/**
+ * The contract-level attributes a toolbar filter can pick on. A STO row carries ONE value of each
+ * (the picked contract's, or a comma list), so a filter chooses rows, not contracts.
+ */
+export type ContractScopeAttrs = {
+  product: string | null;
+  incoterm: string | null;
+  source_type: string | null;
+  supplier: string | null;
+  group_name: string | null;
+  plant_site: string | null;
+  /** YYYY-MM-DD */
+  contract_date: string | null;
+};
+
+/**
+ * One group of the contracts of a STO row that share every attribute above. `outstanding_qty_aggregate`
+ * is what this row was awarded for exactly these contracts (0 when another row holds their furthest
+ * stage), so the groups of a row sum to the row's own aggregate.
+ */
+export type ContractScopeGroup = ContractScopeAttrs & {
+  contract_number: string;
+  outstanding_qty_aggregate: number;
+};
+
+const SCOPE_ATTR_KEYS: ReadonlyArray<keyof ContractScopeAttrs> = [
+  'product',
+  'incoterm',
+  'source_type',
+  'supplier',
+  'group_name',
+  'plant_site',
+  'contract_date',
+];
+
+function scopeText(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  return text ? text : null;
+}
+
+/**
+ * Does the row's own value of each attribute already say what the group's is? A list field (supplier,
+ * group, source, date) holds every member's value joined by commas, so it counts when it contains
+ * the group's.
+ */
+function rowDescribesGroup(row: Record<string, unknown>, attrs: ContractScopeAttrs): boolean {
+  return SCOPE_ATTR_KEYS.every((key) => {
+    const mine = (scopeText(row[key]) ?? '').toUpperCase();
+    const theirs = (attrs[key] ?? '').toUpperCase();
+    if (mine === theirs) return true;
+    if (!theirs) return false;
+    return mine.includes(theirs);
+  });
+}
+
+/**
+ * Split a STO row's contracts into groups of identical attributes, when - and only when - the row's
+ * own single set of values does not already say what its contracts are.
+ *
+ * WHY. Outstanding is awarded per CONTRACT, but the page filters per ROW, and a row can carry
+ * contracts of several products / suppliers / groups. Picking CPO kept a row with three CPO
+ * contracts and one POME contract, and counted the POME one too: BONTANG / CPO read 83,758 MT here
+ * against Contract Performance's 83,258. The row keeps its single attributes for display; this adds
+ * what the page needs to tell its contracts apart.
+ *
+ * That covers two cases, both measured on the dev copy. Contracts that differ among themselves (CPO and
+ * POME on one vessel). And ONE contract whose own attributes differ from the row's: a B2B child is
+ * relabelled to its origin's contract number, but the row keeps the CHILD's supplier / group, so
+ * filtering by supplier put 4,500 MT under the wrong supplier on BONTANG.
+ *
+ * Only rows that differ get it, so the payload is untouched for the large majority and a row without
+ * `contract_scope` behaves exactly as before.
+ */
+export function attachContractScope<T extends ContractGrainOsRow>(
+  row: T,
+  awardedKgByContract: Map<string, number> | undefined,
+  contractAttrs: Map<string, ContractScopeAttrs>,
+): void {
+  delete (row as Record<string, unknown>).contract_scope;
+  const contracts = contractNumbersOf(row);
+  if (contracts.length < 1) return;
+
+  const groups = new Map<string, { attrs: ContractScopeAttrs; contracts: string[]; kg: number }>();
+  for (const contract of contracts) {
+    const known = contractAttrs.get(contract);
+    // A contract the lookup did not find takes the row's own values, so it joins the row's group
+    // rather than forming one of its own.
+    const attrs = {} as ContractScopeAttrs;
+    for (const key of SCOPE_ATTR_KEYS) {
+      attrs[key] = scopeText(known ? known[key] : (row as Record<string, unknown>)[key]);
+    }
+    const identity = SCOPE_ATTR_KEYS.map((key) => (attrs[key] ?? '').toUpperCase()).join('|');
+    const group = groups.get(identity) ?? { attrs, contracts: [], kg: 0 };
+    group.contracts.push(contract);
+    group.kg += awardedKgByContract?.get(contract) ?? 0;
+    groups.set(identity, group);
+  }
+  if (groups.size < 2) {
+    const only = [...groups.values()][0]!;
+    if (rowDescribesGroup(row as Record<string, unknown>, only.attrs)) return;
+  }
+
+  (row as Record<string, unknown>).contract_scope = [...groups.values()].map(
+    (group): ContractScopeGroup => ({
+      ...group.attrs,
+      contract_number: group.contracts.join(', '),
+      outstanding_qty_aggregate: group.kg,
+    }),
+  );
+}
+
+/**
+ * The attributes of these contracts, read once, chunked and bounded by the server's clock like the
+ * outstanding lookup above. The Region/Site expression runs per contract (two correlated subqueries).
+ */
+export async function loadContractScopeAttributes(
+  contractNumbers: string[],
+): Promise<Map<string, ContractScopeAttrs>> {
+  const out = new Map<string, ContractScopeAttrs>();
+  const ids = [...new Set(contractNumbers.map((c) => c.trim()).filter(Boolean))];
+  if (ids.length === 0) return out;
+
+  const client = await getClient();
+  try {
+    await client.query(`SET statement_timeout = ${CONTRACT_OS_STATEMENT_TIMEOUT_MS}`);
+    for (let i = 0; i < ids.length; i += CONTRACT_OS_CHUNK) {
+      const chunk = ids.slice(i, i + CONTRACT_OS_CHUNK);
+      const result = await client.query(
+        `SELECT c.contract_id,
+                c.product,
+                c.incoterm,
+                c.source_type,
+                c.supplier,
+                c.group_name,
+                to_char(c.contract_date::date, 'YYYY-MM-DD') AS contract_date,
+                COALESCE(${sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number')}, 'Blank') AS plant_site
+         FROM contracts c
+         WHERE c.contract_id = ANY($1::text[])`,
+        [chunk],
+      );
+      for (const row of result.rows as Record<string, unknown>[]) {
+        out.set(String(row.contract_id), {
+          product: scopeText(row.product),
+          incoterm: scopeText(row.incoterm),
+          source_type: scopeText(row.source_type),
+          supplier: scopeText(row.supplier),
+          group_name: scopeText(row.group_name),
+          plant_site: scopeText(row.plant_site),
+          contract_date: scopeText(row.contract_date),
+        });
+      }
+    }
+  } finally {
+    try {
+      await client.query('SET statement_timeout = DEFAULT');
+    } catch {
+      /* the connection is going back to the pool either way */
+    }
+    client.release();
+  }
+  return out;
 }

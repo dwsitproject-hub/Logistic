@@ -95,6 +95,8 @@ export interface ShipmentSection1CombinedSummaryQueryOpts {
   toolbarOuterSql: string;
   summaryScopeCte: string;
   summaryEnrichedFrom: string;
+  /** The toolbar's contract-level predicates (`AND ...` over alias `c`): see sqlShipmentExecutionOsPerContractCtes. */
+  contractScopeSql?: string;
 }
 
 async function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1CombinedSummaryQueryOpts): Promise<string> {
@@ -133,7 +135,7 @@ async function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1Combin
         ${masterJoin}
       ),
       ${sqlShipmentContractQtyOncePerContractCtes('enriched')},
-      ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true })}`;
+      ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true, contractScopeSql: opts.contractScopeSql })}`;
 }
 
 /**

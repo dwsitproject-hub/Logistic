@@ -507,6 +507,8 @@ export async function loadShipmentStatusCardQtyForRequest(
     innerParams: unknown[];
     toolbarOuterParams: unknown[];
     filterCacheKey: string;
+    /** The toolbar's contract-level predicates, so a contract of another product / supplier on the same STO is not counted. */
+    contractScopeSql?: string;
   },
   backlogParts: ShipmentStatusCardQtyBacklogParts,
 ): Promise<ShipmentStatusCardQtyBundle> {
@@ -526,6 +528,7 @@ export async function loadShipmentStatusCardQtyForRequest(
     const execText = await buildShipmentStatusCardQtyExecutionAggregateQuery(
       opts.shipmentBaseCteSql,
       opts.toolbarOuterSql,
+      opts.contractScopeSql,
     );
     const execRes = await query(execText, baseParams);
     const execution = parseShipmentStatusContractQtyFromExecutionRow(
@@ -572,6 +575,8 @@ export async function loadShipmentOutstandingQtyForRequest(
     innerParams: unknown[];
     toolbarOuterParams: unknown[];
     filterCacheKey: string;
+    /** The toolbar's contract-level predicates, so a contract of another product / supplier on the same STO is not counted. */
+    contractScopeSql?: string;
   },
 ): Promise<ShipmentOutstandingQtySummary> {
   const cacheKey = buildShipmentOutstandingQtyCacheKey(opts.filterCacheKey);
@@ -592,6 +597,7 @@ export async function loadShipmentOutstandingQtyForRequest(
       opts.toolbarOuterSql,
       baseParams,
       null,
+      opts.contractScopeSql,
     )
       .then((execQ) => query(execQ.text, execQ.params))
       .then((res) =>

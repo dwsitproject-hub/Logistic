@@ -243,7 +243,14 @@ export { sqlShipmentActiveStageRankExpr };
  */
 export function sqlShipmentExecutionOsPerContractCtes(
   enrichedAlias = 'enriched',
-  opts: { requireResolvedRegionSite?: boolean } = {},
+  opts: {
+    requireResolvedRegionSite?: boolean;
+    /**
+     * The toolbar's CONTRACT-level predicates (contract date, contract, Region/Plant, Product / Incoterm / Supplier), as `AND ...` over alias `c`. A
+     * contract the STO row carries counts only when it passes them. See contractScopeFilter below.
+     */
+    contractScopeSql?: string;
+  } = {},
 ): string {
   /*
    * `requireResolvedRegionSite` keeps the OS total on the same population Contract Performance
@@ -255,6 +262,25 @@ export function sqlShipmentExecutionOsPerContractCtes(
           SELECT 1 FROM contracts c_rs
           WHERE c_rs.contract_id = TRIM(cn)
             AND ${sqlContractHasResolvedRegionSiteExpr('c_rs.contract_id', 'c_rs.po_number')}
+        )`
+    : '';
+  /*
+   * Every contract of the STO row has to pass the toolbar's contract-level filters, not only the contracts that picked the row.
+   *
+   * The toolbar picks ROWS: a grouped STO row is kept when any member contract matches. This CTE then splits the row's contract_numbers - the contracts
+   * LINKED to the STO, whatever their product, supplier or date - and valued every one of them. A vessel carrying three CPO contracts and one POME
+   * contract is kept by a CPO filter (its CPO contracts match) and then counted with the POME one: BONTANG / CPO read 83,758 MT here against Contract
+   * Performance's 83,258 (the POME contract, 500 MT; the rest of that gap was a closed-too-early contract fixed on Contract Performance). Contract
+   * Performance, which filters per contract, was right.
+   *
+   * Applied per contract, here, where the rows are already split out; the row set itself is untouched, so the list and its PO column still show the whole STO.
+   * The Discharge Port filter is NOT part of it: a port belongs to the shipment, not to a contract.
+   */
+  const contractScopeFilter = opts.contractScopeSql
+    ? `AND EXISTS (
+          SELECT 1 FROM contracts c
+          WHERE c.contract_id = TRIM(cn)
+            ${opts.contractScopeSql}
         )`
     : '';
   /*
@@ -338,6 +364,7 @@ export function sqlShipmentExecutionOsPerContractCtes(
           'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING'
         )
         ${regionSiteFilter}
+        ${contractScopeFilter}
         AND NOT (${contractOwnSapClosed})
     ),
     execution_os_ranked AS (
@@ -532,6 +559,7 @@ export async function buildShipmentOutstandingQtyExecutionAggregateQuery(
   toolbarOuterSql: string,
   baseParams: unknown[],
   osStatus: string | null,
+  contractScopeSql?: string,
 ): Promise<{ text: string; params: unknown[] }> {
   const stageFilter = appendShipmentPipelineStageFilter(
     osStatus ?? undefined,
@@ -559,7 +587,7 @@ export async function buildShipmentOutstandingQtyExecutionAggregateQuery(
         ${sqlShipmentSection1LightExecutionEnrichSelect('sp')}
       FROM shipment_page sp
     ),
-    ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true })}
+    ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true, contractScopeSql })}
     SELECT
       ${sqlShipmentOutstandingQtyAggregateSelect(
         'execution_os.outstanding_quantity',
