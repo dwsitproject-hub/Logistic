@@ -413,6 +413,8 @@ interface Shipment {
   vlp_discharge_port_name?: string
   quantity_delivered_sap?: number
   is_contract_sap_closed?: boolean
+  /** The PO sits in several KLIP shipments: the SAP Delivered / Received on this row are the PO's, so the row shows the KLIP quantities only. */
+  sap_qty_shared?: boolean | null
   pre_planned_group_id?: string | null
   sfal_qty?: number | null
   sfbd_qty?: number | null
@@ -682,6 +684,7 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
         row.klip_receive_qty ?? row.actual_vessel_qty_receive,
       ),
       is_contract_sap_closed: match.is_contract_sap_closed ?? row.is_contract_sap_closed,
+      sap_qty_shared: match.sap_qty_shared ?? row.sap_qty_shared,
       outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
       outstanding_qty_planning: match.outstanding_qty_planning ?? row.outstanding_qty_planning,
       contract_qty: match.contract_qty ?? row.contract_qty,

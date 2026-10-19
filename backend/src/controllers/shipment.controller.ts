@@ -246,6 +246,7 @@ import {
 import { resolveContractLogisticsStoStatus } from '../utils/contractLogisticsStoDisplay';
 import { isContractLatestSpdSnapshotFresh } from '../services/contractLatestSpdSnapshot.service';
 import { invalidateAfterShipmentWrite } from '../services/shipmentWriteInvalidation.service';
+import { sqlSapQtySharedAcrossShipments } from '../utils/shipmentSapQtyShared';
 import { latestSpdDerivedExprs } from '../utils/contractLatestSpdDerivedSql';
 import { deriveCompactShipmentPage } from '../services/shipmentListNodePage.service';
 import {
@@ -2387,6 +2388,7 @@ ${vlpLateralJoins}
         sl.source_type AS source_type,
         COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged,
         ${sqlMergedPoNumbers('pna', 'sp')} AS po_numbers_merged,
+        ${sqlSapQtySharedAcrossShipments('sp.sto_key', 'sp.contract_numbers')} AS sap_qty_shared,
         sl.vessel_name_sap,
         sl.vessel_code_sap,
         sl.vessel_owner_sap,

@@ -11,6 +11,7 @@ import {
 } from './pipelineDailySummary.service';
 import { parseColumnFiltersQuery, shipmentEffectiveStatusExpr } from '../utils/shipmentListFilters';
 import { sqlMergedPoNumbers } from '../utils/stoLinkedContractSql';
+import { sqlSapQtySharedAcrossShipments } from '../utils/shipmentSapQtyShared';
 import {
   parseDischargePortParam,
   resolveDischargePortSelectionKey,
@@ -1348,6 +1349,7 @@ const LIST_PAGE_SELECT = `
         sl.source_type AS source_type,
         COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged,
         ${sqlMergedPoNumbers('pna', 'sp')} AS po_numbers_merged,
+        ${sqlSapQtySharedAcrossShipments('sp.sto_key', 'sp.contract_numbers')} AS sap_qty_shared,
         sl.vessel_name_sap,
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
@@ -1402,6 +1404,7 @@ const LIST_PAGE_SELECT_ENRICHED = `
         sl.source_type AS source_type,
         COALESCE(sp.contract_ext_no_resolved, sp.contract_ext_no) AS contract_ext_no_merged,
         ${sqlMergedPoNumbers('pna', 'sp')} AS po_numbers_merged,
+        ${sqlSapQtySharedAcrossShipments('sp.sto_key', 'sp.contract_numbers')} AS sap_qty_shared,
         sl.vessel_name_sap,
         sl.vessel_code_sap,
         sl.vessel_owner_sap,

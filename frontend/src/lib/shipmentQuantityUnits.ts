@@ -162,11 +162,14 @@ export function resolveShipmentListDeliveredKg(shipment: {
   total_quantity_delivered?: number | string | null
   quantity_delivered_sap?: number | string | null
   is_contract_sap_closed?: boolean | null
+  sap_qty_shared?: boolean | null
 }): number | null {
   const closed = Boolean(shipment.is_contract_sap_closed)
   const klip =
     shipmentStoredQtyKg(shipment.klip_delivery_qty)
     ?? shipmentStoredQtyKg(shipment.quantity_delivered_klip)
+  // The SAP figure of a PO that sits in several KLIP shipments is the PO's, not this shipment's (see sqlSapQtySharedAcrossShipments): KLIP only.
+  if (shipment.sap_qty_shared) return klip
   const sap = shipmentStoredQtyKg(shipment.quantity_delivered_sap)
   const legacy =
     shipmentStoredQtyKg(shipment.quantity_delivered)
@@ -256,11 +259,14 @@ export function resolveShipmentListReceiveKg(shipment: {
   actual_vessel_qty_receive?: number | string | null
   quantity_receive?: number | string | null
   is_contract_sap_closed?: boolean | null
+  sap_qty_shared?: boolean | null
 }): number | null {
   const closed = Boolean(shipment.is_contract_sap_closed)
   const klip =
     shipmentStoredQtyKg(shipment.klip_receive_qty)
     ?? shipmentStoredQtyKg(shipment.actual_vessel_qty_receive)
+  // As for Delivered: the SAP receive of a PO shared by several KLIP shipments is not this shipment's.
+  if (shipment.sap_qty_shared) return klip
   const sap = shipmentStoredQtyKg(shipment.quantity_receive)
 
   if (closed) {
@@ -286,17 +292,21 @@ export function shipmentModalGrandTotalsKg(totals: {
   sapDeliveredKg: number | null
   sapReceiveKg: number | null
   contractSapClosed: boolean
+  /** The PO sits in several KLIP shipments: its SAP quantities are not this shipment's, so the totals are the KLIP quantities only. */
+  sapQtyShared?: boolean
 }): { delivered: number | null; receive: number | null } {
   return {
     delivered: resolveShipmentListDeliveredKg({
       klip_delivery_qty: totals.klipDeliveredKg,
       quantity_delivered_sap: totals.sapDeliveredKg,
       is_contract_sap_closed: totals.contractSapClosed,
+      sap_qty_shared: totals.sapQtyShared,
     }),
     receive: resolveShipmentListReceiveKg({
       klip_receive_qty: totals.klipReceiveKg,
       quantity_receive: totals.sapReceiveKg,
       is_contract_sap_closed: totals.contractSapClosed,
+      sap_qty_shared: totals.sapQtyShared,
     }),
   }
 }

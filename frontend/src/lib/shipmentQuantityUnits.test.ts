@@ -366,3 +366,34 @@ describe('shipmentModalGrandTotalsKg - the Edit Shipment footer follows the View
     expect(t.receive).toBe(resolveShipmentListReceiveKg({ klip_receive_qty: 0, quantity_receive: 1366000, is_contract_sap_closed: false }))
   })
 })
+
+describe('a PO that sits in several KLIP shipments shows the KLIP quantity only', () => {
+  // PO 1001031313: Dahlia received 1,366 MT; Kapuas 168 has no KLIP receive, and SAP's 1,366 MT is the PO's, not Kapuas's
+  const kapuas = { klip_receive_qty: null, actual_vessel_qty_receive: null, quantity_receive: 1366000, quantity_delivered_sap: 1378000, klip_delivery_qty: 1621901 }
+
+  it('Received does not borrow the SAP figure (0 until the KLIP receive is entered)', () => {
+    expect(shipmentListReceiveKgForViewTable({ ...kapuas, sap_qty_shared: true })).toBe(0)
+    // without the flag the old fallback applies, as for any single-shipment PO
+    expect(shipmentListReceiveKgForViewTable({ ...kapuas, sap_qty_shared: false })).toBe(1366000)
+    expect(shipmentListReceiveKgForViewTable(kapuas)).toBe(1366000)
+  })
+
+  it('Delivered with no KLIP quantity does not borrow the SAP figure either, and a KLIP quantity still shows', () => {
+    expect(shipmentListDeliveredKgForViewTable({ ...kapuas, klip_delivery_qty: null, sap_qty_shared: true })).toBe(0)
+    expect(shipmentListDeliveredKgForViewTable({ ...kapuas, sap_qty_shared: true })).toBe(1621901)
+  })
+
+  it('a KLIP receive entered for the shipment is shown', () => {
+    expect(shipmentListReceiveKgForViewTable({ ...kapuas, klip_receive_qty: 500000, sap_qty_shared: true })).toBe(500000)
+  })
+
+  it('a Close GR does not bring the PO figure back onto a shared shipment', () => {
+    expect(shipmentListReceiveKgForViewTable({ ...kapuas, is_contract_sap_closed: true, sap_qty_shared: true })).toBe(0)
+  })
+
+  it('the Edit Shipment Grand Total follows the same rule', () => {
+    const base = { klipDeliveredKg: 1621901, klipReceiveKg: null, sapDeliveredKg: 1378000, sapReceiveKg: 1366000, contractSapClosed: false }
+    expect(shipmentModalGrandTotalsKg({ ...base, sapQtyShared: true })).toEqual({ delivered: 1621901, receive: null })
+    expect(shipmentModalGrandTotalsKg({ ...base, sapQtyShared: false })).toEqual({ delivered: 1621901, receive: 1366000 })
+  })
+})

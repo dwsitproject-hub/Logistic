@@ -13,6 +13,7 @@ import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.ser
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import { contractsWithActiveSiblingShipment } from './shipmentPoAssignment.service';
+import { sqlSapQtySharedAcrossShipments } from '../utils/shipmentSapQtyShared';
 import { ttlMemo } from '../utils/ttlMemo';
 import {
   SHIPMENT_ATA_OVERRIDES_JOIN,
@@ -575,6 +576,21 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
   }
 
   const shipment = shipmentRes.rows[0] as Record<string, unknown>;
+  /*
+   * Whether the SAP Delivered / Received of this group are its own (see sqlSapQtySharedAcrossShipments). The Grand Total of the PO table follows the
+   * Shipments View Table, which then shows the KLIP quantity only. Left undefined when the lookup fails, which reads as "not shared", as before.
+   */
+  if (lookupKey) {
+    try {
+      const shared = await query(
+        `SELECT ${sqlSapQtySharedAcrossShipments('$1::text', '$2::text')} AS shared`,
+        [lookupKey, contractDetails.map((d) => String(d.contract_number ?? '')).filter(Boolean).join(',')],
+      );
+      shipment.sap_qty_shared = shared.rows[0]?.shared === true;
+    } catch (err) {
+      logger.warn('Edit Shipment: could not tell whether the SAP quantities are shared', { err, shipmentUuid });
+    }
+  }
   mergeShipmentVesselFromSapRow(shipment, {
     overlayDisplayName: false,
     hydrateFromMaster: true,

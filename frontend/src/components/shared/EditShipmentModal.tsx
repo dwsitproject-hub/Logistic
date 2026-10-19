@@ -873,6 +873,8 @@ export function EditShipmentModal({
   const [displayedShipmentStatus, setDisplayedShipmentStatus] = useState<string | null>(null)
   /** GR Close on the shipment's contract: the View Table then reads SAP quantities first, and so does the PO table's Grand Total. */
   const [contractSapClosed, setContractSapClosed] = useState(false)
+  /** The PO sits in several KLIP shipments (no STO of their own): SAP's Delivered / Received are the PO's, so the Grand Total is the KLIP quantity only. */
+  const [sapQtyShared, setSapQtyShared] = useState(false)
   const [shipmentDocuments, setShipmentDocuments] = useState<ShipmentDocumentItem[]>([])
   const [docsLoading, setDocsLoading] = useState(false)
 
@@ -1016,8 +1018,9 @@ export function EditShipmentModal({
         sapDeliveredKg: poTableQtyTotals.sapDelivered,
         sapReceiveKg: poTableQtyTotals.sapReceive,
         contractSapClosed,
+        sapQtyShared,
       }),
-    [qtyTotals, poTableQtyTotals, contractSapClosed],
+    [qtyTotals, poTableQtyTotals, contractSapClosed, sapQtyShared],
   )
 
   const isTcCharter = isTcCharterType(vesselMeta.charter_type)
@@ -1399,6 +1402,7 @@ export function EditShipmentModal({
         const masterVn = String(row.vessel_name_master ?? '').trim()
         const grClosed = isContractSapClosedFlag(row.is_contract_sap_closed)
         setContractSapClosed(grClosed)
+        setSapQtyShared(row.sap_qty_shared === true)
         const primaryVn = shipmentVesselPrimaryName(klipVn, sapVn, {
           masterName: masterVn,
           contractSapClosed: grClosed,
@@ -2772,7 +2776,8 @@ export function EditShipmentModal({
                   </Table>
                 </div>
                 <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  Grand Total Delivered / Received Qty is the STO total shown on Shipments View Table: the Klip quantity, or SAP when no Klip quantity is entered.
+                  Grand Total Delivered / Received Qty is the STO total shown on Shipments View Table: the Klip quantity, or SAP when no Klip quantity is entered
+                  (Klip only when the PO is also in another shipment: SAP books the PO, not each shipment).
                   One PO with several STOs: each shipment row is that STO only.
                 </p>
                 {detailRows.some((row) => isMultiStoPo(row.po_sto_count)) ? (
