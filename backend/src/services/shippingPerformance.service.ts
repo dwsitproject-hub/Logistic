@@ -476,16 +476,45 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
    * 15 of 887 groups on dev take their Close solely from a foreign-STO row. Those are the ones
    * this releases - and only for OS and card membership; `status` keeps the group's value.
    */
-  merged.os_status =
-    ownStoRows.length === rows.length
-      ? merged.status
-      : deriveShippingPerfRowStatus({
-          ...merged,
-          ...clearedMilestones,
-          ...maxMergeMilestoneFields(ownStoRows),
-          import_status:
-            aggregateImportStatusForStoGroup(ownStoRows.map((row) => row.import_status)) ?? null,
-        });
+  /*
+   * An OPERATION-keyed group (sto_key 'OP-...') narrows the DISCHARGE ATC the way Shipments does.
+   *
+   * Shipments reads ata_vessel_complete_discharge_own_sto for outstanding, and its own-STO test is "the shipment's id equals the group key". In a
+   * group keyed by an operation id no shipment id equals the key, so every shipment is foreign there and the group's ATC never finishes it - and a
+   * shipment re-planned onto a new vessel keeps counting until that vessel has its own ATC. Here a re-planned shipment's ATC did finish the whole
+   * row: operation OP-1004030473-15277540 (MT. MULIA KARSA 2, four shipments PLANNED with ETC 6 Nov) read COMPLETED because 1004029908's shipment
+   * 1006019867-1004029908 - the earlier voyage of STO 1006019867, MT. GIAT ARMADA 02, now CANCELLED - carries an ATC of 15 Sep. SIT 2026-10-19:
+   * contracts 1004030297 and 1004030835, 1,874 MT, counted by Contract Performance and Shipments and not by this page.
+   *
+   * Only the discharge ATC is narrowed, as Shipments does - not every milestone and not import_status. Clearing all of them (the real-STO branch
+   * below) would also drop the voyage's progress when every shipment is foreign. The key is the SQL one (sto_key), not the JS-derived
+   * op:<operation_id>: comparing a shipment id with an operation id that is not Shipments' key is what over-rescued contract 1004030359.
+   */
+  const sqlStoKey = String(merged.sto_key ?? '').trim();
+  const operationKey = !groupSto && /^OP-/i.test(sqlStoKey) ? sqlStoKey : '';
+  const operationOwnRows = operationKey
+    ? rows.filter((row) => {
+        const own = String(row.shipment_id ?? '').trim();
+        return !own || own === operationKey;
+      })
+    : rows;
+
+  if (ownStoRows.length !== rows.length) {
+    merged.os_status = deriveShippingPerfRowStatus({
+      ...merged,
+      ...clearedMilestones,
+      ...maxMergeMilestoneFields(ownStoRows),
+      import_status:
+        aggregateImportStatusForStoGroup(ownStoRows.map((row) => row.import_status)) ?? null,
+    });
+  } else if (operationOwnRows.length !== rows.length) {
+    merged.os_status = deriveShippingPerfRowStatus({
+      ...merged,
+      discharge_ata_completed: maxMergeMilestoneFields(operationOwnRows).discharge_ata_completed ?? null,
+    });
+  } else {
+    merged.os_status = merged.status;
+  }
   Object.assign(merged, computeShippingPerfDeltaFields(merged));
   return merged;
 }

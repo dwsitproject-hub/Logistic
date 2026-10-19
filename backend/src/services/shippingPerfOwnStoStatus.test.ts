@@ -73,6 +73,59 @@ describe('os_status narrows the stage to the row own STO', () => {
 });
 
 /**
+ * A group keyed by an OPERATION id (sto_key 'OP-...') narrows only the discharge ATC, by Shipments' own test: a shipment is the group's own when
+ * its id equals the key. SIT 2026-10-19: operation OP-1004030473-15277540 held four shipments PLANNED with ETC 6 Nov and one - the earlier
+ * voyage of STO 1006019867, now cancelled - carrying an ATC of 15 Sep, and the whole row read COMPLETED (1,874 MT of OS dropped).
+ */
+describe('an operation-keyed group does not let a re-planned shipment inherit another voyage ATC', () => {
+  const key = 'OP-1004030473-15277540';
+  const member = (over: Record<string, unknown>) => ({
+    sto_key: key,
+    operation_id: key,
+    shipment_id: 'MNL-15615718-1004030297',
+    contract_number: '1004030297',
+    status: 'PLANNED',
+    ...over,
+  });
+
+  it('keeps the table status COMPLETED but reads the stage as not finished when only a foreign shipment carries the ATC', () => {
+    const merged = mergeShippingPerfStoGroup([
+      member({ contract_number: '1004030297' }),
+      member({ contract_number: '1004030835', shipment_id: 'MNL-15615718-1004030835' }),
+      member({ contract_number: '1004029908', shipment_id: '1006019867-1004029908', discharge_ata_completed: '2026-09-15' }),
+    ]);
+    expect(String(merged.status).toUpperCase()).toBe('COMPLETED');
+    expect(String(merged.os_status).toUpperCase()).not.toBe('COMPLETED');
+  });
+
+  it('a shipment whose id IS the key still finishes the group', () => {
+    const merged = mergeShippingPerfStoGroup([
+      member({ shipment_id: key, discharge_ata_completed: '2026-09-15' }),
+      member({ contract_number: '1004030835', shipment_id: 'MNL-15615718-1004030835' }),
+    ]);
+    expect(String(merged.status).toUpperCase()).toBe('COMPLETED');
+    expect(String(merged.os_status)).toBe(String(merged.status));
+  });
+
+  it('keeps the other milestones of the voyage: a sailed group stays sailed, not planned', () => {
+    const merged = mergeShippingPerfStoGroup([
+      member({ loading_ata_sailed: '2026-09-10' }),
+      member({ contract_number: '1004030835', shipment_id: 'MNL-15615718-1004030835', discharge_ata_completed: '2026-09-15' }),
+    ]);
+    expect(String(merged.os_status).toUpperCase()).not.toBe('COMPLETED');
+    expect(String(merged.os_status).toUpperCase()).not.toBe('PLANNED');
+  });
+
+  it('does not touch a group when no shipment is foreign', () => {
+    const merged = mergeShippingPerfStoGroup([
+      member({ shipment_id: key, discharge_ata_completed: '2026-09-15' }),
+      member({ contract_number: '1004030835', shipment_id: '' }),
+    ]);
+    expect(String(merged.os_status)).toBe(String(merged.status));
+  });
+});
+
+/**
  * An `op:` group has no STO for a row to be foreign to. Comparing a KLIP shipment id against an
  * operation id marked every row foreign, cleared every milestone, and rescued the whole group -
  * over-rescuing contract 1004030359 (own STO MNL-37125720-1004030359) by 3,003 MT and pushing
