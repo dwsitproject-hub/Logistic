@@ -1,5 +1,6 @@
 ﻿import { performance } from 'node:perf_hooks';
 import { shipmentListContractOsWithinBandExpr } from '../utils/shipmentListFilters';
+import { appendContractPerfSourceTypeFilter } from './contractSqlFragments';
 import { Response } from 'express';
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
@@ -1057,6 +1058,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           STRING_AGG(DISTINCT c.product, ', ' ORDER BY c.product) FILTER (WHERE c.product IS NOT NULL) as products,
           MAX(c.incoterm) as incoterm,
           MAX(c.source_type) as contract_source_type,
+          -- every contract's source on the STO, so the Source filter finds a STO by any of its contracts and not only by the MAX above
+          STRING_AGG(DISTINCT c.source_type, ', ' ORDER BY c.source_type) FILTER (WHERE c.source_type IS NOT NULL) as contract_source_types,
           MAX(c.group_name) as group_name,
           STRING_AGG(DISTINCT c.group_name, ', ' ORDER BY c.group_name) FILTER (WHERE c.group_name IS NOT NULL) as group_names,
           -- Get delivery dates from contracts
@@ -1149,6 +1152,13 @@ ${vlpLateralJoins}
     const etcNoAtcDueFilter = appendShipmentEtcNoAtcDueWithin7dFilter(etcNoAtcDueWithin7dParam);
 
     const toolbarOuterSql = `${gSearch.sql}${cCol.sql}${li.sql}${ct.sql}${st.sql}${vo.sql}`;
+    /**
+     * Group and Source are picked on the STO row (the contract of the row's own, or any of its contracts), so a row kept by one of them still
+     * carried the OUTSTANDING of its other contracts: on the dev copy PTPN read 6,303 MT against Contract Performance's 4,000 because one of its
+     * contracts rides an INTERCO-labelled STO, and Source Interco was 2,000 MT over. The same two predicates, on the contract, go to the OS
+     * (sqlShipmentExecutionOsPerContractCtes). They reuse the row filter's own placeholder, so no parameter is added.
+     */
+    const osContractScopeWithToolbarSql = `${osContractScopeSql}${cCol.groupContractSql}${appendContractPerfSourceTypeFilter(sourceTypeParam, 'c.source_type')}`;
     /** List-only layers (status / ETA / Pending ATC) â€” excluded from summaryOnly toolbar scope. */
     const cardOuterSql = `${etaBuckets.sql}${statusFilter.sql}${etcNoAtcDueFilter.sql}`;
     const outerSql = `${toolbarOuterSql}${cardOuterSql}`;
@@ -1427,7 +1437,7 @@ ${vlpLateralJoins}
         innerParams,
         toolbarOuterParams,
         filterCacheKey: shipmentListFilterCacheKey,
-        contractScopeSql: osContractScopeSql,
+        contractScopeSql: osContractScopeWithToolbarSql,
       });
 
     const loadSection1StatusCardQty = (backlogParts: ShipmentStatusCardQtyBacklogParts) =>
@@ -1438,7 +1448,7 @@ ${vlpLateralJoins}
           innerParams,
           toolbarOuterParams,
           filterCacheKey: shipmentListFilterCacheKey,
-          contractScopeSql: osContractScopeSql,
+          contractScopeSql: osContractScopeWithToolbarSql,
         },
         backlogParts,
       );
@@ -1467,7 +1477,7 @@ ${vlpLateralJoins}
       toolbarOuterSql: section1SummaryFilterSql,
       summaryScopeCte,
       summaryEnrichedFrom,
-      contractScopeSql: osContractScopeSql,
+      contractScopeSql: osContractScopeWithToolbarSql,
     });
     /** Live stage counts + vessel names for daily overlay (same ATA ladder as list). */
     const liveStageCountsQuery = buildShipmentPipelineLiveStageCountsQuery({

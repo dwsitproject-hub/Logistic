@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendShipmentColumnFilters,
   appendShipmentGlobalSearch,
   appendShipmentCharterTypeFilter,
   appendShipmentSourceTypeFilter,
@@ -176,5 +177,40 @@ describe('appendShipmentSourceTypeFilter', () => {
     expect(result.sql).toContain('sb.contract_source_type');
     expect(result.sql).toMatch(/3RD.*PARTY/);
     expect(result.params).toEqual([]);
+  });
+});
+
+describe('Group and Source find a STO by ANY of its contracts and give the OS the same test per contract', () => {
+  it('Source looks at every contract source of the STO, not only the MAX of them', () => {
+    const result = appendShipmentSourceTypeFilter('3rd Party', 3);
+    expect(result.sql).toContain('COALESCE(sb.contract_source_types, sb.contract_source_type)');
+  });
+
+  it('Group matches the MAX group OR any group in group_names, with one placeholder', () => {
+    const result = appendShipmentColumnFilters({ group_name: { type: 'multi', values: ['INTERCO'] } } as never, 5);
+    const flat = result.sql.replace(/\s+/g, ' ');
+    expect(flat).toContain('sb.group_name::text = ANY($5::text[])');
+    expect(flat).toContain("string_to_array(sb.group_names, ', ')");
+    expect(flat).toContain('gn.name = ANY($5::text[])');
+    expect(result.params).toEqual([['INTERCO']]);
+    expect(result.nextIndex).toBe(6);
+  });
+
+  it('hands the controller the same Group test on the contract, reusing the row filter placeholder', () => {
+    const result = appendShipmentColumnFilters({ group_name: { type: 'multi', values: ['INTERCO'] } } as never, 5);
+    expect(result.groupContractSql).toBe(' AND (c.group_name::text = ANY($5::text[]))');
+  });
+
+  it('a blank Group choice is a blank test on the contract as well', () => {
+    const result = appendShipmentColumnFilters({ group_name: { type: 'multi', values: [], includeBlank: true } } as never, 5);
+    expect(result.groupContractSql).toContain("c.group_name IS NULL OR TRIM(c.group_name::text) = ''");
+    expect(result.params).toEqual([]);
+  });
+
+  it('no Group filter, or another column, gives no contract test', () => {
+    expect(appendShipmentColumnFilters({}, 5).groupContractSql).toBe('');
+    expect(
+      appendShipmentColumnFilters({ product: { type: 'multi', values: ['CPO'] } } as never, 5).groupContractSql,
+    ).toBe('');
   });
 });

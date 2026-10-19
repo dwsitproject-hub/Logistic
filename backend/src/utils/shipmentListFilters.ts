@@ -262,9 +262,21 @@ export function appendShipmentGlobalSearch(
 export function appendShipmentColumnFilters(
   filters: ColumnFilterPayload,
   startIndex: number
-): { sql: string; params: any[]; nextIndex: number } {
+): {
+  sql: string
+  params: any[]
+  nextIndex: number
+  /**
+   * The Group filter as a predicate on the CONTRACT (`AND ...` over alias `c`), reusing the placeholder
+   * of the row filter above. The row filter picks STO rows by the group of one of their contracts; the
+   * outstanding of a row's contracts counts only those that are in the group (see
+   * sqlShipmentExecutionOsPerContractCtes). Empty when no Group filter is set.
+   */
+  groupContractSql: string
+} {
   const parts: string[] = []
   const params: any[] = []
+  const groupContractParts: string[] = []
   let pi = startIndex
 
   for (const [colId, raw] of Object.entries(filters)) {
@@ -330,18 +342,40 @@ export function appendShipmentColumnFilters(
       if (incBlank) {
         ors.push(`(${expr} IS NULL OR TRIM(${expr}::text) = '')`)
       }
+      const contractOrs: string[] = []
+      /*
+       * Group is matched by ANY contract of the STO (group_names, every contract's group), not only by the MAX of them that group_name holds:
+       * a STO with an INTERCO and a PTPN contract is projected as PTPN, so filtering INTERCO dropped it with the INTERCO contract's outstanding
+       * (2,303 MT under Contract Performance on the dev copy). The outstanding of the other contracts is kept out per contract instead.
+       */
+      const anyGroup = colId === 'group_name' || colId === 'group_names'
+      if (incBlank) contractOrs.push(`(c.group_name IS NULL OR TRIM(c.group_name::text) = '')`)
       if (vals.length > 0) {
         ors.push(`${expr}::text = ANY($${pi}::text[])`)
+        if (anyGroup) {
+          ors.push(
+            `EXISTS (SELECT 1 FROM unnest(string_to_array(sb.group_names, ', ')) AS gn(name) WHERE gn.name = ANY($${pi}::text[]))`,
+          )
+        }
+        contractOrs.push(`c.group_name::text = ANY($${pi}::text[])`)
         params.push(vals)
         pi += 1
       }
       if (ors.length > 0) {
         parts.push(` AND (${ors.join(' OR ')})`)
+        if (colId === 'group_name' || colId === 'group_names') {
+          groupContractParts.push(`(${contractOrs.join(' OR ')})`)
+        }
       }
     }
   }
 
-  return { sql: parts.join(''), params, nextIndex: pi }
+  return {
+    sql: parts.join(''),
+    params,
+    nextIndex: pi,
+    groupContractSql: groupContractParts.length > 0 ? ` AND ${groupContractParts.join(' AND ')}` : '',
+  }
 }
 
 /** Toolbar late-indicator filter (matches `late_indicator` text). */
@@ -419,7 +453,15 @@ export function appendShipmentSourceTypeFilter(
   sourceType: string | undefined,
   startIndex: number,
 ): { sql: string; params: unknown[]; nextIndex: number } {
-  const sql = appendContractPerfSourceTypeFilter(sourceType, 'sb.contract_source_type')
+  /*
+   * By ANY contract of the STO, not by the MAX of them: a STO carrying a 3rd Party and an Interco contract is projected as 'Interco'
+   * (MAX), so the 3rd Party filter dropped it together with the 3rd Party contract's outstanding (2,062 MT under Contract Performance on
+   * the dev copy). The outstanding of the other contracts is then kept out per contract (sqlShipmentExecutionOsPerContractCtes).
+   */
+  const sql = appendContractPerfSourceTypeFilter(
+    sourceType,
+    "COALESCE(sb.contract_source_types, sb.contract_source_type)",
+  )
   return { sql, params: [], nextIndex: startIndex }
 }
 
