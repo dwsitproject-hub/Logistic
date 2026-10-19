@@ -512,6 +512,20 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
       ...merged,
       discharge_ata_completed: maxMergeMilestoneFields(operationOwnRows).discharge_ata_completed ?? null,
     });
+    /*
+     * The ATC no longer spreads over the group, but it still finishes the contract it BELONGS to: a shipment's own ATC is Contract Performance's
+     * per-contract rule, and a group that is one contract (BG. SMS 3002, 1004031960, 2,500 MT; MT. VICTORIA 11, 1004031047, 19 MT) would
+     * otherwise be read as unfinished only because its shipment id is not the operation key. The contracts listed here are left out of the
+     * awarding (applyContractGrainOutstanding).
+     */
+    merged.os_finished_contracts = [
+      ...new Set(
+        rows
+          .filter((row) => maxMergeMilestoneFields([row]).discharge_ata_completed != null)
+          .map((row) => String(row.own_contract_number ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
   } else {
     merged.os_status = merged.status;
   }
@@ -950,6 +964,15 @@ export async function buildShippingPerformanceSql(): Promise<string> {
           sm.contract_numbers,
           c.contract_id::text
         ) AS contract_number,
+        -- The ONE contract this shipment belongs to (contract_number above is the whole STO's list once sto_metrics fills it): which contract an
+        -- ATC finishes in an operation-keyed group. Same B2B relabel as above.
+        COALESCE(
+          CASE
+            WHEN COALESCE(l.b2b_flag, '') = 'B2B' AND l.contract_reference_po IS NOT NULL
+              THEN b2b_origin.contract_id::text
+          END,
+          c.contract_id::text
+        ) AS own_contract_number,
         -- SAP presence of the owning contract, carried on the row: the page's cards are
         -- aggregated in JS from this same row set, so exclusion happens there while the
         -- table keeps showing the row.

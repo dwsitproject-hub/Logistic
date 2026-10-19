@@ -105,6 +105,12 @@ describe('contract_scope: which contracts of a STO row differ, so the page can f
     expect(r.contract_scope).toBeUndefined();
   });
 
+  it('a contract finished by its own ATC in an operation group is not awarded to that row', () => {
+    const r = row({ contract_number: 'A, B', status: 'COMPLETED', os_status: 'UNLOADING', os_finished_contracts: ['A'], ...attrs() });
+    applyContractGrainOutstanding([r], new Map([['A', 1000], ['B', 2000]]), new Map([['A', attrs()], ['B', attrs()]]));
+    expect(r.outstanding_qty_aggregate).toBe(2000);
+  });
+
   it('backlog rows are left exactly as they are', () => {
     const backlog = row({ is_unplanned_backlog: true, outstanding_qty_aggregate: 777 });
     applyContractGrainOutstanding([backlog], new Map([['A', 1000]]), known);

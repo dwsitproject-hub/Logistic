@@ -37,6 +37,7 @@ const { runShippingPerformance, invalidateShippingPerformanceRowCache } = load('
 const { parseLatePerformanceFilters, loadLatePerformanceRows, rowMatchesContractPerfStatusFilter } = load('services/latePerformance.service');
 const { isShipmentPageSeaIncoterm } = load('utils/shipmentIncotermScope');
 const { shippingPerfOutstandingQtyKgForAggregate } = load('utils/shippingPerformanceOutstandingAgg');
+const { osStageOf } = load('services/shippingPerfContractGrainOs.service');
 
 const POS = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const PRODUCT = (POS[0] || '').trim().toUpperCase();
@@ -61,9 +62,12 @@ const contractsOf = (row) =>
   invalidateShippingPerformanceRowCache();
   const sp = await runShippingPerformance({ query: { scope: 'ytd', dateFrom: DATE_FROM, dateTo: DATE_TO } }, 'rows');
   const spRows = sp.rows.filter(inScope);
-  const isOnGoing = (r) =>
-    r.is_unplanned_backlog === true ||
-    (up(r.status) !== 'COMPLETED' && up(r.status) !== 'CANCELLED' && up(r.status) !== '' && up(r.status) !== 'UNPLANNED');
+  // The stage the PAGE reads for outstanding and card membership: os_status (narrowed to the row's own STO / operation), else status. This used to
+  // read status, so a row kept COMPLETED for the table but On Going for the cards was reported as class B / D wrongly.
+  const isOnGoing = (r) => {
+    const st = up(osStageOf(r));
+    return r.is_unplanned_backlog === true || (st !== 'COMPLETED' && st !== 'CANCELLED' && st !== '' && st !== 'UNPLANNED');
+  };
 
   const spAnyContracts = new Set(); // contracts SP lists at all
   const spOnGoing = new Map(); // contract -> { kg, rows, multiRows }
@@ -196,7 +200,7 @@ const contractsOf = (row) =>
   if (process.argv.includes('--explain')) {
     const pick = (row, re) => Object.fromEntries(Object.entries(row || {}).filter(([k, v]) => re.test(k) && v !== null && v !== undefined && v !== ''));
     const cpKeys = /^(contract_id|po_number|status|import_status|outstanding_quantity|last_ata_vessel_complete_discharge|sto_count|all_stos_discharged|incoterm|quantity_ordered|quantity_delivery|quantity_receive)$/;
-    const spKeys = /^(sto|sto_number|sto_key|status|contract_number|po_number|vessel_name|outstanding|ata_discharge_complete|ata_|atc|is_unplanned_backlog|po_sto_count|incoterm)/;
+    const spKeys = /^(sto|sto_number|sto_key|status|os_status|vessel_name|operation_id|shipment_id|contract_number|po_number|vessel_name|outstanding|ata_discharge_complete|ata_|atc|is_unplanned_backlog|po_sto_count|incoterm)/;
     const cpAll = new Map((await loadLatePerformanceRows(cpFilters)).map((r) => [String(r.contract_id), r]));
     for (const [title, arr] of [['A', classA], ['B', classB], ['D', classD]]) {
       for (const x of arr) {

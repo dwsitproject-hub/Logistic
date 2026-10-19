@@ -51,6 +51,11 @@ export type ContractGrainOsRow = Record<string, unknown> & {
   os_status?: unknown;
   outstanding_qty_aggregate?: unknown;
   is_unplanned_backlog?: unknown;
+  /**
+   * Contracts whose OWN shipment carries the discharge ATC in an operation-keyed group whose stage was narrowed (mergeShippingPerfStoGroup): the
+   * ATC finishes them, so this row does not hold their outstanding.
+   */
+  os_finished_contracts?: unknown;
 };
 
 /** The stage that decides outstanding: own-STO when the merge computed one, else the row's. */
@@ -251,8 +256,10 @@ export function applyContractGrainOutstanding<T extends ContractGrainOsRow>(
     const stage = osStageOf(row);
     const rank = shipmentActiveStageRank(stage);
     if (!isShipmentActiveStage(stage)) continue;
+    const finishedHere = Array.isArray(row.os_finished_contracts) ? (row.os_finished_contracts as string[]) : [];
     for (const contract of contractNumbersOf(row)) {
       if (!contractOsKg.has(contract)) continue;
+      if (finishedHere.includes(contract)) continue;
       const held = winnerByContract.get(contract);
       // Strictly greater, so the first row seen wins a tie and the result does not depend on
       // row order changing between runs.

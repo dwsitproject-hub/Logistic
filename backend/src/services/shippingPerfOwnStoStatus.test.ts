@@ -98,6 +98,22 @@ describe('an operation-keyed group does not let a re-planned shipment inherit an
     expect(String(merged.os_status).toUpperCase()).not.toBe('COMPLETED');
   });
 
+  it('lists the contracts whose OWN shipment carries the ATC, so it finishes them and nobody else', () => {
+    const merged = mergeShippingPerfStoGroup([
+      member({ contract_number: '1004030297, 1004030835, 1004029908', own_contract_number: '1004030297' }),
+      member({ own_contract_number: '1004030835', shipment_id: 'MNL-15615718-1004030835' }),
+      member({ own_contract_number: '1004029908', shipment_id: '1006019867-1004029908', discharge_ata_completed: '2026-09-15' }),
+    ]);
+    expect(merged.os_finished_contracts).toEqual(['1004029908']);
+  });
+
+  it('a group that is ONE contract with its own ATC is finished for that contract, although its shipment id is not the key', () => {
+    const merged = mergeShippingPerfStoGroup([
+      member({ contract_number: '1004031960', own_contract_number: '1004031960', shipment_id: 'MNL-1-1004031960', discharge_ata_completed: '2026-09-15' }),
+    ]);
+    expect(merged.os_finished_contracts).toEqual(['1004031960']);
+  });
+
   it('a shipment whose id IS the key still finishes the group', () => {
     const merged = mergeShippingPerfStoGroup([
       member({ shipment_id: key, discharge_ata_completed: '2026-09-15' }),
