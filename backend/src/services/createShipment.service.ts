@@ -1,3 +1,4 @@
+import { hasKlipShipmentActivity } from '../utils/klipLogisticsActivity';
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import logger from '../utils/logger';
@@ -107,6 +108,60 @@ async function upsertPoQtyAssignment(
       [assignmentKey, contractNumber, poKey || null, stoQtyAssignedMtToKg(qtyMt)],
     );
   }
+}
+
+/**
+ * The shipment row a new plan for a contract may reuse, or null when it must get a row of its own.
+ *
+ * A plan used to fall back to "the newest active shipment of the contract" when neither the operation nor the vessel matched. Planning a PO a
+ * second time - on another vessel, to cover the quantity the first voyage left outstanding - therefore UPDATED the first voyage's row: new vessel
+ * and operation on top of the old ETAs, ATAs, ports and quantities, and the first voyage disappeared (PO 1001031313: Dahlia, completed, then Kapuas 168).
+ * A row is reusable only when
+ *   1. it carries the same operation id (the plan is being re-submitted), or
+ *   2. it is on the same vessel and that voyage is not finished (a finished voyage is history, not a draft), or
+ *   3. it is a shell no user has touched (hasKlipShipmentActivity): the row the SAP import created for the PO, which the first KLIP plan fills in.
+ */
+export async function findReusableShipmentForPlan(args: {
+  contractUuid: string;
+  operationId: string | null;
+  vesselName?: string | null;
+}): Promise<string | null> {
+  const { contractUuid, operationId, vesselName } = args;
+  if (operationId) {
+    const byOp = await query(
+      `SELECT id FROM shipments WHERE contract_id = $1::uuid AND operation_id = $2 LIMIT 1`,
+      [contractUuid, operationId],
+    );
+    if (byOp.rows.length > 0) return String(byOp.rows[0].id);
+  }
+  if (vesselName) {
+    const byVessel = await query(
+      `SELECT s.id FROM shipments s
+        WHERE s.contract_id = $1::uuid
+          AND LOWER(TRIM(s.vessel_name)) = LOWER(TRIM($2))
+          AND UPPER(TRIM(COALESCE(s.status, ''))) <> 'COMPLETED'
+          AND s.ata_discharge_complete IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM shipment_ata_overrides o
+             WHERE o.shipment_id = s.id AND o.ata_discharge_complete IS NOT NULL
+          )
+        LIMIT 1`,
+      [contractUuid, vesselName],
+    );
+    if (byVessel.rows.length > 0) return String(byVessel.rows[0].id);
+  }
+  const candidates = await query(
+    `SELECT id FROM shipments
+      WHERE contract_id = $1::uuid
+        AND COALESCE(status, '') <> 'CANCELLED'
+      ORDER BY created_at DESC`,
+    [contractUuid],
+  );
+  for (const row of candidates.rows) {
+    const id = String(row.id);
+    if (!(await hasKlipShipmentActivity(query, id, contractUuid))) return id;
+  }
+  return null;
 }
 
 export async function createShipmentsFromContracts(
@@ -289,34 +344,11 @@ export async function createShipmentsFromContracts(
       eta_complete_discharge: perContractEta.eta_discharge_complete,
     });
 
-    let existingShipmentId: string | null = null;
-    if (resolvedOperationId) {
-      const byOp = await query(
-        `SELECT id FROM shipments WHERE contract_id = $1::uuid AND operation_id = $2 LIMIT 1`,
-        [contract.id, resolvedOperationId],
-      );
-      if (byOp.rows.length > 0) existingShipmentId = byOp.rows[0].id;
-    }
-    if (!existingShipmentId && vesselName) {
-      const byVessel = await query(
-        `SELECT id FROM shipments WHERE contract_id = $1::uuid AND LOWER(TRIM(vessel_name)) = LOWER(TRIM($2)) LIMIT 1`,
-        [contract.id, vesselName],
-      );
-      if (byVessel.rows.length > 0) existingShipmentId = byVessel.rows[0].id;
-    }
-    if (!existingShipmentId) {
-      const byActiveContract = await query(
-        `SELECT id FROM shipments
-         WHERE contract_id = $1::uuid
-           AND COALESCE(status, '') <> 'CANCELLED'
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [contract.id],
-      );
-      if (byActiveContract.rows.length > 0) {
-        existingShipmentId = byActiveContract.rows[0].id;
-      }
-    }
+    const existingShipmentId = await findReusableShipmentForPlan({
+      contractUuid: contract.id,
+      operationId: resolvedOperationId,
+      vesselName,
+    });
 
     let resultId: string;
     if (existingShipmentId) {
