@@ -141,6 +141,26 @@ export function buildStoLinkedContractNumbersSql(
         END`;
 }
 
+/**
+ * The PO list of a Shipments row after the SAP hydrate: every PO the contracts linked to the group carry (sp.po_numbers) plus every PO the SAP rows
+ * keyed to it carry (pna.po_numbers), each once, sorted.
+ *
+ * The hydrate used to REPLACE the first set with the second whenever SAP had any PO for the group. A PO whose SAP line has a blank Contract No and no
+ * STO (an open STO-level line, seen on PO 1001031718) is never keyed to the group, so the row listed two POs on first paint and lost one a moment
+ * later, while Edit Shipment - which reads the contracts - still showed both. B2B children are not re-added: the contract side already maps a
+ * child contract to its origin.
+ */
+export function sqlMergedPoNumbers(pnaAlias = 'pna', spAlias = 'sp'): string {
+  return `(
+    SELECT NULLIF(STRING_AGG(DISTINCT po.v, ', ' ORDER BY po.v), '')
+    FROM (
+      SELECT TRIM(x) AS v
+      FROM regexp_split_to_table(CONCAT_WS(',', ${pnaAlias}.po_numbers, ${spAlias}.po_numbers), ',') AS x
+    ) po
+    WHERE po.v <> ''
+  )`;
+}
+
 export function buildStoLinkedPoNumbersSql(
   groupedStoExpr: string,
   contractAlias = 'c',

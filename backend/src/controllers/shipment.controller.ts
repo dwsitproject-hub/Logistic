@@ -253,6 +253,7 @@ import {
   buildStoLinkedPoNumbersSql,
   buildStoLinkedSuppliersSql,
   contractIdOnStoSql,
+  sqlMergedPoNumbers,
 } from '../utils/stoLinkedContractSql';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
@@ -2384,7 +2385,7 @@ ${vlpLateralJoins}
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
         COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged,
-        COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged,
+        ${sqlMergedPoNumbers('pna', 'sp')} AS po_numbers_merged,
         sl.vessel_name_sap,
         sl.vessel_code_sap,
         sl.vessel_owner_sap,

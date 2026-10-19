@@ -6,6 +6,7 @@ import {
   buildStoLinkedSuppliersSql,
   contractIdOnStoSql,
   contractsOnStoSubquery,
+  sqlMergedPoNumbers,
 } from './stoLinkedContractSql';
 
 describe('stoLinkedContractSql', () => {
@@ -86,7 +87,7 @@ describe('contractIdOnStoSql', () => {
     const sql = contractIdOnStoSql('cc.contract_id', grouped);
     expect(sql.startsWith('cc.contract_id = ANY(ARRAY(')).toBe(true);
     expect(sql).toContain(contractsOnStoSubquery(grouped));
-    expect(sql).not.toMatch(/cc\.contract_id IN \(/);
+    expect(sql).not.toContain('COALESCE(NULLIF(TRIM(pna')
   });
 
   it('every aggregate over the STO contracts uses it, none the IN form', () => {
@@ -95,5 +96,20 @@ describe('contractIdOnStoSql', () => {
       expect(sql).toContain(contractIdOnStoSql('cc.contract_id', grouped));
       expect(sql).not.toMatch(/cc\.contract_id IN \(/);
     }
+  });
+});
+
+describe('sqlMergedPoNumbers', () => {
+  it('unions the SAP-keyed and the contract-linked PO lists instead of letting SAP replace the contracts', () => {
+    const sql = sqlMergedPoNumbers('pna', 'sp').replace(/\s+/g, ' ');
+    expect(sql).toContain("CONCAT_WS(',', pna.po_numbers, sp.po_numbers)");
+    expect(sql).toContain("STRING_AGG(DISTINCT po.v, ', ' ORDER BY po.v)");
+    expect(sql).toContain("po.v <> ''");
+    // no COALESCE(pna, sp): that is what dropped a PO whose SAP line carries no contract
+    expect(sql).not.toContain('COALESCE(NULLIF(TRIM(pna');
+  });
+
+  it('uses the aliases it is given', () => {
+    expect(sqlMergedPoNumbers('a', 'b')).toContain('a.po_numbers, b.po_numbers');
   });
 });

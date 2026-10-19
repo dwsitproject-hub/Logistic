@@ -10,6 +10,7 @@ import {
   type PipelineDailySummaryFilterInput,
 } from './pipelineDailySummary.service';
 import { parseColumnFiltersQuery, shipmentEffectiveStatusExpr } from '../utils/shipmentListFilters';
+import { sqlMergedPoNumbers } from '../utils/stoLinkedContractSql';
 import {
   parseDischargePortParam,
   resolveDischargePortSelectionKey,
@@ -1346,7 +1347,7 @@ const LIST_PAGE_SELECT = `
         sl.b2b_flag AS b2b_flag,
         sl.source_type AS source_type,
         COALESCE(cex.contract_ext_no, sp.contract_ext_no) AS contract_ext_no_merged,
-        COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged,
+        ${sqlMergedPoNumbers('pna', 'sp')} AS po_numbers_merged,
         sl.vessel_name_sap,
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
@@ -1400,7 +1401,7 @@ const LIST_PAGE_SELECT_ENRICHED = `
         COALESCE(sp.b2b_flag_resolved, sl.b2b_flag) AS b2b_flag,
         sl.source_type AS source_type,
         COALESCE(sp.contract_ext_no_resolved, sp.contract_ext_no) AS contract_ext_no_merged,
-        COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged,
+        ${sqlMergedPoNumbers('pna', 'sp')} AS po_numbers_merged,
         sl.vessel_name_sap,
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
