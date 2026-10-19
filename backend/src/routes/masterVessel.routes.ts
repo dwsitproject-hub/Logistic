@@ -9,6 +9,7 @@ import {
   deleteMasterVessel,
   importJovinMasterVessels,
 } from '../controllers/masterVessel.controller';
+import { approveReviewVessel, listReviewVessels, mergeReviewVessel } from '../controllers/masterVesselReview.controller';
 
 const router = express.Router();
 const jovinUpload = multer({
@@ -20,6 +21,10 @@ router.use(authenticateToken);
 
 router.get('/', listMasterVessels);
 router.get('/filter-options', getMasterVesselFilterOptions);
+// vessels KLIP registered itself from a SAP vessel name and is not sure of (services/registerVesselFromSap.service.ts)
+router.get('/review', listReviewVessels);
+router.post('/:id/review/approve', authorize('ADMIN'), approveReviewVessel);
+router.post('/:id/review/merge', authorize('ADMIN'), mergeReviewVessel);
 
 router.post('/', authorize('ADMIN'), createMasterVessel);
 router.put('/:id', authorize('ADMIN'), updateMasterVessel);

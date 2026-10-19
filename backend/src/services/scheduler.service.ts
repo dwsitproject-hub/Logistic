@@ -130,7 +130,7 @@ export class SchedulerService {
    * Incremental DHM replica pull. Off unless DHM_ENABLED=true and keys are set.
    */
   private static startDhmVesselSyncCron(): void {
-    void import('../dhm').then(({ isDhmEnabled, dhmSyncCron, retryDhmPushes, syncDhmMasters, syncDhmVessels }) => {
+    void import('../dhm').then(({ isDhmEnabled, dhmSyncCron, pushUnlinkedSapVessels, retryDhmPushes, syncDhmMasters, syncDhmVessels }) => {
       if (!isDhmEnabled()) {
         logger.info('DHM sync cron is disabled (DHM_ENABLED is not true)');
         return;
@@ -145,6 +145,10 @@ export class SchedulerService {
           // A failed retry is recorded on the row; it must never stop the cron.
           await retryDhmPushes({ onlyDue: true }).catch((error) =>
             logger.warn('DHM push retry failed', { error: error instanceof Error ? error.message : String(error) }),
+          );
+          // The vessels KLIP registered from SAP names since the last tick (DHM answers "same name" with the record it holds, and KLIP links it).
+          await pushUnlinkedSapVessels().catch((error) =>
+            logger.warn('DHM push of SAP-registered vessels failed', { error: error instanceof Error ? error.message : String(error) }),
           );
         },
         { timezone: 'Asia/Jakarta' },

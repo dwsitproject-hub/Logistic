@@ -11,6 +11,7 @@ export {
   pushNamedMasterToDhm,
 } from './pushTracked';
 export { retryDhmPushes, listDhmPushStates } from './pushRetry';
+export { pushUnlinkedSapVessels } from './pushSapVessels';
 export { attachDhmPushState } from './pushState';
 export { syncDhmMasters, syncDhmVessels } from './sync';
 export { handleDhmWebhook } from './webhookHandler';

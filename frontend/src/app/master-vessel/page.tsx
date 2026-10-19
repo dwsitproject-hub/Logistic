@@ -17,6 +17,7 @@ import {
   termsFilterToApi,
   type MasterVesselFilterOptions,
 } from '@/components/master-vessel/MasterVesselGlobalFiltersSection'
+import { MasterVesselReviewPanel } from '@/components/master-vessel/MasterVesselReviewPanel'
 import { MasterVesselTable } from '@/components/master-vessel/MasterVesselTable'
 import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
@@ -62,6 +63,9 @@ export default function MasterVesselPage() {
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
   const [editingVessel, setEditingVessel] = useState<MasterVessel | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
+  // "Perlu review": vessels KLIP registered from a SAP name and is not sure of (the badge counts them)
+  const [view, setView] = useState<'all' | 'review'>('all')
+  const [reviewCount, setReviewCount] = useState(0)
   const [sortKey, setSortKey] = useState<MasterVesselColumnId>('vessel_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const vesselColumns = useListColumnLayout('master-vessel.visibleColumns.v1', VESSEL_LAYOUT_COLUMNS)
@@ -139,6 +143,17 @@ export default function MasterVesselPage() {
     }
   }, [])
 
+  const refreshReviewCount = useCallback(() => {
+    void api
+      .get('/master-vessels/review')
+      .then((res) => setReviewCount(Number(res.data?.data?.total ?? 0)))
+      .catch(() => setReviewCount(0))
+  }, [])
+
+  useEffect(() => {
+    refreshReviewCount()
+  }, [refreshReviewCount])
+
   useEffect(() => {
     void api
       .get('/master-vessels/filter-options')
@@ -200,6 +215,13 @@ export default function MasterVesselPage() {
     setSelectedLambungTypes([])
     setSelectedTerms([])
     setSelectedKlipTransaction([])
+  }
+
+  // the Edit button lives in the All Vessel list: show the vessel there
+  const openInList = (vesselName: string) => {
+    setSearchDraft(vesselName)
+    setSearchTerm(vesselName.trim().length >= 2 ? vesselName.trim() : '')
+    setView('all')
   }
 
   const openNew = () => {
@@ -271,6 +293,29 @@ export default function MasterVesselPage() {
         <p className="text-gray-600">
           Maintain reference data for vessels used in shipments.
         </p>
+
+        <div className="flex gap-2 border-b border-gray-200">
+          {([
+            ['all', 'All Vessel'],
+            ['review', reviewCount > 0 ? `Perlu review (${reviewCount})` : 'Perlu review'],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setView(id)}
+              className={
+                view === id
+                  ? '-mb-px border-b-2 border-blue-600 px-3 py-2 text-sm font-medium text-blue-700'
+                  : 'px-3 py-2 text-sm text-gray-600 hover:text-gray-900'
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {view === 'all' ? (
+          <>
 
         <MasterVesselGlobalFiltersSection
           searchDraft={searchDraft}
@@ -361,6 +406,18 @@ export default function MasterVesselPage() {
             />
           </CardContent>
         </Card>
+
+          </>
+        ) : (
+          <MasterVesselReviewPanel
+            isAdmin={isAdmin}
+            onChanged={() => {
+              refreshReviewCount()
+              void fetchVessels(currentPage)
+            }}
+            onOpenInList={openInList}
+          />
+        )}
 
         <EditVesselModal
           open={modalOpen}

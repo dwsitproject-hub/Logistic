@@ -5,6 +5,7 @@ import {
   isProvisionalVesselCode,
 } from '../utils/masterVesselCodeResolve';
 import { isMissingVesselCode, normalizeVesselName, pickPreferredVesselDisplayName, uppercaseText } from '../utils/vesselNameNormalize';
+import { isVesselAutoRegisterEnabled } from '../utils/vesselAutoRegister';
 
 export type VesselAliasSource =
   | 'sap_import'
@@ -40,7 +41,7 @@ export interface ResolvedMasterVessel {
   alias_added: boolean;
 }
 
-type QueryFn = (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
+export type QueryFn = (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
 
 async function findMasterByAliasCode(
   run: QueryFn,
@@ -117,7 +118,7 @@ function namespaceForAliasSource(source: VesselAliasSource): 'SAP' | 'KLIP' {
     : 'KLIP';
 }
 
-async function ensureAlias(
+export async function ensureAlias(
   run: QueryFn,
   masterVesselId: string,
   code: string,
@@ -243,6 +244,13 @@ export async function resolveMasterVessel(
 
   let aliasAdded = false;
 
+  // 0. A SAP tug + barge name ("TB. X / BG. Y"): its tug, its barge and the pair are created when missing (registerVesselFromSap). Only the SAP import
+  // does this; it never renames or moves anything that exists, and the lookups below then find the barge by its name as before.
+  if (source === 'sap_import' && vesselName.includes('/') && isVesselAutoRegisterEnabled()) {
+    const { registerPairGuarded } = await import('./registerVesselFromSap.service');
+    await registerPairGuarded({ vessel_code: rawCode, vessel_name: vesselName, vessel_owner: input.vessel_owner }, client);
+  }
+
   // 1. Lookup by alias code
   if (officialCode) {
     const byAlias = await findMasterByAliasCode(run, officialCode);
@@ -326,7 +334,18 @@ export async function resolveMasterVessel(
     };
   }
 
-  // 4. Create new master + primary alias
+  // 4. Create new master + primary alias.
+  // The SAP import creates it with the cleaned name, the role and type its prefix says, and a review mark where it is not sure
+  // (registerVesselFromSap); if that is off or fails, the raw creation below is what happened before.
+  if (source === 'sap_import' && isVesselAutoRegisterEnabled()) {
+    const { registerSingleGuarded } = await import('./registerVesselFromSap.service');
+    const registered = await registerSingleGuarded(
+      { vessel_code: rawCode, vessel_name: vesselName, vessel_owner: input.vessel_owner },
+      { primaryCode, codeStatus },
+      client,
+    );
+    if (registered) return registered;
+  }
   const insertResult = await run(
     `INSERT INTO master_vessels (
        vessel_code, vessel_name, normalized_vessel_name, vessel_owner,
