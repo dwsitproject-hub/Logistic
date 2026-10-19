@@ -37,6 +37,17 @@ export function storeUserLocally(user: AuthUser): void {
   hubIdentify(user);
 }
 
+/**
+ * The user a <Layout> starts with. On the server, and on the render that HYDRATES the server HTML, it has to be null: the server has no localStorage
+ * and renders "Loading...", so a client that starts with the cached user renders the whole shell instead - React throws #418, then #423, and replaces
+ * the server HTML with a client render of the entire root. Only a Layout that mounts after the app has hydrated (a route change, which hydrates
+ * nothing) may read the cache synchronously, which is what keeps the shell from flashing "Loading..." between pages.
+ */
+export function initialSessionUser(appHydrated: boolean): AuthUser | null {
+  if (typeof window === 'undefined' || !appHydrated) return null;
+  return readUserLocally();
+}
+
 export function readUserLocally(): AuthUser | null {
   if (typeof window === 'undefined') return null;
   try {

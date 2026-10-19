@@ -21,7 +21,13 @@ import {
 import { NAV_GROUP_LABELS, NAV_GROUP_ORDER, NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
 import { clearClientDataCache } from '@/lib/clientDataCache'
-import { fetchCurrentUser, logoutSession, clearLocalAuth, readUserLocally } from '@/lib/authSession'
+import {
+  fetchCurrentUser,
+  logoutSession,
+  clearLocalAuth,
+  initialSessionUser,
+  readUserLocally,
+} from '@/lib/authSession'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
 import { HeaderMissingEtaAlertBell } from '@/components/HeaderMissingEtaAlertBell'
 import { HeaderFilterSlotProvider, HeaderFilterSlotTarget } from '@/components/HeaderFilterSlot'
@@ -333,16 +339,23 @@ function LayoutWithPermissions({
   )
 }
 
+// True once the app has hydrated in this browser tab. Only written inside an effect, so it is false on the server and during the first (hydrating)
+// client render, and true for every Layout that mounts on a later route change.
+let layoutAppHydrated = false
+
 export default function Layout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
-  // Hydrate from localStorage on client remount so route changes keep the shell visible
-  // while page content shows its own spinners (avoid full-screen blank "Loading...").
-  const [user, setUser] = useState<UserLite | null>(() => {
-    if (typeof window === 'undefined') return null
-    return readUserLocally()
-  })
+  // Read the cached user synchronously only on a client remount (route change), so the shell stays visible while page content shows its own spinners.
+  // The hydrating render must match the server's "Loading...", or React discards the server HTML (errors #418 / #423).
+  const [user, setUser] = useState<UserLite | null>(() => initialSessionUser(layoutAppHydrated))
 
   useEffect(() => {
+    if (!layoutAppHydrated) {
+      layoutAppHydrated = true
+      // Show the shell at once from the cache, before /auth/me answers.
+      const cached = readUserLocally()
+      if (cached) setUser((prev) => prev ?? cached)
+    }
     void (async () => {
       const sessionUser = await fetchCurrentUser()
       if (sessionUser) {
