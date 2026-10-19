@@ -113,6 +113,8 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
     if (!raw.length) console.log("   (no SAP row carries this PO at all)");
   }
 
+  const mergedPos = [...new Set([...fastPos, ...hydratedPos])].sort();
+  console.log('   -> with the merged rule (contracts + SAP, distinct): ' + mergedPos.join(', '));
   const missing = fastPos.filter((p) => !hydratedPos.includes(p));
   console.log(
     '\n=> PO column: fast pass [' + fastPos.join(', ') + '], hydrate [' + hydratedPos.join(', ') + ']' +
@@ -157,6 +159,16 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
 
   console.log('\n7. Which member the table row opens in Edit Shipment (primary row of the group)');
   const keyExpr = "$1::text";
+  // The container may run a build from before the override-aware rule existed (no 6th argument): then add the same OR clauses to rule 4 here,
+  // so this section shows what the new rule would choose without deploying it.
+  const orderSql = (overrideAlias) => {
+    const base = sqlShipmentListPrimaryOrderBy(keyExpr, 'c', 'l', 's', undefined, overrideAlias);
+    if (!overrideAlias || base.includes(overrideAlias + '.')) return base;
+    const anchor = 'OR s.ata_discharge_complete IS NOT NULL';
+    if (!base.includes(anchor)) throw new Error('primary-row ORDER BY has an unexpected shape');
+    const o = overrideAlias;
+    return base.replace(anchor, anchor + ' OR ' + o + '.ata_arrival IS NOT NULL OR ' + o + '.ata_loading_complete IS NOT NULL OR ' + o + '.ata_sailed IS NOT NULL OR ' + o + '.ata_discharge_start IS NOT NULL OR ' + o + '.ata_discharge_complete IS NOT NULL');
+  };
   const pick = async (label, overrideAlias) => {
     const rows = await q(
       `SELECT s.id::text AS id, c.po_number, s.shipment_id, s.status, (sao.ata_discharge_complete IS NOT NULL) AS has_override_atc
@@ -164,7 +176,7 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
          LEFT JOIN contracts c ON c.id = s.contract_id
          LEFT JOIN shipment_ata_overrides sao ON sao.shipment_id = s.id
         WHERE TRIM(COALESCE(s.operation_id, '')) = $1 OR TRIM(COALESCE(s.shipment_id::text, '')) = $1
-        ORDER BY ${sqlShipmentListPrimaryOrderBy(keyExpr, 'c', 'l', 's', undefined, overrideAlias)}`,
+        ORDER BY ${orderSql(overrideAlias)}`,
       [key],
     );
     const first = rows[0];
