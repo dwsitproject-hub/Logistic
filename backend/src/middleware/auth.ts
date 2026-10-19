@@ -111,7 +111,7 @@ export const authorizeSapImportsView = async (
   });
 };
 
-async function userHasPermissionFlag(
+export async function userHasPermissionFlag(
   userId: string,
   roleName: string,
   permissionKey: string,

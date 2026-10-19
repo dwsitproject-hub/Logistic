@@ -80,6 +80,7 @@ import {
 import {
   COMMERCIAL_DOCS_ACTIONS_COL_WIDTH_PX,
   COMMERCIAL_DOCS_ALL_COLUMNS,
+  withBeritaAcaraColumn,
   COMMERCIAL_DOCS_COLUMN_BY_ID,
   commercialDocsDynamicColumnWidthPx,
   commercialDocsTableColumnWidthPx,
@@ -94,13 +95,16 @@ import {
   COMMERCIAL_DOCUMENT_TYPES,
   COMMERCIAL_DOCUMENTS_DATA_PERMISSION,
   COMMERCIAL_DOCUMENTS_PAGE_PERMISSION,
+  commercialDocumentUploadPermissionKey,
   defaultCommercialDocsYtdRange,
   type CommercialDocumentRow,
   type CommercialDocumentType,
   type CommercialDocumentsSummary,
 } from '@/lib/commercialDocumentsTypes'
 
-const VISIBLE_COLUMNS_KEY = 'commercial-documents.visibleColumns.v3'
+const VISIBLE_COLUMNS_KEY = 'commercial-documents.visibleColumns.v4'
+/** Before Berita Acara existed; read once and carried over so a customised column list is not thrown away. */
+const LEGACY_VISIBLE_COLUMNS_KEY = 'commercial-documents.visibleColumns.v3'
 const PAGE_SIZE = 50
 
 type DocumentStatusFilter = '' | 'checked' | 'unchecked'
@@ -127,6 +131,15 @@ function CommercialDocumentsPageContent() {
     canEditPermission(perms, COMMERCIAL_DOCUMENTS_PAGE_PERMISSION) ||
     canCreatePermission(perms, COMMERCIAL_DOCUMENTS_DATA_PERMISSION) ||
     canEditPermission(perms, COMMERCIAL_DOCUMENTS_DATA_PERMISSION)
+  // Per document type, the same rule the API enforces: ADMIN, or can_create / can_edit on that type's upload permission (Role Management).
+  const canUploadDocumentType = useCallback(
+    (type: CommercialDocumentType): boolean => {
+      if (isAdminRole(perms.userRole)) return true
+      const key = commercialDocumentUploadPermissionKey(type)
+      return canCreatePermission(perms, key) || canEditPermission(perms, key)
+    },
+    [perms],
+  )
   // Same rule the API enforces: ADMIN, or can_delete on data.commercial_documents for the user's role and level.
   const canDeleteDocuments =
     isAdminRole(perms.userRole) || canDeletePermission(perms, COMMERCIAL_DOCUMENTS_DATA_PERMISSION)
@@ -170,6 +183,8 @@ function CommercialDocumentsPageContent() {
     try {
       const raw = localStorage.getItem(VISIBLE_COLUMNS_KEY)
       if (raw) return JSON.parse(raw) as CommercialDocsColumnId[]
+      const legacy = localStorage.getItem(LEGACY_VISIBLE_COLUMNS_KEY)
+      if (legacy) return withBeritaAcaraColumn(JSON.parse(legacy) as string[]) as CommercialDocsColumnId[]
     } catch {
       /* ignore */
     }
@@ -1104,6 +1119,7 @@ function CommercialDocumentsPageContent() {
       <DocumentCheckingModal
         row={modalRow}
         canModifyDocuments={canModifyDocuments}
+        canUploadType={canUploadDocumentType}
         canDeleteDocuments={canDeleteDocuments}
         onClose={() => setModalRow(null)}
         onSaved={() => {

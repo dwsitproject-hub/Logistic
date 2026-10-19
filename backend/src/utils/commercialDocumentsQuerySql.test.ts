@@ -53,8 +53,35 @@ describe('commercialDocumentsQuerySql Region/Site', () => {
     expect(cte).toContain('pay.payoff_date');
     expect(cte).toContain('AS payoff_date');
     expect(cte).toContain('AS doc_draft_contract');
+    expect(cte).toContain('AS doc_berita_acara');
     expect(cte).toContain('AS doc_bea_cukai');
     expect(cte).toContain('AS doc_delivery_order');
+  });
+});
+
+describe('commercialDocumentsQuerySql SAP OA amounts', () => {
+  const cte = buildCommercialDocumentsBaseCte();
+
+  it('selects the four OA amounts from the latest SAP row', () => {
+    for (const col of ['vessel_oa_budget', 'vessel_oa_actual', 'truck_oa_budget', 'truck_oa_actual']) {
+      expect(cte).toContain(`AS ${col},`);
+    }
+    expect(cte).toContain("latest_spd.data->'raw'->>'Vessel OA Budget'");
+    expect(cte).toContain("latest_spd.data->'raw'->>'Vessel OA Actual'");
+    expect(cte).toContain("latest_spd.data->'raw'->>'Trucking OA Budget'");
+    expect(cte).toContain("latest_spd.data->'raw'->>'Trucking OA Actual'");
+  });
+
+  it('reads Trucking OA before the Truck OA spelling, and turns text that is not a number into NULL instead of failing', () => {
+    expect(cte.indexOf("->>'Trucking OA Budget'")).toBeLessThan(cte.indexOf("->>'Truck OA Budget'"));
+    expect(cte).toContain("~ '^-?[0-9]+(\\.[0-9]+)?$' THEN");
+  });
+
+  it('can be sorted by each of them', () => {
+    for (const key of ['vessel_oa_budget', 'vessel_oa_actual', 'truck_oa_budget', 'truck_oa_actual']) {
+      const { sql } = buildCommercialDocumentsListQuery({ page: 1, limit: 10, sortKey: key, sortDir: 'asc' });
+      expect(sql).toContain(`ORDER BY e.${key} ASC NULLS LAST`);
+    }
   });
 });
 
@@ -68,6 +95,7 @@ describe('commercialDocumentsQuerySql summary cards', () => {
       'draft_contract',
       'contract',
       'addendum_contract',
+      'berita_acara',
       'bea_cukai',
       'delivery_order',
       'invoice_fp_dp',

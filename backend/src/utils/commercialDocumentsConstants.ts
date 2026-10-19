@@ -2,6 +2,7 @@ export const COMMERCIAL_DOCUMENT_TYPES = [
   'draft_contract',
   'contract',
   'addendum_contract',
+  'berita_acara',
   'bea_cukai',
   'delivery_order',
   'invoice_fp_dp',
@@ -10,6 +11,16 @@ export const COMMERCIAL_DOCUMENT_TYPES = [
 ] as const;
 
 export type CommercialDocumentType = (typeof COMMERCIAL_DOCUMENT_TYPES)[number];
+
+/**
+ * Who may upload a document type is a role permission, one per type, kept in the roles table and edited in Role Management: nothing about it is
+ * hard-coded. can_create (or can_edit) on this key lets the role, level and transport type upload that type; ADMIN always may.
+ */
+export const COMMERCIAL_DOCUMENT_UPLOAD_PERMISSION_PREFIX = 'data.commercial_documents.upload.';
+
+export function commercialDocumentUploadPermissionKey(type: CommercialDocumentType): string {
+  return `${COMMERCIAL_DOCUMENT_UPLOAD_PERMISSION_PREFIX}${type}`;
+}
 
 /** Legacy DB values kept for backward-compatible checklist + history. */
 export const LEGACY_COMMERCIAL_DOCUMENT_TYPES = [
@@ -28,6 +39,7 @@ export const COMMERCIAL_DOCUMENT_TYPE_LABELS: Record<CommercialDocumentType, str
   draft_contract: 'Draft Contract',
   contract: 'Contract',
   addendum_contract: 'Addendum Contract',
+  berita_acara: 'Berita Acara (BA)',
   bea_cukai: 'Bea Cukai',
   delivery_order: 'DO',
   invoice_fp_dp: 'Invoice + FP Down Payment (DP)',
@@ -47,6 +59,7 @@ export const COMMERCIAL_DOCUMENT_FILENAME_CODES: Record<CommercialDocumentType, 
   draft_contract: 'Dctr',
   contract: 'Ctr',
   addendum_contract: 'Add Ctr',
+  berita_acara: 'Ba',
   bea_cukai: 'Bc',
   delivery_order: 'Do',
   invoice_fp_dp: 'DP',
@@ -75,6 +88,7 @@ export function canonicalCommercialDocumentType(
     draft_contract: 'draft_contract',
     contract: 'contract',
     addendum_contract: 'addendum_contract',
+    berita_acara: 'berita_acara',
     bea_cukai: 'bea_cukai',
     delivery_order: 'delivery_order',
     invoice_fp_dp: 'invoice_fp_dp',

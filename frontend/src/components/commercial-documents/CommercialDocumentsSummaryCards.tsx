@@ -29,7 +29,7 @@ export function CommercialDocumentsSummaryCards({ summary, loading = false, acti
         Contracts with the document uploaded, out of all contracts in the selected date range. Click a card to list
         them in the table below.
       </p>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 2xl:grid-cols-8">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-9">
         {COMMERCIAL_DOCUMENT_TYPES.map((type) => {
           const card = summary?.[type]
           const uploaded = card?.uploadedCount ?? 0

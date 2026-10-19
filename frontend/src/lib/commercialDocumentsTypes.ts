@@ -2,6 +2,7 @@ export type CommercialDocumentType =
   | 'draft_contract'
   | 'contract'
   | 'addendum_contract'
+  | 'berita_acara'
   | 'bea_cukai'
   | 'delivery_order'
   | 'invoice_fp_dp'
@@ -12,6 +13,7 @@ export const COMMERCIAL_DOCUMENT_TYPES: CommercialDocumentType[] = [
   'draft_contract',
   'contract',
   'addendum_contract',
+  'berita_acara',
   'bea_cukai',
   'delivery_order',
   'invoice_fp_dp',
@@ -26,11 +28,22 @@ export const COMMERCIAL_DOCUMENT_LABELS: Record<CommercialDocumentType, string> 
   draft_contract: 'Draft Contract',
   contract: 'Contract',
   addendum_contract: 'Addendum Contract',
+  berita_acara: 'Berita Acara (BA)',
   bea_cukai: 'Bea Cukai',
   delivery_order: 'DO',
   invoice_fp_dp: 'Invoice + FP Down Payment (DP)',
   invoice_fp_payoff: 'Invoice + FP Payoff (PO)',
   invoice_fp_full: 'Invoice + FP (Full Receive)',
+}
+
+/**
+ * Who may upload a type is a role permission (Role Management > Data Access), one per type - not a role list in code. can_create or can_edit on
+ * this key lets the user's role upload that type; ADMIN always may. Same key the API checks.
+ */
+export const COMMERCIAL_DOCUMENT_UPLOAD_PERMISSION_PREFIX = 'data.commercial_documents.upload.'
+
+export function commercialDocumentUploadPermissionKey(type: CommercialDocumentType): string {
+  return `${COMMERCIAL_DOCUMENT_UPLOAD_PERMISSION_PREFIX}${type}`
 }
 
 /** Legacy DB document_type values mapped to current checklist categories. */
@@ -83,6 +96,11 @@ export type CommercialDocumentRow = {
   payment_due_date: string | null
   dp_due_date: string | null
   payoff_date: string | null
+  /** SAP Data amounts of the latest SAP row; null when SAP sent none. */
+  vessel_oa_budget: number | null
+  vessel_oa_actual: number | null
+  truck_oa_budget: number | null
+  truck_oa_actual: number | null
   quantity_ordered: number
   unit_price: number
   total_price: number
@@ -99,6 +117,7 @@ export type CommercialDocumentRow = {
   doc_draft_contract: boolean
   doc_contract: boolean
   doc_addendum_contract: boolean
+  doc_berita_acara: boolean
   doc_bea_cukai: boolean
   doc_delivery_order: boolean
   doc_invoice_fp_dp: boolean
@@ -145,6 +164,7 @@ export function docCheckedField(type: CommercialDocumentType): keyof CommercialD
     draft_contract: 'doc_draft_contract',
     contract: 'doc_contract',
     addendum_contract: 'doc_addendum_contract',
+    berita_acara: 'doc_berita_acara',
     bea_cukai: 'doc_bea_cukai',
     delivery_order: 'doc_delivery_order',
     invoice_fp_dp: 'doc_invoice_fp_dp',

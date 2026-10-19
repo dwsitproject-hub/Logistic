@@ -582,7 +582,9 @@ export default function RolesPage() {
                     ) : null}
                     {category === 'data' ? (
                       <span className="block mt-1 text-gray-500">
-                        <strong>Commercial Documents Data</strong> (<code className="text-xs">data.commercial_documents</code>) controls upload and file management on that page.
+                        <strong>Commercial Documents Data</strong> (<code className="text-xs">data.commercial_documents</code>) controls file management on that page (Delete).
+                        <strong> Commercial Documents Upload: …</strong> (<code className="text-xs">data.commercial_documents.upload.*</code>) decides, per document type, which role
+                        may upload it - tick Create (or Edit) for the role, level and transport that may.
                       </span>
                     ) : null}
                   </CardDescription>
@@ -707,7 +709,8 @@ export default function RolesPage() {
                   </li>
                   <li>
                     <strong>Commercial Documents:</strong> Enable <code className="text-xs">page.commercial_documents</code> (View) and{' '}
-                    <code className="text-xs">data.commercial_documents</code> (View/Create/Edit for upload) under Page Access and Data Access.
+                    <code className="text-xs">data.commercial_documents</code> (Delete) under Page Access and Data Access. Who may upload each document type is set
+                    by <code className="text-xs">Commercial Documents Upload: …</code> (one row per type, Create/Edit); a role without that row cannot upload that type.
                     LOGISTICS Staff scope should remain denied unless explicitly granted.
                   </li>
                 </ul>

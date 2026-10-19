@@ -41,6 +41,15 @@ function sapPaymentRawExpr(jsonPaths: string[]): string {
   return `trim(COALESCE(${jsonPaths.join(', ')}))`;
 }
 
+/**
+ * A number out of the latest SAP row's JSON, whichever header spelling carried it. SAP sends text ("1,234.5", "", "-"), so anything that is not
+ * a plain number after dropping thousands separators and spaces is NULL rather than an error that fails the whole list.
+ */
+function sapNumericExpr(jsonPaths: string[]): string {
+  const raw = `NULLIF(TRIM(REPLACE(REPLACE(COALESCE(${jsonPaths.map((p) => `NULLIF(TRIM(${p}), '')`).join(', ')}), ',', ''), ' ', '')), '')`;
+  return `(CASE WHEN ${raw} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${raw}::numeric END)`;
+}
+
 function sqlDocFlag(columnTypes: string[]): string {
   const list = columnTypes.map((t) => `'${t}'`).join(', ');
   return `BOOL_OR(document_type IN (${list}))`;
@@ -64,6 +73,31 @@ export function buildCommercialDocumentsBaseCte(): string {
     `NULLIF(trim(latest_spd.data->'raw'->>'Payoff Date'), '')`,
     `NULLIF(trim(latest_spd.data->>'payoff date'), '')`,
     `NULLIF(trim(latest_spd.data->>'Payoff Date'), '')`,
+  ]);
+
+  // SAP Data: Vessel OA Budget / Vessel OA Actual / Trucking OA Budget / Trucking OA Actual (a "Truck OA ..." header is the same field, as the import maps it).
+  const vesselOaBudget = sapNumericExpr([
+    `latest_spd.data->'raw'->>'Vessel OA Budget'`,
+    `latest_spd.data->'raw'->>'Vessell OA Budget'`,
+    `latest_spd.data->'raw'->>'vessel oa budget'`,
+    `latest_spd.data->'shipment'->>'vessel_oa_budget'`,
+  ]);
+  const vesselOaActual = sapNumericExpr([
+    `latest_spd.data->'raw'->>'Vessel OA Actual'`,
+    `latest_spd.data->'raw'->>'vessel oa actual'`,
+    `latest_spd.data->'shipment'->>'vessel_oa_actual'`,
+  ]);
+  const truckingOaBudget = sapNumericExpr([
+    `latest_spd.data->'raw'->>'Trucking OA Budget'`,
+    `latest_spd.data->'raw'->>'trucking oa budget'`,
+    `latest_spd.data->'raw'->>'Truck OA Budget'`,
+    `latest_spd.data->'raw'->>'truck oa budget'`,
+  ]);
+  const truckingOaActual = sapNumericExpr([
+    `latest_spd.data->'raw'->>'Trucking OA Actual'`,
+    `latest_spd.data->'raw'->>'trucking oa actual'`,
+    `latest_spd.data->'raw'->>'Truck OA Actual'`,
+    `latest_spd.data->'raw'->>'truck oa actual'`,
   ]);
 
   return `
@@ -119,6 +153,10 @@ export function buildCommercialDocumentsBaseCte(): string {
           mv_pay.payoff_date,
           pay.payoff_date
         ) AS payoff_date,
+        ${vesselOaBudget} AS vessel_oa_budget,
+        ${vesselOaActual} AS vessel_oa_actual,
+        ${truckingOaBudget} AS truck_oa_budget,
+        ${truckingOaActual} AS truck_oa_actual,
         latest_spd.data AS latest_spd_data,
         ${COMMERCIAL_DOCS_OPEN_STATUS_SQL} AS is_open
       FROM contracts c
@@ -144,6 +182,7 @@ export function buildCommercialDocumentsBaseCte(): string {
         ${sqlDocFlag(documentTypesForCategory('draft_contract'))} AS doc_draft_contract,
         ${sqlDocFlag(documentTypesForCategory('contract'))} AS doc_contract,
         ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
+        ${sqlDocFlag(documentTypesForCategory('berita_acara'))} AS doc_berita_acara,
         ${sqlDocFlag(documentTypesForCategory('bea_cukai'))} AS doc_bea_cukai,
         ${sqlDocFlag(documentTypesForCategory('delivery_order'))} AS doc_delivery_order,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_dp'))} AS doc_invoice_fp_dp,
@@ -160,6 +199,7 @@ export function buildCommercialDocumentsBaseCte(): string {
         ${sqlDocFlag(documentTypesForCategory('draft_contract'))} AS doc_draft_contract,
         ${sqlDocFlag(documentTypesForCategory('contract'))} AS doc_contract,
         ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
+        ${sqlDocFlag(documentTypesForCategory('berita_acara'))} AS doc_berita_acara,
         ${sqlDocFlag(documentTypesForCategory('bea_cukai'))} AS doc_bea_cukai,
         ${sqlDocFlag(documentTypesForCategory('delivery_order'))} AS doc_delivery_order,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_dp'))} AS doc_invoice_fp_dp,
@@ -176,6 +216,7 @@ export function buildCommercialDocumentsBaseCte(): string {
         COALESCE(df.doc_draft_contract, ldf.doc_draft_contract, false) AS doc_draft_contract,
         COALESCE(df.doc_contract, ldf.doc_contract, false) AS doc_contract,
         COALESCE(df.doc_addendum_contract, ldf.doc_addendum_contract, false) AS doc_addendum_contract,
+        COALESCE(df.doc_berita_acara, ldf.doc_berita_acara, false) AS doc_berita_acara,
         COALESCE(df.doc_bea_cukai, ldf.doc_bea_cukai, false) AS doc_bea_cukai,
         COALESCE(df.doc_delivery_order, ldf.doc_delivery_order, false) AS doc_delivery_order,
         COALESCE(df.doc_invoice_fp_dp, ldf.doc_invoice_fp_dp, false) AS doc_invoice_fp_dp,
@@ -196,6 +237,7 @@ function docTypeCheckedColumn(documentType: string): string | null {
     draft_contract: 'doc_draft_contract',
     contract: 'doc_contract',
     addendum_contract: 'doc_addendum_contract',
+    berita_acara: 'doc_berita_acara',
     bea_cukai: 'doc_bea_cukai',
     delivery_order: 'doc_delivery_order',
     invoice_fp_dp: 'doc_invoice_fp_dp',
@@ -317,6 +359,7 @@ export function buildCommercialDocumentsSummaryQuery(params: CommercialDocuments
       ${count('doc_draft_contract')} AS uploaded_draft_contract,
       ${count('doc_contract')} AS uploaded_contract,
       ${count('doc_addendum_contract')} AS uploaded_addendum_contract,
+      ${count('doc_berita_acara')} AS uploaded_berita_acara,
       ${count('doc_bea_cukai')} AS uploaded_bea_cukai,
       ${count('doc_delivery_order')} AS uploaded_delivery_order,
       ${count('doc_invoice_fp_dp')} AS uploaded_invoice_fp_dp,

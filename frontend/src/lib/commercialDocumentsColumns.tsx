@@ -9,6 +9,7 @@ import {
   formatCommercialDate,
   formatCommercialIdr,
   formatCommercialQtyKg,
+  formatCommercialSapAmount,
   COMMERCIAL_TOTAL_PRICE_FORMULA_HELP,
 } from '@/lib/commercialDocumentsFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
@@ -19,6 +20,7 @@ const DOC_STATUS_COLUMN_IDS = new Set<CommercialDocsColumnId>([
   'doc_draft_contract',
   'doc_contract',
   'doc_addendum_contract',
+  'doc_berita_acara',
   'doc_bea_cukai',
   'doc_delivery_order',
   'doc_invoice_fp_dp',
@@ -42,6 +44,7 @@ export const COMMERCIAL_DOCS_DEFAULT_VISIBLE_COLUMNS = [
   'doc_draft_contract',
   'doc_contract',
   'doc_addendum_contract',
+  'doc_berita_acara',
   'doc_bea_cukai',
   'doc_delivery_order',
   'doc_invoice_fp_dp',
@@ -54,6 +57,10 @@ export const COMMERCIAL_DOCS_HIDDEN_BY_DEFAULT_COLUMNS = [
   'plant_site',
   'transport_mode',
   'b2b_flag',
+  'vessel_oa_budget',
+  'vessel_oa_actual',
+  'truck_oa_budget',
+  'truck_oa_actual',
 ] as const
 
 export type CommercialDocsColumnId =
@@ -89,11 +96,26 @@ const DOC_COL_MAP: Record<
   draft_contract: { id: 'doc_draft_contract', field: 'doc_draft_contract' },
   contract: { id: 'doc_contract', field: 'doc_contract' },
   addendum_contract: { id: 'doc_addendum_contract', field: 'doc_addendum_contract' },
+  berita_acara: { id: 'doc_berita_acara', field: 'doc_berita_acara' },
   bea_cukai: { id: 'doc_bea_cukai', field: 'doc_bea_cukai' },
   delivery_order: { id: 'doc_delivery_order', field: 'doc_delivery_order' },
   invoice_fp_dp: { id: 'doc_invoice_fp_dp', field: 'doc_invoice_fp_dp' },
   invoice_fp_payoff: { id: 'doc_invoice_fp_payoff', field: 'doc_invoice_fp_payoff' },
   invoice_fp_full: { id: 'doc_invoice_fp_full', field: 'doc_invoice_fp_full' },
+}
+
+/**
+ * A saved visible-column list predates Berita Acara, so the new column would never appear for anyone who had customised their columns.
+ * Put it right after Addendum Contract - where the cards and the checklist list it - when that column is shown; leave the list alone otherwise
+ * (a user who hid Addendum Contract chose a narrower table) and when Berita Acara is already in it.
+ */
+export function withBeritaAcaraColumn(saved: readonly string[]): string[] {
+  const ids = [...saved]
+  if (ids.includes('doc_berita_acara')) return ids
+  const at = ids.indexOf('doc_addendum_contract')
+  if (at < 0) return ids
+  ids.splice(at + 1, 0, 'doc_berita_acara')
+  return ids
 }
 
 export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
@@ -239,6 +261,25 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       getSortValue: (r) => r.b2b_flag || '',
       render: (r) => <span className="text-sm">{formatSapDisplayValue(r.b2b_flag)}</span>,
     },
+    ...(
+      [
+        ['vessel_oa_budget', 'Vessel OA Budget'],
+        ['vessel_oa_actual', 'Vessel OA Actual'],
+        ['truck_oa_budget', 'Truck OA Budget'],
+        ['truck_oa_actual', 'Truck OA Actual'],
+      ] as const
+    ).map(
+      ([id, label]): CommercialDocsColumnMeta => ({
+        id,
+        label,
+        defaultVisible: false,
+        sortable: true,
+        getSortValue: (r) => r[id] ?? Number.NEGATIVE_INFINITY,
+        render: (r) => (
+          <span className="text-sm tabular-nums whitespace-nowrap">{formatCommercialSapAmount(r[id])}</span>
+        ),
+      }),
+    ),
   ]
 
   const docCols: CommercialDocsColumnMeta[] = COMMERCIAL_DOCUMENT_TYPES.map(
@@ -281,6 +322,7 @@ export const COMMERCIAL_DOCS_COLUMN_WIDTH_PX: Readonly<Record<string, number>> =
   doc_draft_contract: 96,
   doc_contract: 88,
   doc_addendum_contract: 104,
+  doc_berita_acara: 104,
   doc_bea_cukai: 88,
   doc_delivery_order: 64,
   doc_invoice_fp_dp: 104,
@@ -290,6 +332,10 @@ export const COMMERCIAL_DOCS_COLUMN_WIDTH_PX: Readonly<Record<string, number>> =
   plant_site: 96,
   transport_mode: 88,
   b2b_flag: 64,
+  vessel_oa_budget: 112,
+  vessel_oa_actual: 112,
+  truck_oa_budget: 112,
+  truck_oa_actual: 112,
 }
 
 export const COMMERCIAL_DOCS_ACTIONS_COL_WIDTH_PX = 148

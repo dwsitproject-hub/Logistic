@@ -3,8 +3,12 @@ import {
   buildCommercialDocumentStoredName,
   buyerFilenamePrefix,
   canonicalCommercialDocumentType,
+  COMMERCIAL_DOCUMENT_TYPES,
+  commercialDocumentUploadPermissionKey,
+  commercialDocumentTypeLabel,
   commercialDocumentUploadRelativeDir,
   documentTypesForCategory,
+  isCommercialDocumentType,
   supplierFilenamePrefix,
   useCommercialDocsNasLayout,
 } from './commercialDocumentsConstants';
@@ -126,6 +130,32 @@ describe('commercialDocumentsConstants', () => {
         originalName: 'do.pdf',
       }),
     ).toBe('EOP_Do_1381002868.pdf');
+  });
+
+  it('Berita Acara is a checklist category with its own filename code, listed right after Addendum Contract', () => {
+    expect(COMMERCIAL_DOCUMENT_TYPES.indexOf('berita_acara')).toBe(
+      COMMERCIAL_DOCUMENT_TYPES.indexOf('addendum_contract') + 1,
+    );
+    expect(isCommercialDocumentType('berita_acara')).toBe(true);
+    expect(commercialDocumentTypeLabel('berita_acara')).toBe('Berita Acara (BA)');
+    expect(canonicalCommercialDocumentType('berita_acara')).toBe('berita_acara');
+    expect(documentTypesForCategory('berita_acara')).toEqual(['berita_acara']);
+    expect(
+      buildCommercialDocumentStoredName({
+        buyerName: 'EOP Trading',
+        documentType: 'berita_acara',
+        referenceNumber: '1381002868',
+        originalName: 'ba.pdf',
+      }),
+    ).toBe('EOP_Ba_1381002868.pdf');
+  });
+
+  it('upload permission is one key per document type, under data.commercial_documents', () => {
+    expect(commercialDocumentUploadPermissionKey('delivery_order')).toBe('data.commercial_documents.upload.delivery_order');
+    expect(commercialDocumentUploadPermissionKey('berita_acara')).toBe('data.commercial_documents.upload.berita_acara');
+    const keys = COMMERCIAL_DOCUMENT_TYPES.map(commercialDocumentUploadPermissionKey);
+    expect(new Set(keys).size).toBe(COMMERCIAL_DOCUMENT_TYPES.length);
+    for (const key of keys) expect(key.startsWith('data.commercial_documents.upload.')).toBe(true);
   });
 
   it('SIT/local writes under commercial-documents without NAS year-month folders', () => {

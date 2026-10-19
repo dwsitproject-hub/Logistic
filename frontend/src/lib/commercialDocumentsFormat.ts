@@ -17,6 +17,14 @@ export function formatCommercialIdr(
   return `${n.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${suffix.toLowerCase()}`
 }
 
+/** A SAP amount as SAP has it (no currency is sent with it): '-' when there is none, 0 stays 0. */
+export function formatCommercialSapAmount(value: number | null | undefined): string {
+  if (value === null || value === undefined) return '-'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
 export const COMMERCIAL_TOTAL_PRICE_FORMULA_HELP =
   'Formula: Contract Qty × Unit Price'
 

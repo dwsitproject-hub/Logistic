@@ -4,11 +4,13 @@ import path from 'path';
 import multer from 'multer';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
-import { AuthRequest } from '../middleware/auth';
+import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import {
   buildCommercialDocumentStoredName,
   commercialDocumentTypeLabel,
+  commercialDocumentUploadPermissionKey,
   commercialDocumentUploadRelativeDir,
+  type CommercialDocumentType,
   documentTypesForCategory,
   isCommercialDocumentType,
 } from '../utils/commercialDocumentsConstants';
@@ -44,6 +46,32 @@ function resolveCommercialDocumentPoKey(rawPo: unknown, fallback?: unknown): str
   return String(fallback ?? '').trim();
 }
 
+/** A SAP amount, kept NULL when SAP sent none (0 is a real value and stays 0). */
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** ADMIN, or can_create / can_edit on the type's upload permission for the user's role, level and transport type. */
+export async function userMayUploadCommercialDocumentType(
+  user: AuthRequest['user'] | undefined,
+  documentType: CommercialDocumentType,
+): Promise<boolean> {
+  if (!user) return false;
+  if (user.role === 'ADMIN') return true;
+  const key = commercialDocumentUploadPermissionKey(documentType);
+  try {
+    return (
+      (await userHasPermissionFlag(user.id, user.role, key, 'can_create')) ||
+      (await userHasPermissionFlag(user.id, user.role, key, 'can_edit'))
+    );
+  } catch (err) {
+    logger.error('commercial document upload permission lookup failed:', err);
+    return false;
+  }
+}
+
 function mapRow(row: Record<string, unknown>) {
   const qty = Number(row.quantity_ordered) || 0;
   const unitPrice = Number(row.unit_price) || 0;
@@ -60,6 +88,10 @@ function mapRow(row: Record<string, unknown>) {
     payment_due_date: row.payment_due_date,
     dp_due_date: row.dp_due_date,
     payoff_date: row.payoff_date,
+    vessel_oa_budget: numberOrNull(row.vessel_oa_budget),
+    vessel_oa_actual: numberOrNull(row.vessel_oa_actual),
+    truck_oa_budget: numberOrNull(row.truck_oa_budget),
+    truck_oa_actual: numberOrNull(row.truck_oa_actual),
     quantity_ordered: qty,
     unit_price: unitPrice,
     total_price: qty * unitPrice,
@@ -76,6 +108,7 @@ function mapRow(row: Record<string, unknown>) {
     doc_draft_contract: row.doc_draft_contract,
     doc_contract: row.doc_contract,
     doc_addendum_contract: row.doc_addendum_contract,
+    doc_berita_acara: row.doc_berita_acara,
     doc_bea_cukai: row.doc_bea_cukai,
     doc_delivery_order: row.doc_delivery_order,
     doc_invoice_fp_dp: row.doc_invoice_fp_dp,
@@ -174,6 +207,7 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
           draft_contract: card('uploaded_draft_contract'),
           contract: card('uploaded_contract'),
           addendum_contract: card('uploaded_addendum_contract'),
+          berita_acara: card('uploaded_berita_acara'),
           bea_cukai: card('uploaded_bea_cukai'),
           delivery_order: card('uploaded_delivery_order'),
           invoice_fp_dp: card('uploaded_invoice_fp_dp'),
@@ -364,6 +398,23 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       return res.status(400).json({
         success: false,
         error: { message: 'contract_ext_no is required for audit trail' },
+      });
+    }
+    /*
+     * Per document type, from the role's permissions (Role Management > data.commercial_documents.upload.<type>), checked here and not in the route
+     * because the type travels in the multipart body that multer has only just read. The temp file multer wrote is removed on refusal.
+     */
+    if (!(await userMayUploadCommercialDocumentType(req.user, documentType))) {
+      try {
+        fs.unlinkSync(file.path);
+      } catch {
+        /* ignore */
+      }
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: `Your role is not allowed to upload ${commercialDocumentTypeLabel(documentType)}. Ask an admin to grant it in Role Management.`,
+        },
       });
     }
 
