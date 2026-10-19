@@ -245,6 +245,7 @@ import {
 } from '../utils/contractDeliveryStatus';
 import { resolveContractLogisticsStoStatus } from '../utils/contractLogisticsStoDisplay';
 import { isContractLatestSpdSnapshotFresh } from '../services/contractLatestSpdSnapshot.service';
+import { invalidateAfterShipmentWrite } from '../services/shipmentWriteInvalidation.service';
 import { latestSpdDerivedExprs } from '../utils/contractLatestSpdDerivedSql';
 import { deriveCompactShipmentPage } from '../services/shipmentListNodePage.service';
 import {
@@ -2756,17 +2757,27 @@ export const attachPurchaseOrderToShipmentHandler = async (req: AuthRequest, res
       contractRowId,
       stoQtyAssignedMt,
       stoQtyAssignedKg,
+      reopenOperation: req.body?.reopenOperation === true || req.body?.reopen_operation === true,
+      userId: req.user?.id ?? null,
     });
 
     if (!result.ok) {
       return res.status(result.status).json({
         success: false,
-        error: { message: result.message },
+        error: {
+          message: result.message,
+          ...(result.code ? { code: result.code } : {}),
+          ...(result.dischargeCompleteAta ? { dischargeCompleteAta: result.dischargeCompleteAta } : {}),
+        },
       });
     }
 
     invalidateShipmentsListCache();
     invalidateShippingPerformanceRowCache();
+    if (result.reopenedFromAta) {
+      // The cleared ATA feeds Trade Cycle / Log Cycle for every member, like an ATA edit does.
+      invalidateAfterShipmentWrite(result.affectedShipmentIds);
+    }
 
     return res.json({
       success: true,
@@ -2775,6 +2786,8 @@ export const attachPurchaseOrderToShipmentHandler = async (req: AuthRequest, res
         shipmentId: result.shipmentUuid,
         contractNumber: result.contractNumber,
         poNumber: result.poNumber,
+        reopenedFromAta: result.reopenedFromAta,
+        remainingAta: result.remainingAta,
       },
     });
   } catch (error) {

@@ -85,7 +85,7 @@ import {
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
 import type { AddNewShipmentSubmitPayload, ShipmentEditContextData, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { attachPurchaseOrderToShipment } from '@/components/shared/addNewShipmentTypes'
+import { attachPurchaseOrderToShipment, OPERATION_ALREADY_COMPLETED } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentPoSearchCombobox } from '@/components/shared/ShipmentPoSearchCombobox'
 import {
   ContractDetailModal,
@@ -913,6 +913,8 @@ export function EditShipmentModal({
   const [editContext, setEditContext] = useState<ShipmentEditContextData | null>(null)
   const [selectedAddPoOption, setSelectedAddPoOption] = useState<ShipmentPoOption | null>(null)
   const [addingPo, setAddingPo] = useState(false)
+  /** Set when the operation already finished discharging: the date to show while asking to reopen it. */
+  const [reopenConfirmAta, setReopenConfirmAta] = useState<string | null>(null)
   const [editRemark, setEditRemark] = useState('')
   const [etaBaseline, setEtaBaseline] = useState<ShipmentEtaBaseline | null>(null)
 
@@ -1203,6 +1205,7 @@ export function EditShipmentModal({
     setEditContext(null)
     setSelectedAddPoOption(null)
     setAddingPo(false)
+    setReopenConfirmAta(null)
     setEditRemark('')
     setEtaBaseline(null)
     setPlantSiteName('')
@@ -1650,7 +1653,7 @@ export function EditShipmentModal({
     [hydrateQuantityDocs, loadActivityLog, loadShipmentRemarks, loadShipmentDocuments, editContractNumbers, readOnly],
   )
 
-  const handleAddPo = useCallback(async () => {
+  const handleAddPo = useCallback(async (reopenOperation = false) => {
     if (!shipmentId || !selectedAddPoOption) {
       setNotification({ type: 'error', message: 'Select a PO to add.' })
       return
@@ -1658,13 +1661,29 @@ export function EditShipmentModal({
 
     setAddingPo(true)
     setNotification(null)
+    setReopenConfirmAta(null)
     try {
-      await attachPurchaseOrderToShipment({
+      const outcome = await attachPurchaseOrderToShipment({
         shipmentId,
         contractRowId: selectedAddPoOption.key,
         stoQtyAssignedKg: 0,
+        reopenOperation,
       })
-      setNotification({ type: 'success', message: 'PO added. Set Delivered Qty (Klip) on the row; Received Qty (Klip) needs SLD/SDD.' })
+      const baseMessage = 'PO added. Set Delivered Qty (Klip) on the row; Received Qty (Klip) needs SLD/SDD.'
+      if (outcome.reopenedFromAta && outcome.remainingAta) {
+        // A manual clear only overrides: SAP / JPS / the discharge port row still carry a discharge-complete ATA, so the operation did not reopen.
+        setNotification({
+          type: 'error',
+          message: `${baseMessage} The discharge-complete ATA (${outcome.reopenedFromAta}) could not be cleared: ${outcome.remainingAta} still comes from SAP, JPS or the discharge port, so the operation stays Completed until that is cleared.`,
+        })
+      } else if (outcome.reopenedFromAta) {
+        setNotification({
+          type: 'success',
+          message: `${baseMessage} The operation was reopened: its discharge-complete ATA (${outcome.reopenedFromAta}) was cleared.`,
+        })
+      } else {
+        setNotification({ type: 'success', message: baseMessage })
+      }
       const contractId = editContractId?.trim()
       const directId = editShipmentIdProp?.trim()
       const sto = editStoNumber?.trim()
@@ -1676,12 +1695,19 @@ export function EditShipmentModal({
       onShipmentChanged?.()
     } catch (error: unknown) {
       const axiosErr = error as {
-        response?: { data?: { error?: { message?: string } } }
+        response?: { data?: { error?: { message?: string; code?: string; dischargeCompleteAta?: string } } }
         message?: string
       }
-      const msg =
-        axiosErr.response?.data?.error?.message || axiosErr.message || 'Failed to add PO to shipment'
-      setNotification({ type: 'error', message: msg })
+      const apiError = axiosErr.response?.data?.error
+      if (apiError?.code === OPERATION_ALREADY_COMPLETED) {
+        // Not a failure: ask first, then repeat the add with the confirmation.
+        setReopenConfirmAta(apiError.dischargeCompleteAta || '')
+      } else {
+        setNotification({
+          type: 'error',
+          message: apiError?.message || axiosErr.message || 'Failed to add PO to shipment',
+        })
+      }
     } finally {
       setAddingPo(false)
     }
@@ -2519,7 +2545,7 @@ export function EditShipmentModal({
                         size="sm"
                         className="h-9 shrink-0 bg-blue-600 px-4 text-white hover:bg-blue-700"
                         disabled={!selectedAddPoOption || addingPo}
-                        onClick={() => void handleAddPo()}
+                        onClick={() => void handleAddPo(false)}
                       >
                         {addingPo ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2531,6 +2557,39 @@ export function EditShipmentModal({
                         )}
                       </Button>
                     </div>
+                    {reopenConfirmAta !== null && selectedAddPoOption ? (
+                      <div
+                        role="alertdialog"
+                        aria-label="Reopen the operation"
+                        className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+                      >
+                        <p>
+                          This operation already finished discharging{reopenConfirmAta ? ` on ${reopenConfirmAta}` : ''}. Adding this PO reopens it: the
+                          discharge-complete ATA is cleared for every PO of the operation, and the operation is no longer Completed until it is entered again.
+                        </p>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-8 bg-amber-600 px-3 text-white hover:bg-amber-700"
+                            disabled={addingPo}
+                            onClick={() => void handleAddPo(true)}
+                          >
+                            Reopen and add PO
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-3"
+                            disabled={addingPo}
+                            onClick={() => setReopenConfirmAta(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
                     <p className="text-xs italic text-gray-500">
                       Search by PO, contract, supplier, or product (min. 2 characters). Delivered Qty (Klip) can be edited directly; Received Qty (Klip) needs SLD/SDD or Upload Planning.
                     </p>

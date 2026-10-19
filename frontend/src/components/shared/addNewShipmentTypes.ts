@@ -401,14 +401,26 @@ export async function fetchStoSapPreview(stoNumber: string): Promise<StoSapPrevi
   }
 }
 
+/** What adding a PO to an operation that had already finished discharging did: the ATA it cleared, and one that is still in effect. */
+export type AttachPurchaseOrderOutcome = {
+  reopenedFromAta: string | null
+  remainingAta: string | null
+}
+
+/** The API's 409 code: the operation already finished discharging; adding a PO reopens it and needs the user's confirmation. */
+export const OPERATION_ALREADY_COMPLETED = 'OPERATION_ALREADY_COMPLETED'
+
 export async function attachPurchaseOrderToShipment(args: {
   shipmentId: string
   contractRowId: string
   stoQtyAssignedMt?: number
   stoQtyAssignedKg?: number
-}): Promise<void> {
+  /** The user confirmed that a finished operation is reopened (its discharge-complete ATA is cleared). */
+  reopenOperation?: boolean
+}): Promise<AttachPurchaseOrderOutcome> {
   const api = (await import('@/lib/api')).default
   const body: Record<string, unknown> = { contractRowId: args.contractRowId }
+  if (args.reopenOperation) body.reopenOperation = true
   if (args.stoQtyAssignedKg != null) body.shipment_plan_qty_kg = args.stoQtyAssignedKg
   else if (args.stoQtyAssignedMt != null) body.stoQtyAssignedMt = args.stoQtyAssignedMt
   else body.shipment_plan_qty_kg = 0
@@ -418,6 +430,10 @@ export async function attachPurchaseOrderToShipment(args: {
   )
   if (!res.data?.success) {
     throw new Error(res.data?.error?.message || 'Failed to add PO to shipment')
+  }
+  return {
+    reopenedFromAta: res.data?.data?.reopenedFromAta ?? null,
+    remainingAta: res.data?.data?.remainingAta ?? null,
   }
 }
 

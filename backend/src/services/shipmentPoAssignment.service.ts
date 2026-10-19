@@ -11,6 +11,9 @@ import {
 } from '../utils/contractPoGlobalMetricsSql';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { resolveShipmentEditContext } from './shipmentEditContext.service';
+import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
+import { upsertShipmentAtaOverrideForStoGroup } from './shipmentAtaStoFanOut.service';
+import logger from '../utils/logger';
 import { groupPlantExpr, GROUP_PLANT_CONTRACT_C } from '../utils/groupPlantSql';
 import {
   contractExtNoSubquery,
@@ -202,15 +205,55 @@ export async function listAvailablePurchaseOrdersForShipmentEdit(
   return out;
 }
 
+/** Code of the 409 that asks the caller to confirm that adding a PO reopens an operation which already finished discharging. */
+export const OPERATION_ALREADY_COMPLETED = 'OPERATION_ALREADY_COMPLETED';
+
 export type AttachPurchaseOrderResult =
-  | { ok: true; shipmentUuid: string; contractNumber: string; poNumber: string | null }
-  | { ok: false; status: number; message: string };
+  | {
+      ok: true;
+      shipmentUuid: string;
+      contractNumber: string;
+      poNumber: string | null;
+      /** Every shipment of the group after the PO was added (the ones whose ATA may have changed). */
+      affectedShipmentIds: string[];
+      /** The group's discharge-complete ATA before the PO was added, when the operation had finished discharging and was reopened. */
+      reopenedFromAta: string | null;
+      /** A discharge-complete ATA that is still in effect after the clear (SAP / JPS / port row, which a manual edit does not override). */
+      remainingAta: string | null;
+    }
+  | { ok: false; status: number; message: string; code?: string; dischargeCompleteAta?: string };
+
+/**
+ * The latest effective discharge-complete ATA among the given shipments, as YYYY-MM-DD, or null.
+ * Read the way the Shipments list reads it: JPS while the shipment is open, then the manual override, the stored value, the discharge port row.
+ */
+export async function groupDischargeCompleteAta(shipmentIds: readonly string[]): Promise<string | null> {
+  if (shipmentIds.length === 0) return null;
+  const res = await query(
+    `SELECT MAX(COALESCE(
+              CASE WHEN s.status IS DISTINCT FROM 'COMPLETED' THEN sao.jps_ata_discharge_complete END,
+              sao.ata_discharge_complete,
+              s.ata_discharge_complete,
+              (SELECT MAX(v.ata_loading_completed)::date FROM vessel_loading_ports v
+                WHERE v.shipment_id = s.id AND COALESCE(v.is_discharge_port, false) = true)
+            ))::text AS atc
+       FROM shipments s
+       LEFT JOIN shipment_ata_overrides sao ON sao.shipment_id = s.id
+      WHERE s.id = ANY($1::uuid[])`,
+    [shipmentIds],
+  );
+  const v = res.rows[0]?.atc;
+  return v ? String(v).slice(0, 10) : null;
+}
 
 export async function attachPurchaseOrderToShipment(args: {
   anchorShipmentUuid: string;
   contractRowId: string;
   stoQtyAssignedMt?: number;
   stoQtyAssignedKg?: number;
+  /** The caller confirmed that an operation which already finished discharging is reopened (its discharge-complete ATA is cleared). */
+  reopenOperation?: boolean;
+  userId?: string | null;
 }): Promise<AttachPurchaseOrderResult> {
   const contractRowId = String(args.contractRowId ?? '').trim();
   if (!contractRowId) {
@@ -279,6 +322,23 @@ export async function attachPurchaseOrderToShipment(args: {
   const existingKeys = await fetchExistingPoKeys(context.lookup_key, context.contract_numbers);
   if (existingKeys.has(poLineKey(contractNumber, poNumber))) {
     return { ok: false, status: 409, message: 'This PO is already linked to this shipment group' };
+  }
+
+  /*
+   * A PO added to an operation that already finished discharging would ride along as Completed: the row reads the finished PO's ATA. Operations
+   * reopen such an operation by clearing its discharge-complete ATA, and that step used to be forgotten (operation OP-1004031313-76403194,
+   * PO 1001031718). So the add itself asks for confirmation, and clears the ATA when confirmed.
+   */
+  const priorMemberIds = await resolveStoGroupShipmentIds(args.anchorShipmentUuid);
+  const priorAta = await groupDischargeCompleteAta(priorMemberIds);
+  if (priorAta && !args.reopenOperation) {
+    return {
+      ok: false,
+      status: 409,
+      code: OPERATION_ALREADY_COMPLETED,
+      dischargeCompleteAta: priorAta,
+      message: `This operation already finished discharging on ${priorAta}. Adding a PO reopens it: the discharge-complete ATA is cleared.`,
+    };
   }
 
   const contractUuidRes = await query(`SELECT id FROM contracts WHERE id = $1::uuid LIMIT 1`, [contractRowId]);
@@ -440,11 +500,35 @@ export async function attachPurchaseOrderToShipment(args: {
   // Always link PO to STO group (plan qty may be 0 until user sets Shipment Plan Qty).
   await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);
 
+  const memberIds = await resolveStoGroupShipmentIds(args.anchorShipmentUuid);
+  let remainingAta: string | null = null;
+  if (priorAta) {
+    // Fans out to every member, the new shipment included. A manual edit only overrides: a discharge-complete ATA that SAP, JPS or the discharge
+    // port row carries stays in effect, and the caller is told so rather than led to believe the operation reopened.
+    await upsertShipmentAtaOverrideForStoGroup(
+      args.anchorShipmentUuid,
+      { ata_vessel_complete_discharge: null },
+      args.userId ?? null,
+    );
+    remainingAta = await groupDischargeCompleteAta(memberIds);
+    logger.info('Add PO reopened a finished operation', {
+      anchorShipmentUuid: args.anchorShipmentUuid,
+      lookupKey: context.lookup_key,
+      contractNumber,
+      poNumber,
+      clearedAta: priorAta,
+      remainingAta,
+    });
+  }
+
   return {
     ok: true,
     shipmentUuid: resultShipmentUuid,
     contractNumber,
     poNumber,
+    affectedShipmentIds: memberIds,
+    reopenedFromAta: priorAta,
+    remainingAta,
   };
 }
 
