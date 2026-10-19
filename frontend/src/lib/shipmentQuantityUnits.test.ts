@@ -10,6 +10,7 @@ import {
   shipmentListDeliveredKgForViewTable,
   shipmentListOutstandingKgForViewTable,
   shipmentListReceiveKgForViewTable,
+  shipmentModalGrandTotalsKg,
   shipmentListShipmentPlanKg,
 } from './shipmentQuantityUnits'
 
@@ -338,5 +339,30 @@ describe('shipmentListShipmentPlanKg', () => {
 
   it('is not part of Delivery Qty: a plan does not count as delivered', () => {
     expect(shipmentListDeliveredKgForViewTable({ klip_delivery_qty: null, quantity_delivered_klip: null, ...({ quantity_shipment_plan: 350000 } as object) })).toBe(0)
+  })
+})
+
+describe('shipmentModalGrandTotalsKg - the Edit Shipment footer follows the View Table', () => {
+  const base = { klipDeliveredKg: null, klipReceiveKg: null, sapDeliveredKg: null, sapReceiveKg: null, contractSapClosed: false }
+
+  it('falls back to SAP when there is no KLIP quantity (the table showed 1,366 MT received, the footer 0)', () => {
+    const t = shipmentModalGrandTotalsKg({ ...base, klipDeliveredKg: 1621901, klipReceiveKg: 0, sapDeliveredKg: 1366000, sapReceiveKg: 1366000 })
+    expect(t.delivered).toBe(1621901)
+    expect(t.receive).toBe(1366000)
+  })
+
+  it('an open GR with a KLIP quantity shows KLIP', () => {
+    const t = shipmentModalGrandTotalsKg({ ...base, klipDeliveredKg: 900000, klipReceiveKg: 880000, sapDeliveredKg: 1000000, sapReceiveKg: 990000 })
+    expect(t).toEqual({ delivered: 900000, receive: 880000 })
+  })
+
+  it('a Close GR shows SAP first', () => {
+    const t = shipmentModalGrandTotalsKg({ ...base, klipDeliveredKg: 900000, klipReceiveKg: 880000, sapDeliveredKg: 1000000, sapReceiveKg: 990000, contractSapClosed: true })
+    expect(t).toEqual({ delivered: 1000000, receive: 990000 })
+  })
+
+  it('agrees with the table rule for the same numbers', () => {
+    const t = shipmentModalGrandTotalsKg({ ...base, klipReceiveKg: 0, sapReceiveKg: 1366000 })
+    expect(t.receive).toBe(resolveShipmentListReceiveKg({ klip_receive_qty: 0, quantity_receive: 1366000, is_contract_sap_closed: false }))
   })
 })

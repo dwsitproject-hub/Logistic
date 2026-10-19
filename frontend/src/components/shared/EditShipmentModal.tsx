@@ -76,6 +76,7 @@ import { DecimalDotInput } from '@/components/shared/DecimalDotInput'
 import {
   seedKlipQtyFromShipmentHeader,
   sapContractDetailQtyToKg,
+  shipmentModalGrandTotalsKg,
   shipmentStoredQtyKg,
 } from '@/lib/shipmentQuantityUnits'
 import {
@@ -870,6 +871,8 @@ export function EditShipmentModal({
    * locks an ATA field, and the server's JPS-first read uses that same stored value.
    */
   const [displayedShipmentStatus, setDisplayedShipmentStatus] = useState<string | null>(null)
+  /** GR Close on the shipment's contract: the View Table then reads SAP quantities first, and so does the PO table's Grand Total. */
+  const [contractSapClosed, setContractSapClosed] = useState(false)
   const [shipmentDocuments, setShipmentDocuments] = useState<ShipmentDocumentItem[]>([])
   const [docsLoading, setDocsLoading] = useState(false)
 
@@ -1000,6 +1003,19 @@ export function EditShipmentModal({
   const qtyTotals = useMemo(
     () => sumVesselPortsQuantityEdits(qtyTableRows, qtyEdits),
     [qtyTableRows, qtyEdits],
+  )
+
+  // What the PO table's Grand Total shows for Delivered / Received: the same number as the Shipments View Table (KLIP, else SAP).
+  const grandTotalKg = useMemo(
+    () =>
+      shipmentModalGrandTotalsKg({
+        klipDeliveredKg: qtyTotals.quantity_delivered,
+        klipReceiveKg: qtyTotals.quantity_receive,
+        sapDeliveredKg: poTableQtyTotals.sapDelivered,
+        sapReceiveKg: poTableQtyTotals.sapReceive,
+        contractSapClosed,
+      }),
+    [qtyTotals, poTableQtyTotals, contractSapClosed],
   )
 
   const isTcCharter = isTcCharterType(vesselMeta.charter_type)
@@ -1379,6 +1395,7 @@ export function EditShipmentModal({
         const sapVn = String(row.vessel_name_sap ?? '').trim()
         const masterVn = String(row.vessel_name_master ?? '').trim()
         const grClosed = isContractSapClosedFlag(row.is_contract_sap_closed)
+        setContractSapClosed(grClosed)
         const primaryVn = shipmentVesselPrimaryName(klipVn, sapVn, {
           masterName: masterVn,
           contractSapClosed: grClosed,
@@ -2686,17 +2703,17 @@ export function EditShipmentModal({
                           <MtQtyReadOnly valueKg={poTableQtyTotals.shipmentPlan} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={qtyTotals.quantity_delivered} />
+                          <MtQtyReadOnly valueKg={grandTotalKg.delivered} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={qtyTotals.quantity_receive} />
+                          <MtQtyReadOnly valueKg={grandTotalKg.receive} />
                         </TableCell>
                       </TableRow>
                     </TableFooter>
                   </Table>
                 </div>
                 <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  Grand Total Delivered / Received Qty (Klip) is the STO total shown on Shipments View Table.
+                  Grand Total Delivered / Received Qty is the STO total shown on Shipments View Table: the Klip quantity, or SAP when no Klip quantity is entered.
                   One PO with several STOs: each shipment row is that STO only.
                 </p>
                 {detailRows.some((row) => isMultiStoPo(row.po_sto_count)) ? (

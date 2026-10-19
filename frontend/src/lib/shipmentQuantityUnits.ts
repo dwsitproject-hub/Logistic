@@ -275,6 +275,32 @@ export function resolveShipmentListReceiveKg(shipment: {
   return klip ?? sap
 }
 
+/**
+ * Edit Shipment PO table Grand Total (Delivered / Received): the number the Shipments View Table shows for the same STO.
+ * The table reads KLIP first and falls back to SAP when there is no KLIP quantity (and SAP first when the GR is Close), so a footer that only
+ * summed the KLIP column read 0 MT for a STO whose table row read the SAP receive. Sums are kg, as the PO table keeps them.
+ */
+export function shipmentModalGrandTotalsKg(totals: {
+  klipDeliveredKg: number | null
+  klipReceiveKg: number | null
+  sapDeliveredKg: number | null
+  sapReceiveKg: number | null
+  contractSapClosed: boolean
+}): { delivered: number | null; receive: number | null } {
+  return {
+    delivered: resolveShipmentListDeliveredKg({
+      klip_delivery_qty: totals.klipDeliveredKg,
+      quantity_delivered_sap: totals.sapDeliveredKg,
+      is_contract_sap_closed: totals.contractSapClosed,
+    }),
+    receive: resolveShipmentListReceiveKg({
+      klip_receive_qty: totals.klipReceiveKg,
+      quantity_receive: totals.sapReceiveKg,
+      is_contract_sap_closed: totals.contractSapClosed,
+    }),
+  }
+}
+
 /** Prefer hydrated SAP; use the shell only when hydrate is null/0 (do not keep an inflated header SUM). */
 export function preferHydratedQty(
   hydrated: number | string | null | undefined,
