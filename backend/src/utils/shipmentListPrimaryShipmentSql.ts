@@ -16,11 +16,26 @@ export function sqlShipmentListPrimaryOrderBy(
   spdAlias = 'l',
   shipmentAlias = 's',
   contractStosAlias?: string,
+  ataOverrideAlias?: string,
 ): string {
   const key = stoKeyExpr ?? shipmentListStoKeyExpr(contractAlias, spdAlias, shipmentAlias);
   const stoType = contractStosAlias
     ? `UPPER(TRIM(COALESCE(NULLIF(TRIM(${contractStosAlias}.sto_type), ''), 'Z')))`
     : `'Z'`;
+  /*
+   * A manual ATA lives in shipment_ata_overrides, not on the shipment row. A query that joins that table (alias passed in) counts it as
+   * "ATA populated" too: otherwise a group whose finished voyage carries its ATA only as an override ranked below a newer planned member with no
+   * ATA, the list row opened that planned member, and Edit Shipment read Planned with an empty ATA step while the table row read Completed.
+   */
+  const o = ataOverrideAlias;
+  const overrideAtaPresent = o
+    ? `
+        OR ${o}.ata_arrival IS NOT NULL
+        OR ${o}.ata_loading_complete IS NOT NULL
+        OR ${o}.ata_sailed IS NOT NULL
+        OR ${o}.ata_discharge_start IS NOT NULL
+        OR ${o}.ata_discharge_complete IS NOT NULL`
+    : '';
   return `
     /*
      * A cancelled member is the LAST choice. A shipment with several POs is one row here, and one PO's shipment can be cancelled while the others
@@ -51,7 +66,7 @@ export function sqlShipmentListPrimaryOrderBy(
       WHEN ${shipmentAlias}.ata_arrival IS NOT NULL
         OR ${shipmentAlias}.ata_loading_complete IS NOT NULL
         OR ${shipmentAlias}.ata_sailed IS NOT NULL
-        OR ${shipmentAlias}.ata_discharge_complete IS NOT NULL
+        OR ${shipmentAlias}.ata_discharge_complete IS NOT NULL${overrideAtaPresent}
       THEN 0
       ELSE 1
     END,
@@ -76,6 +91,7 @@ export function sqlShipmentListPrimaryIdAgg(
   spdAlias = 'l',
   shipmentAlias = 's',
   contractStosAlias?: string,
+  ataOverrideAlias?: string,
 ): string {
   const orderBy = sqlShipmentListPrimaryOrderBy(
     stoKeyExpr,
@@ -83,6 +99,7 @@ export function sqlShipmentListPrimaryIdAgg(
     spdAlias,
     shipmentAlias,
     contractStosAlias,
+    ataOverrideAlias,
   );
   return `(array_agg(${shipmentAlias}.id ORDER BY ${orderBy}
   ) FILTER (WHERE ${shipmentAlias}.id IS NOT NULL))[1]`;
@@ -99,6 +116,7 @@ export function sqlShipmentListPrimaryFieldAgg(
   spdAlias = 'l',
   shipmentAlias = 's',
   contractStosAlias?: string,
+  ataOverrideAlias?: string,
 ): string {
   const orderBy = sqlShipmentListPrimaryOrderBy(
     stoKeyExpr,
@@ -106,6 +124,7 @@ export function sqlShipmentListPrimaryFieldAgg(
     spdAlias,
     shipmentAlias,
     contractStosAlias,
+    ataOverrideAlias,
   );
   return `(array_agg(${fieldExpr} ORDER BY ${orderBy}
   ) FILTER (WHERE ${shipmentAlias}.id IS NOT NULL AND NULLIF(TRIM((${fieldExpr})::text), '') IS NOT NULL))[1]`;

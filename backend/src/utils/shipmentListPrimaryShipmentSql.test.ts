@@ -21,6 +21,19 @@ describe('shipmentListPrimaryShipmentSql', () => {
     expect(sql).toContain('s.created_at DESC');
   });
 
+  it('a manual ATA override counts as "ATA populated" only when the query joins the overrides table', () => {
+    const plain = sqlShipmentListPrimaryOrderBy().replace(/\s+/g, ' ');
+    expect(plain).not.toContain('sao.');
+
+    const withOverride = sqlShipmentListPrimaryOrderBy(undefined, 'c', 'l', 's', undefined, 'sao').replace(/\s+/g, ' ');
+    expect(withOverride).toContain('OR sao.ata_discharge_complete IS NOT NULL');
+    expect(withOverride).toContain('OR sao.ata_sailed IS NOT NULL');
+    // it extends the existing ATA rule, ahead of created_at DESC, so a finished voyage outranks a newer planned member
+    expect(withOverride.indexOf('sao.ata_discharge_complete')).toBeLessThan(withOverride.lastIndexOf('created_at DESC'));
+    expect(sqlShipmentListPrimaryIdAgg(undefined, 'c', 'l', 's', undefined, 'sao')).toContain('sao.ata_discharge_complete');
+    expect(sqlShipmentListPrimaryFieldAgg('s.vessel_name', undefined, 'c', 'l', 's', undefined, 'sao')).toContain('sao.ata_sailed');
+  });
+
   it('a cancelled member is the last choice for the primary row, ahead of every other rule', () => {
     const order = sqlShipmentListPrimaryOrderBy().replace(/\s+/g, ' ');
     const cancelledAt = order.indexOf("IN ('CANCELLED', 'CANCELED') THEN 1");

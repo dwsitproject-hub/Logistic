@@ -989,13 +989,13 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
 
     let queryText = `${prelude}
           ${listStoKeySql} as sto_key,
-          ${sqlShipmentListPrimaryIdAgg(listStoKeySql, 'c', 'l', 's', 'cs_sto')} as id,
+          ${sqlShipmentListPrimaryIdAgg(listStoKeySql, 'c', 'l', 's', 'cs_sto', 'sao')} as id,
           MAX(${listStoDisplaySql}) as sto_number,
           MAX(s.shipment_id) as shipment_id,
           MAX(s.operation_id) as operation_id,
-          ${sqlShipmentListPrimaryFieldAgg('s.vessel_name', listStoKeySql, 'c', 'l', 's', 'cs_sto')} as vessel_name,
-          ${sqlShipmentListPrimaryFieldAgg('s.vessel_code', listStoKeySql, 'c', 'l', 's', 'cs_sto')} as vessel_code,
-          ${sqlShipmentListPrimaryFieldAgg('s.master_vessel_id::text', listStoKeySql, 'c', 'l', 's', 'cs_sto')}::uuid AS master_vessel_id,
+          ${sqlShipmentListPrimaryFieldAgg('s.vessel_name', listStoKeySql, 'c', 'l', 's', 'cs_sto', 'sao')} as vessel_name,
+          ${sqlShipmentListPrimaryFieldAgg('s.vessel_code', listStoKeySql, 'c', 'l', 's', 'cs_sto', 'sao')} as vessel_code,
+          ${sqlShipmentListPrimaryFieldAgg('s.master_vessel_id::text', listStoKeySql, 'c', 'l', 's', 'cs_sto', 'sao')}::uuid AS master_vessel_id,
           MAX(s.voyage_no) as voyage_no,
           MAX(s.vessel_owner) as vessel_owner,
           MAX(s.vessel_draft) as vessel_draft,
