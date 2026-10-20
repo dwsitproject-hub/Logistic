@@ -24,7 +24,7 @@ const dist = (p) => require(path.join(process.cwd(), 'dist', p));
 (async () => {
   const pool = dist('database/connection').default;
   const { invalidateAfterShipmentWrite } = dist('services/shipmentWriteInvalidation.service');
-  const { markContractPerformanceSnapshotStale } = dist('services/contractPerformanceSnapshot.service');
+  const { ContractPerformanceSnapshotService } = dist('services/contractPerformanceSnapshot.service');
   const { sqlContractImportStatusExpr } = dist('utils/contractDeliveryStatus');
   const { sqlSpdHasDeletePoFlagFromRow, sqlSpdHasDeleteStoFlagFromRow } = dist('utils/sapMasterV2UatFormat');
   const { deriveShipmentStatus } = dist('utils/shipmentStatus');
@@ -178,8 +178,13 @@ const dist = (p) => require(path.join(process.cwd(), 'dist', p));
   }
 
   if (apply && (contractsHealed > 0 || restored.length > 0)) {
-    // The contract status feeds the Contract Performance snapshot even when no shipment changed: mark it stale, then let the shipment path schedule its refreshes.
-    await markContractPerformanceSnapshotStale();
+    // The contract status feeds the Contract Performance snapshot even when no shipment changed, and the per-shipment refresh cannot reach a contract that has none.
+    // So rebuild the snapshot IN FULL, awaited. This used to only MARK it stale, and nothing then ran the full rebuild that clears the flag (only refreshAll sets
+    // is_stale = FALSE): the flag stayed true for hours, and while it is true the Contract Performance page and the Contracts list leave the snapshot and compute
+    // live, which is the ~65 s / ~182 s cold path. (Production 2026-10-20, 04:51 UTC and 06:13 UTC.)
+    console.log('\nrebuilding the Contract Performance snapshot in full (about 2-3 minutes) ...');
+    const rebuilt = await ContractPerformanceSnapshotService.refreshAll();
+    console.log(`snapshot rebuilt: ${rebuilt} rows`);
     invalidateAfterShipmentWrite(restored);
     const staleNow = async () => {
       const r = await pool.query(
