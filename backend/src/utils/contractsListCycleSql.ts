@@ -1,4 +1,5 @@
 import { sqlJpsAtaWhileOpen } from './shipmentAtaOverrideSql';
+import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
 import {
   sqlMaxTruckingLastReceiveDateForContract,
   sqlMaxTruckingWbActualsDateForContract,
@@ -90,7 +91,11 @@ export function sqlContractEveryStoDischargedExpr(
  * - a shipment sits on the STO its shipment_id names; the contract row's STO places only a shipment without one of its own (1004031778:
  *   its COMPLETED shipment 1006020383 was also read as finishing its other STO 1006020605, still PLANNED);
  * - it is finished when a non-cancelled shipment on it has an ATC (override, own column, discharge leg) or status COMPLETED
- *   (1014003256: BG. ELANG JAWA 1 COMPLETED with no ATC recorded);
+ *   (1014003256: BG. ELANG JAWA 1 COMPLETED with no ATC recorded) AND the GR of THAT STO is Close. A stored COMPLETED alone is not evidence: SAP
+ *   stamps it while the contract reads Close and nothing moves it back when GR reopens, and Shipping Performance / Shipments derive the stage from the
+ *   ATAs and the STO's GR. Production 2026-10-20: 1004031520 / 1004031680 (BG. KALTIM), 1014003290 / 1014003296 (BG. PRIMA SAMUDRA VIII), 1014003192 -
+ *   stored COMPLETED, no ATC, nothing delivered, GR Open or Cancelled on the STO - were closed here and Open on the other two pages: 4,112 MT. The
+ *   1014003256 case keeps closing because its STO's GR is Close;
  * - a B2B origin's vessel STOs and shipments are its children's (origin 9194100035's cargo moved on child 1004031407's STO).
  * One unfinished vessel STO keeps the PO open, so PO 1004030633 (STO 1006019438 discharged, 1006019958 still loading) stays Open. A PO
  * with no vessel STO line returns false and keeps the older rule.
@@ -140,7 +145,7 @@ export function sqlContractVesselStosFinishedExpr(contractNumberExpr: string): s
             OR (TRIM(COALESCE(c_vf.sto_number::text, '')) = vs.sto AND TRIM(COALESCE(s_vf.shipment_id::text, '')) !~ '^[0-9]{8,}')
           )
           AND (
-            UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED'
+            (UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED' AND ${sqlIsContractSapClosedForStoExpr('c_vf', 'vs.sto')})
             OR s_vf.ata_discharge_complete IS NOT NULL
             OR EXISTS (SELECT 1 FROM shipment_ata_overrides o_vf WHERE o_vf.shipment_id = s_vf.id AND o_vf.ata_discharge_complete IS NOT NULL)
             OR EXISTS (
@@ -175,7 +180,7 @@ export function buildVesselStosFinishedCte(name: string, scopeSubquery: string):
                 OR (TRIM(COALESCE(c_vf.sto_number::text, '')) = l0.sto AND TRIM(COALESCE(s_vf.shipment_id::text, '')) !~ '^[0-9]{8,}')
               )
               AND (
-                UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED'
+                (UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED' AND ${sqlIsContractSapClosedForStoExpr('c_vf', 'l0.sto')})
                 OR s_vf.ata_discharge_complete IS NOT NULL
                 OR EXISTS (SELECT 1 FROM shipment_ata_overrides o_vf WHERE o_vf.shipment_id = s_vf.id AND o_vf.ata_discharge_complete IS NOT NULL)
                 OR EXISTS (
