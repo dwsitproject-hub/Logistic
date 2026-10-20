@@ -159,30 +159,25 @@ function CommercialDashboardContent() {
       </HeaderFilterSlot>
 
       <Card className="border border-slate-200 shadow-sm">
-        <CardHeader className="border-b border-slate-100 pb-3">
+        <CardHeader className="border-b border-slate-100 px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                Commercial Documents Completeness
-                <span className="rounded-full border border-blue-200/60 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
-                  Active Scope
-                </span>
-              </CardTitle>
-              <p className="mt-1 text-xs text-slate-500">
-                Commercial document completeness by Region/Plant. Each contract has nine checklist slots.
-              </p>
-            </div>
+            <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
+              Commercial Documents Completeness
+              <span className="rounded-full border border-blue-200/60 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                Active Scope
+              </span>
+            </CardTitle>
             <div className="flex items-center gap-2">
-              <span className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-500">
-                <span className="mr-1.5 h-2 w-2 rounded-full bg-red-500" />
+              <span className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500">
+                <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-red-500" />
                 9 slots / contract
               </span>
-              {fetching ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
+              {fetching ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
             </div>
           </div>
         </CardHeader>
-        <CardContent className="pt-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <CardContent className="space-y-2 p-3">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
               <ScopeButton
                 active={actionScope === 'all'}
@@ -195,6 +190,7 @@ function CommercialDashboardContent() {
               </ScopeButton>
               <ScopeButton
                 active={actionScope === 'high-gaps'}
+                title={`Plants under ${HIGH_GAP_PCT}% complete`}
                 onClick={() => {
                   setActionScope('high-gaps')
                   setShowAllPlants(false)
@@ -203,31 +199,27 @@ function CommercialDashboardContent() {
                 High gaps
               </ScopeButton>
             </div>
-            <p className="text-[11px] text-slate-400">High gaps are plants under {HIGH_GAP_PCT}% complete.</p>
-          </div>
-
-          <div className="grid grid-cols-12 items-stretch gap-5">
-            <div className="col-span-12 flex flex-col justify-between gap-2.5 lg:col-span-3">
+            <div className="grid min-w-[16rem] flex-1 grid-cols-2 gap-1.5 sm:grid-cols-4">
               <StackedKpi
                 label="Contracts"
                 hint="Contracts in the selected period"
                 value={totals ? totals.contractCount.toLocaleString('en-US') : '—'}
                 loading={loading}
-                icon={<FileText className="h-3.5 w-3.5" />}
+                icon={<FileText className="h-3 w-3" />}
               />
               <StackedKpi
                 label="Uploaded"
                 hint="Checklist slots with a file"
                 value={totals ? totals.uploadedSlots.toLocaleString('en-US') : '—'}
                 loading={loading}
-                icon={<Upload className="h-3.5 w-3.5 text-emerald-500" />}
+                icon={<Upload className="h-3 w-3 text-emerald-500" />}
               />
               <StackedKpi
                 label="Total slots"
                 hint="Nine documents expected per contract"
                 value={totals ? totals.totalSlots.toLocaleString('en-US') : '—'}
                 loading={loading}
-                icon={<Layers className="h-3.5 w-3.5" />}
+                icon={<Layers className="h-3 w-3" />}
               />
               <StackedKpi
                 label="Completeness"
@@ -242,35 +234,37 @@ function CommercialDashboardContent() {
                 valueClassName={totals ? pctClass(totals.completenessPct) : undefined}
               />
             </div>
+          </div>
 
-            <div className="col-span-12 flex min-h-[280px] flex-col rounded-lg border border-slate-200 bg-slate-50/50 p-3.5 lg:col-span-4">
-              <div className="mb-2 text-xs font-semibold text-slate-700">
+          <div className="grid grid-cols-12 items-start gap-3">
+            <div className="col-span-12 flex h-[188px] flex-col rounded-lg border border-slate-200 bg-slate-50/50 px-2.5 py-2 lg:col-span-5">
+              <div className="mb-1 text-[11px] font-semibold text-slate-700">
                 {showAllPlants ? 'All plants by missing slots' : 'Top 10 plants by missing slots'}
               </div>
               {loading ? (
-                <div className="flex flex-1 items-center justify-center text-sm text-gray-500">Loading chart...</div>
+                <div className="flex flex-1 items-center justify-center text-xs text-gray-500">Loading chart...</div>
               ) : displayPlants.length === 0 ? (
-                <div className="flex flex-1 items-center justify-center text-sm text-gray-500">
+                <div className="flex flex-1 items-center justify-center text-xs text-gray-500">
                   No plants in this scope.
                 </div>
               ) : (
-                <div className="min-h-[240px] flex-1 overflow-x-auto">
+                <div className="min-h-0 flex-1 overflow-x-auto">
                   <div
-                    className="h-full min-h-[240px]"
+                    className="h-full"
                     style={{ width: showAllPlants ? Math.max(280, displayPlants.length * 48) : '100%' }}
                   >
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={displayPlants} margin={{ top: 8, right: 8, left: 0, bottom: 48 }}>
+                    <BarChart data={displayPlants} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                       <CartesianGrid stroke="#e5e7eb" vertical={false} />
                       <XAxis
                         dataKey="plant"
-                        tick={{ fontSize: 10, fill: '#64748b' }}
+                        tick={{ fontSize: 9, fill: '#64748b' }}
                         interval={0}
                         angle={-35}
                         textAnchor="end"
-                        height={56}
+                        height={36}
                       />
-                      <YAxis tick={{ fontSize: 11, fill: '#64748b' }} allowDecimals={false} width={36} />
+                      <YAxis tick={{ fontSize: 10, fill: '#64748b' }} allowDecimals={false} width={32} />
                       <Tooltip
                         cursor={{ fill: 'rgba(37, 99, 235, 0.06)' }}
                         content={({ active, payload }) => {
@@ -302,47 +296,58 @@ function CommercialDashboardContent() {
               )}
             </div>
 
-            <div className="col-span-12 flex flex-col overflow-hidden rounded-lg border border-slate-200 lg:col-span-5">
-              <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2">
-                <div className="text-xs font-semibold text-slate-700">Top Region/Plant records</div>
-                <span className="text-[11px] text-slate-400">
-                  Showing {displayPlants.length} of {scopedPlants.length}
-                </span>
+            <div className="col-span-12 flex h-[188px] flex-col overflow-hidden rounded-lg border border-slate-200 lg:col-span-7">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-2.5 py-1">
+                <div className="text-[11px] font-semibold text-slate-700">Top Region/Plant records</div>
+                <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                  <span>
+                    Showing {displayPlants.length} of {scopedPlants.length}
+                  </span>
+                  {scopedPlants.length > TOP_PLANT_LIMIT ? (
+                    <button
+                      type="button"
+                      className="font-medium text-blue-700 hover:text-blue-800"
+                      onClick={() => setShowAllPlants((open) => !open)}
+                    >
+                      {showAllPlants ? 'Show top 10' : 'View all plants'}
+                    </button>
+                  ) : null}
+                </div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-gray-50 text-left text-xs font-medium text-gray-500">
+              <div className="min-h-0 flex-1 overflow-auto">
+                <table className="min-w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-50 text-left text-[10px] font-medium text-gray-500">
                     <tr>
-                      <th className="px-3 py-2">Region/Plant</th>
-                      <th className="px-3 py-2 text-right">Missing</th>
-                      <th className="px-3 py-2 text-right">Uploaded</th>
-                      <th className="px-3 py-2 text-right">Total</th>
-                      <th className="px-3 py-2 text-right">Completeness</th>
+                      <th className="px-2.5 py-1">Region/Plant</th>
+                      <th className="px-2.5 py-1 text-right">Missing</th>
+                      <th className="px-2.5 py-1 text-right">Uploaded</th>
+                      <th className="px-2.5 py-1 text-right">Total</th>
+                      <th className="px-2.5 py-1 text-right">Completeness</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {displayPlants.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-3 py-8 text-center text-gray-500">
+                        <td colSpan={5} className="px-2.5 py-6 text-center text-gray-500">
                           No plants in this scope.
                         </td>
                       </tr>
                     ) : (
                       displayPlants.map((row) => (
                         <tr key={row.plant} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 font-medium text-gray-800">{row.plant}</td>
-                          <td className="px-3 py-2 text-right tabular-nums text-red-700">
+                          <td className="px-2.5 py-1 font-medium text-gray-800">{row.plant}</td>
+                          <td className="px-2.5 py-1 text-right tabular-nums text-red-700">
                             {row.missingSlots.toLocaleString('en-US')}
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums">
+                          <td className="px-2.5 py-1 text-right tabular-nums">
                             {row.uploadedSlots.toLocaleString('en-US')}
                           </td>
-                          <td className="px-3 py-2 text-right tabular-nums">
+                          <td className="px-2.5 py-1 text-right tabular-nums">
                             {row.totalSlots.toLocaleString('en-US')}
                           </td>
                           <td
                             className={cn(
-                              'px-3 py-2 text-right font-medium tabular-nums',
+                              'px-2.5 py-1 text-right font-medium tabular-nums',
                               pctClass(row.completenessPct),
                             )}
                           >
@@ -354,17 +359,6 @@ function CommercialDashboardContent() {
                   </tbody>
                 </table>
               </div>
-              {scopedPlants.length > TOP_PLANT_LIMIT ? (
-                <div className="border-t border-slate-100 px-3 py-2 text-right">
-                  <button
-                    type="button"
-                    className="text-xs font-medium text-blue-700 hover:text-blue-800"
-                    onClick={() => setShowAllPlants((open) => !open)}
-                  >
-                    {showAllPlants ? 'Show top 10' : 'View all plants'}
-                  </button>
-                </div>
-              ) : null}
             </div>
           </div>
         </CardContent>
@@ -389,15 +383,18 @@ function CommercialDashboardContent() {
 function ScopeButton({
   active,
   onClick,
+  title,
   children,
 }: {
   active: boolean
   onClick: () => void
+  title?: string
   children: string
 }) {
   return (
     <button
       type="button"
+      title={title}
       onClick={onClick}
       className={cn(
         'rounded-md px-2.5 py-1 font-medium',
@@ -428,23 +425,25 @@ function StackedKpi({
 }) {
   return (
     <div
+      title={hint}
       className={cn(
-        'rounded-lg border p-3',
+        'flex min-w-0 items-center justify-between gap-2 rounded-md border px-2 py-1',
         urgent ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-slate-50/70',
       )}
     >
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium uppercase tracking-wider text-slate-500">{label}</span>
+      <span className="flex min-w-0 items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-slate-500">
         {urgent ? (
-          <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">Urgent</span>
+          <span className="rounded-full bg-red-100 px-1 py-px text-[9px] font-semibold normal-case tracking-normal text-red-700">
+            Urgent
+          </span>
         ) : icon ? (
-          <span className="rounded border border-slate-200 bg-white p-1 text-slate-400">{icon}</span>
+          <span className="text-slate-400">{icon}</span>
         ) : null}
-      </div>
-      <p className={cn('mt-1 text-2xl font-bold tabular-nums text-slate-900', loading && 'opacity-40', valueClassName)}>
+        <span className="truncate">{label}</span>
+      </span>
+      <p className={cn('shrink-0 text-sm font-bold tabular-nums text-slate-900', loading && 'opacity-40', valueClassName)}>
         {value}
       </p>
-      <p className={cn('mt-0.5 text-[10px]', urgent ? 'font-medium text-red-600' : 'text-slate-400')}>{hint}</p>
     </div>
   )
 }
