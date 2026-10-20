@@ -144,6 +144,8 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
    */
   let statusCardSumKg = null;
   let statusCardBreakdown = null;
+  let statusCardCounts = null;
+  let statusCardVessels = null;
   try {
     const req = { query: { summaryOnly: 'true', dateFrom: FROM, dateTo: TO, plant: SITE } };
     let payload = null;
@@ -158,6 +160,10 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
     if (so) {
       statusCardSumKg = Object.values(so).reduce((a, v) => a + (Number(v) || 0), 0);
       statusCardBreakdown = so;
+      // The counts decide whether a card keeps its OS (applyShipmentStatusCardZeroGuards clears the OS of a stage whose count is 0), and the
+      // vessel names say which rows each card is made of: both are needed to tell a zeroed stage from a stage that holds the quantity elsewhere.
+      statusCardCounts = payload.data.summary.status || null;
+      statusCardVessels = payload.data.summary.statusVesselNames || null;
     } else {
       console.log('   Shipments returned no statusOutstandingQty');
     }
@@ -276,18 +282,29 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
     if (Math.abs(d) >= 1000 && statusCardBreakdown) {
       // which status cards make the strip: against the OS card total they should add up to it
       console.log('   strip by status (the card total is ' + mt(shipmentsKg) + ' MT):');
-      for (const [k, v] of Object.entries(statusCardBreakdown)) console.log('      ' + String(k).padEnd(24) + ' ' + (mt(v) + ' MT').padStart(13));
+      for (const [k, v] of Object.entries(statusCardBreakdown)) {
+        const n = statusCardCounts && statusCardCounts[k] != null ? statusCardCounts[k] : '?';
+        const names = statusCardVessels && Array.isArray(statusCardVessels[k]) ? statusCardVessels[k].slice(0, 6).join(', ') : '';
+        console.log('      ' + String(k).padEnd(24) + ' ' + (mt(v) + ' MT').padStart(13) + '   count ' + String(n).padStart(4) + (names ? '   ' + names : ''));
+      }
+      // A stage with count 0 loses its OS to the zero guard, whatever the OS query said for it.
+      const zeroed = statusCardCounts ? Object.keys(statusCardBreakdown).filter((k) => Number(statusCardCounts[k]) <= 0) : [];
+      if (zeroed.length > 0) console.log('   stages whose count is 0 (their OS is cleared by the zero guard): ' + zeroed.join(', '));
       /*
        * The cards count at ROW grain (the row's site), the OS card at CONTRACT grain (the contract's site): a contract of this site on a vessel row that
        * another site owns is in the card and in none of the cards. Shipping Performance carries both: the row's plant_site and, per contract, contract_scope.
        */
       const byStage = new Map();
+      const stageRows = [];
       const crossSite = [];
       for (const r of spRows) {
         if (r.is_unplanned_backlog === true) continue;
         if (['COMPLETED', 'CANCELLED', '', 'UNPLANNED'].includes(up(osStageOf(r)))) continue;
         const kg = spKgOf(r);
-        if (kg > 0) byStage.set(up(osStageOf(r)), (byStage.get(up(osStageOf(r))) || 0) + kg);
+        if (kg > 0) {
+          byStage.set(up(osStageOf(r)), (byStage.get(up(osStageOf(r))) || 0) + kg);
+          stageRows.push({ stage: up(osStageOf(r)), status: up(r.status), vessel: r.vessel_name, sto: r.sto_number || r.sto_key, kg });
+        }
         if (Array.isArray(r.contract_scope) && up(r.plant_site) !== SITE) {
           for (const g of r.contract_scope) {
             if (up(g.plant_site) === SITE && Number(g.outstanding_qty_aggregate) > 0) {
@@ -298,6 +315,10 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
       }
       console.log('   Shipping Perf execution OS of this site, by the stage of the row that holds it:');
       for (const [k, v] of [...byStage.entries()].sort((a, b) => b[1] - a[1])) console.log('      ' + k.padEnd(24) + ' ' + (mt(v) + ' MT').padStart(13));
+      // the rows behind each stage, to set against the vessels the Shipments cards list above
+      for (const x of stageRows.sort((a, b) => b.kg - a.kg).slice(0, 20)) {
+        console.log('      ' + x.stage.padEnd(12) + ' ' + (mt(x.kg) + ' MT').padStart(10) + '  ' + String(x.vessel || '-').padEnd(24) + ' sto ' + String(x.sto || '-') + '  status ' + x.status);
+      }
       const crossKg = crossSite.reduce((a, x) => a + x.kg, 0);
       console.log('   of it, contracts of ' + SITE + ' on a vessel row that ANOTHER site owns: ' + mt(crossKg) + ' MT');
       for (const x of crossSite.slice(0, 12)) console.log('      ' + String(x.contract).padEnd(12) + ' ' + (mt(x.kg) + ' MT').padStart(10) + '  ' + String(x.vessel || '-').padEnd(22) + ' row site ' + x.rowSite + '  stage ' + x.stage);
