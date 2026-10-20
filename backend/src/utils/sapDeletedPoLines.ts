@@ -140,6 +140,11 @@ export function markStoDeletedWithLiveSibling<T extends DeletedPoLineCandidate>(
   return { flagged, setAside };
 }
 
+/** The same flag for a line whose live sibling is a row STORED by an earlier import (the file itself holds only the deleted STO). */
+export function markStoDeletedWithLiveSiblingFor(parsedData: object): void {
+  STO_DELETED_WITH_LIVE_SIBLING.add(parsedData);
+}
+
 /** True when this line was flagged by markStoDeletedWithLiveSibling: a deleted STO of a PO that is still alive. */
 export function isStoDeletedWithLiveSibling(parsedData: object | null | undefined): boolean {
   return !!parsedData && STO_DELETED_WITH_LIVE_SIBLING.has(parsedData);

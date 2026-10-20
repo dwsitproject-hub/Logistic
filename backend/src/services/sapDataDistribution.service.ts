@@ -19,8 +19,14 @@ import {
   sqlContractImportStatusForStoExpr,
 } from '../utils/contractDeliveryStatus';
 import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
-import { resolveSapTruckingQuantityDelivered, hasSapDeleteFlag } from '../utils/sapMasterV2UatFormat';
-import { sapDeleteForcesContractCancel, isStoDeletedWithLiveSibling } from '../utils/sapDeletedPoLines';
+import {
+  resolveSapTruckingQuantityDelivered,
+  hasSapDeleteFlag,
+  hasSapDeletePoFlag,
+  sqlSpdHasDeletePoFlagFromRow,
+  sqlSpdHasDeleteStoFlagFromRow,
+} from '../utils/sapMasterV2UatFormat';
+import { sapDeleteForcesContractCancel, isStoDeletedWithLiveSibling, markStoDeletedWithLiveSiblingFor } from '../utils/sapDeletedPoLines';
 import { KLIP_QTY_STORAGE_UOM, normalizeSapQtyToKg } from '../utils/sapQtyUom';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
 import {
@@ -242,7 +248,9 @@ export class SapDataDistributionService {
           parsedData.contract.delete_sto_status = parsedData.shipment.delete_sto_status;
         }
       }
-      // A Delete STO line of a PO that still has a live STO cancels that STO, not the contract (utils/sapDeletedPoLines.ts).
+      // A Delete STO line of a PO that still has a live STO cancels that STO, not the contract (utils/sapDeletedPoLines.ts). The file may hold only the
+      // deleted STO - a per-period export - so the live one can be a row an earlier import stored.
+      await this.markStoDeleteWithStoredLiveSibling(client, parsedData);
       if (sapDeleteForcesContractCancel(parsedData) && parsedData.contract) {
         parsedData.contract.status = 'Cancelled';
       }
@@ -691,6 +699,29 @@ export class SapDataDistributionService {
         trucking: truck.rowCount ?? 0,
       });
     }
+  }
+
+  /**
+   * A Delete STO line (no Delete PO) whose file carries no live sibling: look for one among the rows already stored for the PO.
+   * Same rule the read side applies (contractDeliveryStatus: the PO is cancelled only when every real STO is deleted).
+   */
+  private static async markStoDeleteWithStoredLiveSibling(client: PoolClient, parsedData: any): Promise<void> {
+    if (!parsedData || !hasSapDeleteFlag(parsedData) || hasSapDeletePoFlag(parsedData) || isStoDeletedWithLiveSibling(parsedData)) return;
+    const po = normalizePoNumber(parsedData.contract?.po_no ?? parsedData.shipment?.po_no);
+    const sto = String(parsedData.shipment?.sto_no ?? parsedData.contract?.sto_no ?? '').trim();
+    if (!po || !sto) return;
+    const r = await client.query(
+      `SELECT 1
+         FROM sap_processed_data o
+        WHERE o.po_number = $1
+          AND NULLIF(TRIM(o.sto_number::text), '') IS NOT NULL
+          AND TRIM(o.sto_number::text) <> $2
+          AND NOT (${sqlSpdHasDeletePoFlagFromRow('o')})
+          AND NOT (${sqlSpdHasDeleteStoFlagFromRow('o')})
+        LIMIT 1`,
+      [po, sto],
+    );
+    if (r.rows.length > 0) markStoDeletedWithLiveSiblingFor(parsedData);
   }
 
   /**
