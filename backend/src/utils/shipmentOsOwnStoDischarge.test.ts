@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildShipmentListAtaSelectSql } from './shipmentAtaOverrideSql';
+import { query } from '../database/connection';
+import { buildShipmentListAtaSelectSql, sqlShipmentBelongsToGroupStoPredicate } from './shipmentAtaOverrideSql';
 import { shipmentEffectiveStatusExpr, shipmentPageEffectiveStatusExpr } from './shipmentListFilters';
 import { sqlShipmentOutstandingActiveStagePredicate } from './shipmentOutstandingQtySummarySql';
 
@@ -45,10 +46,39 @@ describe('a sibling STO\'s discharge does not finish this STO for the OS', () =>
     );
   });
 
-  it('keeps a row that carries no STO of its own', () => {
+  it('keeps a row that carries no STO of its own, and every row of a group that is not keyed by an STO', () => {
     // Such a row has no other group to belong to; excluding it would lose a real discharge.
-    expect(buildShipmentListAtaSelectSql('K')).toMatch(
-      /FILTER \(WHERE NULLIF\(TRIM\(s\.shipment_id::text\), ''\) IS NULL/,
-    );
+    const sql = buildShipmentListAtaSelectSql('K').replace(/\s+/g, ' ');
+    expect(sql).toContain("NULLIF(TRIM(s.shipment_id::text), '') IS NULL");
+    expect(sql).toContain("TRIM((K)::text) !~ '^[0-9]+$'");
   });
+});
+
+/**
+ * PO 1001031704 / operation OP-1004031705-93196222 (production 2026-10-20): a shipment planned by hand in KLIP, its shipment_id MNL-..., with an ATC. The group is keyed by the
+ * OPERATION, so comparing the shipment id with the key marked it foreign and its own-STO ATC came out NULL - the View Table read Unloading while the Edit modal, which reads the
+ * shipment itself, read Completed. Inside a real STO group a shipment of ANOTHER STO is still foreign (STO 1006019867, 2,700 MT, 2026-09-16). Run in Postgres, not as a string.
+ */
+describe('which shipments belong to the STO their group is keyed by (run in Postgres)', () => {
+  const belongs = async (groupKey: string, shipmentId: string | null) => {
+    const r = await query(
+      `SELECT ${sqlShipmentBelongsToGroupStoPredicate('t.group_key', 's')} AS belongs
+         FROM (SELECT $1::text AS group_key) t, (SELECT $2::text AS shipment_id) s`,
+      [groupKey, shipmentId],
+    );
+    return r.rows[0].belongs as boolean;
+  };
+
+  it('an operation-keyed group counts a KLIP shipment id (MNL- / MSEA-) as its own', async () => {
+    expect(await belongs('OP-1004031705-93196222', 'MNL-20260915-0001')).toBe(true);
+    expect(await belongs('OP-1004031705-93196222', 'MSEA-123')).toBe(true);
+    expect(await belongs('OP-1004031705-93196222', null)).toBe(true);
+  }, 60_000);
+
+  it('an STO-keyed group counts its own STO and a shipment with none, not a shipment of another STO', async () => {
+    expect(await belongs('1006019867', '1006019867')).toBe(true);
+    expect(await belongs('1006019867', null)).toBe(true);
+    expect(await belongs('1006019867', '')).toBe(true);
+    expect(await belongs('1006019867', '1006019385')).toBe(false);
+  }, 60_000);
 });
