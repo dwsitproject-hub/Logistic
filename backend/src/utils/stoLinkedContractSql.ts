@@ -4,6 +4,26 @@
  */
 
 import { SQL_SPD_CONTRACT_REFF_PO } from './b2bOriginEndingSql';
+/**
+ * Options of the STO-linked contract lookups.
+ *
+ * memberShipmentIdsExpr: SQL for the uuid[] of shipments that the list itself files under the row's key (a column the grouped query carries).
+ * For a KLIP operation key (OP-...) the shipments branches then take only those shipments. The list groups a shipment by its SAP STO when it has one and
+ * by operation_id only when it has none, so a finished voyage with an STO that still carries the operation id of a later plan is a ROW OF ITS OWN;
+ * counting its contract in the operation's row listed that PO twice, on the finished row and on the new voyage. Taking the members from the grouped
+ * query, rather than recomputing each shipment's key, keeps the B2B child -> origin mapping the list applies before it forms the key.
+ * Other callers (Shipping Performance, Oil Loss) group operations differently and keep the default.
+ */
+export type StoLinkedOptions = { memberShipmentIdsExpr?: string };
+
+function ownKeyMembersWhereSql(opts: StoLinkedOptions | undefined, shipmentAlias: string, groupedStoExpr: string): string {
+  if (!opts?.memberShipmentIdsExpr) return '';
+  return `
+            AND (
+              COALESCE(${groupedStoExpr}, '') !~ '^OP-'
+              OR ${shipmentAlias}.id = ANY(${opts.memberShipmentIdsExpr})
+            )`;
+}
 
 /** Operational STO key on a grouped shipment list row (matches shipmentListStoKeyExpr). */
 export function buildGroupedStoTrimExpr(stoKeySql: string): string {
@@ -47,7 +67,9 @@ export function buildGroupedStoTrimExpr(stoKeySql: string): string {
  * 4.6 s, byte-identical result. Callers that test `contract_id` against this subquery use the same
  * form (contractIdOnStoSql).
  */
-export function contractsOnStoSubquery(groupedStoExpr: string): string {
+export function contractsOnStoSubquery(groupedStoExpr: string, opts?: StoLinkedOptions): string {
+  const shOpMembers = ownKeyMembersWhereSql(opts, 'sh_op', groupedStoExpr);
+  const shIdMembers = ownKeyMembersWhereSql(opts, 'sh_id', groupedStoExpr);
   return `
     SELECT DISTINCT COALESCE(b2b_o.contract_id, cc.contract_id) AS contract_id
     FROM (
@@ -79,12 +101,12 @@ export function contractsOnStoSubquery(groupedStoExpr: string): string {
           SELECT sh_op.contract_id
           FROM shipments sh_op
           WHERE COALESCE(sh_op.status, '') <> 'CANCELLED'
-            AND NULLIF(TRIM(sh_op.operation_id::text), '') = ${groupedStoExpr}
+            AND NULLIF(TRIM(sh_op.operation_id::text), '') = ${groupedStoExpr}${shOpMembers}
         UNION
           SELECT sh_id.contract_id
           FROM shipments sh_id
           WHERE COALESCE(sh_id.status, '') <> 'CANCELLED'
-            AND NULLIF(TRIM(sh_id.shipment_id::text), '') = ${groupedStoExpr}
+            AND NULLIF(TRIM(sh_id.shipment_id::text), '') = ${groupedStoExpr}${shIdMembers}
       ))
         AND cc.contract_id IS NOT NULL
         AND TRIM(cc.contract_id) != ''
@@ -117,14 +139,15 @@ export function contractsOnStoSubquery(groupedStoExpr: string): string {
  * `<contractIdExpr>` is one of the contracts on the STO (contractsOnStoSubquery), as `= ANY(ARRAY(...))`: the IN form hashed the whole
  * contracts table once per row, the array form evaluates the few contract numbers first and reads them by index.
  */
-export function contractIdOnStoSql(contractIdExpr: string, groupedStoExpr: string): string {
-  return `${contractIdExpr} = ANY(ARRAY(${contractsOnStoSubquery(groupedStoExpr)}))`;
+export function contractIdOnStoSql(contractIdExpr: string, groupedStoExpr: string, opts?: StoLinkedOptions): string {
+  return `${contractIdExpr} = ANY(ARRAY(${contractsOnStoSubquery(groupedStoExpr, opts)}))`;
 }
 
 export function buildStoLinkedContractNumbersSql(
   groupedStoExpr: string,
   contractAlias = 'c',
   elseExpr?: string,
+  opts?: StoLinkedOptions,
 ): string {
   const elseBranch =
     elseExpr ??
@@ -134,7 +157,7 @@ export function buildStoLinkedContractNumbersSql(
           WHEN ${groupedStoExpr} IS NOT NULL THEN
             COALESCE(
               (SELECT STRING_AGG(DISTINCT cid.contract_id, ', ' ORDER BY cid.contract_id)
-               FROM (${contractsOnStoSubquery(groupedStoExpr)}) cid),
+               FROM (${contractsOnStoSubquery(groupedStoExpr, opts)}) cid),
               ${elseBranch}
             )
           ELSE ${elseBranch}
@@ -165,6 +188,7 @@ export function buildStoLinkedPoNumbersSql(
   groupedStoExpr: string,
   contractAlias = 'c',
   elseExpr?: string,
+  opts?: StoLinkedOptions,
 ): string {
   const elseBranch =
     elseExpr ??
@@ -175,7 +199,7 @@ export function buildStoLinkedPoNumbersSql(
             COALESCE(
               (SELECT STRING_AGG(DISTINCT cc.po_number, ', ' ORDER BY cc.po_number)
                FROM contracts cc
-               WHERE ${contractIdOnStoSql('cc.contract_id', groupedStoExpr)}
+               WHERE ${contractIdOnStoSql('cc.contract_id', groupedStoExpr, opts)}
                  AND cc.po_number IS NOT NULL AND TRIM(cc.po_number) != ''),
               ${elseBranch}
             )
@@ -187,6 +211,7 @@ export function buildStoLinkedContractCountSql(
   groupedStoExpr: string,
   contractAlias = 'c',
   elseExpr?: string,
+  opts?: StoLinkedOptions,
 ): string {
   const elseBranch =
     elseExpr ??
@@ -194,8 +219,8 @@ export function buildStoLinkedContractCountSql(
   return `CASE
           WHEN ${groupedStoExpr} IS NOT NULL THEN
             COALESCE(
-              (SELECT COUNT(DISTINCT cid.contract_id)::int
-               FROM (${contractsOnStoSubquery(groupedStoExpr)}) cid),
+              NULLIF((SELECT COUNT(DISTINCT cid.contract_id)::int
+               FROM (${contractsOnStoSubquery(groupedStoExpr, opts)}) cid), 0),
               ${elseBranch}
             )
           ELSE ${elseBranch}
@@ -206,6 +231,7 @@ export function buildStoLinkedSuppliersSql(
   groupedStoExpr: string,
   contractAlias = 'c',
   elseExpr?: string,
+  opts?: StoLinkedOptions,
 ): string {
   const elseBranch =
     elseExpr ??
@@ -216,7 +242,7 @@ export function buildStoLinkedSuppliersSql(
             COALESCE(
               (SELECT STRING_AGG(DISTINCT cc.supplier, ', ' ORDER BY cc.supplier)
                FROM contracts cc
-               WHERE ${contractIdOnStoSql('cc.contract_id', groupedStoExpr)}
+               WHERE ${contractIdOnStoSql('cc.contract_id', groupedStoExpr, opts)}
                  AND cc.supplier IS NOT NULL AND TRIM(cc.supplier) != ''),
               ${elseBranch}
             )

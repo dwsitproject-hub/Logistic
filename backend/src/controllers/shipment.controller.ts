@@ -698,25 +698,31 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
 
     /** Grouped STO key on shipment_base rows (safe for scalar subqueries in the outer enrich CTE). */
     const groupedStoFromRow = `NULLIF(TRIM(g.sto_key::text), '')`;
+    // A KLIP operation row lists only the shipments the list files under that key: a finished voyage with its own STO is a row of its own.
+    const rowOwnKeyOnly = { memberShipmentIdsExpr: 'g.member_shipment_ids' };
     const stoLinkedContractNumbersSql = buildStoLinkedContractNumbersSql(
       groupedStoFromRow,
       'c',
       'g.contract_numbers_from_join',
+      rowOwnKeyOnly,
     );
     const stoLinkedPoNumbersSql = buildStoLinkedPoNumbersSql(
       groupedStoFromRow,
       'c',
       'g.po_numbers_from_join',
+      rowOwnKeyOnly,
     );
     const stoLinkedContractCountSql = buildStoLinkedContractCountSql(
       groupedStoFromRow,
       'c',
       'g.contract_count_from_join',
+      rowOwnKeyOnly,
     );
     const stoLinkedSuppliersSql = buildStoLinkedSuppliersSql(
       groupedStoFromRow,
       'c',
       'g.suppliers',
+      rowOwnKeyOnly,
     );
 
     const contractMetaSelectCore = `
@@ -743,7 +749,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
                    SELECT NULLIF(TRIM(COALESCE(l2.contract_ext_no_raw, '')), '') AS v
                    FROM contracts cc
                    LEFT JOIN latest_spd_contract l2 ON l2.contract_number = cc.contract_id
-                   WHERE ${contractIdOnStoSql('cc.contract_id', groupedStoFromRow)}
+                   WHERE ${contractIdOnStoSql('cc.contract_id', groupedStoFromRow, rowOwnKeyOnly)}
                  ) ext
                  WHERE v IS NOT NULL AND v != ''),
                 g.contract_ext_no_from_join
@@ -991,6 +997,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
 
     let queryText = `${prelude}
           ${listStoKeySql} as sto_key,
+          -- the shipments this row is made of: an OP- row lists the contracts of THESE, not of every shipment that carries the same operation id
+          ARRAY_AGG(DISTINCT s.id) FILTER (WHERE s.id IS NOT NULL) AS member_shipment_ids,
           ${sqlShipmentListPrimaryIdAgg(listStoKeySql, 'c', 'l', 's', 'cs_sto', 'sao')} as id,
           MAX(${listStoDisplaySql}) as sto_number,
           MAX(s.shipment_id) as shipment_id,
@@ -1127,11 +1135,11 @@ ${vlpLateralJoins}
     /** Summary uses shell enrich (join aggregates only) â€” not full STO subqueries, not bare core. */
     const shipmentBaseCteSqlSummary = shipmentBaseCteSqlFull.replace(
       shipmentBaseEnrichCte,
-      shipmentBaseShellEnrichCte,
+      () => shipmentBaseShellEnrichCte,
     );
     const shipmentBaseCteSqlShell = shipmentBaseCteSqlFull.replace(
       shipmentBaseEnrichCte,
-      shipmentBaseShellEnrichCte,
+      () => shipmentBaseShellEnrichCte,
     );
 
     let fp = outerFilterStartIndex;
@@ -1255,7 +1263,7 @@ ${vlpLateralJoins}
       const pagingBase = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
       const injected = injectShipmentStoKeyPaging(pagingBase, listStoKeySql, rankedStoBlock);
       if (injected) {
-        shipmentBaseCteSqlList = injected.replace(shipmentBaseShellEnrichCte, shellEnrichWithStoLink);
+        shipmentBaseCteSqlList = injected.replace(shipmentBaseShellEnrichCte, () => shellEnrichWithStoLink);
       }
     }
 
@@ -1345,7 +1353,7 @@ ${vlpLateralJoins}
             if (injected) {
               shipmentBaseCteSqlList = injected.replace(
                 shipmentBaseShellEnrichCte,
-                shellEnrichWithStoLink,
+                () => shellEnrichWithStoLink,
               );
               effectiveListStoPaging = true;
               usedStageSnapshotPaging = true;

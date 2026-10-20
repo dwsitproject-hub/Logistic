@@ -1213,6 +1213,7 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
     delete (row as { __filter_total?: unknown }).__filter_total;
     delete (row as { contract_numbers_from_join?: unknown }).contract_numbers_from_join;
     delete (row as { po_numbers_from_join?: unknown }).po_numbers_from_join;
+    delete (row as { member_shipment_ids?: unknown }).member_shipment_ids;
     delete (row as { contract_count_from_join?: unknown }).contract_count_from_join;
     delete (row as { contract_ext_no_from_join?: unknown }).contract_ext_no_from_join;
     if (Object.prototype.hasOwnProperty.call(row, 'contract_ext_no_merged')) {
