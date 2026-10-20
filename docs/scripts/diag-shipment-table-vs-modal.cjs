@@ -18,7 +18,7 @@ if (!DIST) {
 const load = (m) => require(path.join(DIST, m));
 const connection = load('database/connection');
 const { contractsOnStoSubquery } = load('utils/stoLinkedContractSql');
-const { sapStoNumberKeyExpr } = load('utils/shipmentStoTypeSql');
+const { sapStoNumberKeyExpr, shipmentListSeaStoKeyExpr } = load('utils/shipmentStoTypeSql');
 const { sqlB2bChildSpdDataExcludeWhere } = load('utils/b2bChildSql');
 const { sqlIsContractSapClosedForStoExpr } = load('utils/contractDeliveryStatus');
 const { sqlShipmentListPrimaryOrderBy } = load('utils/shipmentListPrimaryShipmentSql');
@@ -39,15 +39,17 @@ const day = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '-');
   console.log('1. Member shipments (operation_id or shipment_id = key)');
   const members = await q(
     `SELECT s.id::text AS id, c.contract_id, c.po_number, s.status, s.vessel_name, s.shipment_id, s.operation_id,
-            s.ata_arrival, s.ata_loading_complete, s.ata_sailed, s.ata_discharge_complete, s.created_at
+            s.ata_arrival, s.ata_loading_complete, s.ata_sailed, s.ata_discharge_complete, s.created_at,
+            ${shipmentListSeaStoKeyExpr('c', 'l', 's')} AS list_key
        FROM shipments s LEFT JOIN contracts c ON c.id = s.contract_id
+       LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
       WHERE TRIM(COALESCE(s.operation_id, '')) = $1 OR TRIM(COALESCE(s.shipment_id::text, '')) = $1
       ORDER BY s.created_at`,
     [key],
   );
   for (const m of members) {
     console.log(
-      `   ${m.id}  contract=${m.contract_id} po=${m.po_number} status=${m.status} vessel=${m.vessel_name || '-'} ` +
+      `   ${m.id}  contract=${m.contract_id} po=${m.po_number} status=${m.status} vessel=${m.vessel_name || '-'} LIST ROW KEY=${m.list_key} ` +
         `ATA arr/loadcomp/sailed/dischcomp=${day(m.ata_arrival)}/${day(m.ata_loading_complete)}/${day(m.ata_sailed)}/${day(m.ata_discharge_complete)} created=${day(m.created_at)}`,
     );
   }
