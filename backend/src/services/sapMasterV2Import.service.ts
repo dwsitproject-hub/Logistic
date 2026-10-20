@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import pool from '../database/connection';
 import logger from '../utils/logger';
-import { markSupersededDeletedPoLines } from '../utils/sapDeletedPoLines';
+import { markStoDeletedWithLiveSibling, markSupersededDeletedPoLines } from '../utils/sapDeletedPoLines';
 import {
   SAP_MASTER_V2_UAT_FIELD_MAPPING,
   applySapMasterV2RawFieldAliases,
@@ -839,6 +839,15 @@ export class SapMasterV2ImportService {
             contexts.filter((c) => c.supersededDeletedPoLine).map((c) => `${c.contractNumber ?? '-'}/${c.poNumber}`),
           ),
         ].slice(0, 20),
+      });
+    }
+
+    // A Delete STO Status line is one STO of the PO going, not the PO: it must not cancel the contract while the PO has a live STO in this file.
+    const stoDeleted = markStoDeletedWithLiveSibling(contexts);
+    if (stoDeleted.flagged > 0 || stoDeleted.setAside > 0) {
+      logger.info('SAP import: Delete STO lines of POs that still have a live STO', {
+        keptFromCancellingContract: stoDeleted.flagged,
+        setAsideForALiveLineOfTheSameSto: stoDeleted.setAside,
       });
     }
 

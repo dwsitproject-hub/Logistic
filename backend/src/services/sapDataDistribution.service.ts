@@ -20,6 +20,7 @@ import {
 } from '../utils/contractDeliveryStatus';
 import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
 import { resolveSapTruckingQuantityDelivered, hasSapDeleteFlag } from '../utils/sapMasterV2UatFormat';
+import { sapDeleteForcesContractCancel, isStoDeletedWithLiveSibling } from '../utils/sapDeletedPoLines';
 import { KLIP_QTY_STORAGE_UOM, normalizeSapQtyToKg } from '../utils/sapQtyUom';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
 import {
@@ -241,7 +242,8 @@ export class SapDataDistributionService {
           parsedData.contract.delete_sto_status = parsedData.shipment.delete_sto_status;
         }
       }
-      if (hasSapDeleteFlag(parsedData) && parsedData.contract) {
+      // A Delete STO line of a PO that still has a live STO cancels that STO, not the contract (utils/sapDeletedPoLines.ts).
+      if (sapDeleteForcesContractCancel(parsedData) && parsedData.contract) {
         parsedData.contract.status = 'Cancelled';
       }
 
@@ -391,8 +393,12 @@ export class SapDataDistributionService {
 
       // Delete PO/STO: force all linked live logistics rows Cancelled (Cancelled card),
       // even when this import row did not materialize a new shipment/trucking upsert.
-      if (hasSapDeleteFlag(parsedData) && result.contractId) {
+      if (sapDeleteForcesContractCancel(parsedData) && result.contractId) {
         await this.cancelLinkedLogisticsForDeletedContract(client, result.contractId);
+      } else if (hasSapDeleteFlag(parsedData) && isStoDeletedWithLiveSibling(parsedData) && result.contractId) {
+        // The PO is alive: only the shipments of the deleted STO go.
+        const deletedSto = String(parsedData.shipment?.sto_no ?? parsedData.contract?.sto_no ?? '').trim();
+        if (deletedSto) await this.cancelShipmentsOfDeletedSto(client, result.contractId, deletedSto);
       }
       
       // 3. Create quality surveys (multiple) - only for SEA shipments
@@ -688,6 +694,24 @@ export class SapDataDistributionService {
   }
 
   /**
+   * The shipments of ONE deleted STO (shipment_id is the STO, or STO-suffixed), for a Delete STO line whose PO is still alive.
+   * Trucking operations are left alone: they carry no STO of their own to match on.
+   */
+  private static async cancelShipmentsOfDeletedSto(client: PoolClient, contractUuid: string, sto: string): Promise<void> {
+    const r = await client.query(
+      `UPDATE shipments
+          SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+        WHERE contract_id = $1::uuid
+          AND (TRIM(shipment_id::text) = $2 OR TRIM(shipment_id::text) LIKE $2 || '-%')
+          AND COALESCE(status, '') <> 'CANCELLED'`,
+      [contractUuid, sto],
+    );
+    if ((r.rowCount ?? 0) > 0) {
+      logger.debug('Cancelled the shipments of a deleted STO; the PO has a live STO', { contractUuid, sto, shipments: r.rowCount });
+    }
+  }
+
+  /**
    * Create or update contract
    */
   private static async upsertContract(
@@ -747,7 +771,7 @@ export class SapDataDistributionService {
     const rowCarriesContractNo = contractNumber != null;
     const unitPrice = this.parseNumber(contractData.unit_price);
     const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
-    const forceCancelled = hasSapDeleteFlag(parsedData ?? { contract: contractData });
+    const forceCancelled = sapDeleteForcesContractCancel(parsedData ?? { contract: contractData });
     const statusNorm = forceCancelled
       ? 'Cancelled'
       : this.normalizeContractStatus(contractData.status) || 'Open';
