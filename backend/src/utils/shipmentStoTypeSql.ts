@@ -279,8 +279,16 @@ export interface ShipmentPageSeaRowScopeOptions {
 /**
  * Shipments / Shipping Performance row scope: CIF/FOB/CFR incoterm.
  * FOB Type T is a trucking leg — not a Shipments row (mixed V+T POs keep Type V only) - unless SAP
- * names a vessel on that STO (sqlSapStoHasVesselExpr): tug / barge sets typed T.
+ * names a vessel on that STO (sqlSapStoHasVesselExpr): tug / barge sets typed T - or an operator planned
+ * a vessel on it in KLIP (a manual MNL- / MSEA- shipment that names one): that is an explicit statement that it is sea execution. A shipment
+ * the SAP import made keeps the SAP rule even when it carries a vessel name: 85 such shipments, mostly COMPLETED, sit on Type T STOs on the dev copy.
  * CIF/CFR remain incoterm-only (Type T allowed).
+ *
+ * The KLIP half matters because Contract Performance and the Unplanned / Preplanned backlog decide at CONTRACT grain ("a FOB contract with a live
+ * shipment is Shipments'"), while this scope decides at SHIPMENT grain. A contract whose only shipment was planned in KLIP on a Type T STO
+ * (1004032444, KLM. BINTANG SETIA DUA, PLANNED, six STOs all T, production 2026-10-20) fell between the two: it has a shipment, so it is no backlog,
+ * and that shipment was dropped here, so it was no row either - 700 MT Contract Performance counted and neither operational page did. Add New
+ * Shipment checks the incoterm only, so KLIP let the user create a shipment the Shipments page then would not show.
  */
 export function buildShipmentPageSeaRowScopeSql(
   contractAlias = 'c',
@@ -295,11 +303,15 @@ export function buildShipmentPageSeaRowScopeSql(
       ? `$${options.selectedStoParamIndex}::text`
       : `(${shipmentListStoKeyExpr(contractAlias, spdAlias, shipmentAlias)})::text`;
   const resolvedTypeExpr = shipmentResolvedStoTypeForNumberExpr(contractAlias, stoNumberSql);
-  // FOB Type T is a trucking leg unless SAP names a vessel on that STO (sqlSapStoHasVesselExpr).
-  // The EXISTS is last so it only runs for FOB Type T rows.
+  // FOB Type T is a trucking leg unless SAP names a vessel on that STO (sqlSapStoHasVesselExpr) or the shipment names one in KLIP.
+  // The cheap vessel test goes before the EXISTS, which only runs for FOB Type T rows.
   const fobTypeT = `(
     (${inc}) = 'FOB'
     AND ${resolvedTypeExpr} = 'T'
+    AND NOT (
+      NULLIF(TRIM(${shipmentAlias}.vessel_name), '') IS NOT NULL
+      AND (${shipmentAlias}.shipment_id LIKE 'MNL-%' OR ${shipmentAlias}.shipment_id LIKE 'MSEA-%')
+    )
     AND NOT ${sqlSapStoHasVesselExpr(contractAlias, stoNumberSql)}
   )`;
   return `(${incScope}) AND NOT (${fobTypeT})`;

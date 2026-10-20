@@ -97,6 +97,15 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).not.toContain(contractHasSeaVesselStoOnContractSql('c'));
   });
 
+  it('a FOB Type T shipment that an operator planned in KLIP with a vessel stays a row; a SAP-imported one keeps the SAP rule', () => {
+    const sql = buildShipmentPageSeaRowScopeSql('c', 'l', 's').replace(/\s+/g, ' ');
+    expect(sql).toContain("NOT ( NULLIF(TRIM(s.vessel_name), '') IS NOT NULL AND (s.shipment_id LIKE 'MNL-%' OR s.shipment_id LIKE 'MSEA-%') )");
+    // the cheap test goes before the SAP EXISTS, which then only runs for the FOB Type T rows that are neither
+    expect(sql.indexOf("s.shipment_id LIKE 'MNL-%'")).toBeLessThan(sql.indexOf('spd_tv'));
+    // it follows the shipment alias it is given
+    expect(buildShipmentPageSeaRowScopeSql('c', 'l', 'sh').replace(/\s+/g, ' ')).toContain("sh.shipment_id LIKE 'MNL-%'");
+  });
+
   it('sqlSapStoHasVesselExpr looks for a vessel name on the same contract and STO only', () => {
     const sql = sqlSapStoHasVesselExpr('c', '$3::text');
     expect(sql).toContain('TRIM(spd_tv.contract_number) = TRIM(c.contract_id::text)');
