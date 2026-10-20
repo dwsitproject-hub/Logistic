@@ -2,6 +2,9 @@
  * READ-ONLY: how does the SHIPMENTS page see ONE contract - its OS card and the list row(s) it sits on?
  *
  *   cd /opt/klip && docker exec -i klip-backend node - --contract=1004030297 < docs/scripts/diag-shipments-contract-os.cjs
+ *   ... node - --sto=1006020342,1006019673 --plant="TANJUNG PURA"     (the same, for STOs; --plant is optional)
+ *
+ * Per filter it also prints the status cards (count and OS per stage): a stage whose count is 0 loses its OS to the zero guard.
  *
  * Calls the route handler itself (getShipments, mock req/res) with the page's own `contract` filter, so nothing is reconstructed. Prints
  * the OS card for that contract and the list rows: status, the group's discharge ATA and its own-STO twin, the contracts on the row, OS fields.
@@ -20,6 +23,8 @@ const arg = (name) => {
   return hit ? hit.slice(name.length + 3) : '';
 };
 const contracts = arg('contract').split(',').map((s) => s.trim()).filter(Boolean);
+const stos = arg('sto').split(',').map((s) => s.trim()).filter(Boolean);
+const plant = arg('plant');
 const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 });
 
 async function call(query) {
@@ -30,9 +35,19 @@ async function call(query) {
 }
 
 (async () => {
-  for (const contract of contracts) {
-    console.log('\n=== contract ' + contract);
-    const base = { dateFrom: '2026-01-01', dateTo: '2026-12-31', contract };
+  const scopes = [
+    ...contracts.map((c) => ({ label: 'contract ' + c, filter: { contract: c } })),
+    ...stos.map((s) => ({ label: 'sto ' + s, filter: { sto: s } })),
+  ];
+  for (const scope of scopes) {
+    console.log('\n=== ' + scope.label);
+    const base = { dateFrom: '2026-01-01', dateTo: '2026-12-31', ...scope.filter, ...(plant ? { plant } : {}) };
+    // The status cards for the same filter: the count of each stage decides whether its OS survives applyShipmentStatusCardZeroGuards.
+    const cards = await call({ ...base, summaryOnly: 'true' });
+    const sum = cards && cards.data && cards.data.summary;
+    if (sum) {
+      console.log('status cards  counts ' + JSON.stringify(sum.status) + '   OS(MT) ' + JSON.stringify(Object.fromEntries(Object.entries(sum.statusOutstandingQty || {}).map(([k, v]) => [k, mt(v)]))));
+    }
     const card = await call({ ...base, compact: 'true', outstandingQtyOnly: 'true' });
     const os = card && card.data && card.data.outstandingQty;
     if (os) {
