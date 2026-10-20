@@ -35,6 +35,8 @@ const {
   preplannedContractBacklogBaseWhereSql,
 } = load('utils/shipmentUnplannedHybridSql');
 const { shippingPerfOutstandingQtyKgForAggregate } = load('utils/shippingPerformanceOutstandingAgg');
+const { sqlContractVesselStosFinishedExpr } = load('utils/contractsListCycleSql');
+const { sqlIsContractSapClosedForStoExpr } = load('utils/contractDeliveryStatus');
 
 const arg = (name) => {
   const hit = process.argv.find((a) => a.startsWith('--' + name + '='));
@@ -125,6 +127,35 @@ const LATEST_SPD_CTE =
         console.log('       port discharge=' + p.is_discharge_port + '  ATA completed (the discharge port keeps its ATC here)=' + day(p.ata_loading_completed) + '  ETC=' + day(p.eta_vessel_complete_discharge)),
       );
     }
+
+    /*
+     * Contract Performance closes a contract when every vessel STO of it (contract_stos, Type V or a Type T that has a shipment) is finished: a shipment of
+     * that STO with an ATC, or stored COMPLETED while the GR of THAT STO reads Close. One vessel STO without such a shipment keeps the whole contract Open.
+     * This prints the verdict and, per STO, which of the two it is.
+     */
+    console.log('\n[CP RULE] "vessel STOs finished" (sqlContractVesselStosFinishedExpr), the rule that closes the contract on Contract Performance');
+    const fin = await connection.query('SELECT ' + sqlContractVesselStosFinishedExpr('$1::text') + ' AS finished', [c]);
+    console.log('  verdict for the contract: ' + fin.rows[0].finished);
+    const perSto = await connection.query(
+      "SELECT TRIM(cvs.sto_number::text) AS sto, cvs.sto_type, " + sqlIsContractSapClosedForStoExpr('cx', 'TRIM(cvs.sto_number::text)') + " AS gr_closed," +
+        " (SELECT COALESCE(json_agg(json_build_object('id', COALESCE(s_vf.operation_id, s_vf.shipment_id), 'status', s_vf.status," +
+        "     'atc', s_vf.ata_discharge_complete IS NOT NULL," +
+        "     'atc_override', EXISTS (SELECT 1 FROM shipment_ata_overrides o_vf WHERE o_vf.shipment_id = s_vf.id AND o_vf.ata_discharge_complete IS NOT NULL)," +
+        "     'atc_port', EXISTS (SELECT 1 FROM vessel_loading_ports v_vf WHERE v_vf.shipment_id = s_vf.id AND COALESCE(v_vf.is_discharge_port, FALSE) = TRUE AND v_vf.ata_loading_completed IS NOT NULL))), '[]'::json)" +
+        "    FROM shipments s_vf INNER JOIN contracts c_vf ON c_vf.id = s_vf.contract_id" +
+        "   WHERE c_vf.contract_id = cx.contract_id AND UPPER(TRIM(COALESCE(s_vf.status, ''))) <> 'CANCELLED'" +
+        "     AND (TRIM(COALESCE(s_vf.shipment_id::text, '')) = TRIM(cvs.sto_number::text)" +
+        "          OR TRIM(COALESCE(s_vf.shipment_id::text, '')) LIKE TRIM(cvs.sto_number::text) || '-%'" +
+        "          OR (TRIM(COALESCE(c_vf.sto_number::text, '')) = TRIM(cvs.sto_number::text) AND TRIM(COALESCE(s_vf.shipment_id::text, '')) !~ '^[0-9]{8,}'))) AS shipments" +
+        " FROM contract_stos cvs INNER JOIN contracts cx ON cx.id = cvs.contract_id WHERE cx.contract_id = $1 AND NULLIF(TRIM(cvs.sto_number::text), '') IS NOT NULL ORDER BY 1",
+      [c],
+    );
+    if (perSto.rows.length === 0) console.log('  contract_stos: none (the rule needs at least one vessel STO to finish a contract)');
+    for (const r of perSto.rows) {
+      console.log('  STO ' + r.sto + '  type=' + (r.sto_type || '-') + '  GR of this STO reads Close: ' + r.gr_closed + '  shipments matching it: ' + r.shipments.length);
+      r.shipments.forEach((x) => console.log('       ' + x.id + '  stored status=' + x.status + '  ATC(shipment)=' + x.atc + '  ATC(override)=' + x.atc_override + '  ATC(discharge port)=' + x.atc_port));
+    }
+    console.log('  (a Type T STO with no shipment is not counted by the rule; B2B children of this contract are counted by it but not listed here)');
 
     console.log('\n[GATE] the backlog arm (lists a contract with remaining OS and no running shipment)');
     const osExpr = sqlBacklogRemainingOsJoinExpr();

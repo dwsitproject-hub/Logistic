@@ -277,6 +277,30 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
       // which status cards make the strip: against the OS card total they should add up to it
       console.log('   strip by status (the card total is ' + mt(shipmentsKg) + ' MT):');
       for (const [k, v] of Object.entries(statusCardBreakdown)) console.log('      ' + String(k).padEnd(24) + ' ' + (mt(v) + ' MT').padStart(13));
+      /*
+       * The cards count at ROW grain (the row's site), the OS card at CONTRACT grain (the contract's site): a contract of this site on a vessel row that
+       * another site owns is in the card and in none of the cards. Shipping Performance carries both: the row's plant_site and, per contract, contract_scope.
+       */
+      const byStage = new Map();
+      const crossSite = [];
+      for (const r of spRows) {
+        if (r.is_unplanned_backlog === true) continue;
+        if (['COMPLETED', 'CANCELLED', '', 'UNPLANNED'].includes(up(osStageOf(r)))) continue;
+        const kg = spKgOf(r);
+        if (kg > 0) byStage.set(up(osStageOf(r)), (byStage.get(up(osStageOf(r))) || 0) + kg);
+        if (Array.isArray(r.contract_scope) && up(r.plant_site) !== SITE) {
+          for (const g of r.contract_scope) {
+            if (up(g.plant_site) === SITE && Number(g.outstanding_qty_aggregate) > 0) {
+              crossSite.push({ vessel: r.vessel_name, rowSite: r.plant_site, stage: osStageOf(r), contract: g.contract_number, kg: Number(g.outstanding_qty_aggregate) });
+            }
+          }
+        }
+      }
+      console.log('   Shipping Perf execution OS of this site, by the stage of the row that holds it:');
+      for (const [k, v] of [...byStage.entries()].sort((a, b) => b[1] - a[1])) console.log('      ' + k.padEnd(24) + ' ' + (mt(v) + ' MT').padStart(13));
+      const crossKg = crossSite.reduce((a, x) => a + x.kg, 0);
+      console.log('   of it, contracts of ' + SITE + ' on a vessel row that ANOTHER site owns: ' + mt(crossKg) + ' MT');
+      for (const x of crossSite.slice(0, 12)) console.log('      ' + String(x.contract).padEnd(12) + ' ' + (mt(x.kg) + ' MT').padStart(10) + '  ' + String(x.vessel || '-').padEnd(22) + ' row site ' + x.rowSite + '  stage ' + x.stage);
     }
   }
 
