@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCommercialDocumentsBaseCte,
+  buildCommercialDocumentsCompletenessByPlantQuery,
   buildCommercialDocumentsListQuery,
   buildCommercialDocumentsSummaryQuery,
+  commercialCompletenessPct,
+  COMMERCIAL_DOCUMENT_SLOT_COUNT,
 } from './commercialDocumentsQuerySql';
 
 describe('commercialDocumentsQuerySql Region/Site', () => {
@@ -122,5 +125,43 @@ describe('commercialDocumentsQuerySql summary cards', () => {
     });
     expect(sql).toContain('e.doc_contract = true');
     expect(sql).not.toContain('e.is_open = true');
+  });
+});
+
+describe('commercialDocuments completeness by plant', () => {
+  it('counts uploaded checklist slots against contracts times nine document types', () => {
+    expect(COMMERCIAL_DOCUMENT_SLOT_COUNT).toBe(9);
+    const { sql, values } = buildCommercialDocumentsCompletenessByPlantQuery({
+      dateFrom: '2026-01-01',
+      dateTo: '2026-10-20',
+    });
+    expect(sql).toContain("(COUNT(*) * 9)::int AS total_slots");
+    expect(sql).toContain('AS uploaded_slots');
+    expect(sql).toContain("THEN 'Unassigned'");
+    expect(sql).toContain('CASE WHEN e.doc_draft_contract THEN 1 ELSE 0 END');
+    expect(sql).toContain('CASE WHEN e.doc_invoice_fp_full THEN 1 ELSE 0 END');
+    expect(sql).toContain('e.contract_date >= $1::date');
+    expect(sql).toContain('e.contract_date <= $2::date');
+    expect(sql).not.toContain('e.doc_contract = true');
+    expect(values).toEqual(['2026-01-01', '2026-10-20']);
+    expect(sql).toMatch(/END ASC/);
+  });
+
+  it('applies the Region/Plant filter without a document-type filter', () => {
+    const { sql, values } = buildCommercialDocumentsCompletenessByPlantQuery({
+      dateFrom: '2026-01-01',
+      dateTo: '2026-10-20',
+      plant: ['BONTANG', 'Blank'],
+    });
+    expect(sql).toContain("UPPER(NULLIF(TRIM(e.plant_site), 'Blank'))");
+    expect(values).toContain('BONTANG');
+    expect(values).not.toContain('Blank');
+    expect(sql).not.toContain('e.doc_contract = true');
+  });
+
+  it('reports completeness as one decimal percent', () => {
+    expect(commercialCompletenessPct(1, 9)).toBe(11.1);
+    expect(commercialCompletenessPct(9, 9)).toBe(100);
+    expect(commercialCompletenessPct(0, 0)).toBe(0);
   });
 });

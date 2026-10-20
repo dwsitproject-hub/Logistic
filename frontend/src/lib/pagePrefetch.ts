@@ -99,6 +99,12 @@ export function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
     }
     case '/oil-loss':
       return [prefetchFromUrl('/oil-loss')]
+    case '/commercial-dashboard':
+      return [
+        prefetchFromUrl(
+          `/commercial-documents/completeness-by-plant?dateFrom=${dateFrom}&dateTo=${dateTo}`,
+        ),
+      ]
     case '/commercial-documents': {
       const ytd = new Date()
       const y = ytd.getFullYear()

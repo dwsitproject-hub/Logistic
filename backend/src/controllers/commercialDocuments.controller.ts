@@ -15,8 +15,10 @@ import {
   isCommercialDocumentType,
 } from '../utils/commercialDocumentsConstants';
 import {
+  buildCommercialDocumentsCompletenessByPlantQuery,
   buildCommercialDocumentsListQuery,
   buildCommercialDocumentsSummaryQuery,
+  commercialCompletenessPct,
 } from '../utils/commercialDocumentsQuerySql';
 import {
   ensureUploadDir,
@@ -220,6 +222,57 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
   } catch (err) {
     logger.error('getCommercialDocumentsSummary error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch commercial documents summary' } });
+  }
+};
+
+export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest, res: Response) => {
+  try {
+    const ytd = defaultYtdRange();
+    const q = req.query as Record<string, string | undefined>;
+    const dateFrom = q.dateFrom || ytd.dateFrom;
+    const dateTo = q.dateTo || ytd.dateTo;
+    const { sql, values } = buildCommercialDocumentsCompletenessByPlantQuery({
+      dateFrom,
+      dateTo,
+      plant: parseQueryStringList(req.query.plant),
+    });
+    const result = await query(sql, values);
+    const plants = result.rows.map((row) => {
+      const contractCount = Number(row.contract_count) || 0;
+      const uploadedSlots = Number(row.uploaded_slots) || 0;
+      const totalSlots = Number(row.total_slots) || 0;
+      return {
+        plant: String(row.plant_site || 'Unassigned'),
+        contractCount,
+        uploadedSlots,
+        totalSlots,
+        missingSlots: Math.max(0, totalSlots - uploadedSlots),
+        completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
+      };
+    });
+    const contractCount = plants.reduce((sum, row) => sum + row.contractCount, 0);
+    const uploadedSlots = plants.reduce((sum, row) => sum + row.uploadedSlots, 0);
+    const totalSlots = plants.reduce((sum, row) => sum + row.totalSlots, 0);
+    return res.json({
+      success: true,
+      data: {
+        plants,
+        totals: {
+          contractCount,
+          uploadedSlots,
+          totalSlots,
+          missingSlots: Math.max(0, totalSlots - uploadedSlots),
+          completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
+        },
+        filters: { dateFrom, dateTo },
+      },
+    });
+  } catch (err) {
+    logger.error('getCommercialDocumentsCompletenessByPlant error:', err);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch commercial document completeness' },
+    });
   }
 };
 

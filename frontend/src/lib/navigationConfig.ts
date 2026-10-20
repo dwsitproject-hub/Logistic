@@ -7,6 +7,7 @@ import {
   Bot,
   Plug,
   Ship,
+  BarChart3,
 } from 'lucide-react'
 import { StitchNavIcons } from '@/components/shared/stitchIcons'
 
@@ -58,6 +59,14 @@ export const NAV_ITEMS: NavItem[] = [
   { name: 'Oil Loss', href: '/oil-loss', icon: StitchNavIcons.oilLoss, roles: ['ALL'], permissionKey: 'page.oil_loss', group: 'performance' },
   { name: 'Shortage Claim', href: '/claim-susut', icon: StitchNavIcons.claimSusut, roles: ['ALL'], permissionKey: 'page.claim_susut', group: 'performance' },
   { name: 'Quality Claim', href: '/claim-mutu', icon: StitchNavIcons.claimMutu, roles: ['ALL'], permissionKey: 'page.claim_mutu', group: 'performance' },
+  {
+    name: 'Commercial Dashboard',
+    href: '/commercial-dashboard',
+    icon: BarChart3,
+    roles: ['ALL'],
+    permissionKey: 'page.commercial_dashboard',
+    group: 'performance',
+  },
   { name: 'Contracts', href: '/contracts', icon: StitchNavIcons.contracts, roles: ['ALL'], permissionKey: 'page.contracts', group: 'operations' },
   { name: 'Shipments', href: '/shipments', icon: Ship, roles: ['ALL'], permissionKey: 'page.shipments', group: 'operations' },
   { name: 'Trucking', href: '/trucking', icon: StitchNavIcons.trucking, roles: ['ALL'], permissionKey: 'page.trucking', group: 'operations' },

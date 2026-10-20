@@ -8,6 +8,7 @@ import {
   getCommercialDocumentFiles,
   getCommercialDocumentHistory,
   getCommercialDocuments,
+  getCommercialDocumentsCompletenessByPlant,
   getCommercialDocumentsSummary,
   uploadCommercialDocument,
   viewCommercialDocument,
@@ -23,6 +24,11 @@ const router = express.Router();
 
 router.get('/', authenticateToken, getCommercialDocuments);
 router.get('/summary', authenticateToken, getCommercialDocumentsSummary);
+router.get(
+  '/completeness-by-plant',
+  authenticateToken,
+  getCommercialDocumentsCompletenessByPlant,
+);
 router.get('/history/:poNumber', authenticateToken, getCommercialDocumentHistory);
 router.get('/files/:poNumber', authenticateToken, getCommercialDocumentFiles);
 router.post('/upload', authenticateToken, commercialDocumentUpload.single('file'), uploadCommercialDocument);

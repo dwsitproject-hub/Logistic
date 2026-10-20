@@ -132,6 +132,12 @@ export function canViewContractPerformancePage(ctx: PermissionsContextValue): bo
   return !!ctx.byKey[legacyKey]?.canView
 }
 
+/** null = permissions still loading. New page: no legacy fallback. */
+export function canViewCommercialDashboardPage(ctx: PermissionsContextValue): boolean | null {
+  if (!ctx.loaded) return null
+  return !!ctx.byKey['page.commercial_dashboard']?.canView
+}
+
 /** null = permissions still loading — see canViewContractPerformancePage */
 export function canViewShippingPerformancePage(ctx: PermissionsContextValue): boolean | null {
   if (!ctx.loaded) return null

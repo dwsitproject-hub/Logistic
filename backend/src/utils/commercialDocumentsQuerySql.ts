@@ -346,6 +346,63 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
   return { sql, countSql, values };
 }
 
+/** Checklist flags counted once per contract. Matches the nine Commercial Documents types. */
+export const COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS = [
+  'doc_draft_contract',
+  'doc_contract',
+  'doc_addendum_contract',
+  'doc_berita_acara',
+  'doc_bea_cukai',
+  'doc_delivery_order',
+  'doc_invoice_fp_dp',
+  'doc_invoice_fp_payoff',
+  'doc_invoice_fp_full',
+] as const;
+
+export const COMMERCIAL_DOCUMENT_SLOT_COUNT = COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.length;
+
+export function commercialCompletenessPct(uploaded: number, total: number): number {
+  if (!Number.isFinite(uploaded) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.round((uploaded / total) * 1000) / 10;
+}
+
+/**
+ * Document completeness by Region/Plant. Uploaded is the count of checklist slots that have a file.
+ * Total is contracts × the nine document types. Blank plant is labeled Unassigned.
+ */
+export function buildCommercialDocumentsCompletenessByPlantQuery(
+  params: CommercialDocumentsScopeParams,
+): { sql: string; values: unknown[] } {
+  const scope = buildScopeWhere(params);
+  const uploadedExpr = COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.map(
+    (flag) => `(CASE WHEN e.${flag} THEN 1 ELSE 0 END)`,
+  ).join(' + ');
+  const plantExpr = `CASE
+      WHEN NULLIF(TRIM(e.plant_site), '') IS NULL
+        OR UPPER(TRIM(e.plant_site)) IN ('BLANK', 'UNASSIGNED')
+      THEN 'Unassigned'
+      ELSE TRIM(e.plant_site)
+    END`;
+  const sql = `
+    ${buildCommercialDocumentsBaseCte()}
+    SELECT
+      ${plantExpr} AS plant_site,
+      COUNT(*)::int AS contract_count,
+      COALESCE(SUM(${uploadedExpr}), 0)::int AS uploaded_slots,
+      (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS total_slots
+    FROM enriched e
+    WHERE ${scope.where.join(' AND ')}
+    GROUP BY 1
+    ORDER BY
+      CASE
+        WHEN COUNT(*) = 0 THEN 0
+        ELSE COALESCE(SUM(${uploadedExpr}), 0)::numeric / (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})
+      END ASC,
+      1 ASC
+  `;
+  return { sql, values: scope.values };
+}
+
 export function buildCommercialDocumentsSummaryQuery(params: CommercialDocumentsScopeParams): {
   sql: string;
   values: unknown[];
