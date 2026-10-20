@@ -5,6 +5,7 @@ import {
   sqlRegionSiteDisplayForContract,
 } from '../utils/regionSiteSql';
 import { resolveContractsQtyMoveCte } from './contractQtyMoveSnapshot.service';
+import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
 import {
   isShipmentActiveStage,
   shipmentActiveStageRank,
@@ -192,6 +193,14 @@ export async function loadContractExecutionOutstandingKg(
     for (let i = 0; i < ids.length; i += CONTRACT_OS_CHUNK) {
       const chunk = ids.slice(i, i + CONTRACT_OS_CHUNK);
       /*
+       * A contract whose incoterm is not CIF / FOB / CFR (LCO, FRC) is NOT counted: its outstanding is Trucking's, even when SAP files its B2B CHILD under
+       * a vessel STO and the row therefore reaches this page. This page's row scope tests the contract that carries the shipment - the child - while
+       * the contract numbers on the row, and so the contracts valued here, are the ORIGINS after the B2B relabel; Shipments and Contract Performance's
+       * sea half test the origin. SIT 2026-10-20: BG. SEJAHTERA D35 (STO 1016011384), three LCO origins (1004032634 / 637 / 795, BEKASI) = 2,100 MT that
+       * only this page counted. Only the VALUE is withheld: the row, its dates and the delay averages stay, so the vessel leg of those chains still
+       * counts where it is measured in days.
+       */
+      /*
        * A contract whose Region/Site does not resolve is NOT counted.
        *
        * Contract Performance drops those rows outright (`hasResolvedRegionSite`) and Shipments
@@ -211,7 +220,8 @@ export async function loadContractExecutionOutstandingKg(
                 (${sqlContractExecutionOutstandingKgExpr('c.contract_id')})::numeric AS os_kg
          FROM contracts c
          WHERE c.contract_id = ANY($1::text[])
-           AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}`,
+           AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}
+           AND ${buildShipmentPageSeaIncotermScopeSql('c')}`,
         [chunk],
       );
       for (const row of result.rows as Record<string, unknown>[]) {

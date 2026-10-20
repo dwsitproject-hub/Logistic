@@ -103,4 +103,23 @@ describe('contract-grain outstanding for Shipping Performance', () => {
     const r = await loadContractExecutionOutstandingKg(['NOPE-does-not-exist']);
     expect(r.size).toBe(0);
   }, 120_000);
+
+  /*
+   * LCO / FRC is Trucking's. A vessel STO can still reach this page through a B2B child, and the contract numbers on its row are the ORIGINS: SIT
+   * 2026-10-20, three LCO origins of BG. SEJAHTERA D35 = 2,100 MT that only this page counted.
+   */
+  it('never values a contract whose incoterm is not CIF / FOB / CFR', async () => {
+    const { query } = await import('../database/connection');
+    const lco = await query(
+      `SELECT c.contract_id
+         FROM contracts c
+         JOIN contract_qty_move_snapshot q ON q.contract_number = c.contract_id
+        WHERE UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FRC')
+        LIMIT 200`,
+    );
+    const ids = lco.rows.map((r: { contract_id: string }) => String(r.contract_id));
+    if (ids.length === 0) return; // nothing to test against on this database
+    const r = await loadContractExecutionOutstandingKg(ids);
+    expect([...r.keys()]).toEqual([]);
+  }, 120_000);
 });
