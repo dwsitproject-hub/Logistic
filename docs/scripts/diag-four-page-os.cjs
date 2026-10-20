@@ -143,6 +143,7 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
    * in the tooltip. So it is checked here rather than looked at.
    */
   let statusCardSumKg = null;
+  let statusCardBreakdown = null;
   try {
     const req = { query: { summaryOnly: 'true', dateFrom: FROM, dateTo: TO, plant: SITE } };
     let payload = null;
@@ -156,6 +157,7 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
     const so = payload && payload.data && payload.data.summary && payload.data.summary.statusOutstandingQty;
     if (so) {
       statusCardSumKg = Object.values(so).reduce((a, v) => a + (Number(v) || 0), 0);
+      statusCardBreakdown = so;
     } else {
       console.log('   Shipments returned no statusOutstandingQty');
     }
@@ -271,6 +273,11 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
     console.log(
       `   ${'Shipments cards - its own strip'.padEnd(30)} ${(Math.abs(d) < 1000 ? 'OK    ' : 'DRIFT ') + mt(d) + ' MT'}`,
     );
+    if (Math.abs(d) >= 1000 && statusCardBreakdown) {
+      // which status cards make the strip: against the OS card total they should add up to it
+      console.log('   strip by status (the card total is ' + mt(shipmentsKg) + ' MT):');
+      for (const [k, v] of Object.entries(statusCardBreakdown)) console.log('      ' + String(k).padEnd(24) + ' ' + (mt(v) + ' MT').padStart(13));
+    }
   }
 
   // ---- the backlog arm, the half that needs no controller CTE ------------------------------
