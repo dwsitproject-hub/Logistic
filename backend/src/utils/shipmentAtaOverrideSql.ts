@@ -148,22 +148,31 @@ export function sqlEffectiveAtaCompleteDischarge(sAlias = 's', vlpAlias = 'vlpd'
 }
 
 /**
- * Does this shipment belong to the STO its group is keyed by?
+ * The discharge ATC that counts for ONE group - `ata_vessel_complete_discharge_own_sto`. The rule depends on what the group is keyed by.
  *
- * A group is keyed by a real SAP STO (digits) or by something that is NOT an STO - a KLIP operation id (OP-...) or a KLIP shipment id (MNL- / MSEA-). Only inside an STO
- * group can a shipment be FOREIGN to it (its own shipment_id is another STO). In an operation-keyed group there is no STO to be foreign to, and comparing a KLIP shipment id
- * against an operation id marks EVERY shipment foreign, so the own-STO ATC came out NULL even for a shipment that had discharged. Shipping Performance has always made this
- * exception (shippingPerformance.service: it narrows only inside a `sto:` group); this SQL did not, and when the Shipments page began to read the own-STO column for its stage
- * (shipmentPageEffectiveStatusExpr) a manually planned shipment with an ATC read Unloading in the View Table while its Edit modal read Completed (PO 1001031704, operation
- * OP-1004031705-93196222, production 2026-10-20).
+ * A group keyed by a real SAP STO (digits): the ATC of the shipments that belong to THAT STO (shipment_id NULL, or equal to the key). A shipment whose own shipment_id is
+ * another STO is foreign: a finished voyage on a sibling STO must not finish this one (STO 1006019867, 2,700 MT, 2026-09-16; BG. KALTIM / BG. AS MARINA 10, 2026-10-20).
  *
- * True for: a group key that is not all digits; a shipment with no shipment_id; a shipment whose shipment_id IS the group's STO.
+ * A group keyed by something that is NOT an STO - a KLIP operation id (OP-...) or a KLIP shipment id (MNL- / MSEA-): the members are the POs of one planned voyage, none is
+ * foreign, and the ATC finishes the group only when EVERY member that is not cancelled has one (Ryan 2026-10-19: while a PO added to a voyage is not completed, the shipment
+ * must not be Completed). Two earlier readings were wrong in opposite ways. Comparing the members' MNL- ids with the OP- key marked every member foreign, so the column was NULL even
+ * when every PO had discharged: PO 1001031704 (MT. BIO EXPRESS, both POs with an ATC) read Unloading in the View Table and Completed in the Edit modal. Counting the MAX of all
+ * members (6c902ce9) let one PO's ATC finish the whole voyage: MT. MULIA KARSA 2 (three POs, one with an ATC) left 1,874.4 MT out of the Shipments OS while Contract Performance
+ * and Shipping Performance kept it (SIT, BONTANG). Shipping Performance already narrows only inside a `sto:` group and finishes an operation per contract.
+ *
+ * `atcExpr` is the member's ATC, `groupKeyExpr` the key of the group, `shipmentAlias` the shipments alias. Returns an aggregate expression (no alias).
  */
-export function sqlShipmentBelongsToGroupStoPredicate(groupKeyExpr: string, shipmentAlias = 's'): string {
+export function sqlOwnStoDischargeAtc(atcExpr: string, groupKeyExpr: string, shipmentAlias = 's'): string {
   const own = `${shipmentAlias}.shipment_id`;
-  return `(TRIM((${groupKeyExpr})::text) !~ '^[0-9]+$'
-            OR NULLIF(TRIM(${own}::text), '') IS NULL
-            OR TRIM(${own}::text) = TRIM((${groupKeyExpr})::text))`;
+  const keyIsSto = `TRIM((${groupKeyExpr})::text) ~ '^[0-9]+$'`;
+  const live = `UPPER(COALESCE(${shipmentAlias}.status, '')) NOT IN ('CANCELLED', 'CANCELED')`;
+  const ownMember = `(NULLIF(TRIM(${own}::text), '') IS NULL OR TRIM(${own}::text) = TRIM((${groupKeyExpr})::text))`;
+  return `COALESCE(
+            MAX(${atcExpr}) FILTER (WHERE ${keyIsSto} AND ${ownMember}),
+            CASE WHEN COUNT(*) FILTER (WHERE NOT (${keyIsSto}) AND ${live} AND (${atcExpr}) IS NULL) = 0
+                 THEN MAX(${atcExpr}) FILTER (WHERE NOT (${keyIsSto}) AND ${live})
+            END
+          )`;
 }
 
 /**
@@ -188,7 +197,7 @@ export function sqlShipmentBelongsToGroupStoPredicate(groupKeyExpr: string, ship
  */
 export function buildShipmentListAtaSelectSql(groupKeyExpr?: string): string {
   const atc = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete')}, sao.ata_discharge_complete, s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)`;
-  const ownStoFilter = groupKeyExpr ? `FILTER (WHERE ${sqlShipmentBelongsToGroupStoPredicate(groupKeyExpr, 's')})` : '';
+  const ownStoAtc = groupKeyExpr ? sqlOwnStoDischargeAtc(atc, groupKeyExpr, 's') : `MAX(${atc})`;
   return `
           MAX(COALESCE(sao.ata_arrival, s.ata_arrival, vlp_l.vlp_load_ata_va)) as ata_vessel_arrival_at_loading_port,
           MAX(COALESCE(sao.ata_berthed, s.ata_berthed, vlp_l.vlp_load_ata_vb)) as ata_vessel_berthed_at_loading_port,
@@ -199,5 +208,5 @@ export function buildShipmentListAtaSelectSql(groupKeyExpr?: string): string {
           MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed')}, sao.ata_discharge_berthed, s.ata_discharge_berthed, vlp_d.vlp_disc_ata_vb)) as ata_vessel_berthed_at_discharge_port,
           MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_start')}, sao.ata_discharge_start, s.ata_discharge_start, vlp_d.vlp_disc_ata_ls)) as ata_vessel_start_discharging,
           MAX(${atc}) as ata_vessel_complete_discharge,
-          MAX(${atc}) ${ownStoFilter} as ata_vessel_complete_discharge_own_sto,`;
+          ${ownStoAtc} as ata_vessel_complete_discharge_own_sto,`;
 }

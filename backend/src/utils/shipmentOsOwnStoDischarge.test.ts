@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { query } from '../database/connection';
-import { buildShipmentListAtaSelectSql, sqlShipmentBelongsToGroupStoPredicate } from './shipmentAtaOverrideSql';
+import { buildShipmentListAtaSelectSql, sqlOwnStoDischargeAtc } from './shipmentAtaOverrideSql';
 import { shipmentEffectiveStatusExpr, shipmentPageEffectiveStatusExpr } from './shipmentListFilters';
 import { sqlShipmentOutstandingActiveStagePredicate } from './shipmentOutstandingQtySummarySql';
 
@@ -46,39 +46,60 @@ describe('a sibling STO\'s discharge does not finish this STO for the OS', () =>
     );
   });
 
-  it('keeps a row that carries no STO of its own, and every row of a group that is not keyed by an STO', () => {
-    // Such a row has no other group to belong to; excluding it would lose a real discharge.
+  it('counts a group keyed by an STO on its own shipments, and a group that is not by every non-cancelled member', () => {
     const sql = buildShipmentListAtaSelectSql('K').replace(/\s+/g, ' ');
-    expect(sql).toContain("NULLIF(TRIM(s.shipment_id::text), '') IS NULL");
-    expect(sql).toContain("TRIM((K)::text) !~ '^[0-9]+$'");
+    expect(sql).toContain("NULLIF(TRIM(s.shipment_id::text), '') IS NULL"); // an STO group: a shipment with no STO of its own stays counted
+    expect(sql).toContain("TRIM((K)::text) ~ '^[0-9]+$'"); // the group is keyed by an STO
+    expect(sql).toContain('COUNT(*) FILTER (WHERE NOT (TRIM((K)::text)'); // otherwise: no live member may lack an ATC
   });
 });
 
 /**
- * PO 1001031704 / operation OP-1004031705-93196222 (production 2026-10-20): a shipment planned by hand in KLIP, its shipment_id MNL-..., with an ATC. The group is keyed by the
- * OPERATION, so comparing the shipment id with the key marked it foreign and its own-STO ATC came out NULL - the View Table read Unloading while the Edit modal, which reads the
- * shipment itself, read Completed. Inside a real STO group a shipment of ANOTHER STO is still foreign (STO 1006019867, 2,700 MT, 2026-09-16). Run in Postgres, not as a string.
+ * What the own-STO discharge ATC of a group is, run in Postgres on the groups that exposed each reading (production and SIT, 2026-10-20):
+ *  - MT. BIO EXPRESS, operation OP-1004031705-93196222: two POs, MNL- shipments, BOTH with an ATC (override 14 Oct). The members' MNL- ids are not the OP- key; they were marked
+ *    foreign and the column was NULL, so the View Table read Unloading while the Edit modal read Completed.
+ *  - MT. MULIA KARSA 2, OP-1004030473-15277540: three POs, ONE with an ATC (400/400 delivered), two without (OS 158.7 and 1,715.7 MT, Open on Contract Performance). Counting the MAX of all
+ *    members finished the whole voyage and 1,874.4 MT left the Shipments OS while CP and SP kept it (Ryan 2026-10-19: while an added PO is not completed the shipment is not Completed).
+ *  - STO 1006019867 / BG. KALTIM: inside an STO-keyed group a shipment of ANOTHER STO is foreign.
  */
-describe('which shipments belong to the STO their group is keyed by (run in Postgres)', () => {
-  const belongs = async (groupKey: string, shipmentId: string | null) => {
+describe('the own-STO discharge ATC of a group (run in Postgres)', () => {
+  type Member = { id: string | null; status?: string; atc: string | null };
+  const ownAtc = async (groupKey: string, members: Member[]) => {
+    const values = members
+      .map((m, i) => `($1::text, ${m.id === null ? 'NULL' : `'${m.id}'`}::text, '${m.status ?? 'PLANNED'}'::text, ${m.atc === null ? 'NULL' : `DATE '${m.atc}'`}, ${i})`)
+      .join(', ');
     const r = await query(
-      `SELECT ${sqlShipmentBelongsToGroupStoPredicate('t.group_key', 's')} AS belongs
-         FROM (SELECT $1::text AS group_key) t, (SELECT $2::text AS shipment_id) s`,
-      [groupKey, shipmentId],
+      // to_char, not a Date round trip: node-pg turns a DATE into local midnight and toISOString() then reads the day before in WIB.
+      `SELECT to_char(${sqlOwnStoDischargeAtc('s.atc', 's.group_key', 's')}, 'YYYY-MM-DD') AS own_atc
+         FROM (VALUES ${values}) AS s(group_key, shipment_id, status, atc, n)
+        GROUP BY s.group_key`,
+      [groupKey],
     );
-    return r.rows[0].belongs as boolean;
+    return (r.rows[0]?.own_atc as string | null | undefined) ?? null;
   };
+  const OP = 'OP-1004031705-93196222';
 
-  it('an operation-keyed group counts a KLIP shipment id (MNL- / MSEA-) as its own', async () => {
-    expect(await belongs('OP-1004031705-93196222', 'MNL-20260915-0001')).toBe(true);
-    expect(await belongs('OP-1004031705-93196222', 'MSEA-123')).toBe(true);
-    expect(await belongs('OP-1004031705-93196222', null)).toBe(true);
+  it('an operation group is finished only when EVERY member has an ATC', async () => {
+    // BIO EXPRESS: two POs, both discharged
+    expect(await ownAtc(OP, [{ id: 'MNL-1-1004031704', atc: '2026-10-14' }, { id: 'MNL-1-1004031705', atc: '2026-10-14' }])).toBe('2026-10-14');
+    // a single PO that discharged (DAHLIA, AS MARINA 2, SMS 3002 ...)
+    expect(await ownAtc(OP, [{ id: 'MNL-9-1', atc: '2026-09-30' }])).toBe('2026-09-30');
+    // MULIA KARSA 2: one PO of three discharged, the other two have no ATC: not finished
+    expect(await ownAtc('OP-1004030473-15277540', [{ id: 'MNL-2-1', atc: '2026-09-15' }, { id: 'MNL-2-2', atc: null }, { id: 'MNL-2-3', atc: null }])).toBeNull();
+    // KAPUAS 168: a PO added to a finished voyage keeps it open
+    expect(await ownAtc(OP, [{ id: 'MNL-3-1', atc: '2026-10-16' }, { id: 'MNL-3-2', atc: null }])).toBeNull();
   }, 60_000);
 
-  it('an STO-keyed group counts its own STO and a shipment with none, not a shipment of another STO', async () => {
-    expect(await belongs('1006019867', '1006019867')).toBe(true);
-    expect(await belongs('1006019867', null)).toBe(true);
-    expect(await belongs('1006019867', '')).toBe(true);
-    expect(await belongs('1006019867', '1006019385')).toBe(false);
+  it('a cancelled member does not hold an operation group open, and an all-cancelled group has no ATC', async () => {
+    expect(await ownAtc(OP, [{ id: 'MNL-4-1', atc: '2026-10-14' }, { id: 'MNL-4-2', status: 'CANCELLED', atc: null }])).toBe('2026-10-14');
+    expect(await ownAtc(OP, [{ id: 'MNL-5-1', status: 'CANCELLED', atc: '2026-10-14' }])).toBeNull();
+  }, 60_000);
+
+  it('an STO group keeps the old rule: its own shipments and those with no STO count, another STO is foreign', async () => {
+    expect(await ownAtc('1006019867', [{ id: '1006019867', atc: '2026-10-03' }, { id: '1006019385', atc: null }])).toBe('2026-10-03');
+    expect(await ownAtc('1006019867', [{ id: '1006019385', atc: '2026-10-03' }, { id: '1006019867', atc: null }])).toBeNull(); // a sibling STO discharged
+    expect(await ownAtc('1006019867', [{ id: null, atc: '2026-10-03' }])).toBe('2026-10-03'); // no STO of its own: counted
+    // an STO group is NOT held open by a member without an ATC (one STO is one voyage)
+    expect(await ownAtc('1006019867', [{ id: '1006019867', atc: '2026-10-03' }, { id: '1006019867', atc: null }])).toBe('2026-10-03');
   }, 60_000);
 });
