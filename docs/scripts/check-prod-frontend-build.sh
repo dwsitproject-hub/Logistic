@@ -64,8 +64,10 @@ IMAGE_CREATED="$(docker image inspect -f '{{.Created}}' "$(docker inspect -f '{{
 STARTED="$(docker inspect -f '{{.State.StartedAt}}' "$CONTAINER")"
 printf '  state     : %s\n' "$(docker inspect -f '{{.State.Status}}' "$CONTAINER")"
 printf '  image     : %s\n' "$IMAGE_ID"
-printf '  image built : %s UTC   %s\n' "${IMAGE_CREATED%%.*}" "$(wib "$IMAGE_CREATED")"
-printf '  started     : %s UTC   %s\n' "${STARTED%%.*}" "$(wib "$STARTED")"
+# Docker prints the image's Created time in the HOST's zone (+08:00 on ECS-App), so convert it instead of relabelling the digits as UTC (it once read 18:19 UTC for a 10:19 UTC build).
+utc() { date -u -d "$1" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$1"; }
+printf '  image built : %s UTC   %s\n' "$(utc "$IMAGE_CREATED")" "$(wib "$IMAGE_CREATED")"
+printf '  started     : %s UTC   %s\n' "$(utc "$STARTED")" "$(wib "$STARTED")"
 BUILD_ID_TIME="$(docker exec "$CONTAINER" sh -c 'stat -c %y .next/BUILD_ID 2>/dev/null' 2>/dev/null | cut -c1-16)"
 [ -n "$BUILD_ID_TIME" ] && printf '  .next/BUILD_ID written : %s\n' "$BUILD_ID_TIME"
 
