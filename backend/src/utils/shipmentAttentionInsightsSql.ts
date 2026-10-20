@@ -22,7 +22,7 @@ import {
   resolveUnplannedContractBacklogLatestSpdCte,
   unplannedContractBacklogBaseWhereSql,
 } from './shipmentUnplannedHybridSql';
-import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
+import { shipmentPageEffectiveStatusExpr } from './shipmentListFilters';
 
 export function sqlShipmentHybridRowKey(
   stoNumberExpr: string,
@@ -69,7 +69,7 @@ async function buildShipmentOverdueExecutionGroupedRowsCte(
   toolbarOuterSql: string,
 ): Promise<string> {
   /** Former Unplanned STOs are Planned; overdue execution insights use Planned scope. */
-  const outerSql = `${toolbarOuterSql} AND ${shipmentEffectiveStatusExpr('sb')} = 'PLANNED'`;
+  const outerSql = `${toolbarOuterSql} AND ${shipmentPageEffectiveStatusExpr('sb')} = 'PLANNED'`;
   const outstandingExpr = sqlOutstandingKg('c');
   const daysOverdue = sqlDaysOverdue('c.delivery_end_date');
   const rowKey = sqlShipmentHybridRowKey('sp.sto_number', 'sp.operation_id', 'sp.sto_key');

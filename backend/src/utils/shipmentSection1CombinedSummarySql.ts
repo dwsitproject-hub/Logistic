@@ -2,7 +2,7 @@
  * Shipments Section 1 — single enriched scan for pipeline summary counts + status-card qty.
  */
 
-import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
+import { shipmentPageEffectiveStatusExpr } from './shipmentListFilters';
 import { shipmentListQtyMoveCteFromPage } from './shipmentOutstandingQtySql';
 import { sqlMasterVesselLateralJoin } from './masterVesselDisplaySql';
 import { sqlCoalesceSourceType } from './sapSourceTypeSql';
@@ -28,7 +28,7 @@ const DISCHARGE_STATUS_GROUP =
 /** ETA bucket flags for Section 1 summary cards (alias = filtered/scoped shipment row). */
 export function buildShipmentSummaryEtaEnrichmentSelect(alias = 'f'): string {
   return `
-          ${shipmentEffectiveStatusExpr(alias)} AS effective_status,
+          ${shipmentPageEffectiveStatusExpr(alias)} AS effective_status,
           (
             ${alias}.eta_arrival IS NULL AND ${alias}.eta_berthed IS NULL AND ${alias}.eta_loading_start IS NULL AND ${alias}.eta_loading_complete IS NULL AND ${alias}.eta_sailed IS NULL
           ) AS loading_no_eta,
@@ -164,7 +164,7 @@ export function buildShipmentPipelineLiveStageCountsQuery(opts: {
   shipmentBaseCteSql: string;
   toolbarOuterSql: string;
 }): string {
-  const eff = shipmentEffectiveStatusExpr('f');
+  const eff = shipmentPageEffectiveStatusExpr('f');
   const masterJoin = sqlMasterVesselLateralJoin(
     'f.vessel_code',
     'f.vessel_name',

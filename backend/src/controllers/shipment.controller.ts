@@ -157,7 +157,7 @@ import {
   parseColumnFiltersQuery,
   sqlShipmentGroupStatusAgg,
   sqlShipmentGroupStatusFloorAgg,
-  shipmentEffectiveStatusExpr,
+  shipmentPageEffectiveStatusExpr,
 } from '../utils/shipmentListFilters';
 import { resolveShipmentListSortRequest, shipmentListSortStackUsesEnrichedPath } from '../utils/shipmentListSortSql';
 import {
@@ -2401,7 +2401,7 @@ ${vlpLateralJoins}
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
         mv.vessel_name_master,
-        ${shipmentEffectiveStatusExpr('sp')} AS effective_status,
+        ${shipmentPageEffectiveStatusExpr('sp')} AS effective_status,
 ${SHIPMENT_LIST_JPS_SELECT_SQL}
       ${SHIPMENT_LIST_STO_JOIN_SQL}
       ${SHIPMENT_LIST_JPS_JOIN_SQL}

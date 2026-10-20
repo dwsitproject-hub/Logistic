@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildShipmentListAtaSelectSql } from './shipmentAtaOverrideSql';
-import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
+import { shipmentEffectiveStatusExpr, shipmentPageEffectiveStatusExpr } from './shipmentListFilters';
 import { sqlShipmentOutstandingActiveStagePredicate } from './shipmentOutstandingQtySummarySql';
 
 describe('a sibling STO\'s discharge does not finish this STO for the OS', () => {
@@ -29,10 +29,13 @@ describe('a sibling STO\'s discharge does not finish this STO for the OS', () =>
     expect(buildShipmentListAtaSelectSql()).toContain('as ata_vessel_complete_discharge_own_sto');
   });
 
-  it('leaves the group-wide column for the list to display', () => {
-    // Option chosen deliberately: the page keeps showing the ATA it always has; only the OS
-    // buckets read the narrowed column, because only they decide whether quantity is counted.
+  it('leaves the group-wide column for the list to DISPLAY, but the page decides its stage on the own-STO one', () => {
+    // The list keeps showing the ATA it always has. The STAGE of a row (list status, status filters, card counts, OS strip) reads the narrowed column, so a
+    // sibling STO's discharge does not make a row COMPLETED in the list while the OS path counts it as active (TANJUNG PURA 2026-10-20, 8,144.9 MT).
     expect(buildShipmentListAtaSelectSql('K')).toContain('as ata_vessel_complete_discharge,');
+    expect(shipmentPageEffectiveStatusExpr('sb')).toContain('sb.ata_vessel_complete_discharge_own_sto IS NOT NULL');
+    expect(shipmentPageEffectiveStatusExpr('sb')).not.toMatch(/sb.ata_vessel_complete_discharge IS NOT NULL/);
+    // the generic expression keeps its default, for the callers whose base has no own-STO column
     expect(shipmentEffectiveStatusExpr('sb')).toContain('sb.ata_vessel_complete_discharge ');
   });
 

@@ -9,7 +9,7 @@ import {
   sqlShipmentExecutionOsPerContractCtes,
   sqlShipmentSection1LightExecutionEnrichSelect,
 } from './shipmentOutstandingQtySummarySql';
-import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
+import { shipmentPageEffectiveStatusExpr } from './shipmentListFilters';
 
 /** Inclusive forward horizon on due date delivery end (excludes due > today+7). */
 export const ETC_NO_ATC_DUE_HORIZON_DAYS = 7;
@@ -40,7 +40,7 @@ export function sqlShipmentEtcNoAtcDueWithin7dPred(alias = 'fs'): string {
     ${atc} IS NULL
     AND ${alias}.delivery_end_date IS NOT NULL
     AND ${alias}.delivery_end_date::date <= (CURRENT_DATE + ${ETC_NO_ATC_DUE_HORIZON_DAYS})
-    AND ${shipmentEffectiveStatusExpr(alias)} NOT IN ('COMPLETED', 'CANCELLED')
+    AND ${shipmentPageEffectiveStatusExpr(alias)} NOT IN ('COMPLETED', 'CANCELLED')
   )`;
 }
 

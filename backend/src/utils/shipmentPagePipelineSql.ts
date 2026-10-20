@@ -4,7 +4,7 @@
  */
 
 import { sqlIsContractSapInactiveForOsExpr } from './contractDeliveryStatus';
-import { shipmentEffectiveStatusExpr, shipmentHasAnyEtaExpr, shipmentHasDeliveryQtyExpr } from './shipmentListFilters';
+import { shipmentPageEffectiveStatusExpr, shipmentHasAnyEtaExpr, shipmentHasDeliveryQtyExpr } from './shipmentListFilters';
 import {
   SHIPMENT_AT_DISCHARGE_PORT_STATUSES,
   SHIPMENT_AT_LOADING_PORT_STATUSES,
@@ -115,7 +115,7 @@ export function shipmentEffectiveStatusInListSql(
   statuses: readonly string[],
   startIndex: number,
 ): { sql: string; params: string[]; nextIndex: number } {
-  const eff = shipmentEffectiveStatusExpr(alias);
+  const eff = shipmentPageEffectiveStatusExpr(alias);
   if (statuses.length === 0) {
     return { sql: '', params: [], nextIndex: startIndex };
   }
@@ -156,7 +156,7 @@ export function shipmentHasAnyDischargePortAtaExpr(alias: string): string {
 
 /**
  * Legacy virtual pipeline stage expression (summary reference/tests only).
- * View-table status and card filters use shipmentEffectiveStatusExpr + detail status groups.
+ * View-table status and card filters use shipmentPageEffectiveStatusExpr + detail status groups.
  */
 export function shipmentPagePipelineStageExpr(alias: string): string {
   const f = alias;
@@ -375,7 +375,7 @@ export function appendShipmentPipelineStageFilter(
 
   const direct = PIPELINE_STAGE_DIRECT_EFFECTIVE[stage] ?? stage;
   return {
-    sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
+    sql: ` AND ${shipmentPageEffectiveStatusExpr('sb')} = $${startIndex}`,
     params: [direct],
     nextIndex: startIndex + 1,
   };

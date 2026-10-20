@@ -9,7 +9,7 @@ import {
   toPipelineDailySummaryScope,
   type PipelineDailySummaryFilterInput,
 } from './pipelineDailySummary.service';
-import { parseColumnFiltersQuery, shipmentEffectiveStatusExpr } from '../utils/shipmentListFilters';
+import { parseColumnFiltersQuery, shipmentPageEffectiveStatusExpr } from '../utils/shipmentListFilters';
 import { sqlMergedPoNumbers } from '../utils/stoLinkedContractSql';
 import { sqlSapQtySharedAcrossShipments } from '../utils/shipmentSapQtyShared';
 import {
@@ -1238,7 +1238,7 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
     row.sto_number = displayedSto === '-' ? null : displayedSto;
 
     /**
-     * List SQL selects shipmentEffectiveStatusExpr (same ATA ladder as Section 1 cards).
+     * List SQL selects shipmentPageEffectiveStatusExpr (same ATA ladder as Section 1 cards).
      * Prefer that over a second JS derive.
      */
     const sqlEffective = String(row.effective_status ?? '').trim();
@@ -1300,7 +1300,7 @@ const LIST_PAGE_SELECT_SHELL = `
       SELECT
         sp.*,
         mv.vessel_name_master,
-        ${shipmentEffectiveStatusExpr('sp')} AS effective_status,
+        ${shipmentPageEffectiveStatusExpr('sp')} AS effective_status,
 ${SHIPMENT_LIST_JPS_SELECT_SQL}
       FROM shipment_page sp
       ${SHIPMENT_LIST_JPS_JOIN_SQL}
@@ -1355,7 +1355,7 @@ const LIST_PAGE_SELECT = `
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
         mv.vessel_name_master,
-        ${shipmentEffectiveStatusExpr('sp')} AS effective_status,
+        ${shipmentPageEffectiveStatusExpr('sp')} AS effective_status,
 ${SHIPMENT_LIST_JPS_SELECT_SQL}
       ${SHIPMENT_LIST_STO_JOIN_SQL}
       ${SHIPMENT_LIST_JPS_JOIN_SQL}
@@ -1410,7 +1410,7 @@ const LIST_PAGE_SELECT_ENRICHED = `
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
         mv.vessel_name_master,
-        ${shipmentEffectiveStatusExpr('sp')} AS effective_status,
+        ${shipmentPageEffectiveStatusExpr('sp')} AS effective_status,
 ${SHIPMENT_LIST_JPS_SELECT_SQL}
       FROM shipment_page sp
       LEFT JOIN sap_latest sl ON sl.sto_key::text = sp.sto_key::text

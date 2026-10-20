@@ -281,7 +281,7 @@ export function appendShipmentColumnFilters(
 
   for (const [colId, raw] of Object.entries(filters)) {
     const expr =
-      colId === 'status' ? shipmentEffectiveStatusExpr('sb') : SB_COL[colId]
+      colId === 'status' ? shipmentPageEffectiveStatusExpr('sb') : SB_COL[colId]
     if (!expr || !raw || typeof raw !== 'object') continue
 
     const f = raw as ColumnFilterPayload[string]
@@ -628,6 +628,24 @@ export function shipmentEffectiveStatusExpr(
   )`
 }
 
+/**
+ * The status the SHIPMENTS PAGE reads - list column, status filters, the card counts and the OS strip: the ATC of the group's OWN STO.
+ *
+ * It used to be the group-wide ATC here and the own-STO one only in the OS buckets, so a row whose ATC belonged to a sibling STO
+ * (another shipment_id grouped under the same key) read COMPLETED in the list and in the card counts while its outstanding was counted
+ * as an active stage by the OS path. The zero guard then cleared that stage's OS (its count was 0), and the strip lost it: TANJUNG PURA
+ * 2026-10-20, BG. AS MARINA 10 4,999.7 MT (1006020666, ATC of 1006020342) and BG. KALTIM 3,145.2 MT, 8,144.9 MT in all, while the OS card,
+ * Contract Performance and Shipping Performance all read 26,144.9 MT. One rule everywhere the page decides a stage.
+ *
+ * Needs `<alias>.ata_vessel_complete_discharge_own_sto` (buildShipmentListAtaSelectSql emits it in every shipment_base variant, hybrid backlog
+ * rows as NULL). The displayed ATC column is unchanged - the list still shows the group's date as it always has.
+ */
+export const SHIPMENT_OWN_STO_DISCHARGE_COLUMN = 'ata_vessel_complete_discharge_own_sto'
+
+export function shipmentPageEffectiveStatusExpr(alias: string): string {
+  return shipmentEffectiveStatusExpr(alias, { dischargeColumn: SHIPMENT_OWN_STO_DISCHARGE_COLUMN })
+}
+
 /** Aggregates for mixed persisted statuses on grouped STO rows (diagnostic / shipping-perf).
  *  Pipeline cards use MAX ATA via shipmentEffectiveStatusExpr, not this floor. */
 /**
@@ -662,12 +680,12 @@ export function sqlShipmentGroupStatusFloorAgg(shipmentAlias = 's'): string {
 
 /** Statuses that contribute to ETA Loading buckets (matches shipmentsPageDerivedData). */
 export function shipmentLoadingEtaPhaseExpr(alias: string): string {
-  return `${shipmentEffectiveStatusExpr(alias)} IN (${sqlQuoteStatusList(SHIPMENT_LOADING_ETA_PHASE_STATUSES)})`
+  return `${shipmentPageEffectiveStatusExpr(alias)} IN (${sqlQuoteStatusList(SHIPMENT_LOADING_ETA_PHASE_STATUSES)})`
 }
 
 /** Statuses that contribute to ETA Discharge buckets (matches shipmentsPageDerivedData). */
 export function shipmentDischargeEtaPhaseExpr(alias: string): string {
-  return `${shipmentEffectiveStatusExpr(alias)} IN (${sqlQuoteStatusList(SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES)})`
+  return `${shipmentPageEffectiveStatusExpr(alias)} IN (${sqlQuoteStatusList(SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES)})`
 }
 
 /** Filter list rows by derived status (matches deriveShipmentStatus / shipmentEffectiveStatusExpr). */
@@ -681,7 +699,7 @@ export function appendShipmentStatusFilter(
   }
 
   return {
-    sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
+    sql: ` AND ${shipmentPageEffectiveStatusExpr('sb')} = $${startIndex}`,
     params: [resolved],
     nextIndex: startIndex + 1,
   }
@@ -698,7 +716,7 @@ export function appendShipmentScopeStatusFilter(
   }
 
   return {
-    sql: ` AND ${shipmentEffectiveStatusExpr('sb')} = $${startIndex}`,
+    sql: ` AND ${shipmentPageEffectiveStatusExpr('sb')} = $${startIndex}`,
     params: [resolved],
     nextIndex: startIndex + 1,
   }
