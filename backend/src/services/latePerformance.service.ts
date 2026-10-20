@@ -421,14 +421,24 @@ ${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS 
              * column, then the discharge leg. Contract Performance read only the middle one, so a
              * contract whose ATC lived on the leg or in an override read "-" here while Shipments
              * showed it finished - 8 contracts on the dev copy, one with a different date.
-             * Purely additive: nothing that had an ATC loses it.
+             * Additive except for one thing: a CANCELLED shipment is set aside while the contract has a shipment that is not (1004032300: a cancelled
+             * shipment's override ATC closed a contract whose six live shipments had none). All cancelled: it stays the only record.
+             * Same rule as sqlLastAtaVesselCompleteDischargeForContract.
              */
-            MAX(COALESCE(
-              ${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao_atc', 's2')}::date,
-      sao_atc.ata_discharge_complete::date,
-              s2.ata_discharge_complete::date,
-              vlp_discharge.ata_loading_completed::date
-            )) AS last_ata_vessel_complete_discharge,
+            CASE
+              WHEN COUNT(*) FILTER (WHERE UPPER(COALESCE(s2.status, '')) NOT IN ('CANCELLED', 'CANCELED')) > 0 THEN MAX(COALESCE(
+                ${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao_atc', 's2')}::date,
+                sao_atc.ata_discharge_complete::date,
+                s2.ata_discharge_complete::date,
+                vlp_discharge.ata_loading_completed::date
+              )) FILTER (WHERE UPPER(COALESCE(s2.status, '')) NOT IN ('CANCELLED', 'CANCELED'))
+              ELSE MAX(COALESCE(
+                ${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao_atc', 's2')}::date,
+                sao_atc.ata_discharge_complete::date,
+                s2.ata_discharge_complete::date,
+                vlp_discharge.ata_loading_completed::date
+              ))
+            END AS last_ata_vessel_complete_discharge,
             MAX(COALESCE(s2.eta_discharge_complete::date, vlp_discharge.eta_vessel_complete_discharge::date)) AS last_eta_vessel_complete_discharge,
             MAX(vlp_load.eta_vessel_arrival::date) AS open_standard_eta_vessel_loading
           FROM shipments s2

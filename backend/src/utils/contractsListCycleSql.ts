@@ -15,16 +15,25 @@ import { TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG } from './truckingQuantitySql';
  * contract whose ATC lived on the leg or in an override showed "-" on one page and finished on the
  * other - 8 contracts on the dev copy, one of them with a different date.
  *
- * Purely additive: every row that had an ATC keeps it, and the widening can only fill gaps.
+ * Widening that way is additive: every row that had an ATC keeps it, and it can only fill gaps. The one deliberate exception is the shipment status:
+ * a CANCELLED shipment is set aside while the contract has a shipment that is not. Contract 1004032300 (production 2026-10-20) has six PLANNED shipments with
+ * no ATC and one CANCELLED (STO 1006020263, deleted by SAP) with a KLIP override ATC 2026-10-07; that one ATC read as "the contract has discharged" and took the
+ * contract's 700 MT out of Open on Contract Performance, while Shipping Performance and Shipments, which do not count a cancelled shipment, kept it. A contract
+ * whose shipments are ALL cancelled keeps the cancelled ATC as its only record. Same rule in latePerformance.service (shipment_agg).
  */
 export function sqlLastAtaVesselCompleteDischargeForContract(contractIdExpr: string): string {
-  return `(
-    SELECT MAX(COALESCE(
+  const atc = `COALESCE(
       ${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao_atc', 's_atc')}::date,
       sao_atc.ata_discharge_complete::date,
       s_atc.ata_discharge_complete::date,
       vlp_atc.ata_loading_completed::date
-    ))
+    )`;
+  const live = `UPPER(COALESCE(s_atc.status, '')) NOT IN ('CANCELLED', 'CANCELED')`;
+  return `(
+    SELECT CASE
+      WHEN COUNT(*) FILTER (WHERE ${live}) > 0 THEN MAX(${atc}) FILTER (WHERE ${live})
+      ELSE MAX(${atc})
+    END
     FROM shipments s_atc
     LEFT JOIN shipment_ata_overrides sao_atc ON sao_atc.shipment_id = s_atc.id
     LEFT JOIN LATERAL (
