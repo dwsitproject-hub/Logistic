@@ -221,12 +221,32 @@ export function sqlContractImportStatusExpr(
   // Delete PO → Cancelled for the whole PO.
   // Delete STO: per-STO Cancelled when stoKey is set; PO-wide Cancelled only when
   // every real SAP STO in the latest import is deleted (partial cancel must not hide sibling Close/Open).
+  /*
+   * A Delete PO Status row of the PO, in ANY import - unless the PO has a LIVE STO line (a real STO, neither Delete PO nor Delete STO) that was seen AFTER that row.
+   * The rule is Ryan's (2026-10-06, utils/sapDeletedPoLines.ts): a PO is Cancelled only when every line of it is deleted, and an open line decides. The write side has
+   * kept it for lines of one file; this is the read side for lines of different imports. Production 2026-10-20, KARAWANG: B2B child 1014003154 (PO 1011003154) holds a
+   * header row without an STO from the 30 Sep import with Delete PO Status 'S', while its STO lines of the 19 Oct import are live (GR PO Open, GR STO Close, no flag). Every STO
+   * of that PO read Cancelled, the STO group 1016011366 read Cancelled instead of Close, and Shipping Performance kept 112.1 MT of 1014003192 open that Contract Performance
+   * and Shipments had finished.
+   * "Seen after" is last_seen_at, which every re-import touches (hash-skipped rows included). A PO deleted in SAP is exported again with its lines flagged, so its flagged rows are
+   * the newest and it stays Cancelled; a stale flag on an old header row is older than the lines SAP keeps exporting live. A flag with no last_seen_at stays in force.
+   */
   const deletePoExists = `EXISTS (
           SELECT 1
           FROM sap_processed_data spd_del
           WHERE spd_del.contract_number = ${contractAlias}.contract_id
             ${poMatch('spd_del')}
             AND ${sqlSpdHasDeletePoFlagFromRow('spd_del')}
+            AND NOT EXISTS (
+              SELECT 1
+              FROM sap_processed_data spd_new
+              WHERE spd_new.contract_number = ${contractAlias}.contract_id
+                ${poMatch('spd_new')}
+                AND ${sqlSpdHasRealSapStoKeyExpr('spd_new')}
+                AND NOT (${sqlSpdHasDeletePoFlagFromRow('spd_new')})
+                AND NOT (${sqlSpdHasDeleteStoFlagFromRow('spd_new')})
+                AND spd_new.last_seen_at > spd_del.last_seen_at
+            )
         )`;
   const thisStoDeleted =
     stoKeyExpr && String(stoKeyExpr).trim()
