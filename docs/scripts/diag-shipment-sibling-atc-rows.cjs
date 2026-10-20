@@ -56,8 +56,9 @@ async function call(query) {
   /*
    * B. The other direction: an ACTIVE row whose group has an ATC that the row's OWN-STO ATC does not carry.
    *    - keyed by a real STO (digits): a SIBLING STO's ATC - the row is rightly still active (BG. KALTIM, BG. AS MARINA 10).
-   *    - keyed by an OPERATION (OP- ...) or a KLIP shipment id: the own-STO filter once marked a manually planned shipment (shipment_id MNL-...) foreign, so a shipment that HAD
-   *      discharged read Unloading in the table while its Edit modal read Completed (PO 1001031704, 2026-10-20). Fixed by 6c902ce9; on code without it these rows are listed here.
+   *    - keyed by an OPERATION (OP- ...) or a KLIP shipment id: the voyage is finished only when EVERY member has an ATC (sqlOwnStoDischargeAtc, a5f977c5). A row listed here has a
+   *      member without one - MT. MULIA KARSA 2: three POs, one with an ATC - and is rightly active. A row whose members ALL have an ATC must NOT be here: before a5f977c5 the own-STO
+   *      filter marked every MNL- member foreign, so a voyage that had fully discharged (MT. BIO EXPRESS, DAHLIA, 2026-10-20) read Unloading in the table and Completed in the modal.
    */
   const activeStatus = (r) => !['COMPLETED', 'CANCELLED', ''].includes(String(r.status || '').toUpperCase()) && r.is_unplanned_backlog !== true;
   const heldBack = all.filter((r) => activeStatus(r) && r.ata_vessel_complete_discharge && !r.ata_vessel_complete_discharge_own_sto);
@@ -67,7 +68,7 @@ async function call(query) {
   const sum = (list) => list.reduce((a, r) => a + (Number(r.outstanding_quantity) || 0), 0);
   console.log('\nB. ACTIVE rows with a group ATC and no ATC of their own STO');
   console.log('   STO-keyed (a sibling STO discharged - rightly still active) : ' + String(sibling.length).padStart(4) + ' rows   ' + (mt(sum(sibling)) + ' MT').padStart(12));
-  console.log('   operation-keyed (own ATC dropped - the 6c902ce9 class)       : ' + String(operation.length).padStart(4) + ' rows   ' + (mt(sum(operation)) + ' MT').padStart(12));
+  console.log('   operation-keyed (a member of the voyage has no ATC: active)   : ' + String(operation.length).padStart(4) + ' rows   ' + (mt(sum(operation)) + ' MT').padStart(12));
   for (const r of operation.sort((a, b) => (Number(b.outstanding_quantity) || 0) - (Number(a.outstanding_quantity) || 0)).slice(0, 25)) {
     console.log(
       '      ' + String(r.sto_key || '-').padEnd(26) + String(r.status || '-').padEnd(10) + String(r.vessel_name || '-').padEnd(24) + (mt(r.outstanding_quantity) + ' MT').padStart(10) +
