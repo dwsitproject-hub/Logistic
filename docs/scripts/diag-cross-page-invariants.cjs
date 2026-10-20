@@ -54,6 +54,7 @@ const { isShipmentPageSeaIncoterm } = load('utils/shipmentIncotermScope');
 const {
   shippingPerfOutstandingQtyKgForAggregate,
 } = load('utils/shippingPerformanceOutstandingAgg');
+const { osStageOf } = load('services/shippingPerfContractGrainOs.service');
 
 const PRODUCT = (process.argv[2] || '').trim().toUpperCase();
 const SITE = (process.argv[3] || '').trim().toUpperCase();
@@ -86,14 +87,15 @@ const TOLERANCE_KG = 1000;
   const started = Date.now();
   const sp = await runShippingPerformance(req, 'rows');
   const spRows = sp.rows.filter(inScope);
-  const spOnGoing = spRows.filter(
-    (r) =>
-      r.is_unplanned_backlog === true ||
-      (up(r.status) !== 'COMPLETED' &&
-        up(r.status) !== 'CANCELLED' &&
-        up(r.status) !== '' &&
-        up(r.status) !== 'UNPLANNED'),
-  );
+  /*
+   * On Going by the stage the PAGE reads for outstanding and card membership: os_status (narrowed to the row's own STO / operation), else status
+   * (osStageOf). This read r.status, so a row kept COMPLETED for the table but On Going for the cards moved the total (SIT 2026-10-20: 292,965 MT here
+   * against 294,839 MT in diag-invariant2-gap.cjs, which already used osStageOf).
+   */
+  const spOnGoing = spRows.filter((r) => {
+    const st = up(osStageOf(r));
+    return r.is_unplanned_backlog === true || (st !== 'COMPLETED' && st !== 'CANCELLED' && st !== '' && st !== 'UNPLANNED');
+  });
   const spBacklogKg = spRows
     .filter((r) => r.is_unplanned_backlog === true)
     .reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
