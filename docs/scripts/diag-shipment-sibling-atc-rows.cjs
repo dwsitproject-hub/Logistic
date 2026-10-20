@@ -1,5 +1,5 @@
 /*
- * READ-ONLY: which Shipments rows are COMPLETED only because a SIBLING STO discharged?
+ * READ-ONLY: which Shipments rows rest on a SIBLING STO ATC (A: COMPLETED on it), and which ACTIVE rows lost their own ATC (B)?
  *
  *   cd /opt/klip && git fetch origin SIT --quiet && git show origin/SIT:docs/scripts/diag-shipment-sibling-atc-rows.cjs \
  *     | docker exec -i klip-backend node - [--plant="TANJUNG PURA"] [--from=2026-01-01] [--to=2026-10-20]
@@ -39,17 +39,42 @@ async function call(query) {
 }
 
 (async () => {
-  const LIMIT = 200;
-  const base = { dateFrom: from, dateTo: to, status: 'COMPLETED', limit: String(LIMIT), ...(plant ? { plant } : {}) };
-  console.log('scope: ' + (plant || 'all sites') + ' / ' + from + '..' + to + ' / list status COMPLETED');
-  const rows = [];
+  const LIMIT = 500;
+  // Every row, not only the COMPLETED ones: part B below needs the ACTIVE rows too.
+  const base = { dateFrom: from, dateTo: to, limit: String(LIMIT), ...(plant ? { plant } : {}) };
+  console.log('scope: ' + (plant || 'all sites') + ' / ' + from + '..' + to + ' / every list row');
+  const all = [];
   for (let page = 1; page <= 200; page += 1) {
     const p = await call({ ...base, page: String(page) });
     const chunk = (p && p.data && (Array.isArray(p.data) ? p.data : p.data.shipments || p.data.items)) || [];
-    rows.push(...chunk);
+    all.push(...chunk);
     if (chunk.length < LIMIT) break;
   }
-  console.log('COMPLETED rows read: ' + rows.length);
+  const rows = all.filter((r) => String(r.status || '').toUpperCase() === 'COMPLETED');
+  console.log('rows read: ' + all.length + '   of them COMPLETED: ' + rows.length);
+
+  /*
+   * B. The other direction: an ACTIVE row whose group has an ATC that the row's OWN-STO ATC does not carry.
+   *    - keyed by a real STO (digits): a SIBLING STO's ATC - the row is rightly still active (BG. KALTIM, BG. AS MARINA 10).
+   *    - keyed by an OPERATION (OP- ...) or a KLIP shipment id: the own-STO filter once marked a manually planned shipment (shipment_id MNL-...) foreign, so a shipment that HAD
+   *      discharged read Unloading in the table while its Edit modal read Completed (PO 1001031704, 2026-10-20). Fixed by 6c902ce9; on code without it these rows are listed here.
+   */
+  const activeStatus = (r) => !['COMPLETED', 'CANCELLED', ''].includes(String(r.status || '').toUpperCase()) && r.is_unplanned_backlog !== true;
+  const heldBack = all.filter((r) => activeStatus(r) && r.ata_vessel_complete_discharge && !r.ata_vessel_complete_discharge_own_sto);
+  const isStoKey = (r) => /^\d+$/.test(String(r.sto_key || '').trim());
+  const sibling = heldBack.filter(isStoKey);
+  const operation = heldBack.filter((r) => !isStoKey(r));
+  const sum = (list) => list.reduce((a, r) => a + (Number(r.outstanding_quantity) || 0), 0);
+  console.log('\nB. ACTIVE rows with a group ATC and no ATC of their own STO');
+  console.log('   STO-keyed (a sibling STO discharged - rightly still active) : ' + String(sibling.length).padStart(4) + ' rows   ' + (mt(sum(sibling)) + ' MT').padStart(12));
+  console.log('   operation-keyed (own ATC dropped - the 6c902ce9 class)       : ' + String(operation.length).padStart(4) + ' rows   ' + (mt(sum(operation)) + ' MT').padStart(12));
+  for (const r of operation.sort((a, b) => (Number(b.outstanding_quantity) || 0) - (Number(a.outstanding_quantity) || 0)).slice(0, 25)) {
+    console.log(
+      '      ' + String(r.sto_key || '-').padEnd(26) + String(r.status || '-').padEnd(10) + String(r.vessel_name || '-').padEnd(24) + (mt(r.outstanding_quantity) + ' MT').padStart(10) +
+        '   group ATC ' + String(r.ata_vessel_complete_discharge).slice(0, 10) + '   POs ' + String(r.po_numbers || '-').slice(0, 40),
+    );
+  }
+  console.log('\nA. COMPLETED rows that rest on a sibling STO ATC alone');
 
   const changes = rows.filter(
     (r) =>
