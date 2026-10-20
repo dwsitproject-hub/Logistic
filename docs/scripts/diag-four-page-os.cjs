@@ -42,6 +42,7 @@ const load = (m) => require(path.join(DIST, m));
 const { getShipments } = load('controllers/shipment.controller');
 const { getTruckingOperations } = load('controllers/trucking.controller');
 const { runShippingPerformance } = load('services/shippingPerformance.service');
+const { osStageOf } = load('services/shippingPerfContractGrainOs.service');
 const {
   parseLatePerformanceFilters,
   loadLatePerformanceRows,
@@ -205,11 +206,13 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
     'rows',
   );
   const spRows = sp.rows.filter((r) => up(r.plant_site) === SITE);
+  // On Going by the stage the PAGE reads for outstanding and card membership (os_status, else status): the same rule as diag-invariant2-gap.cjs. This read
+  // r.status, which moved the total (SIT 2026-10-20, BONTANG: 92,376.5 MT here against 94,251 MT there).
   const spKg = spRows
     .filter(
       (r) =>
         r.is_unplanned_backlog === true ||
-        !['COMPLETED', 'CANCELLED', '', 'UNPLANNED'].includes(up(r.status)),
+        !['COMPLETED', 'CANCELLED', '', 'UNPLANNED'].includes(up(osStageOf(r))),
     )
     .reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
 
