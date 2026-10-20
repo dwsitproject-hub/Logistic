@@ -205,7 +205,17 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
     { query: { scope: 'ytd', dateFrom: FROM, dateTo: TO } },
     'rows',
   );
-  const spRows = sp.rows.filter((r) => up(r.plant_site) === SITE);
+  /*
+   * The page filters Shipping Performance at CONTRACT grain: a row whose contracts differ in site carries contract_scope (one group per site with the
+   * outstanding it was awarded for those contracts) and the page expands it before any filter runs (expandContractScopeRows). Filtering rows by the
+   * ROW's plant_site put a MERAUKE contract on a BONTANG vessel row into BONTANG: SIT 2026-10-20, 1004031855, 700 MT, which Contract Performance and
+   * Shipments (contract grain) place at MERAUKE.
+   */
+  const spRows = sp.rows.filter((r) => Array.isArray(r.contract_scope) || up(r.plant_site) === SITE);
+  const spKgOf = (r) =>
+    Array.isArray(r.contract_scope)
+      ? r.contract_scope.filter((g) => up(g.plant_site) === SITE).reduce((a, g) => a + Number(g.outstanding_qty_aggregate || 0), 0)
+      : shippingPerfOutstandingQtyKgForAggregate(r);
   // On Going by the stage the PAGE reads for outstanding and card membership (os_status, else status): the same rule as diag-invariant2-gap.cjs. This read
   // r.status, which moved the total (SIT 2026-10-20, BONTANG: 92,376.5 MT here against 94,251 MT there).
   const spKg = spRows
@@ -214,7 +224,7 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
         r.is_unplanned_backlog === true ||
         !['COMPLETED', 'CANCELLED', '', 'UNPLANNED'].includes(up(osStageOf(r))),
     )
-    .reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+    .reduce((a, r) => a + spKgOf(r), 0);
 
   // ---- Contract Performance, through its own entry point ------------------------------------
   const cpFilters = parseLatePerformanceFilters({ query: { dateFrom: FROM, dateTo: TO } }, 'rows');

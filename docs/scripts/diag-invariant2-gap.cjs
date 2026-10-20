@@ -49,6 +49,33 @@ const TOLERANCE_KG = 1000;
 const up = (v) => String(v === null || v === undefined ? '' : v).trim().toUpperCase();
 const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 });
 const inScope = (r) => (!PRODUCT || up(r.product).indexOf(PRODUCT) >= 0) && (!SITE || up(r.plant_site) === SITE);
+
+/*
+ * What the PAGE does before any filter: a Shipping Performance row whose contracts differ in product / supplier / source / incoterm / site carries
+ * contract_scope (one group per distinct set, with the outstanding the row was awarded for it) and the page expands it into one row per group
+ * (frontend/src/lib/shippingPerfContractScope.ts, expandContractScopeRows). Filtering the UNexpanded rows by the row's own site or product counted a
+ * MERAUKE contract on a BONTANG vessel row in BONTANG: SIT 2026-10-20, 1004031855, 700 MT, which Contract Performance and Shipments (contract grain)
+ * place at MERAUKE.
+ */
+const SCOPE_FIELDS = ['product', 'incoterm', 'source_type', 'supplier', 'group_name', 'plant_site', 'contract_date'];
+const expandContractScope = (rows) => {
+  const out = [];
+  for (const row of rows) {
+    const groups = row.contract_scope;
+    if (!Array.isArray(groups) || groups.length < 1) {
+      out.push(row);
+      continue;
+    }
+    for (const g of groups) {
+      const r = Object.assign({}, row);
+      for (const f of SCOPE_FIELDS) r[f] = g[f];
+      r.contract_number = g.contract_number;
+      r.outstanding_qty_aggregate = g.outstanding_qty_aggregate;
+      out.push(r);
+    }
+  }
+  return out;
+};
 const contractsOf = (row) =>
   String(row.contract_number ?? '')
     .split(',')
@@ -61,7 +88,7 @@ const contractsOf = (row) =>
   // ---- Shipping Performance, through its own entry point ------------------------------------
   invalidateShippingPerformanceRowCache();
   const sp = await runShippingPerformance({ query: { scope: 'ytd', dateFrom: DATE_FROM, dateTo: DATE_TO } }, 'rows');
-  const spRows = sp.rows.filter(inScope);
+  const spRows = expandContractScope(sp.rows).filter(inScope);
   // The stage the PAGE reads for outstanding and card membership: os_status (narrowed to the row's own STO / operation), else status. This used to
   // read status, so a row kept COMPLETED for the table but On Going for the cards was reported as class B / D wrongly.
   const isOnGoing = (r) => {
