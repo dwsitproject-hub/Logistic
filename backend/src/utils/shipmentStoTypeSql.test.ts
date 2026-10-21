@@ -128,12 +128,16 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain(pick.trim());
   });
 
-  it('shipmentListSeaStoKeyExpr prefers Type V STO for FOB vessel rows', () => {
-    const sql = shipmentListSeaStoKeyExpr('c', 'l', 's');
+  it('shipmentListSeaStoKeyExpr prefers Type V STO for FOB vessel rows, and a KLIP OP- voyage stays its own row', () => {
+    const sql = shipmentListSeaStoKeyExpr('c', 'l', 's').replace(/\s+/g, ' ');
     expect(sql).toContain("= 'FOB'");
     expect(sql).toContain('vessel_name');
-    expect(sql).toContain(contractSeaVesselStoNumberPickExpr('c').trim());
-    expect(sql).toContain(shipmentListStoKeyExpr('c', 'l', 's').trim());
+    expect(sql).toContain(contractSeaVesselStoNumberPickExpr('c').trim().replace(/\s+/g, ' '));
+    expect(sql).toContain(shipmentListStoKeyExpr('c', 'l', 's').trim().replace(/\s+/g, ' '));
+    // Add New on a PO that already has a vessel: the new OP- is not folded into the Type V STO.
+    expect(sql).toContain("operation_id::text), '') ~ '^OP-'");
+    expect(sql).toContain("IS DISTINCT FROM 'SAP_IMPORT'");
+    expect(sql).toContain('THEN NULLIF(TRIM(s.operation_id::text), \'\')');
   });
 
   it('shipmentListSeaDisplayStoNumberExpr wraps sea sto key', () => {

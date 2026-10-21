@@ -13,9 +13,14 @@ import { shipmentEffectiveStatusExpr, shipmentPageEffectiveStatusExpr } from './
 const ROW_COLUMNS = `
   status, is_contract_sap_closed, is_contract_os_within_band,
   ata_vessel_complete_discharge, ata_vessel_complete_discharge_own_sto,
-  ata_vessel_start_discharging, ata_vessel_berthed_at_discharge_port, ata_vessel_arrive_at_discharge_port,
-  ata_vessel_sailed_from_loading_port, ata_vessel_completed_loading, ata_vessel_start_loading,
-  ata_vessel_berthed_at_loading_port, ata_vessel_arrival_at_loading_port,
+  ata_vessel_start_discharging, ata_vessel_start_discharging_own_sto,
+  ata_vessel_berthed_at_discharge_port, ata_vessel_berthed_at_discharge_port_own_sto,
+  ata_vessel_arrive_at_discharge_port, ata_vessel_arrive_at_discharge_port_own_sto,
+  ata_vessel_sailed_from_loading_port, ata_vessel_sailed_from_loading_port_own_sto,
+  ata_vessel_completed_loading, ata_vessel_completed_loading_own_sto,
+  ata_vessel_start_loading, ata_vessel_start_loading_own_sto,
+  ata_vessel_berthed_at_loading_port, ata_vessel_berthed_at_loading_port_own_sto,
+  ata_vessel_arrival_at_loading_port, ata_vessel_arrival_at_loading_port_own_sto,
   eta_arrival, eta_berthed, eta_loading_start, eta_loading_complete, eta_sailed,
   eta_discharge_arrival, eta_discharge_berthed, eta_discharge_start, eta_vessel_complete_discharge,
   quantity_delivered, quantity_delivered_klip`;
@@ -39,6 +44,13 @@ describe('the Shipments page reads the own-STO discharge ATC for the stage of a 
       status: "'SAILED'",
       ata_vessel_complete_discharge: "DATE '2026-10-03'",
       ata_vessel_sailed_from_loading_port: "DATE '2026-09-20'",
+      ata_vessel_sailed_from_loading_port_own_sto: "DATE '2026-09-20'",
+    }),
+    // STO 1006020666: sibling start-discharging on the group, this STO has only arrived at LP.
+    rowSql('sibling-start-discharge', {
+      status: "'ARRIVED_LP'",
+      ata_vessel_start_discharging: "DATE '2026-10-18'",
+      ata_vessel_arrival_at_loading_port_own_sto: "DATE '2026-10-10'",
     }),
     rowSql('sibling-atc-planned', {
       status: "'PLANNED'",
@@ -60,7 +72,7 @@ describe('the Shipments page reads the own-STO discharge ATC for the stage of a 
     const r = await query(
       `SELECT label,
               ${shipmentPageEffectiveStatusExpr('t')} AS page_status,
-              ${shipmentEffectiveStatusExpr('t', { dischargeColumn: 'ata_vessel_complete_discharge_own_sto' })} AS os_status,
+              ${shipmentPageEffectiveStatusExpr('t')} AS os_status,
               ${shipmentEffectiveStatusExpr('t')} AS group_status
          FROM (${rows}) t`,
     );
@@ -69,6 +81,8 @@ describe('the Shipments page reads the own-STO discharge ATC for the stage of a 
     // the two rows of production: active on the page, as they already were for the OS
     expect(by['sibling-atc-sailed'].page_status).toBe('SAILED');
     expect(by['sibling-atc-planned'].page_status).toBe('PLANNED');
+    expect(by['sibling-start-discharge'].page_status).toBe('ARRIVED_LP');
+    expect(by['sibling-start-discharge'].group_status).toBe('UNLOADING');
     // ... where the group-wide reading made them COMPLETED
     expect(by['sibling-atc-sailed'].group_status).toBe('COMPLETED');
     expect(by['sibling-atc-planned'].group_status).toBe('COMPLETED');

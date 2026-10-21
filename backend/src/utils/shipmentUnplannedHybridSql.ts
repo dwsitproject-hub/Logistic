@@ -452,16 +452,24 @@ export function unplannedContractBacklogRowSelectSql(
     NULL::date AS eta_discharge_complete,
     NULL::date AS eta_vessel_complete_discharge,
     NULL::date AS ata_vessel_arrival_at_loading_port,
+    NULL::date AS ata_vessel_arrival_at_loading_port_own_sto,
     NULL::date AS ata_vessel_berthed_at_loading_port,
+    NULL::date AS ata_vessel_berthed_at_loading_port_own_sto,
     NULL::date AS ata_vessel_start_loading,
+    NULL::date AS ata_vessel_start_loading_own_sto,
     NULL::date AS ata_vessel_completed_loading,
+    NULL::date AS ata_vessel_completed_loading_own_sto,
     NULL::date AS ata_vessel_sailed_from_loading_port,
+    NULL::date AS ata_vessel_sailed_from_loading_port_own_sto,
     NULL::date AS ata_vessel_arrive_at_discharge_port,
+    NULL::date AS ata_vessel_arrive_at_discharge_port_own_sto,
     NULL::date AS ata_vessel_berthed_at_discharge_port,
+    NULL::date AS ata_vessel_berthed_at_discharge_port_own_sto,
     NULL::date AS ata_vessel_start_discharging,
+    NULL::date AS ata_vessel_start_discharging_own_sto,
     NULL::date AS ata_vessel_complete_discharge,
-    -- Same shape as shipment_base: every variant must expose this or the summary fails on the one
-    -- that does not. A backlog row has no shipment, so both discharge columns are NULL alike.
+    -- Same shape as shipment_base: every variant must expose these or the summary fails on the one
+    -- that does not. A backlog row has no shipment, so the own-STO ladder is NULL.
     NULL::date AS ata_vessel_complete_discharge_own_sto,
     c.quantity_ordered AS contract_qty,
     NULL::numeric AS sto_quantity,

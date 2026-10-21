@@ -178,8 +178,12 @@ export function contractHasSeaVesselStoOnContractSql(contractAlias = 'c'): strin
 }
 
 /**
- * List grouping key — for FOB mixed V+T POs with vessel execution, prefer Type V STO.
+ * List grouping key — for FOB mixed V+T POs of one voyage, prefer Type V STO.
  * CIF/CFR and non-vessel rows fall back to shipmentListStoKeyExpr.
+ *
+ * A KLIP plan with its own OP- id is a voyage of its own (Add New on a PO that already has a vessel).
+ * It must not fold into the contract's Type V STO, or Vessel B replaces Vessel A on the one table row.
+ * SAP-imported shells stay on the Type V key, so the V and T legs of that imported voyage stay one row.
  */
 export function shipmentListSeaStoKeyExpr(
   contractAlias = 'c',
@@ -189,7 +193,40 @@ export function shipmentListSeaStoKeyExpr(
   const inc = contractEffectiveIncotermExpr(contractAlias);
   const baseKey = shipmentListStoKeyExpr(contractAlias, spdAlias, shipmentAlias);
   const seaStoPick = contractSeaVesselStoNumberPickExpr(contractAlias);
+  const operationId = `NULLIF(TRIM(${shipmentAlias}.operation_id::text), '')`;
+  const ownVoyage = `${operationId} ~ '^OP-'
+        AND COALESCE(${shipmentAlias}.operation_id_source, '') IS DISTINCT FROM 'SAP_IMPORT'
+        AND ${operationId} IS DISTINCT FROM (${seaStoPick})
+        AND ${operationId} IS DISTINCT FROM NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '')`;
   return `COALESCE(
+    CASE
+      WHEN (${inc}) = 'FOB'
+        AND NULLIF(TRIM(${shipmentAlias}.vessel_name), '') IS NOT NULL
+        AND (${seaStoPick}) IS NOT NULL
+      THEN CASE
+        WHEN ${ownVoyage}
+        THEN ${operationId}
+        ELSE (${seaStoPick})
+      END
+      ELSE NULL
+    END,
+    ${baseKey}
+  )`;
+}
+
+/**
+ * STO number shown on the row. A second FOB voyage is its own group (see shipmentListSeaStoKeyExpr),
+ * but the number shown is still the Type V STO, not the operation id.
+ */
+export function shipmentListSeaDisplayStoNumberExpr(
+  contractAlias = 'c',
+  spdAlias = 'l',
+  shipmentAlias = 's',
+): string {
+  const inc = contractEffectiveIncotermExpr(contractAlias);
+  const seaStoPick = contractSeaVesselStoNumberPickExpr(contractAlias);
+  const base = shipmentListDisplayStoNumberExpr(contractAlias, spdAlias, shipmentAlias);
+  return `NULLIF(TRIM((COALESCE(
     CASE
       WHEN (${inc}) = 'FOB'
         AND NULLIF(TRIM(${shipmentAlias}.vessel_name), '') IS NOT NULL
@@ -197,17 +234,8 @@ export function shipmentListSeaStoKeyExpr(
       THEN (${seaStoPick})
       ELSE NULL
     END,
-    ${baseKey}
-  )`;
-}
-
-/** Display STO for list UI — mirrors shipmentListSeaStoKeyExpr formatting. */
-export function shipmentListSeaDisplayStoNumberExpr(
-  contractAlias = 'c',
-  spdAlias = 'l',
-  shipmentAlias = 's',
-): string {
-  return `NULLIF(TRIM((${shipmentListSeaStoKeyExpr(contractAlias, spdAlias, shipmentAlias)})::text), '')`;
+    ${base}
+  ))::text), '')`;
 }
 
 /**

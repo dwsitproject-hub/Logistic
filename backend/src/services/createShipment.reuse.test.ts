@@ -40,10 +40,20 @@ describe('findReusableShipmentForPlan', () => {
     expect(activityMock).toHaveBeenCalledWith(expect.anything(), 'dahlia-shipment', CONTRACT);
   });
 
-  it('the shell the SAP import made for the PO (no user activity) is still filled in by the first plan', async () => {
+  it('the shell the SAP import made for the PO (no user activity, no vessel yet) is still filled in by the first plan', async () => {
     answer({ candidates: ['sap-shell'] });
     activityMock.mockResolvedValue(false);
     await expect(findReusableShipmentForPlan({ contractUuid: CONTRACT, operationId: 'OP-NEW', vesselName: 'X' })).resolves.toBe('sap-shell');
+    const candidateSql = String(queryMock.mock.calls.find(([sql]) => String(sql).includes('ORDER BY created_at DESC'))?.[0]).replace(/\s+/g, ' ');
+    expect(candidateSql).toContain("NULLIF(TRIM(vessel_name), '') IS NULL");
+  });
+
+  it('a SAP shell that already names a vessel is that voyage: another vessel gets a row of its own', async () => {
+    // FOB: STO A / PO A / Vessel A already on the imported row. Add New with Vessel B must not UPDATE it.
+    answer({ candidates: [] });
+    await expect(findReusableShipmentForPlan({ contractUuid: CONTRACT, operationId: 'OP-NEW', vesselName: 'VESSEL B' })).resolves.toBeNull();
+    const candidateSql = String(queryMock.mock.calls.find(([sql]) => String(sql).includes('ORDER BY created_at DESC'))?.[0]).replace(/\s+/g, ' ');
+    expect(candidateSql).toContain("NULLIF(TRIM(vessel_name), '') IS NULL");
   });
 
   it('skips a touched row and takes the first untouched one, newest first', async () => {

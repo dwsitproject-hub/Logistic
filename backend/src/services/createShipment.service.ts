@@ -119,7 +119,8 @@ async function upsertPoQtyAssignment(
  * A row is reusable only when
  *   1. it carries the same operation id (the plan is being re-submitted), or
  *   2. it is on the same vessel and that voyage is not finished (a finished voyage is history, not a draft), or
- *   3. it is a shell no user has touched (hasKlipShipmentActivity): the row the SAP import created for the PO, which the first KLIP plan fills in.
+ *   3. it is a shell no user has touched AND it names no vessel yet: the row the SAP import created for the PO, which the first KLIP plan fills in.
+ * A shell that already names a vessel is that voyage. Planning the same PO on another vessel inserts a row (FOB: STO A / Vessel A, then Vessel B).
  */
 export async function findReusableShipmentForPlan(args: {
   contractUuid: string;
@@ -154,6 +155,7 @@ export async function findReusableShipmentForPlan(args: {
     `SELECT id FROM shipments
       WHERE contract_id = $1::uuid
         AND COALESCE(status, '') <> 'CANCELLED'
+        AND NULLIF(TRIM(vessel_name), '') IS NULL
       ORDER BY created_at DESC`,
     [contractUuid],
   );

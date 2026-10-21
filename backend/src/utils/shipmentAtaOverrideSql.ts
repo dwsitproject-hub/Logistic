@@ -148,6 +148,24 @@ export function sqlEffectiveAtaCompleteDischarge(sAlias = 's', vlpAlias = 'vlpd'
 }
 
 /**
+ * One ATA milestone of the group's OWN STO.
+ *
+ * A numeric STO key keeps the date only from members whose `shipment_id` is empty or equals that key.
+ * A sibling STO in the same FOB vessel group is foreign: its start-discharging must not move this row
+ * to Unloading (STO 1006020666, BG. AS MARINA, grouped with 1006020342).
+ *
+ * A key that is not an STO (OP-…, MNL-…) is one voyage, so the milestone is the MAX of every member.
+ * A null key is not an STO and takes the same MAX. This is not the ATC rule: ATC on an operation group
+ * finishes the voyage only when every live member has one (`sqlOwnStoDischargeAtc`).
+ */
+export function sqlOwnStoMilestone(dateExpr: string, groupKeyExpr: string, shipmentAlias = 's'): string {
+  const key = `TRIM((${groupKeyExpr})::text)`;
+  const keyIsSto = `${key} ~ '^[0-9]+$'`;
+  const ownMember = `(NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '') IS NULL OR TRIM(${shipmentAlias}.shipment_id::text) = ${key})`;
+  return `MAX(${dateExpr}) FILTER (WHERE CASE WHEN ${keyIsSto} THEN ${ownMember} ELSE TRUE END)`;
+}
+
+/**
  * The discharge ATC that counts for ONE group - `ata_vessel_complete_discharge_own_sto`. The rule depends on what the group is keyed by.
  *
  * A group keyed by a real SAP STO (digits): the ATC of the shipments that belong to THAT STO (shipment_id NULL, or equal to the key). A shipment whose own shipment_id is
@@ -178,35 +196,48 @@ export function sqlOwnStoDischargeAtc(atcExpr: string, groupKeyExpr: string, shi
 /**
  * List query ATA select (uses vlp_l / vlp_d CTE aliases).
  *
- * `groupKeyExpr` adds `ata_vessel_complete_discharge_own_sto`: the same discharge ATA, but counting
- * only the rows whose own STO is the one this group is keyed by.
+ * `groupKeyExpr` adds an `*_own_sto` column beside every milestone the page status reads.
+ * The plain columns stay a MAX over the whole group, so the list still shows the group's dates.
+ * The stage reads the own-STO columns.
  *
  * For FOB with a vessel, `shipmentListSeaStoKeyExpr` keys a row by a contract-level STO pick rather
  * than by the shipment's own STO, so a contract holding two shipments on two STOs puts both in one
- * group. `MAX()` then lets a finished voyage's ATA mark a group whose own shipments have no ATA at
- * all as discharged - the execution arm drops the group as finished while the backlog rejects those
- * contracts for holding live shipments, and their quantity lands in neither. Measured on the dev
- * copy 2026-09-16: 286 FOB shipments are regrouped this way, 40 of them already discharged; STO
- * 1006019867 cost 3 contracts / 2,700 MT.
+ * group. `MAX()` then lets a sibling voyage's ATA move this row: a finished sibling marked the group
+ * discharged (STO 1006019867, 2,700 MT, 2026-09-16), and a sibling that had started discharging marked
+ * STO 1006020666 Unloading while its own dates only reach Arrived LP (BG. AS MARINA, production).
  *
- * The plain column is untouched, so the list still shows the group's ATA as it always has; only the
- * OS path reads the filtered one. Rows carrying no STO of their own stay counted either way - they
- * have no other group to belong to. The column is emitted even without `groupKeyExpr` (where it is
- * simply the same value), because every shipment_base variant has to expose the same columns or the
- * summary refresh fails on the one that does not.
+ * Without `groupKeyExpr` each own-STO column is the same MAX, because every shipment_base variant
+ * has to expose the same columns or the summary refresh fails on the one that does not.
  */
 export function buildShipmentListAtaSelectSql(groupKeyExpr?: string): string {
+  const arrivalLp = `COALESCE(sao.ata_arrival, s.ata_arrival, vlp_l.vlp_load_ata_va)`;
+  const berthedLp = `COALESCE(sao.ata_berthed, s.ata_berthed, vlp_l.vlp_load_ata_vb)`;
+  const startLoad = `COALESCE(sao.ata_loading_start, s.ata_loading_start, vlp_l.vlp_load_ata_ls)`;
+  const completeLoad = `COALESCE(sao.ata_loading_complete, s.ata_loading_complete, vlp_l.vlp_load_ata_lc)`;
+  const sailed = `COALESCE(sao.ata_sailed, s.ata_sailed, vlp_l.vlp_load_ata_vs)`;
+  const arriveDp = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_arrival')}, sao.ata_discharge_arrival, s.ata_discharge_arrival, vlp_d.vlp_disc_ata_va)`;
+  const berthedDp = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed')}, sao.ata_discharge_berthed, s.ata_discharge_berthed, vlp_d.vlp_disc_ata_vb)`;
+  const startDisc = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_start')}, sao.ata_discharge_start, s.ata_discharge_start, vlp_d.vlp_disc_ata_ls)`;
   const atc = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete')}, sao.ata_discharge_complete, s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)`;
+  const own = (expr: string) => (groupKeyExpr ? sqlOwnStoMilestone(expr, groupKeyExpr, 's') : `MAX(${expr})`);
   const ownStoAtc = groupKeyExpr ? sqlOwnStoDischargeAtc(atc, groupKeyExpr, 's') : `MAX(${atc})`;
   return `
-          MAX(COALESCE(sao.ata_arrival, s.ata_arrival, vlp_l.vlp_load_ata_va)) as ata_vessel_arrival_at_loading_port,
-          MAX(COALESCE(sao.ata_berthed, s.ata_berthed, vlp_l.vlp_load_ata_vb)) as ata_vessel_berthed_at_loading_port,
-          MAX(COALESCE(sao.ata_loading_start, s.ata_loading_start, vlp_l.vlp_load_ata_ls)) as ata_vessel_start_loading,
-          MAX(COALESCE(sao.ata_loading_complete, s.ata_loading_complete, vlp_l.vlp_load_ata_lc)) as ata_vessel_completed_loading,
-          MAX(COALESCE(sao.ata_sailed, s.ata_sailed, vlp_l.vlp_load_ata_vs)) as ata_vessel_sailed_from_loading_port,
-          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_arrival')}, sao.ata_discharge_arrival, s.ata_discharge_arrival, vlp_d.vlp_disc_ata_va)) as ata_vessel_arrive_at_discharge_port,
-          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed')}, sao.ata_discharge_berthed, s.ata_discharge_berthed, vlp_d.vlp_disc_ata_vb)) as ata_vessel_berthed_at_discharge_port,
-          MAX(COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_start')}, sao.ata_discharge_start, s.ata_discharge_start, vlp_d.vlp_disc_ata_ls)) as ata_vessel_start_discharging,
+          MAX(${arrivalLp}) as ata_vessel_arrival_at_loading_port,
+          ${own(arrivalLp)} as ata_vessel_arrival_at_loading_port_own_sto,
+          MAX(${berthedLp}) as ata_vessel_berthed_at_loading_port,
+          ${own(berthedLp)} as ata_vessel_berthed_at_loading_port_own_sto,
+          MAX(${startLoad}) as ata_vessel_start_loading,
+          ${own(startLoad)} as ata_vessel_start_loading_own_sto,
+          MAX(${completeLoad}) as ata_vessel_completed_loading,
+          ${own(completeLoad)} as ata_vessel_completed_loading_own_sto,
+          MAX(${sailed}) as ata_vessel_sailed_from_loading_port,
+          ${own(sailed)} as ata_vessel_sailed_from_loading_port_own_sto,
+          MAX(${arriveDp}) as ata_vessel_arrive_at_discharge_port,
+          ${own(arriveDp)} as ata_vessel_arrive_at_discharge_port_own_sto,
+          MAX(${berthedDp}) as ata_vessel_berthed_at_discharge_port,
+          ${own(berthedDp)} as ata_vessel_berthed_at_discharge_port_own_sto,
+          MAX(${startDisc}) as ata_vessel_start_discharging,
+          ${own(startDisc)} as ata_vessel_start_discharging_own_sto,
           MAX(${atc}) as ata_vessel_complete_discharge,
           ${ownStoAtc} as ata_vessel_complete_discharge_own_sto,`;
 }

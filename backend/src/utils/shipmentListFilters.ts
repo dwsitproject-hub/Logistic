@@ -579,19 +579,20 @@ export function shipmentHasDeliveryQtyExpr(alias: string): string {
  */
 export function shipmentEffectiveStatusExpr(
   alias: string,
-  opts: { dischargeColumn?: string } = {},
+  opts: { dischargeColumn?: string; milestoneSuffix?: string } = {},
 ): string {
   const f = alias
   /*
-   * `dischargeColumn` lets the OS path read `ata_vessel_complete_discharge_own_sto` instead.
+   * `dischargeColumn` lets the page read `ata_vessel_complete_discharge_own_sto`.
+   * `milestoneSuffix` (`_own_sto`) does the same for every earlier rung.
    *
-   * The plain column is a MAX over the whole STO group, and for FOB a group can contain a shipment
-   * whose own STO is a different one (see buildShipmentListAtaSelectSql) - so a finished voyage can
-   * mark a group of still-planned shipments as COMPLETED. The list column keeps the group-wide
-   * value, which is what the page has always displayed; only the OS buckets use the narrowed one,
-   * because only they decide whether a contract's quantity is still counted anywhere.
+   * The plain columns are a MAX over the whole STO group. For FOB a group can contain a shipment
+   * whose own STO is a different one (see buildShipmentListAtaSelectSql), so a sibling's date can
+   * move this row: a finished sibling to COMPLETED, a sibling that has started discharging to
+   * UNLOADING. The list still displays the group-wide dates. The page stage reads the narrowed ones.
    */
   const atc = `${f}.${opts.dischargeColumn ?? 'ata_vessel_complete_discharge'}`;
+  const mile = (name: string) => `${f}.${name}${opts.milestoneSuffix ?? ''}`;
   return `(
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
@@ -612,14 +613,14 @@ export function shipmentEffectiveStatusExpr(
        * the aggregates apply to avoid overstating. Testing each contract sidesteps that entirely.
        */
       WHEN COALESCE(${f}.is_contract_os_within_band, FALSE) IS TRUE THEN 'COMPLETED'
-      WHEN ${f}.ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'
-      WHEN ${f}.ata_vessel_berthed_at_discharge_port IS NOT NULL THEN 'BERTHED_DP'
-      WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED_DP'
-      WHEN ${f}.ata_vessel_sailed_from_loading_port IS NOT NULL THEN 'SAILED'
-      WHEN ${f}.ata_vessel_completed_loading IS NOT NULL THEN 'COMPLETED_LOADING'
-      WHEN ${f}.ata_vessel_start_loading IS NOT NULL THEN 'LOADING'
-      WHEN ${f}.ata_vessel_berthed_at_loading_port IS NOT NULL THEN 'BERTHED_LP'
-      WHEN ${f}.ata_vessel_arrival_at_loading_port IS NOT NULL THEN 'ARRIVED_LP'
+      WHEN ${mile('ata_vessel_start_discharging')} IS NOT NULL THEN 'UNLOADING'
+      WHEN ${mile('ata_vessel_berthed_at_discharge_port')} IS NOT NULL THEN 'BERTHED_DP'
+      WHEN ${mile('ata_vessel_arrive_at_discharge_port')} IS NOT NULL THEN 'ARRIVED_DP'
+      WHEN ${mile('ata_vessel_sailed_from_loading_port')} IS NOT NULL THEN 'SAILED'
+      WHEN ${mile('ata_vessel_completed_loading')} IS NOT NULL THEN 'COMPLETED_LOADING'
+      WHEN ${mile('ata_vessel_start_loading')} IS NOT NULL THEN 'LOADING'
+      WHEN ${mile('ata_vessel_berthed_at_loading_port')} IS NOT NULL THEN 'BERTHED_LP'
+      WHEN ${mile('ata_vessel_arrival_at_loading_port')} IS NOT NULL THEN 'ARRIVED_LP'
       WHEN ${shipmentHasAnyEtaExpr(f)} THEN 'PLANNED'
       WHEN ${shipmentHasDeliveryQtyExpr(f)} THEN 'PLANNED'
       /* Open STO/shipment without ATA ladder = Planned (Unplanned card is PO backlog only). */
@@ -629,21 +630,24 @@ export function shipmentEffectiveStatusExpr(
 }
 
 /**
- * The status the SHIPMENTS PAGE reads - list column, status filters, the card counts and the OS strip: the ATC of the group's OWN STO.
+ * The status the SHIPMENTS PAGE reads - list column, status filters, the card counts and the OS strip.
+ * Every rung is the group's OWN STO, the same ladder the Edit modal uses for the opened STO.
  *
- * It used to be the group-wide ATC here and the own-STO one only in the OS buckets, so a row whose ATC belonged to a sibling STO
- * (another shipment_id grouped under the same key) read COMPLETED in the list and in the card counts while its outstanding was counted
- * as an active stage by the OS path. The zero guard then cleared that stage's OS (its count was 0), and the strip lost it: TANJUNG PURA
- * 2026-10-20, BG. AS MARINA 10 4,999.7 MT (1006020666, ATC of 1006020342) and BG. KALTIM 3,145.2 MT, 8,144.9 MT in all, while the OS card,
- * Contract Performance and Shipping Performance all read 26,144.9 MT. One rule everywhere the page decides a stage.
+ * Own-STO ATC alone was not enough. After that fix a sibling's ATC no longer completed the row, but
+ * the earlier rungs were still the group MAX. STO 1006020666 (BG. AS MARINA, FOB, grouped with
+ * 1006020342) therefore read Unloading in the view table from the sibling's start-discharging, while
+ * the modal, which aggregates this STO only, read Arrived LP.
  *
- * Needs `<alias>.ata_vessel_complete_discharge_own_sto` (buildShipmentListAtaSelectSql emits it in every shipment_base variant, hybrid backlog
- * rows as NULL). The displayed ATC column is unchanged - the list still shows the group's date as it always has.
+ * Needs the `*_own_sto` columns (buildShipmentListAtaSelectSql emits them in every shipment_base
+ * variant, hybrid backlog rows as NULL). The displayed date columns stay the group MAX.
  */
 export const SHIPMENT_OWN_STO_DISCHARGE_COLUMN = 'ata_vessel_complete_discharge_own_sto'
 
 export function shipmentPageEffectiveStatusExpr(alias: string): string {
-  return shipmentEffectiveStatusExpr(alias, { dischargeColumn: SHIPMENT_OWN_STO_DISCHARGE_COLUMN })
+  return shipmentEffectiveStatusExpr(alias, {
+    dischargeColumn: SHIPMENT_OWN_STO_DISCHARGE_COLUMN,
+    milestoneSuffix: '_own_sto',
+  })
 }
 
 /** Aggregates for mixed persisted statuses on grouped STO rows (diagnostic / shipping-perf).

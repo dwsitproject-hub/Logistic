@@ -17,7 +17,7 @@ import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 import { sqlCoalesceSourceType } from './sapSourceTypeSql';
 import { sqlContractHasResolvedRegionSiteExpr } from './regionSiteSql';
-import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
+import { shipmentPageEffectiveStatusExpr } from './shipmentListFilters';
 import { shipmentListQtyMoveCteFromPage } from './shipmentOutstandingQtySql';
 import {
   appendShipmentPipelineStageFilter,
@@ -196,9 +196,7 @@ export function shouldIncludeShipmentPreplannedBacklogForOs(osStatus: string | n
 
 /** Active pipeline stages for OS strip (excludes COMPLETED / CANCELLED). */
 export function sqlShipmentOutstandingActiveStagePredicate(alias: string): string {
-  const eff = shipmentEffectiveStatusExpr(alias, {
-    dischargeColumn: 'ata_vessel_complete_discharge_own_sto',
-  });
+  const eff = shipmentPageEffectiveStatusExpr(alias);
   return `(
     ${eff} IN (
       'PLANNED',
@@ -217,9 +215,7 @@ export function sqlShipmentSection1LightExecutionEnrichSelect(alias: string): st
   const incotermExpr = `COALESCE(NULLIF(TRIM(${alias}.incoterm::text), ''), '')`;
   const sourceExpr = sqlCoalesceSourceType(`${alias}.contract_source_type`);
   return `
-        ${shipmentEffectiveStatusExpr(alias, {
-          dischargeColumn: 'ata_vessel_complete_discharge_own_sto',
-        })} AS effective_status,
+        ${shipmentPageEffectiveStatusExpr(alias)} AS effective_status,
         FALSE AS is_unplanned_execution,
         ${sourceExpr} AS source_type,
         ${sourceExpr} AS os_source_type,

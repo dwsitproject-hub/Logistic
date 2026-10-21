@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { query } from '../database/connection';
-import { buildShipmentListAtaSelectSql, sqlOwnStoDischargeAtc } from './shipmentAtaOverrideSql';
+import { buildShipmentListAtaSelectSql, sqlOwnStoDischargeAtc, sqlOwnStoMilestone } from './shipmentAtaOverrideSql';
 import { shipmentEffectiveStatusExpr, shipmentPageEffectiveStatusExpr } from './shipmentListFilters';
 import { sqlShipmentOutstandingActiveStagePredicate } from './shipmentOutstandingQtySummarySql';
 
@@ -35,7 +35,12 @@ describe('a sibling STO\'s discharge does not finish this STO for the OS', () =>
     // sibling STO's discharge does not make a row COMPLETED in the list while the OS path counts it as active (TANJUNG PURA 2026-10-20, 8,144.9 MT).
     expect(buildShipmentListAtaSelectSql('K')).toContain('as ata_vessel_complete_discharge,');
     expect(shipmentPageEffectiveStatusExpr('sb')).toContain('sb.ata_vessel_complete_discharge_own_sto IS NOT NULL');
+    expect(shipmentPageEffectiveStatusExpr('sb')).toContain('sb.ata_vessel_start_discharging_own_sto IS NOT NULL');
+    expect(shipmentPageEffectiveStatusExpr('sb')).toContain('sb.ata_vessel_arrival_at_loading_port_own_sto IS NOT NULL');
     expect(shipmentPageEffectiveStatusExpr('sb')).not.toMatch(/sb.ata_vessel_complete_discharge IS NOT NULL/);
+    expect(shipmentPageEffectiveStatusExpr('sb')).not.toMatch(/sb\.ata_vessel_start_discharging IS NOT NULL/);
+    expect(buildShipmentListAtaSelectSql('K')).toContain('as ata_vessel_start_discharging_own_sto');
+    expect(buildShipmentListAtaSelectSql('K')).toContain('as ata_vessel_arrival_at_loading_port_own_sto');
     // the generic expression keeps its default, for the callers whose base has no own-STO column
     expect(shipmentEffectiveStatusExpr('sb')).toContain('sb.ata_vessel_complete_discharge ');
   });
@@ -93,6 +98,23 @@ describe('the own-STO discharge ATC of a group (run in Postgres)', () => {
   it('a cancelled member does not hold an operation group open, and an all-cancelled group has no ATC', async () => {
     expect(await ownAtc(OP, [{ id: 'MNL-4-1', atc: '2026-10-14' }, { id: 'MNL-4-2', status: 'CANCELLED', atc: null }])).toBe('2026-10-14');
     expect(await ownAtc(OP, [{ id: 'MNL-5-1', status: 'CANCELLED', atc: '2026-10-14' }])).toBeNull();
+  }, 60_000);
+
+  it('an STO group does not take a sibling start-discharging date, and an operation group takes the latest', async () => {
+    const own = sqlOwnStoMilestone('s.ats', 's.group_key', 's');
+    const read = async (groupKey: string, members: Array<[string, string]>) => {
+      const values = members.map(([id, day], i) => `($1::text, '${id}'::text, DATE '${day}', ${i})`).join(', ');
+      const r = await query(
+        `SELECT to_char(${own}, 'YYYY-MM-DD') AS own_ats
+           FROM (VALUES ${values}) AS s(group_key, shipment_id, ats, n)
+          GROUP BY s.group_key`,
+        [groupKey],
+      );
+      return r.rows[0]?.own_ats as string;
+    };
+    // 1006020666 arrived; sibling 1006020342 has already started discharging
+    expect(await read('1006020666', [['1006020666', '2026-10-10'], ['1006020342', '2026-10-18']])).toBe('2026-10-10');
+    expect(await read('OP-1004031705-93196222', [['MNL-1', '2026-10-10'], ['MNL-2', '2026-10-18']])).toBe('2026-10-18');
   }, 60_000);
 
   it('an STO group keeps the old rule: its own shipments and those with no STO count, another STO is foreign', async () => {
