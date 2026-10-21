@@ -87,7 +87,7 @@ export const SHIPPING_SUMMARY_METRIC_FORMULAS = {
   dischargeEtb: 'ETA Vessel Arrive at Discharge Port - ETA Vessel Berthed at Discharge Port',
   dischargeEtc: 'ETA Vessel Berthed at Discharge Port - ETA Vessel Complete Discharge',
   total:
-    'Sum of Loading (ETA-ETR), Loading (ETA-ETB), Loading (ETB-ETC), Discharge (ETA-ETB), and Discharge (ETB-ETC)',
+    'Sum of Loading (ETA-ETB), Loading (ETB-ETC), Discharge (ETA-ETB), and Discharge (ETB-ETC)',
 } as const
 
 export type ShippingSummaryMetricKey = keyof typeof SHIPPING_SUMMARY_METRIC_LABELS

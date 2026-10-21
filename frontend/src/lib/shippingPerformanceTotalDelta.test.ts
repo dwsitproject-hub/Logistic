@@ -18,7 +18,7 @@ describe('shippingPerformanceTotalDelta', () => {
     expect(resolveShippingPerfTotalDeltaDisplay(row, 'eta')).toBeNull()
   })
 
-  it('keeps total when at least one segment has a value', () => {
+  it('ignores Loading ETA-ETR when the port gaps are missing', () => {
     const row = {
       loading_delta_eta_etr_days: 2,
       loading_delta_eta_etb_days: null,
@@ -27,7 +27,19 @@ describe('shippingPerformanceTotalDelta', () => {
       discharge_delta_etb_etc_days: null,
       total_delta_days: 2,
     }
-    expect(resolveShippingPerfTotalDeltaDisplay(row, 'eta')).toBe(2)
+    expect(resolveShippingPerfTotalDeltaDisplay(row, 'eta')).toBeNull()
+  })
+
+  it('keeps total when a port gap has a value', () => {
+    const row = {
+      loading_delta_eta_etr_days: 2,
+      loading_delta_eta_etb_days: 4,
+      loading_delta_etb_etc_days: null,
+      discharge_delta_eta_etb_days: null,
+      discharge_delta_etb_etc_days: null,
+      total_delta_days: 4,
+    }
+    expect(resolveShippingPerfTotalDeltaDisplay(row, 'eta')).toBe(4)
   })
 
   it('uses ATA segment keys in close mode', () => {

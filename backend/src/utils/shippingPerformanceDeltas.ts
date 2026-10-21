@@ -83,15 +83,14 @@ export function computeShippingPerfDeltaFields(
     row.discharge_ata_berthed,
   );
 
+  // Loading arrival vs cargo readiness is its own column. Total is the port gaps only.
   const etaSegments = [
-    loading_delta_eta_etr_days,
     loading_delta_eta_etb_days,
     loading_delta_etb_etc_days,
     discharge_delta_eta_etb_days,
     discharge_delta_etb_etc_days,
   ];
   const ataSegments = [
-    ata_loading_delta_eta_etr_days,
     ata_loading_delta_eta_etb_days,
     ata_loading_delta_etb_etc_days,
     ata_discharge_delta_eta_etb_days,

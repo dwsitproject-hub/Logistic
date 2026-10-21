@@ -1020,8 +1020,8 @@ const SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS: Partial<Record<keyof ShippingPerforma
   discharge_delta_etb_etc_days:
     'ETA Vessel Berthed at Discharge Port - ETA Vessel Complete Discharge',
   total_delta_days:
-    'Total duration in days: sum of Loading (ETA−ETR), Loading (ETA−ETB), Loading (ETB−ETC), ' +
-    'Discharge (ETA−ETB), and Discharge (ETB−ETC). Shows "-" when all segments are missing.',
+    'Sum of Loading (ETA−ETB), Loading (ETB−ETC), Discharge (ETA−ETB), and Discharge (ETB−ETC). ' +
+    'Loading (ETA−ETR) is not included. Shows "-" when those gaps are all missing.',
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
@@ -1390,13 +1390,23 @@ function isMtQtyColumn(key: string): boolean {
   )
 }
 
+/** Port gaps have no late/ahead meaning. Loading ETA-ETR and Total keep the signed color. */
+const SHIPPING_PERF_GAP_ONLY_DELTA_KEYS = new Set([
+  'loading_delta_eta_etb_days',
+  'loading_delta_etb_etc_days',
+  'discharge_delta_eta_etb_days',
+  'discharge_delta_etb_etc_days',
+])
+
 function NumberCell({
   value,
   isDeltaDays = false,
+  neutral = false,
   decimalPlaces,
 }: {
   value: unknown
   isDeltaDays?: boolean
+  neutral?: boolean
   decimalPlaces?: number
 }) {
   if (value === null || value === undefined || value === '') {
@@ -1410,7 +1420,7 @@ function NumberCell({
         ? (n === 0 ? (0).toFixed(decimalPlaces) : Math.abs(n).toFixed(decimalPlaces))
         : formatSignedDeltaDays(n)
     return (
-      <span className={`text-sm font-normal tabular-nums ${signedCycleDaysClass(n)}`}>
+      <span className={`text-sm font-normal tabular-nums ${neutral ? 'text-gray-900' : signedCycleDaysClass(n)}`}>
         {formatted} days
       </span>
     )
@@ -3454,6 +3464,7 @@ function ShippingPerformancePageContent() {
                                   isDeltaDays={
                                     String(key).includes('delta') || String(dataKey).includes('delta')
                                   }
+                                  neutral={SHIPPING_PERF_GAP_ONLY_DELTA_KEYS.has(colKey)}
                                   decimalPlaces={
                                     tableViewMode === 'by_vessel' &&
                                     (String(key).includes('delta') || String(dataKey).includes('delta'))

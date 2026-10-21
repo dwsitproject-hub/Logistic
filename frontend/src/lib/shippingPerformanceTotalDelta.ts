@@ -1,6 +1,5 @@
-/** Segment delta keys that roll up into total_delta_days (ETA mode). */
+/** Gap columns that roll up into total_delta_days. Loading ETA-ETR stays its own column. */
 export const SHIPPING_PERF_DELTA_SEGMENT_KEYS = [
-  'loading_delta_eta_etr_days',
   'loading_delta_eta_etb_days',
   'loading_delta_etb_etc_days',
   'discharge_delta_eta_etb_days',
@@ -11,7 +10,6 @@ const SHIPPING_PERF_DELTA_SEGMENT_ATA_KEYS: Record<
   (typeof SHIPPING_PERF_DELTA_SEGMENT_KEYS)[number],
   string
 > = {
-  loading_delta_eta_etr_days: 'ata_loading_delta_eta_etr_days',
   loading_delta_eta_etb_days: 'ata_loading_delta_eta_etb_days',
   loading_delta_etb_etc_days: 'ata_loading_delta_etb_etc_days',
   discharge_delta_eta_etb_days: 'ata_discharge_delta_eta_etb_days',
