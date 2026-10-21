@@ -22,10 +22,10 @@ export function resolveShipmentDisplayStoNumber(stoNumber: unknown): string {
 /**
  * STO field in Edit Shipment.
  *
- * The list lookup key of an OP- voyage is the operation id, which is not an STO. The SAP shell
- * of that voyage still has a numeric shipment_id and keeps the contract STO. A later Add New
- * row (MNL- or `{sto}-{contract}`) does not. When the table already computed the column, that
- * value wins so the modal matches the row the user opened.
+ * The table column wins, so the modal matches the row the user opened. Without a column, an
+ * OP- voyage keeps the contract STO only when its shipment_id is that STO (the SAP shell).
+ * Any other shipment_id — including another numeric SAP document — is a later voyage and
+ * must not copy the contract STO. A numeric id alone is not the shell.
  */
 export function resolveEditShipmentStoNumber(args: {
   listStoNumber?: string | null
@@ -40,8 +40,8 @@ export function resolveEditShipmentStoNumber(args: {
   }
   const operationId = String(args.operationId ?? '').trim()
   const shipmentId = String(args.shipmentId ?? '').trim()
-  const klipAddedVoyage =
-    operationId.startsWith('OP-') && shipmentId.length > 0 && !/^\d+$/.test(shipmentId)
+  const contractSto = String(args.contractStoNumber ?? '').trim()
+  const klipAddedVoyage = operationId.startsWith('OP-') && shipmentId !== contractSto
   if (klipAddedVoyage) return '-'
   const fromLookup = resolveShipmentDisplayStoNumber(args.lookupKey)
   if (fromLookup !== '-') return fromLookup

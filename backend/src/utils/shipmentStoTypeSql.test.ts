@@ -140,12 +140,16 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain('THEN NULLIF(TRIM(s.operation_id::text), \'\')');
   });
 
-  it('shipmentListSeaDisplayStoNumberExpr keeps the Type V STO on the SAP shell and hides it on a KLIP-added OP- voyage', () => {
+  it('shipmentListSeaDisplayStoNumberExpr keeps the Type V STO only on the shell operation', () => {
     const sql = shipmentListSeaDisplayStoNumberExpr('c', 'l', 's').replace(/\s+/g, ' ');
     expect(sql).toContain('NULLIF(TRIM');
     expect(sql).toContain("= 'FOB'");
     expect(sql).toContain("operation_id::text), '') ~ '^OP-'");
-    expect(sql).toContain("shipment_id::text), '') ~ '^[0-9]+$'");
+    // A later OP- can sit on another numeric SAP document. Digits are not the shell test.
+    expect(sql).not.toContain("NOT (NULLIF(TRIM(s.shipment_id::text), '') ~ '^[0-9]+$')");
+    expect(sql).toContain('FROM shipments sto_shell');
+    expect(sql).toContain('sto_shell.contract_id = c.id');
+    expect(sql).toContain('sto_shell.operation_id::text), \'\') IS NOT DISTINCT FROM');
     expect(sql).toContain('THEN NULL');
   });
 

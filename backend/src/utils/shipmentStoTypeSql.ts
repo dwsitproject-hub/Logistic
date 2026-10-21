@@ -230,9 +230,10 @@ export function shipmentListSeaStoKeyExpr(
 /**
  * STO number shown on the row.
  *
- * The SAP voyage still shows the Type V STO, even after KLIP writes an OP- id onto that shell
- * (shipment_id stays the numeric SAP id). A later Add New voyage is its own OP- row and its
- * shipment_id is MNL- or `{sto}-{contract}`, so the contract STO must not appear on it.
+ * The voyage that still carries the SAP shell (shipment_id = the Type V STO, even after KLIP
+ * writes an OP- id onto that shell) shows that STO. A later Add New voyage is a different
+ * operation id. Its shipment_id may also be numeric, so "digits means SAP shell" is not the test —
+ * that exemption left OP-1004032737-05814565 showing 1006020666.
  */
 export function shipmentListSeaDisplayStoNumberExpr(
   contractAlias = 'c',
@@ -243,10 +244,18 @@ export function shipmentListSeaDisplayStoNumberExpr(
   const seaStoPick = contractSeaVesselStoNumberPickExpr(contractAlias);
   const base = shipmentListDisplayStoNumberExpr(contractAlias, spdAlias, shipmentAlias);
   const ownVoyageId = sqlKlipOwnVoyageOperationIdExpr(shipmentAlias, contractAlias);
-  const sapShipmentId = `NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '') ~ '^[0-9]+$'`;
+  const contractSto = `NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
+  const operationId = `NULLIF(TRIM(${shipmentAlias}.operation_id::text), '')`;
   return `CASE
     WHEN (${ownVoyageId}) IS NOT NULL
-      AND NOT (${sapShipmentId})
+      AND NOT EXISTS (
+        SELECT 1
+        FROM shipments sto_shell
+        WHERE sto_shell.contract_id = ${contractAlias}.id
+          AND COALESCE(sto_shell.status, '') <> 'CANCELLED'
+          AND NULLIF(TRIM(sto_shell.shipment_id::text), '') = COALESCE((${seaStoPick}), ${contractSto})
+          AND NULLIF(TRIM(sto_shell.operation_id::text), '') IS NOT DISTINCT FROM ${operationId}
+      )
     THEN NULL
     ELSE NULLIF(TRIM((COALESCE(
       CASE

@@ -28,15 +28,26 @@ describe('resolveEditShipmentStoNumber', () => {
     ).toBe('-')
   })
 
-  it('keeps the contract STO for a SAP shell opened without a list column', () => {
+  it('keeps the contract STO when the SAP shell shipment_id is that STO', () => {
     expect(
       resolveEditShipmentStoNumber({
         lookupKey: 'OP-1004032737-34122029',
-        shipmentId: '40012345',
+        shipmentId: '1006020666',
         operationId: 'OP-1004032737-34122029',
         contractStoNumber: '1006020666',
       }),
     ).toBe('1006020666')
+  })
+
+  it('does not keep the contract STO just because the added voyage has some other numeric id', () => {
+    expect(
+      resolveEditShipmentStoNumber({
+        lookupKey: 'OP-1004032737-05814565',
+        shipmentId: '40012345',
+        operationId: 'OP-1004032737-05814565',
+        contractStoNumber: '1006020666',
+      }),
+    ).toBe('-')
   })
 
   it('does not copy the contract STO onto a KLIP-added shipment id', () => {
