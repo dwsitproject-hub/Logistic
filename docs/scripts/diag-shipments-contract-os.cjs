@@ -56,12 +56,16 @@ async function call(query) {
     } else {
       console.log('OS card: no payload ' + JSON.stringify(card).slice(0, 200));
     }
-    const list = await call({ ...base, page: '1', limit: '50' });
+    // The page loads the list in TWO passes: the shell (skipSapJoin=true, first paint) and then the SAP hydrate (skipSapJoin=false). A column that reads right in one and wrong in the
+    // other (the PO column losing a PO, a SAP quantity arriving late) shows up as a difference between the two prints below.
+    for (const [passLabel, passQuery] of [['SHELL pass (skipSapJoin=true)', { skipSapJoin: 'true' }], ['HYDRATED pass (skipSapJoin=false)', { skipSapJoin: 'false' }]]) {
+    const list = await call({ ...base, ...passQuery, page: '1', limit: '50' });
     const rows = (list && list.data && (Array.isArray(list.data) ? list.data : list.data.shipments || list.data.items)) || [];
-    console.log('list rows: ' + rows.length);
-    const keep = /^(sto_key|sto_number|shipment_id|operation_id|vessel_name|status|effective_status|contract_numbers|po_numbers|ata_vessel_complete_discharge|ata_vessel_complete_discharge_own_sto|is_contract_sap_closed|outstanding|quantity_delivered|quantity_shipped|quantity_shipment_plan|contract_os)/;
+    console.log('list rows, ' + passLabel + ': ' + rows.length);
+    const keep = /^(sto_key|sto_number|shipment_id|operation_id|vessel_name|status|effective_status|contract_numbers|po_numbers|ata_vessel_complete_discharge|ata_vessel_complete_discharge_own_sto|is_contract_sap_closed|outstanding|quantity_delivered|quantity_shipped|quantity_shipment_plan|contract_os|sap_qty_shared|klip_delivery_qty|quantity_receive|actual_vessel_qty_receive|total_quantity_delivered)/;
     for (const r of rows) {
       console.log(JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k, v]) => keep.test(k) && v !== null && v !== undefined && v !== ''))));
+    }
     }
   }
   process.exit(0);
