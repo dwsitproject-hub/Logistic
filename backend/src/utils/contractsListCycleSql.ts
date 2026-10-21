@@ -109,7 +109,23 @@ export function sqlContractEveryStoDischargedExpr(
  * One unfinished vessel STO keeps the PO open, so PO 1004030633 (STO 1006019438 discharged, 1006019958 still loading) stays Open. A PO
  * with no vessel STO line returns false and keeps the older rule.
  */
-export function sqlContractVesselStosFinishedExpr(contractNumberExpr: string): string {
+/**
+ * The arm of 'a shipment on this STO is finished' that reads the STO's GR. SAP closes the GR of an STO when its cargo is delivered, whatever status KLIP last stored on the shipment
+ * (SAILED is typical: the stored status only moves when SAP re-imports the row). Shipping Performance and Shipments derive a row's stage from the ATA ladder and the GR and make a
+ * Close GR COMPLETED on its own, so this is the same reading. BATAM 2026-10-21, 1004032751: STO 1006020594 (500 MT, GR Close, stored SAILED, no ATC) kept the contract Open on
+ * Contract Performance - 497.9 MT - while the other two pages had it finished. A stored COMPLETED with the GR still Open or Cancelled is still NOT finished (1014003192).
+ * `grCloseFinishes: false` is the earlier reading (stored COMPLETED AND GR Close), kept so the difference between the two can be measured.
+ */
+export interface VesselStosFinishedOptions {
+  grCloseFinishes?: boolean;
+}
+
+function vesselStoGrArm(stoRef: string, opts: VesselStosFinishedOptions): string {
+  const closed = sqlIsContractSapClosedForStoExpr('c_vf', stoRef);
+  return opts.grCloseFinishes === false ? `(UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED' AND ${closed})` : `(${closed})`;
+}
+
+export function sqlContractVesselStosFinishedExpr(contractNumberExpr: string, opts: VesselStosFinishedOptions = {}): string {
   const executing = `(
         SELECT ${contractNumberExpr}
         UNION
@@ -154,7 +170,7 @@ export function sqlContractVesselStosFinishedExpr(contractNumberExpr: string): s
             OR (TRIM(COALESCE(c_vf.sto_number::text, '')) = vs.sto AND TRIM(COALESCE(s_vf.shipment_id::text, '')) !~ '^[0-9]{8,}')
           )
           AND (
-            (UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED' AND ${sqlIsContractSapClosedForStoExpr('c_vf', 'vs.sto')})
+            ${vesselStoGrArm('vs.sto', opts)}
             OR s_vf.ata_discharge_complete IS NOT NULL
             OR EXISTS (SELECT 1 FROM shipment_ata_overrides o_vf WHERE o_vf.shipment_id = s_vf.id AND o_vf.ata_discharge_complete IS NOT NULL)
             OR EXISTS (
@@ -172,7 +188,7 @@ export function sqlContractVesselStosFinishedExpr(contractNumberExpr: string): s
  * contracts `scopeSubquery` returns. The per-contract form costs ~3.9 ms a contract (a scan of contract_latest_spd_snapshot for the B2B
  * children each time), 117 s over the 14,806 sea contracts of the dev copy; this one joins once. Same rule, row for row.
  */
-export function buildVesselStosFinishedCte(name: string, scopeSubquery: string): string {
+export function buildVesselStosFinishedCte(name: string, scopeSubquery: string, opts: VesselStosFinishedOptions = {}): string {
   return `
       ${name} AS (
         SELECT links.display_contract_id AS contract_id, BOOL_AND(links.finished) AS vessel_stos_finished
@@ -189,7 +205,7 @@ export function buildVesselStosFinishedCte(name: string, scopeSubquery: string):
                 OR (TRIM(COALESCE(c_vf.sto_number::text, '')) = l0.sto AND TRIM(COALESCE(s_vf.shipment_id::text, '')) !~ '^[0-9]{8,}')
               )
               AND (
-                (UPPER(TRIM(COALESCE(s_vf.status, ''))) = 'COMPLETED' AND ${sqlIsContractSapClosedForStoExpr('c_vf', 'l0.sto')})
+                ${vesselStoGrArm('l0.sto', opts)}
                 OR s_vf.ata_discharge_complete IS NOT NULL
                 OR EXISTS (SELECT 1 FROM shipment_ata_overrides o_vf WHERE o_vf.shipment_id = s_vf.id AND o_vf.ata_discharge_complete IS NOT NULL)
                 OR EXISTS (
