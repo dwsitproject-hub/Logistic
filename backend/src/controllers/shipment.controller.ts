@@ -257,6 +257,11 @@ import {
   contractIdOnStoSql,
   sqlMergedPoNumbers,
 } from '../utils/stoLinkedContractSql';
+import {
+  sqlIdentityGroupCandidates,
+  sqlIdentityGroupKeysCte,
+  sqlIdentityGroupMember,
+} from '../utils/shipmentIdentityGroupSql';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
 function toShipmentDateOrNull(v: unknown): string | null {
@@ -840,9 +845,19 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       relevantContractWhereParts.push(`s.is_delayed = true`);
       shipmentBaseWhereParts.push(`s.is_delayed = true`);
     }
+    /**
+     * A row of this page is an STO or an operation, not a PO. A contract / PO that is searched PICKS the groups (STO / operation) it belongs to; each picked group
+     * then keeps ALL of its members - every PO and contract, and the quantities, status and OS of the whole group - exactly as the row reads without the search.
+     * So the contract is not a member-level WHERE (it left the group holding only the searched PO's shipment: BIO EXPRESS, OP-1004031705-93196222, showed one of
+     * its two POs, with the other's quantity missing) but picks group KEYS (identity_group_keys_N, below) that the row's own key is then tested against. A PO /
+     * contract is looked at on its own on the Contracts page. The OS follows the group too: the contract is left out of osContractScopeParts.
+     * The backlog arms still match the contract itself (contractScopeParts): a contract with no shipment has no group to pick.
+     */
+    const identityRowSqls: string[] = [];
+    let contractIdentityParamIndex = 0;
     if (contract) {
-      relevantContractWhereParts.push(`c.contract_id = $${cp}`);
-      shipmentBaseWhereParts.push(`c.contract_id = $${cp}`);
+      contractIdentityParamIndex = cp;
+      identityRowSqls.push(`c.contract_id = $${cp}`);
       contractScopeParts.push(`c.contract_id = $${cp}`);
       coreParams.push(contract);
       cp += 1;
@@ -895,8 +910,12 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     });
     shipmentBaseWhereParts.unshift(seaRowScopeCond);
 
+    // `?sto=` is the group's own key: a member-level test that keeps every member of that one group. A searched 10-digit number may also be a PO or a contract
+    // number - it picks the groups holding it and each keeps all its members, like the contract filter above (utils/shipmentIdentityGroupSql.ts).
     if (exactStoKey && exactStoParamIndex != null) {
-      shipmentBaseWhereParts.push(buildExactNumericGlobalSearchInnerSql(listStoKeySql, exactStoParamIndex));
+      const exactInner = buildExactNumericGlobalSearchInnerSql(listStoKeySql, exactStoParamIndex);
+      if (stoIsSet) shipmentBaseWhereParts.push(exactInner);
+      else identityRowSqls.push(exactInner);
     }
 
     const relevantContractWhereSql = relevantContractWhereParts.join(' AND ');
@@ -908,7 +927,11 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
      * it passes them. Without the Discharge Port one - a port is a property of the shipment, and a contract with a shipment is matched by that, not by the
      * SAP port the backlog arm uses.
      */
-    const osContractScopeParts = contractScopeParts.filter((part) => part !== dischargePortFilter.contractSql);
+    // The contract the toolbar names picks the group; it is not a reason to leave the group's other contracts out of the group's OS (see identityRowSqls).
+    const contractIdentityScopeSql = contract ? `c.contract_id = $${contractIdentityParamIndex}` : null;
+    const osContractScopeParts = contractScopeParts.filter(
+      (part) => part !== dischargePortFilter.contractSql && part !== contractIdentityScopeSql,
+    );
     const osContractScopeSql = osContractScopeParts.length > 0 ? `AND ${osContractScopeParts.join(' AND ')}` : '';
 
     /**
@@ -971,6 +994,39 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           ${latestSpdProjection},
           spd.created_at`;
 
+    // Match dashboard baseline: exclude B2B "child" contracts (latest SAP row indicates B2B AND Contract Reference PO is not blank).
+    const b2bChildExcludeSql = `AND NOT (
+            l.contract_number IS NOT NULL
+            AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
+            AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
+          )`;
+    /**
+     * The groups a searched PO / contract picks, and the test that keeps each picked group whole (utils/shipmentIdentityGroupSql.ts). The candidate prune reads
+     * contract_latest_spd_snapshot, so it is used only while that snapshot is fresh; stale, the exact test alone decides (correct, slower).
+     */
+    const identityKeyCteNames = identityRowSqls.map((_, i) => `identity_group_keys_${i}`);
+    const identityKeysCtesSql = identityRowSqls
+      .map((identityRowSql, i) =>
+        sqlIdentityGroupKeysCte(identityKeyCteNames[i], {
+          listStoKeySql,
+          fromJoinsSql: `${sqlShipmentListB2bOriginContractJoins()}
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}`,
+          scopeWhereSql: shipmentBaseWhereSql,
+          identityRowSql,
+          b2bChildExcludeSql,
+        }),
+      )
+      .map((cte) => `${cte},\n      `)
+      .join('');
+    const identityMainWhereSql = identityKeyCteNames
+      .map((name) => `AND ${sqlIdentityGroupMember(name, listStoKeySql)}`)
+      .concat(
+        identityKeyCteNames.length > 0 && latestSpdSnapshotFresh
+          ? [`AND ${sqlIdentityGroupCandidates(identityKeyCteNames[0])}`]
+          : [],
+      )
+      .join('\n          ');
+
     const prelude = scopeLatestSpdToContracts
       ? `WITH
       ${sqlRelevantContractNumbersWithB2bOrigins(relevantContractWhereSql)},
@@ -981,8 +1037,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST${latestSpdOrderTailSql}
       ),
-      shipment_base_core AS (
-        SELECT 
+      ${identityKeysCtesSql}shipment_base_core AS (
+        SELECT
 `
       : `WITH
       latest_spd_contract AS (
@@ -991,8 +1047,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST${latestSpdOrderTailSql}
       ),
-      shipment_base_core AS (
-        SELECT 
+      ${identityKeysCtesSql}shipment_base_core AS (
+        SELECT
 `;
 
     let queryText = `${prelude}
@@ -1112,13 +1168,8 @@ ${vlpLateralJoins}
         ${SHIPMENT_ATA_OVERRIDES_JOIN}
         WHERE 1=1
           AND (${shipmentBaseWhereSql})
-          -- Match dashboard baseline: exclude B2B "child" contracts
-          -- (latest SAP row indicates B2B AND Contract Reference PO is not blank).
-          AND NOT (
-            l.contract_number IS NOT NULL
-            AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
-            AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
-          )
+          ${identityMainWhereSql}
+          ${b2bChildExcludeSql}
     `;
     const innerParams = [...coreParams];
     const outerFilterStartIndex = coreParams.length + 1;
