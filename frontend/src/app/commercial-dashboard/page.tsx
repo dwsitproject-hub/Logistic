@@ -42,7 +42,7 @@ function formatPct(value: number): string {
 const HIGH_GAP_PCT = 50
 const TOP_PLANT_LIMIT = 10
 
-type ActionScope = 'all' | 'high-gaps'
+type ActionScope = 'most-progress' | 'high-gaps'
 
 function pctClass(value: number): string {
   if (value >= 80) return 'text-green-700'
@@ -50,7 +50,21 @@ function pctClass(value: number): string {
   return 'text-red-700'
 }
 
-function byMissingDesc(a: PlantCompleteness, b: PlantCompleteness): number {
+function uploadRatio(row: PlantCompleteness): number {
+  if (row.totalSlots <= 0) return 0
+  return row.uploadedSlots / row.totalSlots
+}
+
+function byUploadProgressDesc(a: PlantCompleteness, b: PlantCompleteness): number {
+  const delta = uploadRatio(b) - uploadRatio(a)
+  if (delta !== 0) return delta
+  if (b.uploadedSlots !== a.uploadedSlots) return b.uploadedSlots - a.uploadedSlots
+  return a.plant.localeCompare(b.plant)
+}
+
+function byUploadProgressAsc(a: PlantCompleteness, b: PlantCompleteness): number {
+  const delta = uploadRatio(a) - uploadRatio(b)
+  if (delta !== 0) return delta
   if (b.missingSlots !== a.missingSlots) return b.missingSlots - a.missingSlots
   return a.plant.localeCompare(b.plant)
 }
@@ -76,7 +90,7 @@ function CommercialDashboardContent() {
   const [payload, setPayload] = useState<CompletenessPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetching, setFetching] = useState(false)
-  const [actionScope, setActionScope] = useState<ActionScope>('all')
+  const [actionScope, setActionScope] = useState<ActionScope>('most-progress')
   const [showAllPlants, setShowAllPlants] = useState(false)
 
   usePageHeaderBusy(loading || fetching)
@@ -125,10 +139,12 @@ function CommercialDashboardContent() {
 
   const plants = payload?.plants ?? []
   const totals = payload?.totals
+  const mostUploadProgress = actionScope === 'most-progress'
   const scopedPlants = useMemo(() => {
-    const rows =
-      actionScope === 'high-gaps' ? plants.filter((row) => row.completenessPct < HIGH_GAP_PCT) : plants
-    return [...rows].sort(byMissingDesc)
+    if (actionScope === 'high-gaps') {
+      return plants.filter((row) => uploadRatio(row) < HIGH_GAP_PCT / 100).sort(byUploadProgressAsc)
+    }
+    return [...plants].sort(byUploadProgressDesc)
   }, [actionScope, plants])
   const displayPlants = showAllPlants ? scopedPlants : scopedPlants.slice(0, TOP_PLANT_LIMIT)
 
@@ -180,17 +196,18 @@ function CommercialDashboardContent() {
           <div className="flex flex-wrap items-center gap-2">
             <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
               <ScopeButton
-                active={actionScope === 'all'}
+                active={mostUploadProgress}
+                title="Plants with the highest upload completeness"
                 onClick={() => {
-                  setActionScope('all')
+                  setActionScope('most-progress')
                   setShowAllPlants(false)
                 }}
               >
-                All plants
+                Most upload progress
               </ScopeButton>
               <ScopeButton
                 active={actionScope === 'high-gaps'}
-                title={`Plants under ${HIGH_GAP_PCT}% complete`}
+                title={`Least upload progress: plants under ${HIGH_GAP_PCT}% complete`}
                 onClick={() => {
                   setActionScope('high-gaps')
                   setShowAllPlants(false)
@@ -239,7 +256,13 @@ function CommercialDashboardContent() {
           <div className="grid grid-cols-12 items-start gap-3">
             <div className="col-span-12 flex h-[188px] flex-col rounded-lg border border-slate-200 bg-slate-50/50 px-2.5 py-2 lg:col-span-5">
               <div className="mb-1 text-[11px] font-semibold text-slate-700">
-                {showAllPlants ? 'All plants by missing slots' : 'Top 10 plants by missing slots'}
+                {mostUploadProgress
+                  ? showAllPlants
+                    ? 'All plants by upload progress'
+                    : 'Top 10 by upload progress'
+                  : showAllPlants
+                    ? 'All plants with the least upload progress'
+                    : 'Top 10 with the least upload progress'}
               </div>
               {loading ? (
                 <div className="flex flex-1 items-center justify-center text-xs text-gray-500">Loading chart...</div>
@@ -264,7 +287,12 @@ function CommercialDashboardContent() {
                         textAnchor="end"
                         height={36}
                       />
-                      <YAxis tick={{ fontSize: 10, fill: '#64748b' }} allowDecimals={false} width={32} />
+                      <YAxis
+                        tick={{ fontSize: 10, fill: '#64748b' }}
+                        width={36}
+                        domain={[0, 100]}
+                        tickFormatter={(value: number) => `${value}%`}
+                      />
                       <Tooltip
                         cursor={{ fill: 'rgba(37, 99, 235, 0.06)' }}
                         content={({ active, payload }) => {
@@ -288,7 +316,13 @@ function CommercialDashboardContent() {
                           )
                         }}
                       />
-                      <Bar dataKey="missingSlots" name="Missing" fill="#2563eb" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                      <Bar
+                        dataKey="completenessPct"
+                        name="Completeness"
+                        fill={mostUploadProgress ? '#2563eb' : '#dc2626'}
+                        radius={[4, 4, 0, 0]}
+                        maxBarSize={28}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                   </div>
@@ -298,7 +332,9 @@ function CommercialDashboardContent() {
 
             <div className="col-span-12 flex h-[188px] flex-col overflow-hidden rounded-lg border border-slate-200 lg:col-span-7">
               <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-2.5 py-1">
-                <div className="text-[11px] font-semibold text-slate-700">Top Region/Plant records</div>
+                <div className="text-[11px] font-semibold text-slate-700">
+                  {mostUploadProgress ? 'Highest upload progress' : 'Least upload progress'}
+                </div>
                 <div className="flex items-center gap-2 text-[10px] text-slate-400">
                   <span>
                     Showing {displayPlants.length} of {scopedPlants.length}
