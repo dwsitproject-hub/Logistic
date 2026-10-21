@@ -15,6 +15,9 @@ import { CLAIM_SUSUT_BLANK, formatClaimSusutIdr } from '@/lib/claimSusutView'
  *
  * - Aging is built from OS_CLAIM rows - the same aggregate the PIVOT sheet shows, not an import of
  *   it - so it follows the page filters like the view table below.
+ * - By Vendor is the same outstanding rows, one line per Group Vendor + Vendor + Group of
+ *   Transport + Product. Group Vendor is SAP Vendor Group when the claim PO matches a contract;
+ *   unmatched POs stay in the list as "-".
  * - Realised Claims is REAL_CLAIM across every import, cut to the page's CR date range (YTD by
  *   default) on its CLAIM DATE; the Product / Vendor / Transport filters do not apply to it.
  *   Those filters resolve through SAP contract data that only the outstanding rows carry.
@@ -28,6 +31,29 @@ export type ClaimSusutAgingGroupRow = {
   a_61_90: number
   a_gt_90: number
   grand_total: number
+}
+
+export type ClaimSusutVendorBreakdownRow = {
+  group_vendor: string | null
+  vendor: string
+  group_of_transport: string
+  product: string
+  qty_claim: number
+  amount_after_tax_idr: number
+}
+
+/** Largest Qty Claim, then largest Amount After Tax. Unmapped Group Vendor stays in the list. */
+export function sortVendorRows(rows: ClaimSusutVendorBreakdownRow[]): ClaimSusutVendorBreakdownRow[] {
+  return [...rows].sort((a, b) => {
+    const qty = (Number(b.qty_claim) || 0) - (Number(a.qty_claim) || 0)
+    if (qty !== 0) return qty
+    return (Number(b.amount_after_tax_idr) || 0) - (Number(a.amount_after_tax_idr) || 0)
+  })
+}
+
+export function formatGroupVendor(value: string | null | undefined): string {
+  const s = String(value ?? '').trim()
+  return s || '-'
 }
 
 export type ClaimSusutRealizedVendor = {
@@ -64,10 +90,11 @@ export type ClaimSusutRealized = {
   sources?: Array<{ importId: string; fileName: string | null; periodLabel: string | null; claims: number }>
 }
 
-type RecapTab = 'aging' | 'realised'
+type RecapTab = 'aging' | 'vendor' | 'realised'
 
 const TABS: ReadonlyArray<{ id: RecapTab; label: string }> = [
   { id: 'aging', label: 'Aging' },
+  { id: 'vendor', label: 'Vendor' },
   { id: 'realised', label: 'Realised Claims' },
 ]
 
@@ -109,6 +136,8 @@ export function ClaimSusutSection1Dashboard({
   summaryLoading,
   groupRows,
   groupLoading,
+  vendorRows,
+  vendorLoading,
   realized,
   realizedLoading,
   selectedGroups,
@@ -121,6 +150,8 @@ export function ClaimSusutSection1Dashboard({
   summaryLoading: boolean
   groupRows: ClaimSusutAgingGroupRow[]
   groupLoading: boolean
+  vendorRows: ClaimSusutVendorBreakdownRow[]
+  vendorLoading: boolean
   realized: ClaimSusutRealized | null
   realizedLoading: boolean
   selectedGroups: string[]
@@ -129,6 +160,9 @@ export function ClaimSusutSection1Dashboard({
 }) {
   const [tab, setTab] = useState<RecapTab>('aging')
   const groups = sortGroups(groupRows)
+  const vendorsByGroup = sortVendorRows(vendorRows)
+  const vendorQtyTotal = vendorsByGroup.reduce((s, r) => s + (Number(r.qty_claim) || 0), 0)
+  const vendorAmountTotal = vendorsByGroup.reduce((s, r) => s + (Number(r.amount_after_tax_idr) || 0), 0)
   const total = (key: keyof ClaimSusutAgingGroupRow) =>
     groups.reduce((s, g) => s + (Number(g[key]) || 0), 0)
   const agingTotal = total('grand_total')
@@ -146,8 +180,10 @@ export function ClaimSusutSection1Dashboard({
   const note =
     tab === 'aging'
       ? `Amount after tax (IDR) per group · CR date ${crDateLabel}${realized?.osPeriodLabel ? ` · outstanding as of ${realized.osPeriodLabel}` : ''} · follows the filters. Click a group to filter the table below.`
-      : `Approved claims with a CR date in ${crDateLabel}. Product, vendor and transport filters do not apply.`
-  const tabLoading = tab === 'aging' ? groupLoading : realizedLoading
+      : tab === 'vendor'
+        ? `Outstanding claims · CR date ${crDateLabel}. Group Vendor is matched on PO; unmatched POs show -. Follows the filters.`
+        : `Approved claims with a CR date in ${crDateLabel}. Product, vendor and transport filters do not apply.`
+  const tabLoading = tab === 'aging' ? groupLoading : tab === 'vendor' ? vendorLoading : realizedLoading
   const empty = (text: string) => <div className="py-8 text-center text-sm text-gray-500">{text}</div>
 
   return (
@@ -278,6 +314,50 @@ export function ClaimSusutSection1Dashboard({
                         <Idr v={agingTotal} strong />
                       </td>
                       <td className="px-3 py-1.5 text-[11px] text-gray-500">{agingTotal ? '100%' : '-'}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )
+          ) : tab === 'vendor' ? (
+            vendorsByGroup.length === 0 ? (
+              empty(hasImport ? 'No data for these filters.' : 'Upload a file to see the summary.')
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px] text-sm">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className={`${TH} text-left`}>Group Vendor</th>
+                      <th className={`${TH} text-left`}>Vendor</th>
+                      <th className={`${TH} text-left`}>Group of Transport</th>
+                      <th className={`${TH} text-left`}>Product</th>
+                      <th className={`${TH} text-right`}>Qty Claim (Kg)</th>
+                      <th className={`${TH} text-right text-gray-800`}>Amount After Tax (IDR)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {vendorsByGroup.map((r, i) => (
+                      <tr key={`${r.group_vendor ?? ''}|${r.vendor}|${r.group_of_transport}|${r.product}|${i}`} className="hover:bg-gray-50">
+                        <td className="px-3 py-1.5 font-medium">{formatGroupVendor(r.group_vendor)}</td>
+                        <td className="px-3 py-1.5">{r.vendor || CLAIM_SUSUT_BLANK}</td>
+                        <td className="px-3 py-1.5">{r.group_of_transport || CLAIM_SUSUT_BLANK}</td>
+                        <td className="px-3 py-1.5">{r.product || CLAIM_SUSUT_BLANK}</td>
+                        <td className={`${TD} text-right`}>{formatKg(r.qty_claim)}</td>
+                        <td className={`${TD} text-right`}>
+                          <Idr v={r.amount_after_tax_idr} strong />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="border-t-2 border-gray-200 bg-gray-50">
+                    <tr>
+                      <td className="px-3 py-2 font-semibold" colSpan={4}>
+                        Grand Total
+                      </td>
+                      <td className={`${TD} text-right font-semibold`}>{formatKg(vendorQtyTotal)}</td>
+                      <td className={`${TD} text-right`}>
+                        <Idr v={vendorAmountTotal} strong />
+                      </td>
                     </tr>
                   </tfoot>
                 </table>

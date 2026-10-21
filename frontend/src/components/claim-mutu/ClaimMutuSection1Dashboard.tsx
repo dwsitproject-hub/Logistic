@@ -44,6 +44,29 @@ export type ClaimMutuAgingGroupRow = {
 
 export type ClaimMutuLocationRow = ClaimMutuSidePair & { dest: string; unit: string }
 
+export type ClaimMutuVendorRow = {
+  group_vendor: string | null
+  vendor: string
+  group_of_transport: string
+  product: string
+  qty_claim: number
+  amount_after_tax_idr: number
+}
+
+/** Largest Qty Claim, then largest Amount After Tax. Unmapped Group Vendor stays in the list. */
+export function sortClaimMutuVendorRows(rows: ClaimMutuVendorRow[]): ClaimMutuVendorRow[] {
+  return [...rows].sort((a, b) => {
+    const qty = (Number(b.qty_claim) || 0) - (Number(a.qty_claim) || 0)
+    if (qty !== 0) return qty
+    return (Number(b.amount_after_tax_idr) || 0) - (Number(a.amount_after_tax_idr) || 0)
+  })
+}
+
+function formatGroupVendor(value: string | null | undefined): string {
+  const s = String(value ?? '').trim()
+  return s || '-'
+}
+
 export type ClaimMutuDashboard = {
   importId: string | null
   periodLabel: string | null
@@ -58,17 +81,19 @@ export type ClaimMutuDashboard = {
   agingByGroup: ClaimMutuAgingGroupRow[]
   byCommodityUnit: ClaimMutuCommodityUnitRow[]
   byLocation: ClaimMutuLocationRow[]
+  byVendor?: ClaimMutuVendorRow[]
 }
 
 export type ClaimMutuTrend = { b2b: ClaimMutuB2bScope; months: string[]; rows: ClaimMutuTrendRow[] }
 
-type RecapTab = 'aging' | 'lokasi' | 'komoditi' | 'unit'
+type RecapTab = 'aging' | 'vendor' | 'lokasi' | 'komoditi' | 'unit'
 
 const TABS: Array<{ id: RecapTab; label: string }> = [
   { id: 'aging', label: 'Aging' },
-  { id: 'lokasi', label: 'By Location' },
-  { id: 'komoditi', label: 'By Commodity' },
-  { id: 'unit', label: 'By Unit' },
+  { id: 'vendor', label: 'Vendor' },
+  { id: 'lokasi', label: 'Location' },
+  { id: 'komoditi', label: 'Commodity' },
+  { id: 'unit', label: 'Unit' },
 ]
 
 const AGING_COLUMNS: Array<{ key: keyof ClaimMutuAgingGroupRow; label: string }> = [
@@ -223,13 +248,17 @@ export function ClaimMutuSection1Dashboard({
 
   const tabNote: Record<RecapTab, string> = {
     aging: 'Claim value after tax per group (Pivot sheet). Click a group to filter the page.',
+    vendor: 'Outstanding claims. Group Vendor is matched on PO; unmatched POs show -. Follows the filters.',
     lokasi: 'OS and realised claims per DEST code (Rekap Klaim Per Lokasi sheet).',
     komoditi: 'OS and realised claims per commodity; open a commodity to see its units (Summary Per Komoditi sheet).',
     unit: `OS and realised claims per unit for one month - that month's latest import, not narrowed by the CR date period (Summary Per Unit sheet${
       b2b === 'exclude' ? ', which the workbook builds as Include B2B' : ''
     }).`,
   }
-  const realNote = osOnlyFilterActive && tab !== 'aging' ? ' The Group and Payment Method filters apply to OS only.' : ''
+  const realNote =
+    osOnlyFilterActive && tab !== 'aging' && tab !== 'vendor'
+      ? ' The Group and Payment Method filters apply to OS only.'
+      : ''
   const tabLoading = tab === 'unit' ? trendLoading : loading
 
   return (
@@ -297,7 +326,7 @@ export function ClaimMutuSection1Dashboard({
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
               <RecapSegmented value={tab} options={TABS} onChange={setTab} ariaLabel="Summary" />
-              {tab !== 'aging' ? (
+              {tab !== 'aging' && tab !== 'vendor' ? (
                 <RecapSegmented
                   value={measure}
                   options={[
@@ -318,6 +347,8 @@ export function ClaimMutuSection1Dashboard({
         <CardContent className="pt-2">
           {tab === 'aging' ? (
             <AgingTab dashboard={dashboard} hasImport={hasImport} selectedGroups={selectedGroups} onToggleGroup={onToggleGroup} />
+          ) : tab === 'vendor' ? (
+            <VendorTab rows={dashboard?.byVendor ?? []} hasImport={hasImport} />
           ) : tab === 'lokasi' ? (
             <LokasiTab dashboard={dashboard} hasImport={hasImport} m={measure} />
           ) : tab === 'komoditi' ? (
@@ -421,6 +452,48 @@ function AgingTab({
             <Num v={grand} m="amount" strong />
           </td>
           <td className="px-3 py-1.5 text-[11px] text-gray-500">{grand ? '100%' : '-'}</td>
+        </tr>
+      </tfoot>
+    </TableShell>
+  )
+}
+
+function VendorTab({ rows, hasImport }: { rows: ClaimMutuVendorRow[]; hasImport: boolean }) {
+  const sorted = sortClaimMutuVendorRows(rows)
+  if (sorted.length === 0) return <Empty hasImport={hasImport} />
+  const qtyTotal = sorted.reduce((s, r) => s + (Number(r.qty_claim) || 0), 0)
+  const amountTotal = sorted.reduce((s, r) => s + (Number(r.amount_after_tax_idr) || 0), 0)
+  return (
+    <TableShell minWidth={860}>
+      <thead className="bg-gray-100">
+        <tr>
+          <th className={`${TH} text-left`}>Group Vendor</th>
+          <th className={`${TH} text-left`}>Vendor</th>
+          <th className={`${TH} text-left`}>Group of Transport</th>
+          <th className={`${TH} text-left`}>Product</th>
+          <th className={`${TH} text-right`}>Qty Claim (Kg)</th>
+          <th className={`${TH} text-right text-gray-800`}>Amount After Tax (IDR)</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y">
+        {sorted.map((r, i) => (
+          <tr key={`${r.group_vendor ?? ''}|${r.vendor}|${r.group_of_transport}|${r.product}|${i}`} className="hover:bg-gray-50">
+            <td className="px-3 py-1.5 font-medium">{formatGroupVendor(r.group_vendor)}</td>
+            <td className="px-3 py-1.5">{r.vendor || CLAIM_MUTU_BLANK}</td>
+            <td className="px-3 py-1.5">{r.group_of_transport || CLAIM_MUTU_BLANK}</td>
+            <td className="px-3 py-1.5">{r.product || CLAIM_MUTU_BLANK}</td>
+            <td className={`${TD} text-right`}>{formatClaimMutuKg(r.qty_claim)}</td>
+            <td className={`${TD} text-right font-semibold text-gray-900`}>{formatClaimMutuIdr(r.amount_after_tax_idr)}</td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot className="border-t-2 border-gray-200 bg-gray-50">
+        <tr>
+          <td className="px-3 py-2 font-semibold" colSpan={4}>
+            Grand Total
+          </td>
+          <td className={`${TD} text-right font-semibold`}>{formatClaimMutuKg(qtyTotal)}</td>
+          <td className={`${TD} text-right font-semibold text-gray-900`}>{formatClaimMutuIdr(amountTotal)}</td>
         </tr>
       </tfoot>
     </TableShell>

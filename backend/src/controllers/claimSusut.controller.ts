@@ -632,3 +632,35 @@ export const listClaimSusutByGroupOfTransport = async (req: AuthRequest, res: Re
   }
 };
 
+/** Outstanding rows grouped for the By Vendor tab. Group Vendor is null when the PO is not on a contract. */
+export const listClaimSusutByVendor = async (req: AuthRequest, res: Response) => {
+  try {
+    const filters = claimSusutQueryFromReq(req);
+    const result = await runClaimSusutCte(
+      filters,
+      'rows',
+      `
+      SELECT
+        group_vendor,
+        company AS vendor,
+        group_of_transport_norm AS group_of_transport,
+        product,
+        COALESCE(SUM(qty_claim), 0)::float8 AS qty_claim,
+        COALESCE(SUM(amount_after_tax_idr), 0)::float8 AS amount_after_tax_idr
+      FROM filtered
+      GROUP BY 1, 2, 3, 4
+      ORDER BY qty_claim DESC NULLS LAST,
+               amount_after_tax_idr DESC NULLS LAST,
+               vendor ASC,
+               group_of_transport ASC,
+               product ASC
+      `,
+    );
+
+    return res.json({ success: true, data: result.rows, meta: { importId: filters.importId } });
+  } catch (error) {
+    logger.error('List Claim Susut by vendor failed:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Susut by vendor' } });
+  }
+};
+

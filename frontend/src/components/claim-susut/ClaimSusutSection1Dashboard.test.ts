@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { formatKg, sortGroups, type ClaimSusutAgingGroupRow } from './ClaimSusutSection1Dashboard'
+import {
+  formatGroupVendor,
+  formatKg,
+  sortGroups,
+  sortVendorRows,
+  type ClaimSusutAgingGroupRow,
+  type ClaimSusutVendorBreakdownRow,
+} from './ClaimSusutSection1Dashboard'
 
 const row = (group: string, total: number): ClaimSusutAgingGroupRow => ({
   group_of_transport: group,
@@ -28,6 +35,30 @@ describe('Claim Susut Section 1', () => {
       'VESSEL VOYAGE',
       '(Blank)',
     ])
+  })
+
+  it('orders By Vendor by qty claim, then amount after tax, and keeps an unmapped group', () => {
+    const vendor = (
+      group: string | null,
+      name: string,
+      qty: number,
+      amount: number,
+    ): ClaimSusutVendorBreakdownRow => ({
+      group_vendor: group,
+      vendor: name,
+      group_of_transport: 'VESSEL TC',
+      product: 'CPO',
+      qty_claim: qty,
+      amount_after_tax_idr: amount,
+    })
+    const sorted = sortVendorRows([
+      vendor(null, 'MAXIMA LINERS PT.', 100, 9_000),
+      vendor('INTERCO', 'LAWANA', 100, 50_000),
+      vendor('APICAL', 'SUPRA', 400, 1),
+    ])
+    expect(sorted.map((r) => r.vendor)).toEqual(['SUPRA', 'LAWANA', 'MAXIMA LINERS PT.'])
+    expect(formatGroupVendor(sorted[2].group_vendor)).toBe('-')
+    expect(formatGroupVendor('INTERCO')).toBe('INTERCO')
   })
 
   it('shows realised quantities in kg, so a 100 kg claim is not rounded to "0 MT"', () => {

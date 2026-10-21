@@ -8,6 +8,7 @@ import {
   listClaimSusutImports,
   listClaimSusutRows,
   listClaimSusutByGroupOfTransport,
+  listClaimSusutByVendor,
   getClaimSusutFilterOptions,
   getClaimSusutSummary,
   getClaimSusutRealized,
@@ -59,6 +60,7 @@ router.get('/rows', listClaimSusutRows);
 
 // Aggregate by group of transport
 router.get('/by-group-of-transport', listClaimSusutByGroupOfTransport);
+router.get('/by-vendor', listClaimSusutByVendor);
 
 export default router;
 

@@ -177,6 +177,7 @@ sap_by_po AS (
   SELECT DISTINCT ON (UPPER(TRIM(c.po_number)))
     TRIM(c.po_number) AS po_key,
     NULLIF(TRIM(c.incoterm), '') AS sap_incoterm,
+    NULLIF(TRIM(c.group_name), '') AS sap_group_name,
     NULLIF(TRIM(s.discharge_destination), '') AS sap_dest
   FROM contracts c
   LEFT JOIN contract_latest_spd_snapshot s
@@ -252,7 +253,10 @@ enriched AS (
       )), ''),
       '${CLAIM_SUSUT_BLANK}'
     ) AS incoterm,
-    COALESCE(NULLIF(TRIM(r.group_of_transport), ''), '${CLAIM_SUSUT_BLANK}') AS group_of_transport_norm
+    COALESCE(NULLIF(TRIM(r.group_of_transport), ''), '${CLAIM_SUSUT_BLANK}') AS group_of_transport_norm,
+    -- Vendor Group only when the claim PO matches contracts.po_number. Contract-ext fallback
+    -- is not used: values such as TBA match many contracts and many groups.
+    NULLIF(TRIM(sap_po.sap_group_name), '') AS group_vendor
   FROM claim_susut_rows r
   INNER JOIN active_import ai ON ai.id = r.import_id
   LEFT JOIN sap_by_po sap_po

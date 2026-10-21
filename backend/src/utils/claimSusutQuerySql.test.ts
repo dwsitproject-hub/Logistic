@@ -96,6 +96,10 @@ describe('buildClaimSusutFilteredCte', () => {
     expect(sql).toContain('r.amount_after_tax_idr');
     expect(sql).toContain("COALESCE(NULLIF(TRIM(r.vendor_name), ''), '(Blank)') AS company");
     expect(sql).toContain('c.incoterm');
+    expect(sql).toContain('NULLIF(TRIM(c.group_name), \'\') AS sap_group_name');
+    expect(sql).toContain('NULLIF(TRIM(sap_po.sap_group_name), \'\') AS group_vendor');
+    expect(sql).not.toContain('sap_ext.sap_group_name');
+    expect(sql).not.toContain('sap_po_as_ext.sap_group_name');
     expect(sql).not.toContain('spd.incoterm');
     expect(sql).not.toContain('master_vessel');
     expect(sql).not.toContain('delivery');

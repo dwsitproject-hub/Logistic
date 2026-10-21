@@ -12,7 +12,7 @@ import {
   trendUnits,
   type ClaimMutuCommodityUnitRow,
 } from './claimMutuView'
-import { sortLocations } from '@/components/claim-mutu/ClaimMutuSection1Dashboard'
+import { sortClaimMutuVendorRows, sortLocations, type ClaimMutuVendorRow } from '@/components/claim-mutu/ClaimMutuSection1Dashboard'
 
 const cu = (commodity: string, unit: string, os_amount: number, real_amount = 0): ClaimMutuCommodityUnitRow => ({
   commodity,
@@ -106,6 +106,22 @@ describe('Claim Mutu view', () => {
     expect(CLAIM_MUTU_DEFAULT_VISIBLE_IDS.every((id) => ids.includes(id))).toBe(true)
     const p = appendClaimMutuFilterParams(new URLSearchParams(), { b2b: 'exclude', claimStatuses: ['Claimed'] })
     expect(p.getAll('claimStatus')).toEqual(['Claimed'])
+  })
+
+  it('orders the Vendor tab by qty claim, then amount after tax', () => {
+    const row = (vendor: string, qty: number, amount: number, group: string | null): ClaimMutuVendorRow => ({
+      group_vendor: group,
+      vendor,
+      group_of_transport: '(Blank)',
+      product: 'CPO',
+      qty_claim: qty,
+      amount_after_tax_idr: amount,
+    })
+    expect(sortClaimMutuVendorRows([row('A', 10, 9, null), row('B', 10, 50, 'INTERCO'), row('C', 40, 1, 'APICAL')]).map((r) => r.vendor)).toEqual([
+      'C',
+      'B',
+      'A',
+    ])
   })
 
   it('picks value or quantity from a side pair', () => {

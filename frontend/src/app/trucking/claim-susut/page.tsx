@@ -41,6 +41,7 @@ import {
 import {
   ClaimSusutSection1Dashboard,
   type ClaimSusutRealized,
+  type ClaimSusutVendorBreakdownRow,
 } from '@/components/claim-susut/ClaimSusutSection1Dashboard'
 import {
   ClaimSusutUploadResultDialog,
@@ -152,6 +153,8 @@ export default function ClaimSusutPage() {
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [realizedLoading, setRealizedLoading] = useState(false)
   const [groupTransportLoading, setGroupTransportLoading] = useState(false)
+  const [vendorRows, setVendorRows] = useState<ClaimSusutVendorBreakdownRow[]>([])
+  const [vendorLoading, setVendorLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [uploadSummary, setUploadSummary] = useState<ClaimSusutUploadResult | null>(null)
@@ -402,6 +405,24 @@ export default function ClaimSusutPage() {
     }
   }, [])
 
+  const loadByVendor = useCallback(async (filters: ClaimSusutApiFilters) => {
+    if (!filters.importId) {
+      setVendorRows([])
+      return
+    }
+    setVendorLoading(true)
+    try {
+      const params = appendClaimSusutFilterParams(new URLSearchParams(), filters, {
+        includeDrilldown: true,
+        includeGroup: true,
+      })
+      const res = await api.get(`/claim-susut/by-vendor?${params.toString()}`)
+      setVendorRows((res.data?.data || []) as ClaimSusutVendorBreakdownRow[])
+    } finally {
+      setVendorLoading(false)
+    }
+  }, [])
+
   const loadByGroupOfTransport = useCallback(async (filters: ClaimSusutApiFilters) => {
     if (!filters.importId) {
       setGroupTransportRows([])
@@ -521,6 +542,25 @@ export default function ClaimSusutPage() {
   ])
 
   useEffect(() => {
+    if (!selectedImportId) {
+      setVendorRows([])
+      return
+    }
+    loadByVendor(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Shortage Claim by vendor')))
+  }, [
+    selectedImportId,
+    dateFrom,
+    dateTo,
+    selectedPlants,
+    selectedProducts,
+    selectedVendors,
+    selectedClaimStatuses,
+    selectedGroupsOfTransport,
+    loadByVendor,
+    scopeFilters,
+  ])
+
+  useEffect(() => {
     if (!selectedImportId) return
     loadRows(scopeFilters, { page }).catch((e) => setError(apiErrorMessage(e, 'Failed to load Shortage Claim rows')))
   }, [
@@ -553,7 +593,8 @@ export default function ClaimSusutPage() {
     summaryLoading ||
     realizedLoading ||
     uploading ||
-    groupTransportLoading
+    groupTransportLoading ||
+    vendorLoading
   usePageHeaderBusy(busy)
 
   const onUploadFile = async (uploadFile: File) => {
@@ -808,6 +849,8 @@ export default function ClaimSusutPage() {
           summaryLoading={summaryLoading}
           groupRows={groupTransportRows}
           groupLoading={groupTransportLoading}
+          vendorRows={vendorRows}
+          vendorLoading={vendorLoading}
           realized={realized}
           realizedLoading={realizedLoading}
           selectedGroups={selectedGroupsOfTransport}

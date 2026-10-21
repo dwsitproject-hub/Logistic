@@ -371,7 +371,38 @@ export const getClaimMutuDashboard = async (req: AuthRequest, res: Response) => 
     const byLocation = `SELECT dest_norm AS dest, MAX(unit_norm) AS unit,
                 COALESCE(SUM(qty),0)::float8 AS qty, COALESCE(SUM(amount),0)::float8 AS amount`;
 
-    const [imp, osTotals, aging, osByCu, osByLoc, realTotals, realByCu, realByLoc] = await Promise.all([
+    const byVendor = `
+         sap_by_po AS (
+           SELECT DISTINCT ON (UPPER(TRIM(c.po_number)))
+             TRIM(c.po_number) AS po_key,
+             NULLIF(TRIM(c.group_name), '') AS sap_group_name
+           FROM contracts c
+           WHERE NULLIF(TRIM(c.po_number), '') IS NOT NULL
+             AND EXISTS (
+               SELECT 1 FROM os k
+               WHERE NULLIF(TRIM(k.po_number), '') IS NOT NULL
+                 AND UPPER(TRIM(c.po_number)) = UPPER(TRIM(k.po_number))
+             )
+           ORDER BY UPPER(TRIM(c.po_number)), c.updated_at DESC NULLS LAST, c.created_at DESC NULLS LAST
+         )
+         SELECT
+           NULLIF(TRIM(sap.sap_group_name), '') AS group_vendor,
+           COALESCE(NULLIF(TRIM(o.vendor_name), ''), '(Blank)') AS vendor,
+           '(Blank)' AS group_of_transport,
+           o.commodity_norm AS product,
+           COALESCE(SUM(o.qty), 0)::float8 AS qty_claim,
+           COALESCE(SUM(o.amount), 0)::float8 AS amount_after_tax_idr
+         FROM os o
+         LEFT JOIN sap_by_po sap
+           ON NULLIF(TRIM(o.po_number), '') IS NOT NULL
+          AND UPPER(TRIM(o.po_number)) = UPPER(TRIM(sap.po_key))
+         GROUP BY 1, 2, 3, 4
+         ORDER BY qty_claim DESC NULLS LAST,
+                  amount_after_tax_idr DESC NULLS LAST,
+                  vendor ASC,
+                  product ASC`;
+
+    const [imp, osTotals, aging, osByCu, osByLoc, osByVendor, realTotals, realByCu, realByLoc] = await Promise.all([
       query(
         `SELECT id, os_period_label, real_period_label, period_month::text, b2b_source, real_sheet_name, warnings
            FROM claim_mutu_imports
@@ -396,6 +427,7 @@ export const getClaimMutuDashboard = async (req: AuthRequest, res: Response) => 
       ),
       query(`WITH ${os.sql} ${byCommodityUnit} FROM os GROUP BY 1, 2`, os.params),
       query(`WITH ${os.sql} ${byLocation} FROM os GROUP BY 1`, os.params),
+      query(`WITH ${os.sql}, ${byVendor}`, os.params),
       query(
         `WITH ${real.sql}
          SELECT COUNT(*)::int AS claims, COALESCE(SUM(qty),0)::float8 AS qty, COALESCE(SUM(amount),0)::float8 AS amount
@@ -426,6 +458,7 @@ export const getClaimMutuDashboard = async (req: AuthRequest, res: Response) => 
           unit: r.unit,
         })),
         byLocation: mergeSides(osByLoc.rows, realByLoc.rows, (r) => r.dest, (r) => ({ dest: r.dest, unit: r.unit })),
+        byVendor: osByVendor.rows,
       },
     });
   } catch (error) {
