@@ -56,8 +56,12 @@ const upload = multer({
   storage,
   limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    if (ALLOWED_DOC_MIMES.has(file.mimetype)) cb(null, true);
-    else cb(new Error(`Unsupported file type: ${file.mimetype}`));
+    const name = String(file.originalname ?? '').toLowerCase();
+    const mime = String(file.mimetype ?? '').toLowerCase();
+    // A dropped PDF sometimes arrives as octet-stream or with an empty type.
+    const pdfByName = name.endsWith('.pdf') && (mime === '' || mime === 'application/octet-stream' || mime === 'application/pdf');
+    if (ALLOWED_DOC_MIMES.has(mime) || pdfByName) cb(null, true);
+    else cb(new Error(`Unsupported file type: ${file.mimetype || 'unknown'}`));
   },
 });
 

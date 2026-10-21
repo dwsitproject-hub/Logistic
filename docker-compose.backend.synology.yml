@@ -1,5 +1,6 @@
 # Optional override: bind-mount Synology share into backend /app/uploads.
 # Commercial Documents year/month folders on \\172.30.1.94\APPs\dev\KLIP are PRODUCTION ONLY.
+# Shipment Contract / SI / BL files use documents/shipment/<kind>/<id> on that same root.
 #
 # Production (/opt/klip/.env):
 #   KLIP_ENV=prod

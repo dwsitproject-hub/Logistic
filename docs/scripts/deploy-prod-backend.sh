@@ -213,6 +213,25 @@ else
   printf '  the share is readable and the route is not through a Docker bridge\n'
 fi
 
+# Shipment Contract / SI / BL files are written under
+# /app/uploads/documents/shipment/<kind>/<id>. That directory is the Synology share only when
+# this overlay is attached. Without it they stay in the Docker volume and never show up in
+# \\172.30.1.94\APPs\dev\KLIP\documents\shipment.
+step "upload share (shipment documents and commercial docs)"
+UPLOAD_MOUNT="$(grep -E '^KLIP_UPLOAD_MOUNT=' .env | tail -n 1 | cut -d= -f2- \
+  | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//" || true)"
+UPLOAD_MOUNT="${UPLOAD_MOUNT:-/mnt/synology/dev/KLIP}"
+export KLIP_UPLOAD_MOUNT="$UPLOAD_MOUNT"
+UPLOAD_ON_NAS=0
+if timeout 10 ls "$UPLOAD_MOUNT" >/dev/null 2>&1; then
+  COMPOSE+=(-f docker-compose.backend.synology.yml)
+  UPLOAD_ON_NAS=1
+  printf '  %s -> /app/uploads\n' "$UPLOAD_MOUNT"
+  printf '  shipment files land in documents/shipment/contract|si|bl/<id> on that share\n'
+else
+  printf '  WARNING: %s is not readable. Uploads stay on the Docker volume and will not appear on Synology.\n' "$UPLOAD_MOUNT"
+fi
+
 IMAGE_BEFORE="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null || echo none)"
 
 step "pulling"
@@ -253,6 +272,13 @@ bad()  { printf '  [FAIL] %s\n' "$1"; FAILED=1; }
 logs() { "${COMPOSE[@]}" logs --tail=800 "$SERVICE" 2>/dev/null; }
 
 if docker exec "$CONTAINER" true >/dev/null 2>&1; then ok "container is running"; else bad "container is running"; fi
+
+UPLOAD_SOURCE="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/app/uploads"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
+if [[ "$UPLOAD_ON_NAS" == "1" && "$UPLOAD_SOURCE" == *"$UPLOAD_MOUNT"* ]]; then
+  ok "uploads are on Synology ($UPLOAD_MOUNT)"
+else
+  bad "uploads are on Synology (container /app/uploads source is '${UPLOAD_SOURCE:-none}', expected $UPLOAD_MOUNT)"
+fi
 
 if logs | grep -qiE 'migration.*(failed|error)'; then bad "no migration errors this boot"; else ok "no migration errors this boot"; fi
 if [[ "$WITHOUT_SHARE" == "1" ]]; then

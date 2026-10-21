@@ -1,13 +1,19 @@
 import { Request, Response } from 'express';
 import fs from 'fs';
+import path from 'path';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { scanFileWithClamdIfConfigured } from '../services/clamScan.service';
 import {
+  allocateShipmentNasFilename,
+  buildShipmentNasFileStem,
   ensureUploadDir,
   resolveUploadAbsolutePath,
+  shipmentNasFileToken,
+  shipmentStructuredDocKindFromType,
   toRelativeUploadPath,
 } from '../utils/fileUpload';
+import { AuthRequest } from '../middleware/auth';
 
 export { ensureUploadDir };
 
@@ -66,15 +72,18 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
       });
     }
 
-    const relativePath = toRelativeUploadPath(file.path);
+    const stored = await applyShipmentNasFilename(req, file, document_type, shipment_id);
+    if (stored.error) {
+      return res.status(stored.status).json({ success: false, error: { message: stored.error } });
+    }
 
     const insert = await query(
       `INSERT INTO documents (document_type, file_name, file_path, file_size, mime_type, contract_id, shipment_id, payment_id, trucking_operation_id, description)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [
         document_type || 'OTHER',
-        file.originalname,
-        relativePath,
+        stored.fileName,
+        stored.filePath,
         file.size,
         file.mimetype,
         contract_id || null,
@@ -102,6 +111,65 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, error: { message: 'Failed to upload document' } });
   }
 };
+
+function uploaderLabel(req: Request): string {
+  const user = (req as AuthRequest).user;
+  const username = String(user?.username ?? '').trim();
+  if (username) return username.split('@')[0];
+  const email = String(user?.email ?? '').trim();
+  if (email) return email.split('@')[0];
+  return 'user';
+}
+
+function discardUploadedFile(filePath: string): void {
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Contract, SI, and BL are renamed on disk to
+ * operation_id-ctr|si|bl-ddmmyy-username.pdf before the row is stored.
+ * Other document types keep the name multer already wrote.
+ */
+async function applyShipmentNasFilename(
+  req: Request,
+  file: Express.Multer.File,
+  documentType: string | undefined,
+  shipmentId: string | undefined,
+): Promise<{ fileName: string; filePath: string; error?: undefined; status?: undefined } | { error: string; status: number; fileName?: undefined; filePath?: undefined }> {
+  const kind = shipmentStructuredDocKindFromType(String(documentType ?? ''));
+  const token = kind ? shipmentNasFileToken(kind) : null;
+  const shipment = String(shipmentId ?? '').trim();
+  if (!token || !shipment) {
+    return { fileName: file.originalname, filePath: toRelativeUploadPath(file.path) };
+  }
+
+  const found = await query('SELECT operation_id FROM shipments WHERE id = $1', [shipment]);
+  if (found.rows.length === 0) {
+    discardUploadedFile(file.path);
+    return { error: 'Shipment not found', status: 404 };
+  }
+  const operationId = String(found.rows[0]?.operation_id ?? '').trim();
+  if (!operationId) {
+    discardUploadedFile(file.path);
+    return { error: 'This shipment has no operation id, so the file cannot be named', status: 400 };
+  }
+
+  const ext = path.extname(file.originalname).toLowerCase() || '.pdf';
+  const stem = buildShipmentNasFileStem({
+    operationId,
+    token,
+    uploadedBy: uploaderLabel(req),
+  });
+  const dir = path.dirname(file.path);
+  const filename = allocateShipmentNasFilename(dir, stem, ext);
+  const nextPath = path.join(dir, filename);
+  fs.renameSync(file.path, nextPath);
+  return { fileName: filename, filePath: toRelativeUploadPath(nextPath) };
+}
 
 export const downloadDocument = async (req: Request, res: Response) => {
   try {

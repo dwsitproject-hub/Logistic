@@ -50,9 +50,12 @@ export function toRelativeUploadPath(absolutePath: string): string {
 }
 
 /**
- * The folder a shipment document lands in under the upload root, which is the Synology share in
- * production. `sld` and `sdd` remain so files uploaded before 2026-09-25 stay reachable; nothing
- * writes to them any more.
+ * The folder a shipment document lands in under the upload root.
+ *
+ * Production mounts that root at `\\172.30.1.94\APPs\dev\KLIP`, so a Contract file for shipment
+ * `abc` is `documents\shipment\contract\abc\`. SI and BL use their own folders beside it.
+ * `sld` and `sdd` stay in the same tree so files uploaded before 2026-09-25 stay reachable;
+ * nothing writes to them any more.
  */
 export type ShipmentStructuredDocKind = 'contract' | 'si' | 'bl' | 'sld' | 'sdd';
 
@@ -64,7 +67,7 @@ const SHIPMENT_STRUCTURED_DOC_KINDS = new Set<ShipmentStructuredDocKind>([
   'sdd',
 ]);
 
-/** Relative subdir under upload root for Synology-ready shipment document layout. */
+/** Relative subdir under upload root: `documents/shipment/<kind>/<shipment id>`. */
 export function buildShipmentDocumentUploadSubdir(
   shipmentId: string,
   kind: ShipmentStructuredDocKind,
@@ -79,15 +82,83 @@ export function buildShipmentDocumentUploadSubdir(
   if (!SHIPMENT_STRUCTURED_DOC_KINDS.has(kind)) {
     throw new Error(`Unsupported shipment document kind: ${kind}`);
   }
-  return path.posix.join('shipments', safeId, kind);
+  return path.posix.join('documents', 'shipment', kind, safeId);
+}
+
+const SHIPMENT_NAS_FILE_TOKEN: Partial<Record<ShipmentStructuredDocKind, 'ctr' | 'si' | 'bl'>> = {
+  contract: 'ctr',
+  si: 'si',
+  bl: 'bl',
+};
+
+/** Contract, SI, and BL use a short token in the Synology file name. SLD/SDD do not. */
+export function shipmentNasFileToken(
+  kind: ShipmentStructuredDocKind,
+): 'ctr' | 'si' | 'bl' | null {
+  return SHIPMENT_NAS_FILE_TOKEN[kind] ?? null;
+}
+
+/** Upload calendar date in Asia/Jakarta as ddmmyy. */
+export function formatUploadDateDdmmyy(uploadedAt: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+  }).formatToParts(uploadedAt);
+  const day = parts.find((part) => part.type === 'day')?.value ?? '00';
+  const month = parts.find((part) => part.type === 'month')?.value ?? '00';
+  const year = parts.find((part) => part.type === 'year')?.value ?? '00';
+  return `${day}${month}${year}`;
+}
+
+/** Keep a path segment readable: letters, digits, dot, underscore, hyphen. */
+export function sanitizeNasNamePart(value: string, fallback: string): string {
+  const cleaned = String(value ?? '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w.-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^[.-]+|[.-]+$/g, '')
+    .slice(0, 80);
+  return cleaned || fallback;
+}
+
+/**
+ * `operation_id-ctr|si|bl-ddmmyy-username`, without the extension.
+ * The username is the KLIP login, not the original PDF name.
+ */
+export function buildShipmentNasFileStem(input: {
+  operationId: string;
+  token: 'ctr' | 'si' | 'bl';
+  uploadedBy: string;
+  uploadedAt?: Date;
+}): string {
+  const operationId = sanitizeNasNamePart(input.operationId, 'operation');
+  const uploadedBy = sanitizeNasNamePart(input.uploadedBy, 'user');
+  const date = formatUploadDateDdmmyy(input.uploadedAt ?? new Date());
+  return `${operationId}-${input.token}-${date}-${uploadedBy}`;
+}
+
+/** First free name in `dir`. A second upload the same day becomes `...-2.pdf`. */
+export function allocateShipmentNasFilename(dir: string, stem: string, extension: string): string {
+  const ext = extension.startsWith('.') ? extension.toLowerCase() : `.${extension.toLowerCase()}`;
+  const safeExt = ext === '.' ? '.pdf' : ext;
+  let candidate = `${stem}${safeExt}`;
+  let sequence = 2;
+  while (fs.existsSync(path.join(dir, candidate)) && sequence < 100) {
+    candidate = `${stem}-${sequence}${safeExt}`;
+    sequence += 1;
+  }
+  return candidate;
 }
 
 /**
  * Map API document_type to its structured shipment subfolder.
  *
  * A type that is not listed returns null and the file lands in the flat upload root - which is what
- * happened to Contract, SI and BL documents until they were added here, so they never reached the
- * shipments/<id>/<kind> layout the Synology share expects.
+ * happened to Contract, SI and BL documents until they were added here, so they never reached
+ * `documents/shipment/<kind>/<shipment id>` on the Synology share.
  */
 export function shipmentStructuredDocKindFromType(
   documentType: string,
