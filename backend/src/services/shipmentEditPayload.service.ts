@@ -192,7 +192,6 @@ const SHIPMENT_BY_ID_SQL = `
 
 const ACTIVE_PORT_FILTER = 'AND COALESCE(vlp.is_cancelled, false) = false';
 const ACTIVE_LOADING_JOIN = ' AND COALESCE(vlp1.is_cancelled, false) = false';
-const ACTIVE_DISCHARGE_JOIN = ' AND COALESCE(vlpd.is_cancelled, false) = false';
 
 const PORTS_SELECT = `
   vlp.id,
@@ -414,8 +413,15 @@ async function loadPortsAndInfo(
     LEFT JOIN contracts c ON s.contract_id = c.id
     LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id
       AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${ACTIVE_LOADING_JOIN}
-    LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id
-      AND vlpd.is_discharge_port = true${ACTIVE_DISCHARGE_JOIN}
+    LEFT JOIN LATERAL (
+      SELECT *
+      FROM vessel_loading_ports vlpd_pick
+      WHERE vlpd_pick.shipment_id = s.id
+        AND COALESCE(vlpd_pick.is_discharge_port, false) = true
+        AND COALESCE(vlpd_pick.is_cancelled, false) = false
+      ORDER BY vlpd_pick.port_sequence NULLS LAST, vlpd_pick.id
+      LIMIT 1
+    ) vlpd ON TRUE
     ${SHIPMENT_ATA_OVERRIDES_JOIN}
     WHERE s.id = $1::uuid
     LIMIT 1`,

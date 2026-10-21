@@ -1,3 +1,5 @@
+import { sqlShipmentListPrimaryRowValueAgg } from './shipmentListPrimaryShipmentSql';
+
 /** LEFT JOIN for shipment list / detail queries. */
 export const SHIPMENT_ATA_OVERRIDES_JOIN = `
   LEFT JOIN shipment_ata_overrides sao ON sao.shipment_id = s.id`;
@@ -208,8 +210,16 @@ export function sqlOwnStoDischargeAtc(atcExpr: string, groupKeyExpr: string, shi
  *
  * Without `groupKeyExpr` each own-STO column is the same MAX, because every shipment_base variant
  * has to expose the same columns or the summary refresh fails on the one that does not.
+ *
+ * `displayCompleteDischargeFromPrimary` is the View Table cell. It is the ATC of the shipment Edit
+ * opens (the primary member), read the same way as the modal: JPS, then the override, then the
+ * shipment column, then the first active discharge port. A sibling member's date stays off that cell.
+ * The own-STO column and the pipeline summary keep the group MAX, because those decide status.
  */
-export function buildShipmentListAtaSelectSql(groupKeyExpr?: string): string {
+export function buildShipmentListAtaSelectSql(
+  groupKeyExpr?: string,
+  options?: { displayCompleteDischargeFromPrimary?: boolean },
+): string {
   const arrivalLp = `COALESCE(sao.ata_arrival, s.ata_arrival, vlp_l.vlp_load_ata_va)`;
   const berthedLp = `COALESCE(sao.ata_berthed, s.ata_berthed, vlp_l.vlp_load_ata_vb)`;
   const startLoad = `COALESCE(sao.ata_loading_start, s.ata_loading_start, vlp_l.vlp_load_ata_ls)`;
@@ -221,6 +231,18 @@ export function buildShipmentListAtaSelectSql(groupKeyExpr?: string): string {
   const atc = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete')}, sao.ata_discharge_complete, s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)`;
   const own = (expr: string) => (groupKeyExpr ? sqlOwnStoMilestone(expr, groupKeyExpr, 's') : `MAX(${expr})`);
   const ownStoAtc = groupKeyExpr ? sqlOwnStoDischargeAtc(atc, groupKeyExpr, 's') : `MAX(${atc})`;
+  const modalAtc = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete')}, sao.ata_discharge_complete, s.ata_discharge_complete, (
+            SELECT v_atc.ata_loading_completed::date
+            FROM vessel_loading_ports v_atc
+            WHERE v_atc.shipment_id = s.id
+              AND COALESCE(v_atc.is_discharge_port, false) = true
+              AND COALESCE(v_atc.is_cancelled, false) = false
+            ORDER BY v_atc.port_sequence NULLS LAST, v_atc.id
+            LIMIT 1
+          ))`;
+  const displayAtc = options?.displayCompleteDischargeFromPrimary
+    ? sqlShipmentListPrimaryRowValueAgg(modalAtc, groupKeyExpr, 'c', 'l', 's', 'cs_sto', 'sao')
+    : `MAX(${atc})`;
   return `
           MAX(${arrivalLp}) as ata_vessel_arrival_at_loading_port,
           ${own(arrivalLp)} as ata_vessel_arrival_at_loading_port_own_sto,
@@ -238,6 +260,6 @@ export function buildShipmentListAtaSelectSql(groupKeyExpr?: string): string {
           ${own(berthedDp)} as ata_vessel_berthed_at_discharge_port_own_sto,
           MAX(${startDisc}) as ata_vessel_start_discharging,
           ${own(startDisc)} as ata_vessel_start_discharging_own_sto,
-          MAX(${atc}) as ata_vessel_complete_discharge,
+          ${displayAtc} as ata_vessel_complete_discharge,
           ${ownStoAtc} as ata_vessel_complete_discharge_own_sto,`;
 }

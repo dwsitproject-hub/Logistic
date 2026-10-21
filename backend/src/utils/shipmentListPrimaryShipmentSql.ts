@@ -129,3 +129,31 @@ export function sqlShipmentListPrimaryFieldAgg(
   return `(array_agg(${fieldExpr} ORDER BY ${orderBy}
   ) FILTER (WHERE ${shipmentAlias}.id IS NOT NULL AND NULLIF(TRIM((${fieldExpr})::text), '') IS NOT NULL))[1]`;
 }
+
+/**
+ * The primary member's value, including NULL.
+ *
+ * `sqlShipmentListPrimaryFieldAgg` skips blanks so a vessel name falls through to the next member.
+ * A date must not: the shipment Edit opens is this row, and a sibling's ATA must not fill the cell
+ * when that shipment's own date is empty (OP-1004032737-34122029, ATA Discharge Complete).
+ */
+export function sqlShipmentListPrimaryRowValueAgg(
+  fieldExpr: string,
+  stoKeyExpr?: string,
+  contractAlias = 'c',
+  spdAlias = 'l',
+  shipmentAlias = 's',
+  contractStosAlias?: string,
+  ataOverrideAlias?: string,
+): string {
+  const orderBy = sqlShipmentListPrimaryOrderBy(
+    stoKeyExpr,
+    contractAlias,
+    spdAlias,
+    shipmentAlias,
+    contractStosAlias,
+    ataOverrideAlias,
+  );
+  return `(array_agg(${fieldExpr} ORDER BY ${orderBy}
+  ) FILTER (WHERE ${shipmentAlias}.id IS NOT NULL))[1]`;
+}

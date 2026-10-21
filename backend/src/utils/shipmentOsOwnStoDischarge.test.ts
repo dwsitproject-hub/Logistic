@@ -30,6 +30,14 @@ describe('a sibling STO\'s discharge does not finish this STO for the OS', () =>
     expect(buildShipmentListAtaSelectSql()).toContain('as ata_vessel_complete_discharge_own_sto');
   });
 
+  it('shows the Edit shipment ATC on the view table instead of a sibling MAX', () => {
+    const sql = buildShipmentListAtaSelectSql('K', { displayCompleteDischargeFromPrimary: true }).replace(/\s+/g, ' ');
+    expect(sql).toContain('array_agg');
+    expect(sql).toContain('COALESCE(v_atc.is_cancelled, false) = false');
+    expect(sql).toContain(')[1] as ata_vessel_complete_discharge');
+    expect(sql).toContain('as ata_vessel_complete_discharge_own_sto');
+  });
+
   it('leaves the group-wide column for the list to DISPLAY, but the page decides its stage on the own-STO one', () => {
     // The list keeps showing the ATA it always has. The STAGE of a row (list status, status filters, card counts, OS strip) reads the narrowed column, so a
     // sibling STO's discharge does not make a row COMPLETED in the list while the OS path counts it as active (TANJUNG PURA 2026-10-20, 8,144.9 MT).
