@@ -19,6 +19,35 @@ export function resolveShipmentDisplayStoNumber(stoNumber: unknown): string {
   return sto
 }
 
+/**
+ * STO field in Edit Shipment.
+ *
+ * The list lookup key of an OP- voyage is the operation id, which is not an STO. The SAP shell
+ * of that voyage still has a numeric shipment_id and keeps the contract STO. A later Add New
+ * row (MNL- or `{sto}-{contract}`) does not. When the table already computed the column, that
+ * value wins so the modal matches the row the user opened.
+ */
+export function resolveEditShipmentStoNumber(args: {
+  listStoNumber?: string | null
+  listStoProvided?: boolean
+  lookupKey?: string | null
+  shipmentId?: string | null
+  operationId?: string | null
+  contractStoNumber?: string | null
+}): string {
+  if (args.listStoProvided) {
+    return resolveShipmentDisplayStoNumber(args.listStoNumber)
+  }
+  const operationId = String(args.operationId ?? '').trim()
+  const shipmentId = String(args.shipmentId ?? '').trim()
+  const klipAddedVoyage =
+    operationId.startsWith('OP-') && shipmentId.length > 0 && !/^\d+$/.test(shipmentId)
+  if (klipAddedVoyage) return '-'
+  const fromLookup = resolveShipmentDisplayStoNumber(args.lookupKey)
+  if (fromLookup !== '-') return fromLookup
+  return resolveShipmentDisplayStoNumber(args.contractStoNumber)
+}
+
 /** Grouping / API lookup key (details, loading ports) — may be sto_key or operation_id. */
 export function resolveShipmentApiLookupKey(row: {
   sto_key?: string | null

@@ -1361,6 +1361,7 @@ function ShipmentsPageContent() {
     shipmentId: string
     editContractId: string | null
     editStoNumber: string
+    displayStoNumber: string | null
     editContractNumbers: string
     readOnly?: boolean
   } | null>(null)
@@ -2472,6 +2473,7 @@ function ShipmentsPageContent() {
       shipmentId: shipment.id,
       editContractId: editContractId || null,
       editStoNumber: resolveShipmentApiLookupKey(shipment),
+      displayStoNumber: String(shipment.sto_number ?? '').trim() || null,
       editContractNumbers: shipment.contract_numbers ?? '',
       readOnly,
     })
@@ -9950,6 +9952,7 @@ function ShipmentsPageContent() {
         editStoNumber={
           editShipmentFromTable?.editStoNumber ?? plotShipmentFromTable?.editStoNumber ?? null
         }
+        displayStoNumber={editShipmentFromTable?.displayStoNumber}
         editContractNumbers={
           editShipmentFromTable?.editContractNumbers ?? plotShipmentFromTable?.editContractNumbers ?? null
         }

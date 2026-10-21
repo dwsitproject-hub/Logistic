@@ -228,8 +228,11 @@ export function shipmentListSeaStoKeyExpr(
 }
 
 /**
- * STO number shown on the row. A second FOB voyage is its own group (see shipmentListSeaStoKeyExpr),
- * but the number shown is still the Type V STO, not the operation id.
+ * STO number shown on the row.
+ *
+ * The SAP voyage still shows the Type V STO, even after KLIP writes an OP- id onto that shell
+ * (shipment_id stays the numeric SAP id). A later Add New voyage is its own OP- row and its
+ * shipment_id is MNL- or `{sto}-{contract}`, so the contract STO must not appear on it.
  */
 export function shipmentListSeaDisplayStoNumberExpr(
   contractAlias = 'c',
@@ -239,16 +242,23 @@ export function shipmentListSeaDisplayStoNumberExpr(
   const inc = contractEffectiveIncotermExpr(contractAlias);
   const seaStoPick = contractSeaVesselStoNumberPickExpr(contractAlias);
   const base = shipmentListDisplayStoNumberExpr(contractAlias, spdAlias, shipmentAlias);
-  return `NULLIF(TRIM((COALESCE(
-    CASE
-      WHEN (${inc}) = 'FOB'
-        AND NULLIF(TRIM(${shipmentAlias}.vessel_name), '') IS NOT NULL
-        AND (${seaStoPick}) IS NOT NULL
-      THEN (${seaStoPick})
-      ELSE NULL
-    END,
-    ${base}
-  ))::text), '')`;
+  const ownVoyageId = sqlKlipOwnVoyageOperationIdExpr(shipmentAlias, contractAlias);
+  const sapShipmentId = `NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '') ~ '^[0-9]+$'`;
+  return `CASE
+    WHEN (${ownVoyageId}) IS NOT NULL
+      AND NOT (${sapShipmentId})
+    THEN NULL
+    ELSE NULLIF(TRIM((COALESCE(
+      CASE
+        WHEN (${inc}) = 'FOB'
+          AND NULLIF(TRIM(${shipmentAlias}.vessel_name), '') IS NOT NULL
+          AND (${seaStoPick}) IS NOT NULL
+        THEN (${seaStoPick})
+        ELSE NULL
+      END,
+      ${base}
+    ))::text), '')
+  END`;
 }
 
 /**

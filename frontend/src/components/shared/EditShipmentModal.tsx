@@ -58,8 +58,8 @@ import {
 } from '@/lib/shipmentVesselCompare'
 import { invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import {
+  resolveEditShipmentStoNumber,
   resolveShipmentApiLookupKey,
-  resolveShipmentDisplayStoNumber,
 } from '@/lib/shipmentStoDisplay'
 import { formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
@@ -787,8 +787,13 @@ export type EditShipmentModalProps = {
   onSubmit: (payload: AddNewShipmentSubmitPayload) => Promise<void>
   editContractId?: string | null
   editShipmentId?: string | null
-  /** STO from Shipments list row (sto_key / displayed sto_number). */
+  /** Lookup key from the list row (sto_key). May be an operation id. */
   editStoNumber?: string | null
+  /**
+   * STO column of the list row that opened this modal. Null means that row has no STO.
+   * Omit when the caller has no list column (the modal then derives it from the shipment).
+   */
+  displayStoNumber?: string | null
   /** All contract numbers on the grouped list row (comma-separated). */
   editContractNumbers?: string | null
   /** Read-only mode (e.g. Cancelled shipments on Shipments view table). */
@@ -811,6 +816,7 @@ export function EditShipmentModal({
   editContractId = null,
   editShipmentId: editShipmentIdProp = null,
   editStoNumber = null,
+  displayStoNumber,
   editContractNumbers = null,
   readOnly = false,
   enableAtaQualityEditInView = false,
@@ -1352,20 +1358,18 @@ export function EditShipmentModal({
         setEditContext(editContext)
         setSelectedAddPoOption(null)
 
-        // Display the list STO (preferredStoNumber = row sto_key). Payload also receives
-        // that STO so SAP delivered/receive/OS are scoped to the Type V sea leg, not the
-        // Type T shipment_id sibling on FOB mixed POs.
-        const preferredLookup = String(preferredStoNumber ?? '').trim()
-        const preferredIsOwnVoyage =
-          preferredLookup.startsWith('OP-') ||
-          preferredLookup.startsWith('MNL-') ||
-          preferredLookup.startsWith('MSEA-')
-        const preferredDisplaySto = resolveShipmentDisplayStoNumber(preferredStoNumber)
-        const displaySto = preferredIsOwnVoyage
-          ? '-'
-          : preferredDisplaySto !== '-'
-            ? preferredDisplaySto
-            : resolveShipmentDisplayStoNumber(row.contract_sto_number ?? row.sto_number)
+        // preferredStoNumber is the list lookup key (sto_key), which is the OP- id on a
+        // second voyage. The STO field follows the table column when the page passed it,
+        // otherwise the SAP shell (numeric shipment_id) keeps the contract STO and a
+        // KLIP-added row does not.
+        const displaySto = resolveEditShipmentStoNumber({
+          listStoNumber: displayStoNumber,
+          listStoProvided: displayStoNumber !== undefined,
+          lookupKey: preferredStoNumber,
+          shipmentId: row.shipment_id as string | null,
+          operationId: row.operation_id as string | null,
+          contractStoNumber: (row.contract_sto_number ?? row.sto_number) as string | null,
+        })
 
         const detailsData = Array.isArray(payload.contractDetails) ? payload.contractDetails : []
         let contractDetails = await buildContractDetailRows(
@@ -1656,7 +1660,7 @@ export function EditShipmentModal({
         setLoading(false)
       }
     },
-    [loadActivityLog, loadShipmentRemarks, loadShipmentDocuments, editContractNumbers, readOnly],
+    [loadActivityLog, loadShipmentRemarks, loadShipmentDocuments, editContractNumbers, readOnly, displayStoNumber],
   )
 
   const handleAddPo = useCallback(async (reopenOperation = false) => {

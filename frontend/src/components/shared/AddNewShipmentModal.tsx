@@ -391,8 +391,10 @@ export type AddNewShipmentModalProps = {
   editContractId?: string | null
   /** When set (Shipments table edit), load this shipment directly instead of first match by contract. */
   editShipmentId?: string | null
-  /** STO No shown on the Shipments table row — keeps modal aligned with grouped list display. */
+  /** Lookup key from the Shipments table row (sto_key). May be an operation id. */
   editStoNumber?: string | null
+  /** STO column of the row that opened Edit. Null means the table shows no STO. */
+  displayStoNumber?: string | null
   /** Comma-separated contract numbers from grouped Shipments list row. */
   editContractNumbers?: string | null
   mode?: 'add' | 'edit'
@@ -421,6 +423,7 @@ export function AddNewShipmentModal({
   editContractId = null,
   editShipmentId: editShipmentIdProp = null,
   editStoNumber = null,
+  displayStoNumber,
   editContractNumbers = null,
   mode = 'add',
   plotShipmentId = null,
@@ -2254,6 +2257,7 @@ export function AddNewShipmentModal({
         editContractId={editContractId}
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
+        displayStoNumber={displayStoNumber}
         editContractNumbers={editContractNumbers}
         onSubmit={onSubmit}
         onShipmentChanged={onShipmentChanged}
@@ -2274,6 +2278,7 @@ export function AddNewShipmentModal({
         editContractId={editContractId}
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
+        displayStoNumber={displayStoNumber}
         editContractNumbers={editContractNumbers}
         onShipmentChanged={onShipmentChanged}
       />

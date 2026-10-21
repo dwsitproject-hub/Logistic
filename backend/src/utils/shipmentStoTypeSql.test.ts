@@ -140,10 +140,13 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain('THEN NULLIF(TRIM(s.operation_id::text), \'\')');
   });
 
-  it('shipmentListSeaDisplayStoNumberExpr wraps sea sto key', () => {
-    const sql = shipmentListSeaDisplayStoNumberExpr('c', 'l', 's');
+  it('shipmentListSeaDisplayStoNumberExpr keeps the Type V STO on the SAP shell and hides it on a KLIP-added OP- voyage', () => {
+    const sql = shipmentListSeaDisplayStoNumberExpr('c', 'l', 's').replace(/\s+/g, ' ');
     expect(sql).toContain('NULLIF(TRIM');
     expect(sql).toContain("= 'FOB'");
+    expect(sql).toContain("operation_id::text), '') ~ '^OP-'");
+    expect(sql).toContain("shipment_id::text), '') ~ '^[0-9]+$'");
+    expect(sql).toContain('THEN NULL');
   });
 
   it('sqlIsSapSeaStoRowExpr matches Type V or any row naming a vessel (a Type T tug / barge too)', () => {
