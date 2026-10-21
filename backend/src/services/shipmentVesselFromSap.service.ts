@@ -8,6 +8,7 @@ import {
   canonicalVesselName,
 } from '../utils/sapVesselFields';
 import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
+import { sqlResolveMasterVesselIdFromShipment } from '../utils/masterVesselCanonicalSql';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
 import { resolveMasterVessel } from './resolveMasterVessel.service';
 
@@ -146,6 +147,56 @@ export function mergeShipmentVesselFromSapRow(
   });
 }
 
+/**
+ * The master vessel a shipment of the STO gets: its OWN - the stored id, else the one its own vessel code (alias or code) or normalised name resolves to.
+ * The row the page is showing hands over its master id ($5) only to a shipment that names no vessel at all.
+ *
+ * The update used to write the page row's master id on EVERY shipment of the STO's contract whose id was empty, and on any row whose code or name it was
+ * filling it replaced a stored id. A contract carried by several vessels therefore got the first-processed vessel's id on all of them: JPS eligibility
+ * (the vessel / DataHub code it sends) and the vessel busy / idle view read that stored id first. Found on a dev copy: 19 of 86 ids written by page views
+ * contradicted both the shipment's own code and its name.
+ */
+const OWN_MASTER_VESSEL_SQL = `COALESCE(
+              ${sqlResolveMasterVesselIdFromShipment('s')},
+              CASE WHEN NULLIF(TRIM(s.vessel_code), '') IS NULL AND NULLIF(TRIM(s.vessel_name), '') IS NULL THEN $5::uuid END
+            )`;
+
+/** Fill the vessel fields of every shipment of one STO from the SAP row the page shows. $1 STO key, $2 code, $3 name, $4 owner, $5 the row's master id. */
+export const SHIPMENT_VESSEL_BACKFILL_STO_UPDATE_SQL = `UPDATE shipments s SET
+            vessel_code = COALESCE(NULLIF(TRIM(s.vessel_code), ''), $2),
+            vessel_name = COALESCE(NULLIF(TRIM(s.vessel_name), ''), $3),
+            vessel_owner = COALESCE(NULLIF(TRIM(s.vessel_owner), ''), $4),
+            master_vessel_id = ${OWN_MASTER_VESSEL_SQL},
+            updated_at = CURRENT_TIMESTAMP
+          FROM contracts c
+          LEFT JOIN LATERAL (
+            SELECT NULLIF(TRIM(COALESCE(
+              spd.sto_number::text,
+              spd.data->'raw'->>'STO No.',
+              spd.data->'raw'->>'STO Number',
+              spd.data->'shipment'->>'sto_no',
+              spd.data->'contract'->>'sto_no'
+            )), '') AS effective_sto
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+              AND TRIM(spd.contract_number) != ''
+            ORDER BY spd.created_at DESC NULLS LAST
+            LIMIT 1
+          ) l ON TRUE
+          WHERE s.contract_id = c.id
+            AND TRIM(COALESCE(
+              c.sto_number::text,
+              l.effective_sto,
+              CASE WHEN TRIM(s.shipment_id::text) ~ '^[0-9]+$' THEN s.shipment_id::text END,
+              s.operation_id,
+              s.shipment_id::text
+            )) = TRIM($1::text)
+            AND (
+              s.vessel_code IS NULL OR TRIM(s.vessel_code) = ''
+              OR s.vessel_name IS NULL OR TRIM(s.vessel_name) = ''
+              OR (s.master_vessel_id IS NULL AND (${OWN_MASTER_VESSEL_SQL}) IS NOT NULL)
+            )`;
+
 /** Persist SAP vessel onto shipments + master_vessels (page-scoped, fire-and-forget). */
 export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
   const vesselCode = trimOrNull(row.vessel_code);
@@ -189,50 +240,14 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
          * ~0.8 s alone and ~2 s under the page's own load (four at a time, beside the list queries). Same rows updated: 62 STO keys x 2 on the dev
          * copy, in rolled-back transactions, gave identical id sets (113 rows); 827 -> 22 ms each.
          */
-        await query(
-          `UPDATE shipments s SET
-            vessel_code = COALESCE(NULLIF(TRIM(s.vessel_code), ''), $2),
-            vessel_name = COALESCE(NULLIF(TRIM(s.vessel_name), ''), $3),
-            vessel_owner = COALESCE(NULLIF(TRIM(s.vessel_owner), ''), $4),
-            master_vessel_id = COALESCE($5::uuid, s.master_vessel_id),
-            updated_at = CURRENT_TIMESTAMP
-          FROM contracts c
-          LEFT JOIN LATERAL (
-            SELECT NULLIF(TRIM(COALESCE(
-              spd.sto_number::text,
-              spd.data->'raw'->>'STO No.',
-              spd.data->'raw'->>'STO Number',
-              spd.data->'shipment'->>'sto_no',
-              spd.data->'contract'->>'sto_no'
-            )), '') AS effective_sto
-            FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id
-              AND TRIM(spd.contract_number) != ''
-            ORDER BY spd.created_at DESC NULLS LAST
-            LIMIT 1
-          ) l ON TRUE
-          WHERE s.contract_id = c.id
-            AND TRIM(COALESCE(
-              c.sto_number::text,
-              l.effective_sto,
-              CASE WHEN TRIM(s.shipment_id::text) ~ '^[0-9]+$' THEN s.shipment_id::text END,
-              s.operation_id,
-              s.shipment_id::text
-            )) = TRIM($1::text)
-            AND (
-              s.vessel_code IS NULL OR TRIM(s.vessel_code) = ''
-              OR s.vessel_name IS NULL OR TRIM(s.vessel_name) = ''
-              OR ($5::uuid IS NOT NULL AND s.master_vessel_id IS NULL)
-            )`,
-          [stoKey, vesselCode, vesselName, trimOrNull(row.vessel_owner), masterVesselId],
-        );
+        await query(SHIPMENT_VESSEL_BACKFILL_STO_UPDATE_SQL, [stoKey, vesselCode, vesselName, trimOrNull(row.vessel_owner), masterVesselId]);
       } else if (shipmentId) {
         await query(
           `UPDATE shipments SET
             vessel_code = COALESCE(NULLIF(TRIM(vessel_code), ''), $2),
             vessel_name = COALESCE(NULLIF(TRIM(vessel_name), ''), $3),
             vessel_owner = COALESCE(NULLIF(TRIM(vessel_owner), ''), $4),
-            master_vessel_id = COALESCE($5::uuid, master_vessel_id),
+            master_vessel_id = COALESCE(master_vessel_id, $5::uuid),
             updated_at = CURRENT_TIMESTAMP
           WHERE id = $1::uuid
             AND (
