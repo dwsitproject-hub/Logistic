@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import { RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
+import { formatProductList, topGroupVendorRollups } from '@/lib/claimGroupVendorRollup'
 import {
   CLAIM_MUTU_BLANK,
   addPair,
@@ -53,20 +54,6 @@ export type ClaimMutuVendorRow = {
   amount_after_tax_idr: number
 }
 
-/** Largest Qty Claim, then largest Amount After Tax. Unmapped Group Vendor stays in the list. */
-export function sortClaimMutuVendorRows(rows: ClaimMutuVendorRow[]): ClaimMutuVendorRow[] {
-  return [...rows].sort((a, b) => {
-    const qty = (Number(b.qty_claim) || 0) - (Number(a.qty_claim) || 0)
-    if (qty !== 0) return qty
-    return (Number(b.amount_after_tax_idr) || 0) - (Number(a.amount_after_tax_idr) || 0)
-  })
-}
-
-function formatGroupVendor(value: string | null | undefined): string {
-  const s = String(value ?? '').trim()
-  return s || '-'
-}
-
 export type ClaimMutuDashboard = {
   importId: string | null
   periodLabel: string | null
@@ -90,7 +77,7 @@ type RecapTab = 'aging' | 'vendor' | 'lokasi' | 'komoditi' | 'unit'
 
 const TABS: Array<{ id: RecapTab; label: string }> = [
   { id: 'aging', label: 'Aging' },
-  { id: 'vendor', label: 'Vendor' },
+  { id: 'vendor', label: 'Group Vendor' },
   { id: 'lokasi', label: 'Location' },
   { id: 'komoditi', label: 'Commodity' },
   { id: 'unit', label: 'Unit' },
@@ -248,7 +235,7 @@ export function ClaimMutuSection1Dashboard({
 
   const tabNote: Record<RecapTab, string> = {
     aging: 'Claim value after tax per group (Pivot sheet). Click a group to filter the page.',
-    vendor: 'Outstanding claims. Group Vendor is matched on PO; unmatched POs show -. Follows the filters.',
+    vendor: 'Outstanding claims. Top 5 Group Vendors by amount after tax; open a group to see its vendors. Unmatched POs show -. Follows the filters.',
     lokasi: 'OS and realised claims per DEST code (Rekap Klaim Per Lokasi sheet).',
     komoditi: 'OS and realised claims per commodity; open a commodity to see its units (Summary Per Komoditi sheet).',
     unit: `OS and realised claims per unit for one month - that month's latest import, not narrowed by the CR date period (Summary Per Unit sheet${
@@ -459,44 +446,81 @@ function AgingTab({
 }
 
 function VendorTab({ rows, hasImport }: { rows: ClaimMutuVendorRow[]; hasImport: boolean }) {
-  const sorted = sortClaimMutuVendorRows(rows)
-  if (sorted.length === 0) return <Empty hasImport={hasImport} />
-  const qtyTotal = sorted.reduce((s, r) => s + (Number(r.qty_claim) || 0), 0)
-  const amountTotal = sorted.reduce((s, r) => s + (Number(r.amount_after_tax_idr) || 0), 0)
+  const [open, setOpen] = useState<Set<string>>(() => new Set())
+  const groups = topGroupVendorRollups(rows)
+  if (groups.length === 0) return <Empty hasImport={hasImport} />
+  const qtyTotal = groups.reduce((s, r) => s + r.qty_claim, 0)
+  const amountTotal = groups.reduce((s, r) => s + r.amount_after_tax_idr, 0)
+  const allOpen = groups.every((g) => open.has(g.key))
   return (
-    <TableShell minWidth={860}>
-      <thead className="bg-gray-100">
-        <tr>
-          <th className={`${TH} text-left`}>Group Vendor</th>
-          <th className={`${TH} text-left`}>Vendor</th>
-          <th className={`${TH} text-left`}>Group of Transport</th>
-          <th className={`${TH} text-left`}>Product</th>
-          <th className={`${TH} text-right`}>Qty Claim (Kg)</th>
-          <th className={`${TH} text-right text-gray-800`}>Amount After Tax (IDR)</th>
-        </tr>
-      </thead>
-      <tbody className="divide-y">
-        {sorted.map((r, i) => (
-          <tr key={`${r.group_vendor ?? ''}|${r.vendor}|${r.group_of_transport}|${r.product}|${i}`} className="hover:bg-gray-50">
-            <td className="px-3 py-1.5 font-medium">{formatGroupVendor(r.group_vendor)}</td>
-            <td className="px-3 py-1.5">{r.vendor || CLAIM_MUTU_BLANK}</td>
-            <td className="px-3 py-1.5">{r.group_of_transport || CLAIM_MUTU_BLANK}</td>
-            <td className="px-3 py-1.5">{r.product || CLAIM_MUTU_BLANK}</td>
-            <td className={`${TD} text-right`}>{formatClaimMutuKg(r.qty_claim)}</td>
-            <td className={`${TD} text-right font-semibold text-gray-900`}>{formatClaimMutuIdr(r.amount_after_tax_idr)}</td>
+    <>
+      <div className="mb-2 flex justify-end">
+        <button
+          type="button"
+          className="text-xs text-indigo-700 hover:underline"
+          onClick={() => setOpen(allOpen ? new Set() : new Set(groups.map((g) => g.key)))}
+        >
+          {allOpen ? 'Collapse all' : 'Expand all'}
+        </button>
+      </div>
+      <TableShell minWidth={720}>
+        <thead className="bg-gray-100">
+          <tr>
+            <th className={`${TH} text-left`}>Group Vendor</th>
+            <th className={`${TH} text-left`}>Product</th>
+            <th className={`${TH} text-right`}>Qty Claim (Kg)</th>
+            <th className={`${TH} text-right text-gray-800`}>Amount After Tax (IDR)</th>
           </tr>
-        ))}
-      </tbody>
-      <tfoot className="border-t-2 border-gray-200 bg-gray-50">
-        <tr>
-          <td className="px-3 py-2 font-semibold" colSpan={4}>
-            Grand Total
-          </td>
-          <td className={`${TD} text-right font-semibold`}>{formatClaimMutuKg(qtyTotal)}</td>
-          <td className={`${TD} text-right font-semibold text-gray-900`}>{formatClaimMutuIdr(amountTotal)}</td>
-        </tr>
-      </tfoot>
-    </TableShell>
+        </thead>
+        <tbody className="divide-y">
+          {groups.flatMap((g) => {
+            const isOpen = open.has(g.key)
+            const head = (
+              <tr key={g.key} className="cursor-pointer hover:bg-gray-50" onClick={() => setOpen((prev) => {
+                const next = new Set(prev)
+                if (next.has(g.key)) next.delete(g.key)
+                else next.add(g.key)
+                return next
+              })}>
+                <td className="px-3 py-1.5 whitespace-nowrap">
+                  <span className="inline-flex items-center gap-1 font-medium text-gray-900">
+                    {isOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    {g.label}
+                  </span>
+                  <span className="ml-2 text-xs text-gray-500">
+                    {g.vendors.length} vendor{g.vendors.length === 1 ? '' : 's'}
+                  </span>
+                </td>
+                <td className="px-3 py-1.5">{formatProductList(g.products)}</td>
+                <td className={`${TD} text-right`}>{formatClaimMutuKg(g.qty_claim)}</td>
+                <td className={`${TD} text-right font-semibold text-gray-900`}>{formatClaimMutuIdr(g.amount_after_tax_idr)}</td>
+              </tr>
+            )
+            if (!isOpen) return [head]
+            return [
+              head,
+              ...g.vendors.map((v) => (
+                <tr key={`${g.key}|${v.vendor}`} className="bg-slate-50/60 text-gray-600">
+                  <td className="py-1 pl-9 pr-3 whitespace-nowrap">{v.vendor}</td>
+                  <td className="px-3 py-1">{formatProductList(v.products)}</td>
+                  <td className={`${TD} text-right`}>{formatClaimMutuKg(v.qty_claim)}</td>
+                  <td className={`${TD} text-right`}>{formatClaimMutuIdr(v.amount_after_tax_idr)}</td>
+                </tr>
+              )),
+            ]
+          })}
+        </tbody>
+        <tfoot className="border-t-2 border-gray-200 bg-gray-50">
+          <tr>
+            <td className="px-3 py-2 font-semibold" colSpan={2}>
+              Grand Total
+            </td>
+            <td className={`${TD} text-right font-semibold`}>{formatClaimMutuKg(qtyTotal)}</td>
+            <td className={`${TD} text-right font-semibold text-gray-900`}>{formatClaimMutuIdr(amountTotal)}</td>
+          </tr>
+        </tfoot>
+      </TableShell>
+    </>
   )
 }
 

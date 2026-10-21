@@ -12,7 +12,8 @@ import {
   trendUnits,
   type ClaimMutuCommodityUnitRow,
 } from './claimMutuView'
-import { sortClaimMutuVendorRows, sortLocations, type ClaimMutuVendorRow } from '@/components/claim-mutu/ClaimMutuSection1Dashboard'
+import { sortLocations } from '@/components/claim-mutu/ClaimMutuSection1Dashboard'
+import { topGroupVendorRollups } from '@/lib/claimGroupVendorRollup'
 
 const cu = (commodity: string, unit: string, os_amount: number, real_amount = 0): ClaimMutuCommodityUnitRow => ({
   commodity,
@@ -108,19 +109,18 @@ describe('Claim Mutu view', () => {
     expect(p.getAll('claimStatus')).toEqual(['Claimed'])
   })
 
-  it('orders the Vendor tab by qty claim, then amount after tax', () => {
-    const row = (vendor: string, qty: number, amount: number, group: string | null): ClaimMutuVendorRow => ({
+  it('ranks Group Vendor by amount after tax and keeps an unmapped group', () => {
+    const row = (vendor: string, qty: number, amount: number, group: string | null) => ({
       group_vendor: group,
       vendor,
-      group_of_transport: '(Blank)',
       product: 'CPO',
       qty_claim: qty,
       amount_after_tax_idr: amount,
     })
-    expect(sortClaimMutuVendorRows([row('A', 10, 9, null), row('B', 10, 50, 'INTERCO'), row('C', 40, 1, 'APICAL')]).map((r) => r.vendor)).toEqual([
-      'C',
-      'B',
-      'A',
+    expect(topGroupVendorRollups([row('A', 10, 9, null), row('B', 10, 50, 'INTERCO'), row('C', 40, 1, 'APICAL')]).map((r) => r.label)).toEqual([
+      'INTERCO',
+      '-',
+      'APICAL',
     ])
   })
 

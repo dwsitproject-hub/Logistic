@@ -1,10 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import { RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
+import { formatProductList, topGroupVendorRollups } from '@/lib/claimGroupVendorRollup'
 import { CLAIM_SUSUT_BLANK, formatClaimSusutIdr } from '@/lib/claimSusutView'
 
 /**
@@ -15,9 +16,9 @@ import { CLAIM_SUSUT_BLANK, formatClaimSusutIdr } from '@/lib/claimSusutView'
  *
  * - Aging is built from OS_CLAIM rows - the same aggregate the PIVOT sheet shows, not an import of
  *   it - so it follows the page filters like the view table below.
- * - By Vendor is the same outstanding rows, one line per Group Vendor + Vendor + Group of
- *   Transport + Product. Group Vendor is SAP Vendor Group when the claim PO matches a contract;
- *   unmatched POs stay in the list as "-".
+ * - Group Vendor is the same outstanding rows rolled up to five groups, largest Amount After
+ *   Tax first. Open a group to see its vendors. Group Vendor is SAP Vendor Group when the claim
+ *   PO matches a contract; unmatched POs stay in the list as "-".
  * - Realised Claims is REAL_CLAIM across every import, cut to the page's CR date range (YTD by
  *   default) on its CLAIM DATE; the Product / Vendor / Transport filters do not apply to it.
  *   Those filters resolve through SAP contract data that only the outstanding rows carry.
@@ -40,15 +41,6 @@ export type ClaimSusutVendorBreakdownRow = {
   product: string
   qty_claim: number
   amount_after_tax_idr: number
-}
-
-/** Largest Qty Claim, then largest Amount After Tax. Unmapped Group Vendor stays in the list. */
-export function sortVendorRows(rows: ClaimSusutVendorBreakdownRow[]): ClaimSusutVendorBreakdownRow[] {
-  return [...rows].sort((a, b) => {
-    const qty = (Number(b.qty_claim) || 0) - (Number(a.qty_claim) || 0)
-    if (qty !== 0) return qty
-    return (Number(b.amount_after_tax_idr) || 0) - (Number(a.amount_after_tax_idr) || 0)
-  })
 }
 
 export function formatGroupVendor(value: string | null | undefined): string {
@@ -94,7 +86,7 @@ type RecapTab = 'aging' | 'vendor' | 'realised'
 
 const TABS: ReadonlyArray<{ id: RecapTab; label: string }> = [
   { id: 'aging', label: 'Aging' },
-  { id: 'vendor', label: 'Vendor' },
+  { id: 'vendor', label: 'Group Vendor' },
   { id: 'realised', label: 'Realised Claims' },
 ]
 
@@ -159,10 +151,12 @@ export function ClaimSusutSection1Dashboard({
   hasImport: boolean
 }) {
   const [tab, setTab] = useState<RecapTab>('aging')
+  const [openVendorGroups, setOpenVendorGroups] = useState<Set<string>>(() => new Set())
   const groups = sortGroups(groupRows)
-  const vendorsByGroup = sortVendorRows(vendorRows)
-  const vendorQtyTotal = vendorsByGroup.reduce((s, r) => s + (Number(r.qty_claim) || 0), 0)
-  const vendorAmountTotal = vendorsByGroup.reduce((s, r) => s + (Number(r.amount_after_tax_idr) || 0), 0)
+  const vendorGroups = topGroupVendorRollups(vendorRows)
+  const vendorQtyTotal = vendorGroups.reduce((s, r) => s + r.qty_claim, 0)
+  const vendorAmountTotal = vendorGroups.reduce((s, r) => s + r.amount_after_tax_idr, 0)
+  const allVendorGroupsOpen = vendorGroups.length > 0 && vendorGroups.every((g) => openVendorGroups.has(g.key))
   const total = (key: keyof ClaimSusutAgingGroupRow) =>
     groups.reduce((s, g) => s + (Number(g[key]) || 0), 0)
   const agingTotal = total('grand_total')
@@ -181,7 +175,7 @@ export function ClaimSusutSection1Dashboard({
     tab === 'aging'
       ? `Amount after tax (IDR) per group · CR date ${crDateLabel}${realized?.osPeriodLabel ? ` · outstanding as of ${realized.osPeriodLabel}` : ''} · follows the filters. Click a group to filter the table below.`
       : tab === 'vendor'
-        ? `Outstanding claims · CR date ${crDateLabel}. Group Vendor is matched on PO; unmatched POs show -. Follows the filters.`
+        ? `Outstanding claims · CR date ${crDateLabel}. Top 5 Group Vendors by amount after tax. Open a group to see its vendors. Unmatched POs show -. Follows the filters.`
         : `Approved claims with a CR date in ${crDateLabel}. Product, vendor and transport filters do not apply.`
   const tabLoading = tab === 'aging' ? groupLoading : tab === 'vendor' ? vendorLoading : realizedLoading
   const empty = (text: string) => <div className="py-8 text-center text-sm text-gray-500">{text}</div>
@@ -320,48 +314,93 @@ export function ClaimSusutSection1Dashboard({
               </div>
             )
           ) : tab === 'vendor' ? (
-            vendorsByGroup.length === 0 ? (
+            vendorGroups.length === 0 ? (
               empty(hasImport ? 'No data for these filters.' : 'Upload a file to see the summary.')
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[860px] text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className={`${TH} text-left`}>Group Vendor</th>
-                      <th className={`${TH} text-left`}>Vendor</th>
-                      <th className={`${TH} text-left`}>Group of Transport</th>
-                      <th className={`${TH} text-left`}>Product</th>
-                      <th className={`${TH} text-right`}>Qty Claim (Kg)</th>
-                      <th className={`${TH} text-right text-gray-800`}>Amount After Tax (IDR)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {vendorsByGroup.map((r, i) => (
-                      <tr key={`${r.group_vendor ?? ''}|${r.vendor}|${r.group_of_transport}|${r.product}|${i}`} className="hover:bg-gray-50">
-                        <td className="px-3 py-1.5 font-medium">{formatGroupVendor(r.group_vendor)}</td>
-                        <td className="px-3 py-1.5">{r.vendor || CLAIM_SUSUT_BLANK}</td>
-                        <td className="px-3 py-1.5">{r.group_of_transport || CLAIM_SUSUT_BLANK}</td>
-                        <td className="px-3 py-1.5">{r.product || CLAIM_SUSUT_BLANK}</td>
-                        <td className={`${TD} text-right`}>{formatKg(r.qty_claim)}</td>
+              <>
+                <div className="mb-2 flex justify-end">
+                  <button
+                    type="button"
+                    className="text-xs text-indigo-700 hover:underline"
+                    onClick={() =>
+                      setOpenVendorGroups(allVendorGroupsOpen ? new Set() : new Set(vendorGroups.map((g) => g.key)))
+                    }
+                  >
+                    {allVendorGroupsOpen ? 'Collapse all' : 'Expand all'}
+                  </button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[720px] text-sm">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className={`${TH} text-left`}>Group Vendor</th>
+                        <th className={`${TH} text-left`}>Product</th>
+                        <th className={`${TH} text-right`}>Qty Claim (Kg)</th>
+                        <th className={`${TH} text-right text-gray-800`}>Amount After Tax (IDR)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {vendorGroups.flatMap((g) => {
+                        const isOpen = openVendorGroups.has(g.key)
+                        const head = (
+                          <tr
+                            key={g.key}
+                            className="cursor-pointer hover:bg-gray-50"
+                            onClick={() =>
+                              setOpenVendorGroups((prev) => {
+                                const next = new Set(prev)
+                                if (next.has(g.key)) next.delete(g.key)
+                                else next.add(g.key)
+                                return next
+                              })
+                            }
+                          >
+                            <td className="px-3 py-1.5 whitespace-nowrap">
+                              <span className="inline-flex items-center gap-1 font-medium text-gray-900">
+                                {isOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                                {g.label}
+                              </span>
+                              <span className="ml-2 text-xs text-gray-500">
+                                {g.vendors.length} vendor{g.vendors.length === 1 ? '' : 's'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-1.5">{formatProductList(g.products)}</td>
+                            <td className={`${TD} text-right`}>{formatKg(g.qty_claim)}</td>
+                            <td className={`${TD} text-right`}>
+                              <Idr v={g.amount_after_tax_idr} strong />
+                            </td>
+                          </tr>
+                        )
+                        if (!isOpen) return [head]
+                        return [
+                          head,
+                          ...g.vendors.map((v) => (
+                            <tr key={`${g.key}|${v.vendor}`} className="bg-slate-50/60 text-gray-600">
+                              <td className="py-1 pl-9 pr-3 whitespace-nowrap">{v.vendor}</td>
+                              <td className="px-3 py-1">{formatProductList(v.products)}</td>
+                              <td className={`${TD} text-right`}>{formatKg(v.qty_claim)}</td>
+                              <td className={`${TD} text-right`}>
+                                <Idr v={v.amount_after_tax_idr} />
+                              </td>
+                            </tr>
+                          )),
+                        ]
+                      })}
+                    </tbody>
+                    <tfoot className="border-t-2 border-gray-200 bg-gray-50">
+                      <tr>
+                        <td className="px-3 py-2 font-semibold" colSpan={2}>
+                          Grand Total
+                        </td>
+                        <td className={`${TD} text-right font-semibold`}>{formatKg(vendorQtyTotal)}</td>
                         <td className={`${TD} text-right`}>
-                          <Idr v={r.amount_after_tax_idr} strong />
+                          <Idr v={vendorAmountTotal} strong />
                         </td>
                       </tr>
-                    ))}
-                  </tbody>
-                  <tfoot className="border-t-2 border-gray-200 bg-gray-50">
-                    <tr>
-                      <td className="px-3 py-2 font-semibold" colSpan={4}>
-                        Grand Total
-                      </td>
-                      <td className={`${TD} text-right font-semibold`}>{formatKg(vendorQtyTotal)}</td>
-                      <td className={`${TD} text-right`}>
-                        <Idr v={vendorAmountTotal} strong />
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
+                    </tfoot>
+                  </table>
+                </div>
+              </>
             )
           ) : !realizedAvailable || vendors.length === 0 ? (
             empty(

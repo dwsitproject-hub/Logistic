@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { topGroupVendorRollups } from '@/lib/claimGroupVendorRollup'
 import {
   formatGroupVendor,
   formatKg,
   sortGroups,
-  sortVendorRows,
   type ClaimSusutAgingGroupRow,
-  type ClaimSusutVendorBreakdownRow,
 } from './ClaimSusutSection1Dashboard'
 
 const row = (group: string, total: number): ClaimSusutAgingGroupRow => ({
@@ -37,27 +36,14 @@ describe('Claim Susut Section 1', () => {
     ])
   })
 
-  it('orders By Vendor by qty claim, then amount after tax, and keeps an unmapped group', () => {
-    const vendor = (
-      group: string | null,
-      name: string,
-      qty: number,
-      amount: number,
-    ): ClaimSusutVendorBreakdownRow => ({
-      group_vendor: group,
-      vendor: name,
-      group_of_transport: 'VESSEL TC',
-      product: 'CPO',
-      qty_claim: qty,
-      amount_after_tax_idr: amount,
-    })
-    const sorted = sortVendorRows([
-      vendor(null, 'MAXIMA LINERS PT.', 100, 9_000),
-      vendor('INTERCO', 'LAWANA', 100, 50_000),
-      vendor('APICAL', 'SUPRA', 400, 1),
+  it('ranks Group Vendor by amount after tax and keeps an unmapped group', () => {
+    const groups = topGroupVendorRollups([
+      { group_vendor: null, vendor: 'MAXIMA LINERS PT.', product: 'CPO', qty_claim: 100, amount_after_tax_idr: 9_000 },
+      { group_vendor: 'INTERCO', vendor: 'LAWANA', product: 'CPO', qty_claim: 100, amount_after_tax_idr: 50_000 },
+      { group_vendor: 'APICAL', vendor: 'SUPRA', product: 'CPO', qty_claim: 400, amount_after_tax_idr: 1 },
     ])
-    expect(sorted.map((r) => r.vendor)).toEqual(['SUPRA', 'LAWANA', 'MAXIMA LINERS PT.'])
-    expect(formatGroupVendor(sorted[2].group_vendor)).toBe('-')
+    expect(groups.map((r) => r.label)).toEqual(['INTERCO', '-', 'APICAL'])
+    expect(formatGroupVendor(null)).toBe('-')
     expect(formatGroupVendor('INTERCO')).toBe('INTERCO')
   })
 
