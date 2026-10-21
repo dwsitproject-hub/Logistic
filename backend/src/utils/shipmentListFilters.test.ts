@@ -132,7 +132,8 @@ describe('shipmentEffectiveStatusExpr', () => {
     expect(sql).toContain('ata_vessel_complete_discharge');
     expect(sql).toMatch(/is_contract_sap_closed[\s\S]*THEN 'COMPLETED'/);
     // ATC completes the shipment; only discharge that started but did not finish is UNLOADING.
-    expect(sql).toMatch(/ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'/);
+    // ...but only an ATC that has already happened: one dated after today is a data-entry mistake.
+    expect(sql).toMatch(/f\.ata_vessel_complete_discharge IS NOT NULL AND \(f\.ata_vessel_complete_discharge\)::date <= CURRENT_DATE THEN 'COMPLETED'/);
     expect(sql).toMatch(/ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'/);
     expect(sql).not.toContain('group_status_floor');
   });

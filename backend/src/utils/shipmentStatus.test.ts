@@ -1,9 +1,74 @@
 import { describe, expect, it } from 'vitest';
 import {
   deriveShipmentStatus,
+  hasActualDate,
+  isFutureDate,
   normalizeShipmentDetailStatus,
+  pickDisplayedShipmentStatus,
   sqlShipmentStatusRank,
 } from './shipmentStatus';
+
+const dayOffset = (days: number): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+describe('an ATA Discharge Complete after today does not complete the shipment', () => {
+  /*
+   * An ATA is a time that already happened, so a future one is a data-entry mistake (2026-10-21, OP-1004032737-34122029).
+   * The cell keeps showing it so it can be fixed; the status ignores it.
+   */
+  it('isFutureDate / hasActualDate compare calendar days, today included as actual', () => {
+    expect(isFutureDate(dayOffset(1))).toBe(true);
+    expect(isFutureDate(dayOffset(0))).toBe(false);
+    expect(isFutureDate(dayOffset(-1))).toBe(false);
+    expect(isFutureDate(null)).toBe(false);
+    expect(isFutureDate('not a date')).toBe(false);
+    expect(hasActualDate(dayOffset(0))).toBe(true);
+    expect(hasActualDate(dayOffset(1))).toBe(false);
+    expect(hasActualDate(null)).toBe(false);
+    // DD/MM/YYYY (Indonesia templates) and Date instances
+    expect(isFutureDate('01/01/2099')).toBe(true);
+    expect(isFutureDate(new Date(2099, 0, 1))).toBe(true);
+    expect(isFutureDate(new Date(2020, 0, 1))).toBe(false);
+  });
+
+  it('yesterday and today complete the shipment, tomorrow does not', () => {
+    expect(deriveShipmentStatus({ ata_complete_discharge: dayOffset(-1) })).toBe('COMPLETED');
+    expect(deriveShipmentStatus({ ata_complete_discharge: dayOffset(0) })).toBe('COMPLETED');
+    expect(deriveShipmentStatus({ ata_complete_discharge: dayOffset(1) })).not.toBe('COMPLETED');
+  });
+
+  it('a future ATC falls back to the next rung of the ladder', () => {
+    expect(
+      deriveShipmentStatus({ ata_complete_discharge: dayOffset(3), ata_start_discharging: dayOffset(-1) }),
+    ).toBe('UNLOADING');
+    expect(
+      deriveShipmentStatus({ ata_complete_discharge: dayOffset(3), ata_berthed_at_discharge_port: dayOffset(-1) }),
+    ).toBe('BERTHED_DP');
+    expect(deriveShipmentStatus({ ata_complete_discharge: dayOffset(3) })).toBe('PLANNED');
+  });
+
+  it('GR Close still completes the shipment whatever the ATC says', () => {
+    expect(
+      deriveShipmentStatus({ ata_complete_discharge: dayOffset(3), contract_import_status: 'Close' }),
+    ).toBe('COMPLETED');
+  });
+
+  it('the modal does not keep a stored COMPLETED alive for a future ATC, but still never demotes otherwise', () => {
+    const derived = deriveShipmentStatus({ ata_complete_discharge: dayOffset(3), ata_start_discharging: dayOffset(-1) });
+    expect(pickDisplayedShipmentStatus('COMPLETED', derived, { futureAtc: true })).toBe('UNLOADING');
+    // without the flag the stored status is kept, as before
+    expect(pickDisplayedShipmentStatus('COMPLETED', derived)).toBe('COMPLETED');
+    // GR Close: the ladder answers COMPLETED, so nothing changes
+    const closed = deriveShipmentStatus({ ata_complete_discharge: dayOffset(3), contract_import_status: 'Close' });
+    expect(pickDisplayedShipmentStatus('COMPLETED', closed, { futureAtc: true })).toBe('COMPLETED');
+    // cancelled is never overridden
+    expect(pickDisplayedShipmentStatus('CANCELLED', derived, { futureAtc: true })).toBe('CANCELLED');
+  });
+});
 
 describe('deriveShipmentStatus', () => {
   /*

@@ -122,6 +122,37 @@ const hasDate = (v: unknown): boolean => {
   return !Number.isNaN(t);
 };
 
+/** The calendar day (local midnight) of a date-like value, or null when it is not a date. */
+function toCalendarDay(v: unknown): Date | null {
+  if (!hasDate(v)) return null;
+  if (v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  const s = String(v).trim();
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (ymd) return new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]));
+  const dmy = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/.exec(s);
+  if (dmy) return new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+  const t = new Date(Date.parse(s));
+  return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+}
+
+/**
+ * True when the value is a date AFTER today.
+ *
+ * An ATA is a time that already happened, so a future one is a data-entry mistake. It must not drive the status
+ * (ATA Discharge Complete in the future must not make a shipment Completed); the cell still shows it so it can be fixed.
+ */
+export function isFutureDate(v: unknown, now: Date = new Date()): boolean {
+  const day = toCalendarDay(v);
+  if (!day) return false;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return day.getTime() > today.getTime();
+}
+
+/** A date that has already happened (today included) - the only kind an ATA can be. */
+export function hasActualDate(v: unknown, now: Date = new Date()): boolean {
+  return hasDate(v) && !isFutureDate(v, now);
+}
+
 export function hasAnyEtaMilestone(m: Pick<ShipmentMilestones, keyof ShipmentMilestones>): boolean {
   return (
     hasDate(m.eta_arrival_at_loading_port) ||
@@ -197,7 +228,8 @@ export function normalizeShipmentDetailStatus(raw: string | null | undefined): S
  */
 export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus {
   if (isContractDeliveryClosed(m.contract_import_status)) return 'COMPLETED';
-  if (hasDate(m.ata_complete_discharge)) return 'COMPLETED';
+  // ATA Discharge Complete dated after today is a data-entry mistake: it does not complete the shipment.
+  if (hasActualDate(m.ata_complete_discharge)) return 'COMPLETED';
   if (hasDate(m.ata_start_discharging)) return 'UNLOADING';
   if (hasDate(m.ata_berthed_at_discharge_port)) return 'BERTHED_DP';
   if (hasDate(m.ata_arrive_at_discharge_port)) return 'ARRIVED_DP';
@@ -220,14 +252,20 @@ export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus 
  * written back: the JPS lane is read first only while the stored status is not COMPLETED, so storing Completed from the
  * JPS lane would switch that lane off and the status would fall back. Cancelled is never overridden, and the ladder only
  * ever moves a status forward, so nothing a user saved is shown as less than it is.
+ *
+ * One exception: `futureAtc` (the ATA Discharge Complete is dated after today). A stored COMPLETED written when that date was saved
+ * would otherwise keep a mistaken date alive as Completed, so the ladder's answer wins over a stored COMPLETED. A COMPLETED that is
+ * still earned another way (GR Close) comes back from the ladder as COMPLETED anyway.
  */
 export function pickDisplayedShipmentStatus(
   stored: unknown,
   derived: ShipmentAutoStatus,
+  opts: { futureAtc?: boolean } = {},
 ): ShipmentAutoStatus {
   const storedKey = String(stored ?? '').trim().toUpperCase();
   if (storedKey === 'CANCELLED' || storedKey === 'CANCELED') return 'CANCELLED';
   const storedStatus = normalizeShipmentDetailStatus(storedKey);
+  if (opts.futureAtc && storedStatus === 'COMPLETED') return derived;
   const derivedRank = SHIPMENT_STATUS_RANK[derived] ?? 1;
   const storedRank = SHIPMENT_STATUS_RANK[storedStatus] ?? 1;
   return derivedRank > storedRank ? derived : storedStatus === 'UNPLANNED' ? 'PLANNED' : storedStatus;

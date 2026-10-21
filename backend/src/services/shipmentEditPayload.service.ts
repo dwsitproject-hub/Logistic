@@ -8,7 +8,7 @@ import { sqlJpsAtaJsonExpr } from '../jps/scheduleAtaSql';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { getContractImportStatusForShipment } from '../utils/contractDeliveryStatus';
-import { deriveShipmentStatus, pickDisplayedShipmentStatus } from '../utils/shipmentStatus';
+import { deriveShipmentStatus, isFutureDate, pickDisplayedShipmentStatus } from '../utils/shipmentStatus';
 import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
@@ -625,6 +625,8 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
     shipmentInfo: portsBundle.shipmentInfo,
     contractDetails,
     jettyStatus: await loadJettyStatusForShipment(shipmentId),
-    effectiveStatus: pickDisplayedShipmentStatus(shipment.status ?? info.status, derivedStatus),
+    effectiveStatus: pickDisplayedShipmentStatus(shipment.status ?? info.status, derivedStatus, {
+      futureAtc: isFutureDate(info.ata_vessel_complete_discharge),
+    }),
   };
 }

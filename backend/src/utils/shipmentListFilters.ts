@@ -597,7 +597,8 @@ export function shipmentEffectiveStatusExpr(
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
-      WHEN ${atc} IS NOT NULL THEN 'COMPLETED'
+      /* An ATC dated after today is a data-entry mistake and does not complete the shipment (the own-STO column already drops it at the source). */
+      WHEN ${atc} IS NOT NULL AND (${atc})::date <= CURRENT_DATE THEN 'COMPLETED'
       /*
        * Nothing left outstanding finishes a shipment, even with GR still Open and no ATC.
        * Trucking has had this since isTruckingPipelineCompleted, and the OS cards already apply

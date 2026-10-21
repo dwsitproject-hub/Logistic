@@ -125,6 +125,25 @@ describe('the own-STO discharge ATC of a group (run in Postgres)', () => {
     expect(await read('OP-1004031705-93196222', [['MNL-1', '2026-10-10'], ['MNL-2', '2026-10-18']])).toBe('2026-10-18');
   }, 60_000);
 
+  it('an ATC dated after today counts as no ATC (a data-entry mistake must not complete the voyage)', async () => {
+    // STO group: its own ATC is in the future -> not finished
+    expect(await ownAtc('1006020666', [{ id: '1006020666', atc: '2099-01-01' }])).toBeNull();
+    // operation group: one PO has a real ATC, the other a future one -> not every member has an ATC
+    expect(await ownAtc(OP, [{ id: 'MNL-6-1', atc: '2026-10-14' }, { id: 'MNL-6-2', atc: '2099-01-01' }])).toBeNull();
+    // a single PO with a future ATC is not finished either
+    expect(await ownAtc(OP, [{ id: 'MNL-7-1', atc: '2099-01-01' }])).toBeNull();
+    // the past ATC still wins over a future one inside an STO group
+    expect(await ownAtc('1006020666', [{ id: '1006020666', atc: '2026-10-03' }, { id: '1006020666', atc: '2099-01-01' }])).toBe('2026-10-03');
+  }, 60_000);
+
+  it('the page status reads the own-STO ATC, which is NULL for a future date, so the shipment is not Completed', () => {
+    const sql = buildShipmentListAtaSelectSql('K').replace(/\s+/g, ' ');
+    expect(sql).toContain('<= CURRENT_DATE');
+    // the View Table cell keeps the raw date so the mistake stays visible
+    expect(sql).toContain('as ata_vessel_complete_discharge,');
+    expect(buildShipmentListAtaSelectSql().replace(/\s+/g, ' ')).toContain('<= CURRENT_DATE');
+  });
+
   it('an STO group keeps the old rule: its own shipments and those with no STO count, another STO is foreign', async () => {
     expect(await ownAtc('1006019867', [{ id: '1006019867', atc: '2026-10-03' }, { id: '1006019385', atc: null }])).toBe('2026-10-03');
     expect(await ownAtc('1006019867', [{ id: '1006019385', atc: '2026-10-03' }, { id: '1006019867', atc: null }])).toBeNull(); // a sibling STO discharged

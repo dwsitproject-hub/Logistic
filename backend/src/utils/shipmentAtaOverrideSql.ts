@@ -187,12 +187,25 @@ export function sqlOwnStoDischargeAtc(atcExpr: string, groupKeyExpr: string, shi
   const keyIsSto = `TRIM((${groupKeyExpr})::text) ~ '^[0-9]+$'`;
   const live = `UPPER(COALESCE(${shipmentAlias}.status, '')) NOT IN ('CANCELLED', 'CANCELED')`;
   const ownMember = `(NULLIF(TRIM(${own}::text), '') IS NULL OR TRIM(${own}::text) = TRIM((${groupKeyExpr})::text))`;
+  // A member whose ATC is dated after today has no ATC as far as the status is concerned (see sqlAtaNotInFuture).
+  const atc = sqlAtaNotInFuture(atcExpr);
   return `COALESCE(
-            MAX(${atcExpr}) FILTER (WHERE ${keyIsSto} AND ${ownMember}),
-            CASE WHEN COUNT(*) FILTER (WHERE NOT (${keyIsSto}) AND ${live} AND (${atcExpr}) IS NULL) = 0
-                 THEN MAX(${atcExpr}) FILTER (WHERE NOT (${keyIsSto}) AND ${live})
+            MAX(${atc}) FILTER (WHERE ${keyIsSto} AND ${ownMember}),
+            CASE WHEN COUNT(*) FILTER (WHERE NOT (${keyIsSto}) AND ${live} AND (${atc}) IS NULL) = 0
+                 THEN MAX(${atc}) FILTER (WHERE NOT (${keyIsSto}) AND ${live})
             END
           )`;
+}
+
+/**
+ * The date, or NULL when it is after today.
+ *
+ * An ATA is a time that already happened, so one dated in the future is a data-entry mistake. It must not make a shipment Completed:
+ * the status reads the discharge ATC through this, while the View Table cell keeps showing the raw date so the mistake can be fixed.
+ * Same clock as the rest of the Shipments SQL (CURRENT_DATE).
+ */
+export function sqlAtaNotInFuture(dateExpr: string): string {
+  return `(CASE WHEN (${dateExpr})::date <= CURRENT_DATE THEN (${dateExpr}) END)`;
 }
 
 /**
@@ -230,7 +243,9 @@ export function buildShipmentListAtaSelectSql(
   const startDisc = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_start')}, sao.ata_discharge_start, s.ata_discharge_start, vlp_d.vlp_disc_ata_ls)`;
   const atc = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete')}, sao.ata_discharge_complete, s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)`;
   const own = (expr: string) => (groupKeyExpr ? sqlOwnStoMilestone(expr, groupKeyExpr, 's') : `MAX(${expr})`);
-  const ownStoAtc = groupKeyExpr ? sqlOwnStoDischargeAtc(atc, groupKeyExpr, 's') : `MAX(${atc})`;
+  const ownStoAtc = groupKeyExpr
+    ? sqlOwnStoDischargeAtc(atc, groupKeyExpr, 's')
+    : `MAX(${sqlAtaNotInFuture(atc)})`;
   const modalAtc = `COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete')}, sao.ata_discharge_complete, s.ata_discharge_complete, (
             SELECT v_atc.ata_loading_completed::date
             FROM vessel_loading_ports v_atc
