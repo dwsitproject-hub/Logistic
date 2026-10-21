@@ -1,0 +1,94 @@
+KLIP — deploy SIT, lalu production (branch main)
+Repo:   https://github.com/dwsitproject-hub/Logistic
+Folder: /opt/klip di setiap server
+
+Jangan campur sesi PuTTY.
+  SIT        user ubuntu, SSH port 22
+  Production user root, SSH port 1818 (frontend) dan 1819 (backend)
+
+Urutan: push dari laptop → SIT backend → SIT frontend → cek browser SIT
+        → baru merge ke main → production backend → production frontend.
+
+Migrasi 195, 196, dan 197 menghapus lalu mengisi ulang master_plants dan
+master_loading_ports. Itu jalan di database environment yang di-deploy
+(SIT dulu, production hanya setelah commit yang sama ada di main).
+
+================================================================================
+0. Laptop — commit dan push ke SIT
+================================================================================
+
+cd D:\Project\Klip
+git checkout SIT
+git status
+git add <file yang memang untuk rilis ini>
+git commit -m "pesan"
+git push origin SIT
+
+Jangan ikutkan skrip diag, file Excel yang terhapus, atau .env.
+
+================================================================================
+1. SIT backend — PuTTY 172.28.92.57
+================================================================================
+
+cd /opt/klip && git fetch origin SIT && git checkout SIT && git pull --ff-only origin SIT && bash docs/scripts/deploy-sit.sh backend
+
+Tunggu sampai health mengembalikan JSON. Jangan lanjut kalau gagal.
+
+curl -sS http://127.0.0.1:5001/health
+
+================================================================================
+2. SIT frontend — PuTTY 172.28.92.56
+================================================================================
+
+curl -sS http://172.28.92.57:5001/health
+
+cd /opt/klip && git fetch origin SIT && git checkout SIT && git pull --ff-only origin SIT && bash docs/scripts/deploy-sit.sh frontend
+
+Browser: http://8.215.6.189
+Hard refresh: Ctrl+Shift+R
+
+================================================================================
+3. Laptop — bawa SIT ke main
+================================================================================
+
+Lakukan hanya setelah SIT sudah dicek.
+
+cd D:\Project\Klip
+git checkout main
+git pull origin main
+git merge SIT
+git push origin main
+
+================================================================================
+4. Production backend — PuTTY KLIP-PROD-BE
+================================================================================
+
+Host: 8.215.56.98   port 1819   user root
+(VPN: 172.28.80.51 port 1819)
+
+cd /opt/klip && git fetch origin main && git checkout main && git pull --ff-only origin main && bash docs/scripts/deploy-prod-backend.sh
+
+Skrip menanyakan konfirmasi. Ketik: backend
+
+Ia memakai tiga file compose (dasar, remote-db, sap-share).
+DB_HOST di /opt/klip/.env harus host RDS production
+pgm-d9jn3khh0b3907w4.pgsql.ap-southeast-5.rds.aliyuncs.com
+bukan RDS SIT.
+
+curl -sS http://127.0.0.1:5001/health
+
+================================================================================
+5. Production frontend — PuTTY KLIP-PROD-FE
+================================================================================
+
+Host: 147.139.176.70   port 1818   user root
+(VPN: 172.28.80.50 port 1818)
+
+curl -sS http://172.28.80.51:5001/health
+
+cd /opt/klip && git fetch origin main && git checkout main && git pull --ff-only origin main && bash docs/scripts/deploy-prod-frontend.sh
+
+Skrip menanyakan konfirmasi. Ketik: frontend
+
+Browser: http://147.139.176.70
+Hard refresh: Ctrl+Shift+R

@@ -1,0 +1,32 @@
+KLIP — deploy SIT lewat PuTTY
+Branch: SIT   (commit sudah di origin/SIT)
+URL:    http://8.215.6.189
+
+Urutan: backend dulu, tunggu health OK, baru frontend.
+Jangan pakai docker compose tanpa overlay remote-db. deploy-sit.sh yang menambahkan overlay itu.
+
+Saat backend boot, migrasi 195–197 menghapus lalu mengisi ulang
+master_plants dan master_loading_ports di database SIT.
+
+================================================================================
+1. PuTTY session 172.28.92.57  (backend)
+================================================================================
+
+cd /opt/klip && git fetch origin SIT && git checkout SIT && git pull --ff-only origin SIT && bash docs/scripts/deploy-sit.sh backend
+
+Tunggu sampai /health OK, lalu lanjut frontend.
+
+================================================================================
+2. PuTTY session 172.28.92.56  (frontend)
+================================================================================
+
+curl -sS http://172.28.92.57:5001/health
+
+cd /opt/klip && git fetch origin SIT && git checkout SIT && git pull --ff-only origin SIT && bash docs/scripts/deploy-sit.sh frontend
+
+================================================================================
+3. Browser
+================================================================================
+
+http://8.215.6.189
+Hard refresh: Ctrl+Shift+R

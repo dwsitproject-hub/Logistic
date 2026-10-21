@@ -29,6 +29,46 @@ def search_name(name):
     return re.sub(r'\s+', ' ', base).strip().upper()
 
 
+TYPE_PREFIX = {'BARGE': 'BG.', 'TUG BOAT': 'TB.', 'TANKER': 'MT.', 'SPOB': 'SPOB.'}
+# a prefix the rule knows (with or without the dot / the space after it)
+_KNOWN = re.compile(r'^\s*(BG|TB|MT|SPOB)\b\s*\.?\s*', re.I)
+# TK. (tongkang) became BG. in the earlier cleanup of the pair list; KLM. / MV. / KM. were never decided
+_TK = re.compile(r'^\s*TK\b\s*\.?\s*', re.I)
+_OTHER = re.compile(r'^\s*(KLM|MV|KM)\b\s*\.?\s*', re.I)
+
+
+def fix_vessel_name(name, vessel_type):
+    """The vessel name with its prefix settled -> (new_name, note). The prefix is added from Vessel Type (BARGE BG., TUG BOAT TB., TANKER MT., SPOB SPOB.),
+    rewritten as 'XX. NAME' when it lacks its dot or space, TK. becomes BG.; KLM. / KM. / MV. only get their space and are flagged. `note` is '' when nothing was done."""
+    name = str(name).strip() if name is not None else ''
+    vtype = str(vessel_type).strip().upper() if vessel_type is not None else ''
+    new, note = name, ''
+    if not name:
+        note = 'Nama kosong'
+    elif _KNOWN.match(name):
+        m = _KNOWN.match(name)
+        pre = m.group(1).upper() + '.'
+        want = TYPE_PREFIX.get(vtype)
+        new = f'{pre} {name[m.end():].strip()}'
+        if new != name:
+            note = 'Titik / spasi prefix dirapikan'
+        if want and want != pre:
+            note = (note + '; ' if note else '') + f'Prefix {pre} tidak cocok dengan Vessel Type {vessel_type} (seharusnya {want}) - tidak diubah'
+    elif _TK.match(name):
+        new = f'BG. {name[_TK.match(name).end():].strip()}'
+        note = 'TK. diganti BG. (aturan cleanup sebelumnya: tongkang = BG.)'
+    elif _OTHER.match(name):
+        m = _OTHER.match(name)
+        new = f'{m.group(1).upper()}. {name[m.end():].strip()}'
+        note = f'Prefix {m.group(1).upper()}. belum ada aturannya - perlu diputuskan' + ('; spasi setelah prefix ditambah' if new != name else '')
+    elif vtype in TYPE_PREFIX:
+        new = f'{TYPE_PREFIX[vtype]} {name}'
+        note = f'Prefix {TYPE_PREFIX[vtype]} ditambah dari Vessel Type {vessel_type}'
+    else:
+        note = 'Perlu diputuskan: tanpa prefix dan tanpa Vessel Type'
+    return new, note
+
+
 # ---------------------------------------------------------------------------------------------------------------------------------- owner
 NOT_A_COMPANY = {'CIF', 'FOB', 'CFR', 'FRC', 'LCO'}  # an incoterm sitting in the owner column
 LEGAL = r'(PT|CV|UD|PD)'
@@ -141,6 +181,9 @@ def _selftest():
     assert search_name('TB. ARGO 10') == 'ARGO 10'
     assert search_name('AS GLORY 15') == 'AS GLORY 15'
     assert search_name('KLM. HIKMAH INDAH') == 'HIKMAH INDAH'
+    assert fix_vessel_name('BG.LUMINOR 9 V23', 'Barge') == ('BG. LUMINOR 9 V23', 'Titik / spasi prefix dirapikan')
+    assert fix_vessel_name('ASIKE I', 'Tanker')[0] == 'MT. ASIKE I' and fix_vessel_name('TK. KAPUAS 168', None)[0] == 'BG. KAPUAS 168'
+    assert fix_vessel_name('DAYA MAJU', None) == ('DAYA MAJU', 'Perlu diputuskan: tanpa prefix dan tanpa Vessel Type')
     assert norm_owner('MAXIMA LINERS PT.')[0] == 'PT. MAXIMA LINERS'
     assert norm_owner('Kapuas Armada Nusantara')[0] == 'PT. KAPUAS ARMADA NUSANTARA'
     assert norm_owner('BINTANG BAHARI JAYA CV.')[0] == 'CV. BINTANG BAHARI JAYA'
