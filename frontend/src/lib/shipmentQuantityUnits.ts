@@ -32,6 +32,15 @@ function isMeaningfulManualShipmentQtyKg(kg: number | null): boolean {
   return kg !== null && kg > 0
 }
 
+/**
+ * A COMPLETED shipment has discharged: SAP books its delivery and receipt, and a small KLIP figure left in the shipment's own fields is a leftover, not a measurement.
+ * MT. BIO EXPRESS (production 2026-10-21, PO 1001031704 / 1001031705): Delivered Qty (Klip) 1 MT beside SAP 3,998.6 MT - the View Table showed 1 MT because KLIP wins while
+ * the contract is Open. (Ryan 2026-10-21, option A.) A shipment still under way keeps KLIP first.
+ */
+function isCompletedShipmentStatus(status: string | null | undefined): boolean {
+  return String(status ?? '').trim().toUpperCase() === 'COMPLETED'
+}
+
 export function shipmentStoredQtyKg(value: number | string | null | undefined): number | null {
   if (value === null || value === undefined || value === '') return null
   const raw = typeof value === 'string' ? value.replace(/,/g, '').trim() : value
@@ -150,6 +159,7 @@ export function seedKlipQtyFromShipmentHeader(
 
 /**
  * Shipments list table — kg for display.
+ * COMPLETED shipment with a SAP delivery → SAP (a leftover KLIP figure does not hide it)
  * Open + KLIP qty present → quantity_delivered_klip
  * Open without KLIP → SAP fallback
  * Close → SAP; if SAP is missing, legacy then KLIP so the table is not blank
@@ -163,6 +173,8 @@ export function resolveShipmentListDeliveredKg(shipment: {
   quantity_delivered_sap?: number | string | null
   is_contract_sap_closed?: boolean | null
   sap_qty_shared?: boolean | null
+  /** The status the row shows. COMPLETED: SAP when SAP has a delivery (see isCompletedShipmentStatus). */
+  status?: string | null
 }): number | null {
   const closed = Boolean(shipment.is_contract_sap_closed)
   const klip =
@@ -174,6 +186,7 @@ export function resolveShipmentListDeliveredKg(shipment: {
   const legacy =
     shipmentStoredQtyKg(shipment.quantity_delivered)
     ?? shipmentStoredQtyKg(shipment.total_quantity_delivered)
+  if (isCompletedShipmentStatus(shipment.status) && isMeaningfulManualShipmentQtyKg(sap)) return sap
 
   if (closed) {
     if (isMeaningfulManualShipmentQtyKg(sap)) return sap
@@ -260,6 +273,8 @@ export function resolveShipmentListReceiveKg(shipment: {
   quantity_receive?: number | string | null
   is_contract_sap_closed?: boolean | null
   sap_qty_shared?: boolean | null
+  /** As for Delivered: a COMPLETED shipment reads the SAP receipt when SAP has one. */
+  status?: string | null
 }): number | null {
   const closed = Boolean(shipment.is_contract_sap_closed)
   const klip =
@@ -268,6 +283,7 @@ export function resolveShipmentListReceiveKg(shipment: {
   // As for Delivered: the SAP receive of a PO shared by several KLIP shipments is not this shipment's.
   if (shipment.sap_qty_shared) return klip
   const sap = shipmentStoredQtyKg(shipment.quantity_receive)
+  if (isCompletedShipmentStatus(shipment.status) && isMeaningfulManualShipmentQtyKg(sap)) return sap
 
   if (closed) {
     if (isMeaningfulManualShipmentQtyKg(sap)) return sap
@@ -294,19 +310,24 @@ export function shipmentModalGrandTotalsKg(totals: {
   contractSapClosed: boolean
   /** The PO sits in several KLIP shipments: its SAP quantities are not this shipment's, so the totals are the KLIP quantities only. */
   sapQtyShared?: boolean
+  /** The shipment is COMPLETED (the status the Edit modal shows): the total is SAP's, as the View Table shows it. */
+  shipmentCompleted?: boolean
 }): { delivered: number | null; receive: number | null } {
+  const status = totals.shipmentCompleted ? 'COMPLETED' : null
   return {
     delivered: resolveShipmentListDeliveredKg({
       klip_delivery_qty: totals.klipDeliveredKg,
       quantity_delivered_sap: totals.sapDeliveredKg,
       is_contract_sap_closed: totals.contractSapClosed,
       sap_qty_shared: totals.sapQtyShared,
+      status,
     }),
     receive: resolveShipmentListReceiveKg({
       klip_receive_qty: totals.klipReceiveKg,
       quantity_receive: totals.sapReceiveKg,
       is_contract_sap_closed: totals.contractSapClosed,
       sap_qty_shared: totals.sapQtyShared,
+      status,
     }),
   }
 }

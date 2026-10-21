@@ -32,6 +32,7 @@ import {
   ChevronRight,
   Clock,
   Edit2,
+  Eye,
   FileText,
   FlaskConical,
   Gauge,
@@ -186,7 +187,8 @@ import {
  * you must do first.
  *
  * JPS receives the download URL of each file (contract_document_url, shipping_instruction_document_url,
- * bl_document_url). The PDF stays on the Synology share.
+ * bl_document_url). The PDF stays on the Synology share at
+ * documents\shipment\contract|si|bl\<shipment id>.
  */
 const SHIPMENT_DOC_TYPES = [
   { type: 'CONTRACT', label: 'Contract Document' },
@@ -862,8 +864,11 @@ export function EditShipmentModal({
   const [originalDeliveredKg, setOriginalDeliveredKg] = useState<number | null>(null)
   const [originalReceiveKg, setOriginalReceiveKg] = useState<number | null>(null)
 
-  const [uploadedDocTypes, setUploadedDocTypes] = useState<Set<string>>(new Set())
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null)
+  const [dragOverDocType, setDragOverDocType] = useState<string | null>(null)
+  const [viewingDocId, setViewingDocId] = useState<string | null>(null)
+  const [pdfPreview, setPdfPreview] = useState<{ id: string; fileName: string; url: string } | null>(null)
+  const pdfPreviewUrlRef = useRef<string | null>(null)
   const [shipmentStatus, setShipmentStatus] = useState<string | null>(null)
   /**
    * What the Shipment Status badge SHOWS: the status as the table and cards derive it from the effective ATAs (the server
@@ -1009,7 +1014,9 @@ export function EditShipmentModal({
     [qtyTableRows, qtyEdits],
   )
 
-  // What the PO table's Grand Total shows for Delivered / Received: the same number as the Shipments View Table (KLIP, else SAP).
+  // What the PO table's Grand Total shows for Delivered / Received: the same number as the Shipments View Table (KLIP, else SAP; SAP for a COMPLETED shipment).
+  const shipmentCompletedForQty =
+    normalizeShipmentStatusKey(displayedShipmentStatus ?? shipmentStatus) === 'COMPLETED'
   const grandTotalKg = useMemo(
     () =>
       shipmentModalGrandTotalsKg({
@@ -1019,8 +1026,9 @@ export function EditShipmentModal({
         sapReceiveKg: poTableQtyTotals.sapReceive,
         contractSapClosed,
         sapQtyShared,
+        shipmentCompleted: shipmentCompletedForQty,
       }),
-    [qtyTotals, poTableQtyTotals, contractSapClosed, sapQtyShared],
+    [qtyTotals, poTableQtyTotals, contractSapClosed, sapQtyShared, shipmentCompletedForQty],
   )
 
   const isTcCharter = isTcCharterType(vesselMeta.charter_type)
@@ -1199,8 +1207,14 @@ export function EditShipmentModal({
     setShowQualityDifferencesOnly(false)
     setQualityEditsByPortKey({})
     setOriginalQualityByPortKey({})
-    setUploadedDocTypes(new Set())
     setUploadingDocType(null)
+    setDragOverDocType(null)
+    setViewingDocId(null)
+    if (pdfPreviewUrlRef.current) {
+      window.URL.revokeObjectURL(pdfPreviewUrlRef.current)
+      pdfPreviewUrlRef.current = null
+    }
+    setPdfPreview(null)
     setShipmentStatus(null)
     setDisplayedShipmentStatus(null)
     setShipmentDocuments([])
@@ -1213,20 +1227,6 @@ export function EditShipmentModal({
     setEtaBaseline(null)
     setPlantSiteName('')
     initSessionRef.current = null
-  }, [])
-
-  const hydrateQuantityDocs = useCallback(async (sid: string) => {
-    try {
-      const params = new URLSearchParams()
-      params.append('shipmentId', sid)
-      const res = await api.get(`/documents?${params.toString()}`)
-      const docs: Array<{ document_type?: string }> = res.data?.data ?? []
-      setUploadedDocTypes(
-        new Set(docs.map((d) => String(d.document_type ?? '')).filter(Boolean)),
-      )
-    } catch {
-      // non-blocking
-    }
   }, [])
 
   const loadShipmentDocuments = useCallback(async (sid: string) => {
@@ -1639,11 +1639,7 @@ export function EditShipmentModal({
         }
 
         void (async () => {
-          if (readOnly) {
-            await loadShipmentDocuments(sid)
-          } else {
-            await hydrateQuantityDocs(sid)
-          }
+          await loadShipmentDocuments(sid)
           void loadActivityLog(sid)
           void loadShipmentRemarks(sid)
         })()
@@ -1654,7 +1650,7 @@ export function EditShipmentModal({
         setLoading(false)
       }
     },
-    [hydrateQuantityDocs, loadActivityLog, loadShipmentRemarks, loadShipmentDocuments, editContractNumbers, readOnly],
+    [loadActivityLog, loadShipmentRemarks, loadShipmentDocuments, editContractNumbers, readOnly],
   )
 
   const handleAddPo = useCallback(async (reopenOperation = false) => {
@@ -1744,39 +1740,76 @@ export function EditShipmentModal({
     }
   }, [open, editContractId, editShipmentIdProp, editStoNumber, editContractNumbers, loadShipment, resetState])
 
-  const handleQtyDocUpload = async (
+  const closePdfPreview = useCallback(() => {
+    if (pdfPreviewUrlRef.current) {
+      window.URL.revokeObjectURL(pdfPreviewUrlRef.current)
+      pdfPreviewUrlRef.current = null
+    }
+    setPdfPreview(null)
+  }, [])
+
+  const uploadShipmentPdfs = async (
     kind: (typeof SHIPMENT_DOC_TYPES)[number]['type'],
-    e: React.ChangeEvent<HTMLInputElement>,
+    files: File[],
   ) => {
-    const file = e.target.files?.[0]
-    if (!file || !shipmentId) return
-    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-    if (!isPdf) {
-      alert('Only PDF files are allowed.')
-      e.target.value = ''
+    if (!shipmentId || !canModifyCoreSections || uploadingDocType) return
+    const pdfs = files.filter(
+      (file) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'),
+    )
+    if (pdfs.length === 0) {
+      setNotification({ type: 'error', message: 'Only PDF files are allowed.' })
       return
     }
-    if (uploadedDocTypes.has(kind) || uploadingDocType) return
     setUploadingDocType(kind)
+    setNotification(null)
     try {
-      const form = new FormData()
-      form.append('file', file)
-      form.append('document_type', kind)
-      form.append('shipment_id', shipmentId)
-      form.append('description', `${kind} document for shipment ${shipmentId}`)
-      const res = await api.post('/documents/upload', form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      for (const file of pdfs) {
+        const form = new FormData()
+        form.append('file', file)
+        form.append('document_type', kind)
+        form.append('shipment_id', shipmentId)
+        form.append('description', `${kind} document for shipment ${shipmentId}`)
+        const res = await api.post('/documents/upload', form, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
+        if (!res.data?.success) {
+          throw new Error(res.data?.error?.message || 'Upload failed')
+        }
+      }
+      await loadShipmentDocuments(shipmentId)
+      setNotification({
+        type: 'success',
+        message: pdfs.length === 1 ? 'Document uploaded.' : `${pdfs.length} documents uploaded.`,
       })
-      if (res.data?.success) setUploadedDocTypes((prev) => new Set(prev).add(kind))
-      else alert(res.data?.error?.message || 'Upload failed')
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Upload failed'
-      alert(msg)
+      const axiosMsg = (err as { response?: { data?: { error?: { message?: string } } } }).response?.data
+        ?.error?.message
+      const msg = axiosMsg || (err instanceof Error ? err.message : 'Upload failed')
+      setNotification({ type: 'error', message: msg })
+      await loadShipmentDocuments(shipmentId)
     } finally {
       setUploadingDocType(null)
-      e.target.value = ''
     }
   }
+
+  const handleViewDocument = useCallback(async (docId: string, fileName: string) => {
+    if (pdfPreview?.id === docId) {
+      closePdfPreview()
+      return
+    }
+    setViewingDocId(docId)
+    try {
+      const response = await api.get(`/documents/${docId}/download`, { responseType: 'blob' })
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }))
+      if (pdfPreviewUrlRef.current) window.URL.revokeObjectURL(pdfPreviewUrlRef.current)
+      pdfPreviewUrlRef.current = url
+      setPdfPreview({ id: docId, fileName, url })
+    } catch {
+      setNotification({ type: 'error', message: 'Failed to open document. Please try again.' })
+    } finally {
+      setViewingDocId(null)
+    }
+  }, [closePdfPreview, pdfPreview?.id])
 
   const resolveRowQty = (
     row: VesselPortsQuantityRow,
@@ -2837,99 +2870,152 @@ export function EditShipmentModal({
                     </>
                   )}
                 </div>
-                {readOnly ? (
-                  <div className="rounded-lg border border-gray-200 bg-gray-50/80 p-4">
-                    <div className="mb-3 flex items-center gap-2">
-                      <FileText className="h-4 w-4 text-gray-600" />
-                      <h5 className="text-sm font-semibold text-gray-800">Uploaded Documents</h5>
-                    </div>
-                    {docsLoading ? (
-                      <div className="flex items-center gap-2 text-sm text-gray-500">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading documents…
-                      </div>
-                    ) : shipmentDocuments.length === 0 ? (
-                      <p className="text-sm text-gray-500">No documents uploaded for this shipment.</p>
-                    ) : (
-                      <ul className="space-y-2">
-                        {shipmentDocuments.map((doc) => (
-                          <li
-                            key={doc.id}
-                            className="flex flex-col gap-2 rounded-md border border-gray-100 bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="outline" className="text-[10px]">
-                                  {doc.document_type || 'DOC'}
-                                </Badge>
-                                <span className="truncate text-sm font-medium text-gray-800">
-                                  {doc.file_name}
-                                </span>
-                              </div>
-                              {doc.created_at && (
-                                <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
-                                  Uploaded {formatDateTimeDMY(doc.created_at)}
-                                </p>
-                              )}
-                            </div>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-8 shrink-0 text-xs"
-                              onClick={() => void handleDownloadDocument(doc.id, doc.file_name)}
-                            >
-                              <Download className="mr-1 h-3.5 w-3.5" />
-                              Download
-                            </Button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-gray-600" />
+                    <h5 className="text-sm font-semibold text-gray-800">Documents</h5>
                   </div>
-                ) : (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  {SHIPMENT_DOC_TYPES.map(({ type, label }) => {
-                    const uploaded = uploadedDocTypes.has(type)
-                    const busy = uploadingDocType === type
-                    const inputId = `edit-shipment-doc-${type.toLowerCase()}`
-                    return (
-                      <div key={type} className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
-                        <p className="text-xs font-medium text-gray-800">{label}</p>
-                        <p className="mt-0.5 text-[11px] text-gray-500">PDF, optional.</p>
-                        <input
-                          id={inputId}
-                          type="file"
-                          accept=".pdf,application/pdf"
-                          className="hidden"
-                          onChange={(e) => handleQtyDocUpload(type, e)}
-                          disabled={!canModifyCoreSections || busy || uploaded}
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="mt-2 h-8 text-xs"
-                          disabled={!canModifyCoreSections || busy || uploaded}
-                          onClick={() => document.getElementById(inputId)?.click()}
-                        >
-                          {busy ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : uploaded ? (
-                            <>
-                              <Check className="h-3.5 w-3.5 mr-1 text-green-600" /> Uploaded
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="h-3.5 w-3.5 mr-1" /> Upload
-                            </>
-                          )}
+                  {docsLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-gray-500">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading documents…
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      {SHIPMENT_DOC_TYPES.map(({ type, label }) => {
+                        const busy = uploadingDocType === type
+                        const inputId = `edit-shipment-doc-${type.toLowerCase()}`
+                        const docs = shipmentDocuments.filter(
+                          (doc) => String(doc.document_type ?? '').toUpperCase() === type,
+                        )
+                        const dropping = dragOverDocType === type
+                        return (
+                          <div
+                            key={type}
+                            className={`rounded-lg border bg-gray-50/60 p-3 ${
+                              dropping ? 'border-blue-400 bg-blue-50' : 'border-gray-200'
+                            }`}
+                            onDragOver={(event) => {
+                              event.preventDefault()
+                              if (!canModifyCoreSections) return
+                              setDragOverDocType(type)
+                            }}
+                            onDragLeave={(event) => {
+                              const next = event.relatedTarget as Node | null
+                              if (next && event.currentTarget.contains(next)) return
+                              setDragOverDocType((current) => (current === type ? null : current))
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault()
+                              setDragOverDocType(null)
+                              if (!canModifyCoreSections) return
+                              void uploadShipmentPdfs(type, Array.from(event.dataTransfer.files ?? []))
+                            }}
+                          >
+                            <p className="text-xs font-medium text-gray-800">{label}</p>
+                            <p className="mt-0.5 text-[11px] text-gray-500">
+                              {canModifyCoreSections
+                                ? 'PDF. Drop one or more files here, or use Upload.'
+                                : 'PDF.'}
+                            </p>
+                            {canModifyCoreSections ? (
+                              <>
+                                <input
+                                  id={inputId}
+                                  type="file"
+                                  accept=".pdf,application/pdf"
+                                  multiple
+                                  className="hidden"
+                                  onChange={(event) => {
+                                    const picked = Array.from(event.target.files ?? [])
+                                    event.target.value = ''
+                                    void uploadShipmentPdfs(type, picked)
+                                  }}
+                                  disabled={busy}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="mt-2 h-8 text-xs"
+                                  disabled={busy}
+                                  onClick={() => document.getElementById(inputId)?.click()}
+                                >
+                                  {busy ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <>
+                                      <Upload className="mr-1 h-3.5 w-3.5" /> Upload
+                                    </>
+                                  )}
+                                </Button>
+                              </>
+                            ) : null}
+                            {docs.length === 0 ? (
+                              <p className="mt-2 text-[11px] text-gray-400">No file yet.</p>
+                            ) : (
+                              <ul className="mt-2 space-y-1.5">
+                                {docs.map((doc) => (
+                                  <li
+                                    key={doc.id}
+                                    className="rounded-md border border-gray-100 bg-white px-2 py-1.5"
+                                  >
+                                    <p className="truncate text-xs font-medium text-gray-800" title={doc.file_name}>
+                                      {doc.file_name}
+                                    </p>
+                                    {doc.created_at ? (
+                                      <p className="text-[10px] tabular-nums text-gray-500">
+                                        {formatDateTimeDMY(doc.created_at)}
+                                      </p>
+                                    ) : null}
+                                    <div className="mt-1 flex gap-1">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 px-2 text-[11px]"
+                                        disabled={viewingDocId === doc.id}
+                                        onClick={() => void handleViewDocument(doc.id, doc.file_name)}
+                                      >
+                                        {viewingDocId === doc.id ? (
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                        ) : (
+                                          <Eye className="mr-1 h-3 w-3" />
+                                        )}
+                                        {pdfPreview?.id === doc.id ? 'Hide' : 'View'}
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 px-2 text-[11px]"
+                                        onClick={() => void handleDownloadDocument(doc.id, doc.file_name)}
+                                      >
+                                        <Download className="mr-1 h-3 w-3" />
+                                        Download
+                                      </Button>
+                                    </div>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {pdfPreview ? (
+                    <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                      <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-1.5">
+                        <p className="truncate text-xs font-medium text-gray-700">{pdfPreview.fileName}</p>
+                        <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={closePdfPreview}>
+                          Close
                         </Button>
                       </div>
-                    )
-                  })}
+                      <iframe title={pdfPreview.fileName} src={pdfPreview.url} className="h-80 w-full" />
+                    </div>
+                  ) : null}
                 </div>
-                )}
               </div>
             </div>
 

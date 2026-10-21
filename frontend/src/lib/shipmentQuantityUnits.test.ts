@@ -397,3 +397,52 @@ describe('a PO that sits in several KLIP shipments shows the KLIP quantity only'
     expect(shipmentModalGrandTotalsKg({ ...base, sapQtyShared: false })).toEqual({ delivered: 1621901, receive: 1366000 })
   })
 })
+
+/**
+ * MT. BIO EXPRESS (production 2026-10-21): PO 1001031704 had Delivered Qty (Klip) 1 MT beside SAP 3,998.6 MT, the contract still Open (OS 1.4 MT). KLIP wins while a shipment is under
+ * way, so the View Table showed 1 MT for a shipment that had discharged on 14 Oct. A COMPLETED shipment reads SAP when SAP has a delivery (Ryan 2026-10-21, option A).
+ */
+describe('a COMPLETED shipment reads SAP delivery / receipt, not a leftover KLIP figure', () => {
+  const bioExpress = {
+    klip_delivery_qty: 1_000,
+    quantity_delivered_klip: 1_000,
+    quantity_delivered_sap: 3_998_596,
+    quantity_receive: 3_998_596,
+    is_contract_sap_closed: false,
+    sap_qty_shared: false,
+  }
+
+  it('Delivered: COMPLETED + SAP present + Open contract -> SAP, not the 1 MT KLIP figure', () => {
+    expect(resolveShipmentListDeliveredKg({ ...bioExpress, status: 'COMPLETED' })).toBe(3_998_596)
+    expect(resolveShipmentListDeliveredKg({ ...bioExpress, status: 'completed' })).toBe(3_998_596)
+    expect(shipmentListDeliveredKgForViewTable({ ...bioExpress, status: 'COMPLETED' })).toBe(3_998_596)
+  })
+
+  it('Received: COMPLETED + SAP present -> SAP, over a KLIP vessel receipt', () => {
+    expect(resolveShipmentListReceiveKg({ klip_receive_qty: 2_000, quantity_receive: 3_998_596, status: 'COMPLETED' })).toBe(3_998_596)
+  })
+
+  it('a shipment still under way keeps KLIP first, exactly as before', () => {
+    for (const status of ['PLANNED', 'SAILED', 'UNLOADING', undefined, null]) {
+      expect(resolveShipmentListDeliveredKg({ ...bioExpress, status })).toBe(1_000)
+    }
+    expect(resolveShipmentListReceiveKg({ klip_receive_qty: 2_000, quantity_receive: 3_998_596, status: 'UNLOADING' })).toBe(2_000)
+  })
+
+  it('COMPLETED without a SAP delivery keeps the KLIP figure so the table is not blank', () => {
+    expect(resolveShipmentListDeliveredKg({ klip_delivery_qty: 1_000, quantity_delivered_sap: null, status: 'COMPLETED' })).toBe(1_000)
+    expect(resolveShipmentListDeliveredKg({ klip_delivery_qty: 1_000, quantity_delivered_sap: 0, status: 'COMPLETED' })).toBe(1_000)
+  })
+
+  it('a PO shared by several KLIP shipments stays KLIP only, even when COMPLETED (its SAP figure is the PO\'s)', () => {
+    expect(resolveShipmentListDeliveredKg({ ...bioExpress, sap_qty_shared: true, status: 'COMPLETED' })).toBe(1_000)
+  })
+
+  it('the Edit modal Grand Total follows the same rule as the View Table', () => {
+    const totals = { klipDeliveredKg: 1_000, klipReceiveKg: 0, sapDeliveredKg: 3_998_596, sapReceiveKg: 3_998_596, contractSapClosed: false }
+    expect(shipmentModalGrandTotalsKg({ ...totals, shipmentCompleted: true })).toEqual({ delivered: 3_998_596, receive: 3_998_596 })
+    // not completed: KLIP delivered 1 MT, receive falls back to SAP because KLIP receive is 0 (unchanged)
+    expect(shipmentModalGrandTotalsKg({ ...totals, shipmentCompleted: false }).delivered).toBe(1_000)
+    expect(shipmentModalGrandTotalsKg(totals).delivered).toBe(1_000)
+  })
+})
