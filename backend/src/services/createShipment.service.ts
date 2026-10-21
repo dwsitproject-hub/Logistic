@@ -111,6 +111,20 @@ async function upsertPoQtyAssignment(
 }
 
 /**
+ * Add New is an Operation ID voyage. A numeric STO sent with that OP- is the contract's SAP STO
+ * and must not become this voyage's assignment key or be written back onto the contract.
+ * Plot / resubmit of a voyage whose operation id IS the STO still files under that STO.
+ */
+export function klipOwnVoyageIgnoresSubmittedSto(
+  operationId: string | null | undefined,
+  stoNumber: string | null | undefined,
+): boolean {
+  const op = String(operationId ?? '').trim();
+  const sto = String(stoNumber ?? '').trim();
+  return op.startsWith('OP-') && op !== sto;
+}
+
+/**
  * The shipment row a new plan for a contract may reuse, or null when it must get a row of its own.
  *
  * A plan used to fall back to "the newest active shipment of the contract" when neither the operation nor the vessel matched. Planning a PO a
@@ -208,7 +222,23 @@ export async function createShipmentsFromContracts(
   }
 
   const hasStoNumber = Boolean(stoNumber && String(stoNumber).trim() !== '');
-  if (hasStoNumber) {
+  let resolvedOperationId: string | null =
+    operationId != null && String(operationId).trim() !== '' ? String(operationId).trim() : null;
+  if (!resolvedOperationId && hasStoNumber) {
+    const stoTrimForOp = String(stoNumber).trim();
+    if (isOfficialSapStoNumber(stoTrimForOp)) {
+      resolvedOperationId = stoTrimForOp;
+    }
+  }
+  if (!resolvedOperationId && !hasStoNumber) {
+    const dmy = formatDDMMYYYY(new Date());
+    const seq = await allocateNextSyntheticSequenceDefault('shipments', 'SEA', dmy);
+    resolvedOperationId = buildSyntheticOperationId('SEA', dmy, seq);
+  }
+  const ownVoyage = klipOwnVoyageIgnoresSubmittedSto(resolvedOperationId, stoNumber);
+  const filesUnderSubmittedSto = hasStoNumber && !ownVoyage;
+
+  if (filesUnderSubmittedSto) {
     const stoTrim = String(stoNumber).trim();
     if (isOfficialSapStoNumber(stoTrim)) {
       if (await officialSapStoHasRegisteredPlanning(stoTrim)) {
@@ -253,20 +283,6 @@ export async function createShipmentsFromContracts(
 
   const shipmentIds: string[] = [];
   const timestamp = Date.now().toString();
-
-  let resolvedOperationId: string | null =
-    operationId != null && String(operationId).trim() !== '' ? String(operationId).trim() : null;
-  if (!resolvedOperationId && hasStoNumber) {
-    const stoTrimForOp = String(stoNumber).trim();
-    if (isOfficialSapStoNumber(stoTrimForOp)) {
-      resolvedOperationId = stoTrimForOp;
-    }
-  }
-  if (!resolvedOperationId && !hasStoNumber) {
-    const dmy = formatDDMMYYYY(new Date());
-    const seq = await allocateNextSyntheticSequenceDefault('shipments', 'SEA', dmy);
-    resolvedOperationId = buildSyntheticOperationId('SEA', dmy, seq);
-  }
 
   type PerContractEtaPayload = {
     port_of_loading?: string | null;
@@ -330,7 +346,7 @@ export async function createShipmentsFromContracts(
     const quantityDeliveredKg =
       quantityDeliveredKlipKg ?? parsePositiveQtyKg(quantityDelivered);
 
-    const shipmentId = hasStoNumber
+    const shipmentId = filesUnderSubmittedSto
       ? `${stoNumber}-${contract.contract_id}`
       : `MNL-${timestamp.slice(-8)}-${contract.contract_id}`;
 
@@ -472,12 +488,11 @@ export async function createShipmentsFromContracts(
     shipmentIds.push(resultId);
   }
 
-  const assignmentKey =
-    hasStoNumber && stoNumber && String(stoNumber).trim()
-      ? String(stoNumber).trim()
-      : resolvedOperationId && String(resolvedOperationId).trim()
-        ? String(resolvedOperationId).trim()
-        : `MNL-${timestamp.slice(-8)}`;
+  const assignmentKey = filesUnderSubmittedSto
+    ? String(stoNumber).trim()
+    : resolvedOperationId && String(resolvedOperationId).trim()
+      ? String(resolvedOperationId).trim()
+      : `MNL-${timestamp.slice(-8)}`;
 
   const mergedPlanQtyEntries: Record<string, unknown> = {
     ...(contractQtyAssigned && typeof contractQtyAssigned === 'object' ? contractQtyAssigned : {}),
@@ -506,7 +521,7 @@ export async function createShipmentsFromContracts(
     }
   }
 
-  if (hasStoNumber) {
+  if (filesUnderSubmittedSto) {
     await query(
       `
         UPDATE contracts
@@ -552,7 +567,7 @@ export async function createShipmentsFromContracts(
   }
 
   return {
-    stoNumber: stoNumber ? String(stoNumber) : null,
+    stoNumber: filesUnderSubmittedSto && stoNumber ? String(stoNumber) : null,
     contractNumbers,
     shipmentIds,
   };

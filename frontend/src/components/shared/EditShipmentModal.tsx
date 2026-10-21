@@ -1355,9 +1355,15 @@ export function EditShipmentModal({
         // Display the list STO (preferredStoNumber = row sto_key). Payload also receives
         // that STO so SAP delivered/receive/OS are scoped to the Type V sea leg, not the
         // Type T shipment_id sibling on FOB mixed POs.
+        const preferredLookup = String(preferredStoNumber ?? '').trim()
+        const preferredIsOwnVoyage =
+          preferredLookup.startsWith('OP-') ||
+          preferredLookup.startsWith('MNL-') ||
+          preferredLookup.startsWith('MSEA-')
         const preferredDisplaySto = resolveShipmentDisplayStoNumber(preferredStoNumber)
-        const displaySto =
-          preferredDisplaySto !== '-'
+        const displaySto = preferredIsOwnVoyage
+          ? '-'
+          : preferredDisplaySto !== '-'
             ? preferredDisplaySto
             : resolveShipmentDisplayStoNumber(row.contract_sto_number ?? row.sto_number)
 

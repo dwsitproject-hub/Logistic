@@ -1,7 +1,7 @@
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { poLineHasSapStoSql } from '../utils/poLineSapStoSql';
-import { contractSeaVesselStoNumberPickExpr } from '../utils/shipmentStoTypeSql';
+import { contractSeaVesselStoNumberPickExpr, sqlKlipOwnVoyageOperationIdExpr } from '../utils/shipmentStoTypeSql';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 
 export interface ShipmentEditContext {
@@ -28,6 +28,11 @@ export function pickShipmentEditLookupKey(args: {
   const resolved = String(args.resolvedKey ?? '').trim();
   const preferred = String(args.preferredSto ?? '').trim();
   if (!preferred) return resolved;
+  // The list still shows the contract's SAP STO on a second voyage. That number must not
+  // replace the operation id, or Edit loads the previous voyage's PO group.
+  if (isKlipSyntheticLogisticsKey(resolved) && preferred !== resolved && /^\d+$/.test(preferred)) {
+    return resolved;
+  }
   const allowed = new Set(
     [
       resolved,
@@ -188,6 +193,7 @@ export async function resolveShipmentEditContext(
             AND NULLIF(TRIM(cs.sto_number::text), '') IS NOT NULL
         ) AS contract_sto_numbers,
         COALESCE(
+          ${sqlKlipOwnVoyageOperationIdExpr('s', 'c')},
           CASE
             WHEN (${contractEffectiveIncotermExpr('c')}) = 'FOB'
               AND NULLIF(TRIM(s.vessel_name), '') IS NOT NULL

@@ -2155,7 +2155,9 @@ export function AddNewShipmentModal({
       await onSubmit({
         kind: 'create',
         operationId,
-        stoNumber: newShipment.stoNumber.trim() || String(prefilledStoNumber ?? '').trim(),
+        stoNumber: isPlotMode
+          ? newShipment.stoNumber.trim() || String(prefilledStoNumber ?? '').trim()
+          : '',
         contractNumbers,
         ...(Object.keys(quantityShipmentPlanByContract).length > 0
           ? { quantityShipmentPlanByContract }
@@ -2410,7 +2412,7 @@ export function AddNewShipmentModal({
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
                 <span>
                   <strong>Required:</strong> at least one PO &nbsp;•&nbsp; <strong>Optional:</strong> plant/site, Estimation &nbsp;•&nbsp;
-                  <strong>Note:</strong> Operation ID is auto-generated; STO will be filled from SAP when available
+                  <strong>Note:</strong> Operation ID is auto-generated. A new shipment does not copy an existing SAP STO
                   {hasSapSto ? (
                     <>
                       {' '}

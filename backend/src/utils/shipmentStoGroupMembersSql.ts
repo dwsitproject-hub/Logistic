@@ -1,11 +1,17 @@
 import { query } from '../database/connection';
+import { sqlKlipOwnVoyageOperationIdExpr } from './shipmentStoTypeSql';
 
-/** STO key for a shipment row without requiring latest_spd_contract join. */
+/**
+ * STO key for a shipment row without requiring latest_spd_contract join.
+ * A KLIP OP- voyage is keyed by that operation id, ahead of the contract's SAP STO,
+ * so vessel / ETA fan-out stays on the voyage the user edited.
+ */
 export function shipmentStoKeyWithoutSpdExpr(
   contractAlias = 'c',
   shipmentAlias = 's',
 ): string {
   return `COALESCE(
+    ${sqlKlipOwnVoyageOperationIdExpr(shipmentAlias, contractAlias)},
     CASE
       WHEN NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '') ~ '^[0-9]+$'
         AND (

@@ -5,7 +5,7 @@ const activityMock = vi.hoisted(() => vi.fn());
 vi.mock('../database/connection', () => ({ query: queryMock, default: { query: queryMock } }));
 vi.mock('../utils/klipLogisticsActivity', () => ({ hasKlipShipmentActivity: activityMock }));
 
-import { findReusableShipmentForPlan } from './createShipment.service';
+import { findReusableShipmentForPlan, klipOwnVoyageIgnoresSubmittedSto } from './createShipment.service';
 
 const CONTRACT = '11111111-1111-1111-1111-111111111111';
 
@@ -19,6 +19,17 @@ function answer(opts: { byOp?: string[]; byVessel?: string[]; candidates?: strin
     throw new Error('unexpected query: ' + flat.slice(0, 80));
   });
 }
+
+describe('klipOwnVoyageIgnoresSubmittedSto', () => {
+  it('does not file an Add New OP- under the SAP STO sent with it', () => {
+    expect(klipOwnVoyageIgnoresSubmittedSto('OP-1004032737-05814565', '1006020666')).toBe(true);
+  });
+
+  it('still files a plan whose operation id is the STO itself', () => {
+    expect(klipOwnVoyageIgnoresSubmittedSto('1006020666', '1006020666')).toBe(false);
+    expect(klipOwnVoyageIgnoresSubmittedSto(null, '1006020666')).toBe(false);
+  });
+});
 
 describe('findReusableShipmentForPlan', () => {
   beforeEach(() => {

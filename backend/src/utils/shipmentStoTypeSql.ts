@@ -178,6 +178,27 @@ export function contractHasSeaVesselStoOnContractSql(contractAlias = 'c'): strin
 }
 
 /**
+ * Operation id of a KLIP Add New voyage, or NULL when this row still belongs to its SAP STO.
+ *
+ * Add New does not take an STO. The voyage is the OP- id. A SAP import keeps operation_id_source
+ * SAP_IMPORT (or a numeric STO id), so the V and T legs of that imported voyage stay one group.
+ * Changing the vessel on a second OP- must not write the first voyage.
+ */
+export function sqlKlipOwnVoyageOperationIdExpr(shipmentAlias = 's', contractAlias = 'c'): string {
+  const operationId = `NULLIF(TRIM(${shipmentAlias}.operation_id::text), '')`;
+  const seaStoPick = contractSeaVesselStoNumberPickExpr(contractAlias);
+  return `CASE
+    WHEN ${operationId} ~ '^OP-'
+      AND COALESCE(${shipmentAlias}.operation_id_source, '') IS DISTINCT FROM 'SAP_IMPORT'
+      AND ${operationId} IS DISTINCT FROM NULLIF(TRIM(${contractAlias}.sto_number::text), '')
+      AND ${operationId} IS DISTINCT FROM NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '')
+      AND ${operationId} IS DISTINCT FROM (${seaStoPick})
+    THEN ${operationId}
+    ELSE NULL
+  END`;
+}
+
+/**
  * List grouping key — for FOB mixed V+T POs of one voyage, prefer Type V STO.
  * CIF/CFR and non-vessel rows fall back to shipmentListStoKeyExpr.
  *
@@ -193,21 +214,13 @@ export function shipmentListSeaStoKeyExpr(
   const inc = contractEffectiveIncotermExpr(contractAlias);
   const baseKey = shipmentListStoKeyExpr(contractAlias, spdAlias, shipmentAlias);
   const seaStoPick = contractSeaVesselStoNumberPickExpr(contractAlias);
-  const operationId = `NULLIF(TRIM(${shipmentAlias}.operation_id::text), '')`;
-  const ownVoyage = `${operationId} ~ '^OP-'
-        AND COALESCE(${shipmentAlias}.operation_id_source, '') IS DISTINCT FROM 'SAP_IMPORT'
-        AND ${operationId} IS DISTINCT FROM (${seaStoPick})
-        AND ${operationId} IS DISTINCT FROM NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '')`;
+  const ownVoyageId = sqlKlipOwnVoyageOperationIdExpr(shipmentAlias, contractAlias);
   return `COALESCE(
     CASE
       WHEN (${inc}) = 'FOB'
         AND NULLIF(TRIM(${shipmentAlias}.vessel_name), '') IS NOT NULL
         AND (${seaStoPick}) IS NOT NULL
-      THEN CASE
-        WHEN ${ownVoyage}
-        THEN ${operationId}
-        ELSE (${seaStoPick})
-      END
+      THEN COALESCE(${ownVoyageId}, (${seaStoPick}))
       ELSE NULL
     END,
     ${baseKey}

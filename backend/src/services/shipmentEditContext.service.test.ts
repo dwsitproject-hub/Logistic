@@ -21,15 +21,17 @@ describe('shipmentEditContext.service (legacy file checks)', () => {
     expect(src).toContain('TRIM(u.sto_number::text) = a.lookup_key');
   });
 
-  it('prefers FOB Type V STO, then numeric shipment_id, then operation_id, over unrelated contract_stos', () => {
+  it('keys a KLIP OP- voyage before the FOB Type V STO, then numeric shipment_id, then operation_id', () => {
     const src = readFileSync(resolve(__dirname, 'shipmentEditContext.service.ts'), 'utf8');
     const anchorBlock = src.slice(src.indexOf('WITH anchor AS'), src.indexOf('linked_contracts AS'));
     const coalesce = anchorBlock.slice(anchorBlock.indexOf('COALESCE('));
+    const ownVoyage = coalesce.indexOf('sqlKlipOwnVoyageOperationIdExpr');
     const fob = coalesce.indexOf("= 'FOB'");
     const shipmentIdCase = coalesce.indexOf("s.shipment_id::text), '') ~ '^[0-9]+$'");
     const opId = coalesce.indexOf("NULLIF(TRIM(s.operation_id::text), '')");
     const fallbackStos = coalesce.indexOf('ORDER BY cs.updated_at DESC NULLS LAST');
-    expect(fob).toBeGreaterThan(-1);
+    expect(ownVoyage).toBeGreaterThan(-1);
+    expect(fob).toBeGreaterThan(ownVoyage);
     expect(shipmentIdCase).toBeGreaterThan(fob);
     expect(opId).toBeGreaterThan(shipmentIdCase);
     expect(fallbackStos).toBeGreaterThan(opId);
@@ -59,6 +61,18 @@ describe('pickShipmentEditLookupKey', () => {
         contractStoNumbers: ['1016010951', '1016010991'],
       }),
     ).toBe('1016010951');
+  });
+
+  it('does not let the displayed SAP STO replace a KLIP operation id', () => {
+    expect(
+      pickShipmentEditLookupKey({
+        resolvedKey: 'OP-1004032737-05814565',
+        preferredSto: '1006020666',
+        seaVesselSto: '1006020666',
+        operationId: 'OP-1004032737-05814565',
+        contractStoNumbers: ['1006020666'],
+      }),
+    ).toBe('OP-1004032737-05814565');
   });
 
   it('ignores an unrelated preferred STO', () => {

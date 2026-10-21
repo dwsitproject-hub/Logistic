@@ -6569,6 +6569,11 @@ function ShipmentsPageContent() {
                   )
                   return
                 }
+                setPlotShipmentFromTable(null)
+                setAddShipmentPrefilledPOs(null)
+                setAddShipmentPrefilledSto(null)
+                setAddShipmentPrefilledContractNumbers(null)
+                setAddShipmentPrePlannedGroupId(null)
                 setShowAddShipment(true)
               }}
             >

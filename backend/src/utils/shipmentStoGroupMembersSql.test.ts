@@ -12,6 +12,8 @@ describe('shipmentStoGroupMembersSql', () => {
   it('derives sto_key from operation_id when sto_number is empty (OP-* manual operations)', () => {
     const sql = shipmentStoKeyWithoutSpdExpr('c', 's');
     expect(sql).toContain('s.operation_id');
+    expect(sql).toContain(" ~ '^OP-'");
+    expect(sql).toContain("IS DISTINCT FROM 'SAP_IMPORT'");
     expect(sql).not.toContain('effective_sto');
   });
 
