@@ -19,8 +19,19 @@ describe('computeShippingPerfDeltaFields', () => {
     expect(deltas.ata_loading_delta_eta_etr_days).toBe(31);
     expect(deltas.ata_loading_delta_eta_etb_days).toBe(-1);
     expect(deltas.ata_loading_delta_etb_etc_days).toBe(-3);
-    expect(deltas.total_delta_days).toBe(-4);
-    expect(deltas.ata_total_delta_days).toBe(-4);
+    expect(deltas.total_delta_days).toBe(4);
+    expect(deltas.ata_total_delta_days).toBe(4);
+  });
+
+  it('adds the day counts even when the stored gaps have opposite signs', () => {
+    const deltas = computeShippingPerfDeltaFields({
+      loading_eta_arrival: '2026-01-08',
+      loading_eta_berthed: '2026-01-09',
+      loading_eta_completed: '2026-01-07',
+    });
+    expect(deltas.loading_delta_eta_etb_days).toBe(-1);
+    expect(deltas.loading_delta_etb_etc_days).toBe(2);
+    expect(deltas.total_delta_days).toBe(3);
   });
 
   it('does not roll the readiness gap into total', () => {

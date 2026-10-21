@@ -80,7 +80,7 @@ export const FIELD_HELP = {
   oilLossPct: `Formula: (Qty Receive − Qty Delivery) ÷ Qty Delivery × 100%. Qty Delivery uses SAP UAT Quantity Delivery Trucking/Vessel matrix. Negative values indicate oil loss.`,
 
   // Shipping Performance
-  shipmentTotalDelta: `Sum of the gap columns in days: Loading (ETA−ETB) + Loading (ETB−ETC) + Discharge (ETA−ETB) + Discharge (ETB−ETC). Loading (ETA−ETR) is not included. On Completed the same gaps use ATA, ATB, and ATC.`,
+  shipmentTotalDelta: `Sum of the day counts: Loading (ETA−ETB) + Loading (ETB−ETC) + Discharge (ETA−ETB) + Discharge (ETB−ETC). A negative gap still counts as that many days. Loading (ETA−ETR) is not included. On Completed the same gaps use ATA, ATB, and ATC.`,
 
   shipmentStoQty: `STO Quantity from the linked contract in SAP (in MT). Represents the planned quantity allocated to this shipment.`,
   shipmentReceivedQty: `Shipments View Table grain is the STO (one row). Open + KLIP: sum of Received Qty (Klip) per PO on this STO — same as Edit Shipment Grand Total, not a single PO cell. One PO with several STOs: this row is that STO only (not the full PO copied onto every sibling). GR Close uses SAP Quantity Receive for this STO.`,

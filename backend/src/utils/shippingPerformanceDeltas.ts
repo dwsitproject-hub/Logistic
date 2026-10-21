@@ -32,9 +32,10 @@ export interface ShippingPerfDeltaFields {
   ata_total_delta_days: number | null;
 }
 
-function sumSegmentsOrNull(segments: Array<number | null>): number | null {
+/** Day-count total. A negative gap is still that many days, so the signs do not cancel. */
+function sumAbsSegmentsOrNull(segments: Array<number | null>): number | null {
   if (segments.every((value) => value == null)) return null;
-  return segments.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  return segments.reduce<number>((sum, value) => sum + (value == null ? 0 : Math.abs(value)), 0);
 }
 
 /** Recompute signed cycle deltas from resolved milestone dates (ETA + ATA variants). */
@@ -103,12 +104,12 @@ export function computeShippingPerfDeltaFields(
     loading_delta_etb_etc_days,
     discharge_delta_eta_etb_days,
     discharge_delta_etb_etc_days,
-    total_delta_days: sumSegmentsOrNull(etaSegments),
+    total_delta_days: sumAbsSegmentsOrNull(etaSegments),
     ata_loading_delta_eta_etr_days,
     ata_loading_delta_eta_etb_days,
     ata_loading_delta_etb_etc_days,
     ata_discharge_delta_eta_etb_days,
     ata_discharge_delta_etb_etc_days,
-    ata_total_delta_days: sumSegmentsOrNull(ataSegments),
+    ata_total_delta_days: sumAbsSegmentsOrNull(ataSegments),
   };
 }

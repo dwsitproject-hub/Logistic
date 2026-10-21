@@ -1081,10 +1081,10 @@ export async function buildShippingPerformanceSql(): Promise<string> {
             AND (COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)) IS NULL
           THEN NULL
           ELSE (
-            COALESCE((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date)), 0) +
-            COALESCE((COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date)), 0) +
-            COALESCE((COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date)), 0) +
-            COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
+            COALESCE(ABS((COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date))), 0) +
+            COALESCE(ABS((COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date))), 0) +
+            COALESCE(ABS((COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) - COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date))), 0) +
+            COALESCE(ABS((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date))), 0)
           )::int
         END AS total_delta_days,
         (COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - c.cargo_readiness_date::date)::int AS ata_loading_delta_eta_etr_days,
@@ -1099,10 +1099,10 @@ export async function buildShippingPerformanceSql(): Promise<string> {
             AND (COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed', 'sao', 's')}, sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) - COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao', 's')}, sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed)) IS NULL
           THEN NULL
           ELSE (
-            COALESCE((COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed)), 0) +
-            COALESCE((COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) - COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed)), 0) +
-            COALESCE((COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_arrival', 'sao', 's')}, sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) - COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed', 'sao', 's')}, sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed)), 0) +
-            COALESCE((COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed', 'sao', 's')}, sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) - COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao', 's')}, sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed)), 0)
+            COALESCE(ABS((COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed))), 0) +
+            COALESCE(ABS((COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) - COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed))), 0) +
+            COALESCE(ABS((COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_arrival', 'sao', 's')}, sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) - COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed', 'sao', 's')}, sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed))), 0) +
+            COALESCE(ABS((COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_berthed', 'sao', 's')}, sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) - COALESCE(${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao', 's')}, sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed))), 0)
           )::int
         END AS ata_total_delta_days,
         sa.remark,

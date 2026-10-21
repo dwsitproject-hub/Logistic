@@ -1020,8 +1020,8 @@ const SHIPPING_PERF_DELTA_COLUMN_TOOLTIPS: Partial<Record<keyof ShippingPerforma
   discharge_delta_etb_etc_days:
     'ETA Vessel Berthed at Discharge Port - ETA Vessel Complete Discharge',
   total_delta_days:
-    'Sum of Loading (ETA−ETB), Loading (ETB−ETC), Discharge (ETA−ETB), and Discharge (ETB−ETC). ' +
-    'Loading (ETA−ETR) is not included. Shows "-" when those gaps are all missing.',
+    'Sum of the day counts for Loading (ETA−ETB), Loading (ETB−ETC), Discharge (ETA−ETB), and Discharge (ETB−ETC). ' +
+    'A negative gap still counts as that many days. Loading (ETA−ETR) is not included. Shows "-" when those gaps are all missing.',
 }
 
 const COLUMN_DEFS: ColumnDef[] = [
@@ -1390,12 +1390,13 @@ function isMtQtyColumn(key: string): boolean {
   )
 }
 
-/** Port gaps have no late/ahead meaning. Loading ETA-ETR and Total keep the signed color. */
+/** Port gaps and their total are day counts. Loading ETA-ETR keeps the late/ahead color. */
 const SHIPPING_PERF_GAP_ONLY_DELTA_KEYS = new Set([
   'loading_delta_eta_etb_days',
   'loading_delta_etb_etc_days',
   'discharge_delta_eta_etb_days',
   'discharge_delta_etb_etc_days',
+  'total_delta_days',
 ])
 
 function NumberCell({
@@ -2268,7 +2269,12 @@ function ShippingPerformancePageContent() {
           return (
             <span key={key} className="shrink-0 cursor-help" title={formula}>
               {shortLabel}:{' '}
-              <span className={cn('font-semibold tabular-nums', signedCycleDaysClass(value))}>
+              <span
+                className={cn(
+                  'font-semibold tabular-nums',
+                  key === 'loadingEtr' ? signedCycleDaysClass(value) : 'text-gray-900',
+                )}
+              >
                 {fmt(value)}
               </span>
             </span>
