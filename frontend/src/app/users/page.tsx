@@ -42,8 +42,7 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
-  Eye,
-  EyeOff,
+  Mail,
   Activity,
 } from 'lucide-react'
 import api from '@/lib/api'
@@ -98,7 +97,6 @@ export default function UsersPage() {
 
   const emptyFormData = {
     email: '',
-    password: '',
     full_name: '',
     role: 'TRADING',
     level: 'Staff',
@@ -112,9 +110,8 @@ export default function UsersPage() {
   // Form states
   const [formData, setFormData] = useState(emptyFormData)
 
-  const [resetPassword, setResetPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
-  const [showResetPassword, setShowResetPassword] = useState(false)
+  /** A reset link or an invitation is being sent (the request waits for the SMTP server). */
+  const [sendingLink, setSendingLink] = useState(false)
   const showTransportType = formData.role === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(formData.level)
   // Region/Plant follows the role's own flag (roles.uses_region_scope, set on the Roles page); Product stays LOGISTICS / TRADING only.
   const showRegion =
@@ -183,12 +180,18 @@ export default function UsersPage() {
     setSuccess('')
 
     try {
-      await api.post('/users', {
+      const response = await api.post('/users', {
         ...formData,
         plants: showRegion ? formData.plants : [],
         products: showProducts ? formData.products : [],
       })
-      setSuccess('User created successfully')
+      const created = response.data?.data
+      // The account exists either way; the message says whether the invitation went out, so the admin knows to resend it.
+      setSuccess(
+        created?.invitation_sent
+          ? `User created. An invitation e-mail was sent to ${created.email}.`
+          : `User created, but the invitation e-mail could not be sent (SMTP is not configured or failed). Use "Resend invitation" once e-mail works.`,
+      )
       setShowAddModal(false)
       setFormData(emptyFormData)
       fetchData()
@@ -226,25 +229,38 @@ export default function UsersPage() {
     }
   }
 
+  /** Mail a user a link to set a password: a reset link for an active account, the invitation again for a pending one. */
+  const sendPasswordLink = async (user: User, kind: 'reset' | 'invitation') => {
+    setError('')
+    setSuccess('')
+    setSendingLink(true)
+    try {
+      const path = kind === 'invitation' ? 'resend-invitation' : 'reset-password'
+      const response = await api.post(`/users/${user.id}/${path}`)
+      const sent = Boolean(response.data?.data?.email_sent)
+      if (sent) {
+        setSuccess(
+          kind === 'invitation'
+            ? `Invitation sent to ${user.email}.`
+            : `Password reset link sent to ${user.email}. Their current password keeps working until they use it.`,
+        )
+      } else {
+        setError('The e-mail could not be sent (SMTP is not configured or failed). Nothing was changed for the user.')
+      }
+      setShowResetModal(false)
+      setSelectedUser(null)
+      fetchData()
+    } catch (err: any) {
+      setError(err.response?.data?.error?.message || 'Failed to send the link')
+    } finally {
+      setSendingLink(false)
+    }
+  }
+
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedUser) return
-
-    setError('')
-    setSuccess('')
-
-    try {
-      await api.post(`/users/${selectedUser.id}/reset-password`, {
-        newPassword: resetPassword,
-      })
-      setSuccess('Password reset successfully. User will be prompted to change password on next login.')
-      setShowResetModal(false)
-      setSelectedUser(null)
-      setResetPassword('')
-      fetchData()
-    } catch (err: any) {
-      setError(err.response?.data?.error?.message || 'Failed to reset password')
-    }
+    await sendPasswordLink(selectedUser, 'reset')
   }
 
   const handleDeleteUser = async (userId: string) => {
@@ -268,7 +284,6 @@ export default function UsersPage() {
     setSuccess('')
     setFormData({
       email: user.email,
-      password: '',
       full_name: user.full_name,
       role: user.role,
       level: user.level || 'Staff',
@@ -292,7 +307,6 @@ export default function UsersPage() {
 
   const openResetModal = (user: User) => {
     setSelectedUser(user)
-    setResetPassword('')
     setShowResetModal(true)
   }
 
@@ -508,13 +522,28 @@ export default function UsersPage() {
                             >
                               <Edit2 className="h-3 w-3" />
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => openResetModal(user)}
-                            >
-                              <Key className="h-3 w-3" />
-                            </Button>
+                            {user.is_first_login && user.is_active ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                title="Resend invitation e-mail"
+                                aria-label={`Resend invitation to ${user.email}`}
+                                disabled={sendingLink}
+                                onClick={() => sendPasswordLink(user, 'invitation')}
+                              >
+                                <Mail className="h-3 w-3" />
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                title="Send password reset link"
+                                aria-label={`Send password reset link to ${user.email}`}
+                                onClick={() => openResetModal(user)}
+                              >
+                                <Key className="h-3 w-3" />
+                              </Button>
+                            )}
                             {user.id !== currentUser?.id && (
                               <Button
                                 size="sm"
@@ -542,7 +571,7 @@ export default function UsersPage() {
             <DialogHeader>
               <DialogTitle>Add New User</DialogTitle>
               <DialogDescription>
-                Create a new user account with a default password
+                Create a new user account. An invitation e-mail is sent so the user can set their own password.
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleAddUser} autoComplete="off">
@@ -576,37 +605,10 @@ export default function UsersPage() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="password">Default Password *</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      type={showPassword ? "text" : "password"}
-                      value={formData.password}
-                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                      placeholder="User will change this on first login"
-                      autoComplete="new-password"
-                      required
-                      className="pr-10"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4 text-gray-400" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-gray-400" />
-                      )}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-gray-500">
-                    Click the eye icon to show/hide password. User will be required to change it on first login.
-                  </p>
-                </div>
+                <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                  No password is set here. After you save, the user receives an e-mail with a one-time link (valid 72
+                  hours) to choose their own password and sign in for the first time.
+                </p>
 
                 <div className="space-y-2">
                   <Label htmlFor="role">Role *</Label>
@@ -911,50 +913,26 @@ export default function UsersPage() {
         <Dialog open={showResetModal} onOpenChange={setShowResetModal}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>Reset Password</DialogTitle>
+              <DialogTitle>Send Password Reset Link</DialogTitle>
               <DialogDescription>
-                Set a new default password for {selectedUser?.full_name}
+                E-mail {selectedUser?.full_name} ({selectedUser?.email}) a link to choose a new password
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleResetPassword}>
-              <div className="grid gap-4 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="reset_password">New Default Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="reset_password"
-                      type={showResetPassword ? "text" : "password"}
-                      value={resetPassword}
-                      onChange={(e) => setResetPassword(e.target.value)}
-                      placeholder="Enter new password (min 6 characters)"
-                      required
-                      className="pr-10"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                      onClick={() => setShowResetPassword(!showResetPassword)}
-                    >
-                      {showResetPassword ? (
-                        <EyeOff className="h-4 w-4 text-gray-400" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-gray-400" />
-                      )}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-gray-500">
-                    Click the eye icon to show/hide password. The user will be required to change it on their next login.
-                  </p>
-                </div>
+              <div className="py-4">
+                <p className="text-sm text-gray-600">
+                  The link works once and expires in 60 minutes. You do not see or set the password. Their current
+                  password keeps working until they use the link.
+                </p>
               </div>
 
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setShowResetModal(false)}>
                   Cancel
                 </Button>
-                <Button type="submit">Reset Password</Button>
+                <Button type="submit" disabled={sendingLink}>
+                  {sendingLink ? 'Sending...' : 'Send reset link'}
+                </Button>
               </DialogFooter>
             </form>
           </DialogContent>

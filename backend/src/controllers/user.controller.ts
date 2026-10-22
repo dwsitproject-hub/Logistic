@@ -7,6 +7,9 @@ import { AuthRequest } from '../middleware/auth';
 import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
 import { canonicalizeUserRegionSites } from '../utils/userRegionSite';
 import { findAssignableRole } from '../services/roleAssignment.service';
+import { AuditService } from '../services/audit.service';
+import { issueToken, unusablePasswordHash } from '../services/authToken.service';
+import { sendInvitationEmail, sendPasswordResetEmail } from '../services/authEmail.service';
 
 type UserAssociations = {
   groupPlantsByUser: Map<string, string[]>;
@@ -238,9 +241,9 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
   let transactionStarted = false;
 
   try {
+    // No `password` here: the admin does not choose one. The user gets an invitation e-mail and sets their own.
     const {
       email,
-      password,
       full_name,
       role,
       phone,
@@ -310,7 +313,8 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     // Region/Plant follows the role's own flag (roles.uses_region_scope); product scope stays LOGISTICS / TRADING only.
     const scopedPlants = assignedRole.usesRegionScope ? (plants ?? []) : [];
     const scopedProducts = ['LOGISTICS', 'TRADING'].includes(normRole) ? (products ?? []) : [];
-    const password_hash = await bcrypt.hash(password, 10);
+    // A hash nobody knows the password of: the account cannot be signed into until the invitation link is used.
+    const password_hash = await unusablePasswordHash();
 
     await client.query('BEGIN');
     transactionStarted = true;
@@ -343,9 +347,27 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
       [plantSummary, userId]
     );
 
+    // The token is made in the same transaction as the user, so there is never a user without an invitation to send.
+    const invitation = await issueToken(client, userId, 'INVITE');
+
     await client.query('COMMIT');
+    transactionStarted = false;
 
     logger.info(`User created by ${req.user?.username}: ${normalizedEmail}`);
+
+    const invitationSent = await sendInvitationEmail(
+      { email: normalizedEmail, fullName: full_name ?? null },
+      invitation.token,
+    );
+    await AuditService.log({
+      userId: req.user?.id ?? userId,
+      action: 'USER_INVITED',
+      entityType: 'USER',
+      entityId: userId,
+      afterData: { email: normalizedEmail, invitation_sent: invitationSent },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
 
     res.status(201).json({
       success: true,
@@ -355,6 +377,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
         plants: savedPlants,
         group_plants: savedPlants,
         products: savedProducts,
+        invitation_sent: invitationSent,
       },
     });
   } catch (error) {
@@ -557,43 +580,81 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
   }
 };
 
-// Reset user password (Admin only)
+/**
+ * Mail the user a link to set their own password. The admin never sees or chooses a password.
+ * `INVITE` (account not activated yet) and `RESET` (an active account) only differ in the e-mail and in how long the link lives.
+ */
+async function sendPasswordLinkToUser(
+  req: AuthRequest,
+  res: Response,
+  purpose: 'INVITE' | 'RESET',
+): Promise<void> {
+  const { id } = req.params;
+  const found = await query('SELECT id, email, full_name, is_active, is_first_login FROM users WHERE id = $1', [id]);
+  const user = found.rows[0];
+  if (!user) {
+    res.status(404).json({ success: false, error: { message: 'User not found' } });
+    return;
+  }
+  if (!user.is_active) {
+    res.status(400).json({ success: false, error: { message: 'This user is deactivated' } });
+    return;
+  }
+  if (purpose === 'INVITE' && !user.is_first_login) {
+    res.status(400).json({
+      success: false,
+      error: { message: 'This user already set a password. Use Reset Password instead.' },
+    });
+    return;
+  }
+
+  const { token } = await issueToken({ query }, String(user.id), purpose);
+  const person = { email: String(user.email), fullName: (user.full_name as string | null) ?? null };
+  const sent =
+    purpose === 'INVITE' ? await sendInvitationEmail(person, token) : await sendPasswordResetEmail(person, token);
+
+  await AuditService.log({
+    userId: req.user?.id ?? String(user.id),
+    action: purpose === 'INVITE' ? 'USER_INVITATION_RESENT' : 'USER_PASSWORD_RESET_SENT',
+    entityType: 'USER',
+    entityId: String(user.id),
+    afterData: { email: person.email, email_sent: sent },
+    ipAddress: req.ip,
+    userAgent: req.get('user-agent'),
+  });
+  logger.info(`${purpose} link sent by ${req.user?.username} for user ID: ${id}`, { sent });
+
+  res.json({
+    success: true,
+    data: { email: person.email, email_sent: sent },
+    message: sent
+      ? `A link was sent to ${person.email}.`
+      : 'The e-mail could not be sent (SMTP is not configured or failed). Nothing was changed for the user.',
+  });
+}
+
+// Send a password reset link to a user (Admin only). The current password keeps working until the user uses the link.
 export const resetUserPassword = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
-    const { newPassword } = req.body;
-
-    if (!newPassword || newPassword.length < 6) {
-      res.status(400).json({
-        success: false,
-        error: { message: 'Password must be at least 6 characters' },
-      });
-      return;
-    }
-
-    const password_hash = await bcrypt.hash(newPassword, 10);
-
-    await query(
-      `UPDATE users
-       SET password_hash = $1,
-           is_first_login = true,
-           last_password_change = CURRENT_TIMESTAMP,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2`,
-      [password_hash, id]
-    );
-
-    logger.info(`Password reset by ${req.user?.username} for user ID: ${id}`);
-
-    res.json({
-      success: true,
-      message: 'Password reset successfully. User will be prompted to change password on next login.',
-    });
+    await sendPasswordLinkToUser(req, res, 'RESET');
   } catch (error) {
-    logger.error('Reset password error:', error);
+    logger.error('Send reset link error:', error);
     res.status(500).json({
       success: false,
-      error: { message: 'Failed to reset password' },
+      error: { message: 'Failed to send the reset link' },
+    });
+  }
+};
+
+// Send the invitation again to a user who has not set a password yet (Admin only). Replaces the earlier link.
+export const resendInvitation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    await sendPasswordLinkToUser(req, res, 'INVITE');
+  } catch (error) {
+    logger.error('Resend invitation error:', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to resend the invitation' },
     });
   }
 };

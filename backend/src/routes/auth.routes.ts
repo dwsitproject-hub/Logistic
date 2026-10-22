@@ -1,7 +1,9 @@
 import express from 'express';
 import {
-  register,
   login,
+  forgotPassword,
+  validatePasswordToken,
+  setPassword,
   getLoginOptions,
   getProfile,
   getMe,
@@ -11,15 +13,17 @@ import {
 import { ssoExchangeHandler } from '../controllers/sso.controller';
 import { authenticateToken } from '../middleware/auth';
 import { body } from 'express-validator';
-import { USER_ROLES } from '../utils/userRoles';
+import { forgotPasswordLimiter, passwordLinkLimiter } from '../middleware/authRateLimit';
 
 const router = express.Router();
 
+// No public registration: an administrator creates accounts (User Management) and the user sets a password from the e-mailed link.
+
 /**
  * @swagger
- * /api/auth/register:
+ * /api/auth/forgot-password:
  *   post:
- *     summary: Register a new user
+ *     summary: Ask for a password reset link by e-mail (always answers 200 for a well-formed e-mail)
  *     tags: [Authentication]
  *     requestBody:
  *       required: true
@@ -27,37 +31,52 @@ const router = express.Router();
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - email
- *               - password
- *               - full_name
- *               - role
+ *             required: [email]
  *             properties:
  *               email:
  *                 type: string
- *               password:
- *                 type: string
- *               full_name:
- *                 type: string
- *               role:
- *                 type: string
- *                 enum: [ADMIN, TRADING, LOGISTICS, FINANCE, MANAGEMENT, SUPPORT, ADMIN_SUPPORT]
  *     responses:
- *       201:
- *         description: User registered successfully
- *       400:
- *         description: Bad request
+ *       200:
+ *         description: Generic confirmation
+ *       429:
+ *         description: Too many requests
  */
-router.post(
-  '/register',
-  [
-    body('email').isEmail(),
-    body('password').isLength({ min: 6 }),
-    body('full_name').notEmpty(),
-    body('role').isIn([...USER_ROLES]),
-  ],
-  register
-);
+router.post('/forgot-password', forgotPasswordLimiter, forgotPassword);
+
+/**
+ * @swagger
+ * /api/auth/password-token/validate:
+ *   post:
+ *     summary: Check whether an invitation / reset link is still usable
+ *     tags: [Authentication]
+ */
+router.post('/password-token/validate', passwordLinkLimiter, validatePasswordToken);
+
+/**
+ * @swagger
+ * /api/auth/set-password:
+ *   post:
+ *     summary: Set the password with an invitation / reset link token
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, newPassword]
+ *             properties:
+ *               token:
+ *                 type: string
+ *               newPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Password saved
+ *       400:
+ *         description: Link invalid or expired, or password too short
+ */
+router.post('/set-password', passwordLinkLimiter, setPassword);
 
 /**
  * @swagger

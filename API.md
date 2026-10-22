@@ -75,24 +75,25 @@ Response:
 
 ### Authentication
 
-#### Register User
+#### Creating users, forgot password (no public registration)
 
-**POST** `/api/auth/register`
+There is no self-registration (`POST /api/auth/register` was removed: it accepted any role and returned a token).
+An ADMIN creates users with **POST** `/api/users` (no `password` field). The server mails the user an invitation
+link (`/set-password?token=...`, valid 72 hours, single use) and answers with `invitation_sent: true|false`.
 
-Request:
-```json
-{
-  "username": "newuser",
-  "email": "user@klip.com",
-  "password": "securepassword",
-  "full_name": "John Doe",
-  "role": "TRADING"
-}
-```
+Admin-only helpers: **POST** `/api/users/:id/resend-invitation` (user still pending) and
+**POST** `/api/users/:id/reset-password` (no body; mails a reset link, valid 60 minutes; the current password keeps
+working until the link is used). Both answer `{ email, email_sent }`.
 
-Roles: `ADMIN`, `TRADING`, `LOGISTICS`, `FINANCE`, `MANAGEMENT`, `SUPPORT`
+Public endpoints (rate limited; `403` when `LOCAL_LOGIN_ENABLED=false`):
 
-Response: Same as login
+| Endpoint | Body | Answer |
+|----------|------|--------|
+| **POST** `/api/auth/forgot-password` | `{ "email" }` | Always the same `200` message for a well-formed e-mail (never says whether the account exists). A second request within 60 seconds sends nothing. |
+| **POST** `/api/auth/password-token/validate` | `{ "token" }` | `{ valid: false }` or `{ valid: true, purpose: "INVITE"\|"RESET", full_name, email }` |
+| **POST** `/api/auth/set-password` | `{ "token", "newPassword" }` (min 6 chars) | `200` and the token is spent; `400` for an invalid, used or expired link |
+
+E-mail needs `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` and `FRONTEND_URL` on the backend.
 
 #### Login
 
@@ -659,7 +660,7 @@ Future versions will use URL versioning:
 
 ## Best Practices
 
-1. **Always include Authorization header** (except login/register)
+1. **Always include Authorization header** (except login and the public password-link endpoints)
 2. **Use pagination** for large datasets
 3. **Handle errors gracefully** on the client side
 4. **Cache responses** when appropriate

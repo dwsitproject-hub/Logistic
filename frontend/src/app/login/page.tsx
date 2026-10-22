@@ -8,8 +8,10 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import ChangePasswordModal from '@/components/ChangePasswordModal'
 import api from '@/lib/api'
+import Link from 'next/link'
 import {
   fetchCurrentUser,
+  fetchLoginOptions,
   storeUserLocally,
 } from '@/lib/authSession'
 import { redirectAfterAuth, resolvePostAuthRedirect, type StoredAuthUser } from '@/lib/navigationAccess'
@@ -24,6 +26,12 @@ function LoginPageContent() {
   const [checkingSession, setCheckingSession] = useState(true)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [isFirstLogin, setIsFirstLogin] = useState(false)
+  /** "Forgot password?" resets a local password, so it is hidden when the server has local login switched off. */
+  const [localLoginEnabled, setLocalLoginEnabled] = useState(true)
+
+  useEffect(() => {
+    void fetchLoginOptions().then((options) => setLocalLoginEnabled(options.localLogin))
+  }, [])
 
   useEffect(() => {
     const errorCode = searchParams.get('error')
@@ -157,6 +165,13 @@ function LoginPageContent() {
                 required
               />
             </div>
+            {localLoginEnabled && (
+              <div className="text-right">
+                <Link href="/forgot-password" className="text-sm text-blue-600 hover:underline">
+                  Forgot password?
+                </Link>
+              </div>
+            )}
             {error && (
               <div className="text-sm text-red-500 text-center">{error}</div>
             )}

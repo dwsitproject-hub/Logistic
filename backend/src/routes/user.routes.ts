@@ -6,6 +6,7 @@ import {
   createUser,
   updateUser,
   resetUserPassword,
+  resendInvitation,
   deleteUser,
   changePassword,
 } from '../controllers/user.controller';
@@ -34,7 +35,7 @@ router.post(
   authorize('ADMIN'),
   [
     body('email').isEmail(),
-    body('password').isLength({ min: 6 }),
+    // No password: the user receives an invitation e-mail and chooses their own.
     body('full_name').notEmpty(),
     // Whether the role exists and is active is checked against the roles table in the controller.
     body('role').matches(/^[A-Z][A-Z_]*$/),
@@ -64,12 +65,11 @@ router.put(
   updateUser
 );
 
-router.post(
-  '/:id/reset-password',
-  authorize('ADMIN'),
-  [body('newPassword').isLength({ min: 6 })],
-  resetUserPassword
-);
+// Send the user a link to set a new password (the admin does not type one).
+router.post('/:id/reset-password', authorize('ADMIN'), resetUserPassword);
+
+// Send the invitation again to a user who has not activated the account.
+router.post('/:id/resend-invitation', authorize('ADMIN'), resendInvitation);
 
 router.delete('/:id', authorize('ADMIN'), deleteUser);
 
