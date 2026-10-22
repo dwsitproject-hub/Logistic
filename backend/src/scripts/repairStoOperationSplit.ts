@@ -183,21 +183,32 @@ async function siblingIdentity(
   expectedPos: string[],
   needle: string,
   ignorePos: string[] = [],
-): Promise<VesselIdentity> {
+  masterMustAgree = true,
+): Promise<VesselIdentity & { rows: Array<{ id: string; po: string; master_vessel_id: string | null }> }> {
   const sib = await db.query(
-    `SELECT TRIM(c.po_number::text) AS po, s.vessel_name, s.vessel_code, s.vessel_owner, s.master_vessel_id::text AS master_vessel_id
+    `SELECT s.id::text AS id, TRIM(c.po_number::text) AS po, s.vessel_name, s.vessel_code, s.vessel_owner, s.master_vessel_id::text AS master_vessel_id
        FROM shipments s JOIN contracts c ON c.id = s.contract_id
       WHERE s.shipment_id = $1 AND s.operation_id = $2 AND ($3::uuid IS NULL OR s.id <> $3::uuid) AND COALESCE(s.status, '') <> 'CANCELLED'
         AND NOT (TRIM(c.po_number::text) = ANY($4::text[]))
-      ORDER BY 1`,
+      ORDER BY TRIM(c.po_number::text)`,
     [sto, operationId, excludeId, ignorePos],
   );
   const poList = sib.rows.map((r) => String(r.po));
   if (poList.join(',') !== expectedPos.join(',')) throw new Error(`expected the sibling POs ${expectedPos.join(', ')}, found ${poList.join(', ') || 'none'}`);
   if (sib.rows.some((r) => !String(r.vessel_name ?? '').toLowerCase().includes(needle))) throw new Error(`a sibling row's vessel does not contain "${needle}"`);
-  const identities = new Set(sib.rows.map((r) => JSON.stringify([r.vessel_name, r.vessel_code, r.vessel_owner, r.master_vessel_id])));
+  // `masterMustAgree` false: a row whose master vessel link contradicts its own vessel name is allowed (the caller realigns it), the name, code and owner must still agree.
+  const identities = new Set(
+    sib.rows.map((r) => JSON.stringify(masterMustAgree ? [r.vessel_name, r.vessel_code, r.vessel_owner, r.master_vessel_id] : [r.vessel_name, r.vessel_code, r.vessel_owner])),
+  );
   if (identities.size !== 1) throw new Error(`the siblings do not share one vessel identity: ${[...identities].join(' | ')}`);
-  return sib.rows[0] as VesselIdentity;
+  const first = sib.rows[0];
+  return {
+    vessel_name: first.vessel_name,
+    vessel_code: first.vessel_code,
+    vessel_owner: first.vessel_owner,
+    master_vessel_id: masterMustAgree ? first.master_vessel_id : null,
+    rows: sib.rows.map((r) => ({ id: String(r.id), po: String(r.po), master_vessel_id: r.master_vessel_id ?? null })),
+  };
 }
 
 /**
@@ -275,7 +286,8 @@ export async function stepSto396Po347(db: Db): Promise<void> {
  * STO 1016011511 = PO 1011003026, 1011003084, 1011003192, 1011003251, 1011003268, 1011003269, one voyage in OP-SEA-180920260006.
  * SAP names BG. LUMINOR 8 (code MBGLUMINOR) for all six, and all six carry the same ATA (sailed / loading complete 15 Oct). Only PO 1011003251's row, planned in KLIP on
  * 18 Sep and so never overwritten by the SAP import (operation_id_source NULL), still says PRIMA SAMUDRA IV. Its vessel identity is set to the siblings' (name, code, owner)
- * and linked to the master vessel registered under that SAP code (MBGLUMINOR); the step stops when the master vessel is missing, ambiguous or named differently. Dates, ports, documents and the operation are not touched. The old identity is printed so it can be put back.
+ * and linked to the master vessel registered under that SAP code (MBGLUMINOR, an alias of master vessel MLUM8 "BG. LUMINOR 8"); the step stops when the master vessel is missing,
+ * ambiguous or named differently. A sibling that names Luminor 8 but is linked to another master vessel (PO 1011003026 -> BG. ANAK LAUT 289) is re-linked. Dates, ports, documents and the operation are not touched. The old identity is printed so it can be put back.
  *
  * Only run it once it is confirmed that Luminor 8, not Prima Samudra IV, is the vessel that really carried PO 1011003251.
  */
@@ -289,8 +301,17 @@ export async function stepSto1511(db: Db): Promise<void> {
   if (odd.src !== null) throw new Error(`PO ${ODD_PO} row has operation_id_source "${odd.src}": expected NULL (a KLIP-planned row)`);
   vesselHas(odd, 'prima samudra', `shell ${STO} PO ${ODD_PO}`);
 
-  const target = await siblingIdentity(db, STO, OP, odd.id, SIBLING_POS, 'luminor');
+  const target = await siblingIdentity(db, STO, OP, odd.id, SIBLING_POS, 'luminor', [], false);
   const master = await masterForIdentity(db, target);
+
+  // A sibling whose name and code say Luminor 8 but whose master vessel link points at another vessel (production: PO 1011003026 -> BG. ANAK LAUT 289) is re-linked.
+  // A sibling with no link at all is left alone.
+  for (const r of target.rows) {
+    if (r.master_vessel_id && r.master_vessel_id !== master.id) {
+      console.log(`PO ${r.po}: master vessel link ${r.master_vessel_id} -> ${master.id} (previous link, to restore: ${r.master_vessel_id})`);
+      await db.query(`UPDATE shipments SET master_vessel_id = $2::uuid, updated_at = CURRENT_TIMESTAMP WHERE id = $1::uuid`, [r.id, master.id]);
+    }
+  }
   await takeVesselIdentity(db, odd.id, ODD_PO, target, master.id);
 
   const check = await db.query(

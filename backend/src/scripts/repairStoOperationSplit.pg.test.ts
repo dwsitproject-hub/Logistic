@@ -213,6 +213,25 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
     await client.query('ROLLBACK TO SAVEPOINT s2');
   }, 60_000);
 
+  it('STO 1511 re-links a sibling whose master vessel is another vessel (PO 026 -> ANAK LAUT 289), and leaves a sibling with no link alone', async () => {
+    await client.query('SAVEPOINT s7');
+    const other = await client.query(
+      `INSERT INTO master_vessels (vessel_code, vessel_name, normalized_vessel_name) VALUES ('MLAUT289', 'BG. ANAK LAUT 289', 'anak laut 289')
+       ON CONFLICT (vessel_code) DO UPDATE SET vessel_name = 'BG. ANAK LAUT 289' RETURNING id`,
+    );
+    await client.query(`UPDATE shipments SET vessel_name = 'PRIMA SAMUDRA IV' WHERE id = $1::uuid`, [ids.S1511_251]);
+    await client.query(`UPDATE shipments SET master_vessel_id = $2::uuid WHERE id = $1::uuid`, [ids.S1511_1011003026, other.rows[0].id]);
+    await client.query(`UPDATE shipments SET master_vessel_id = NULL WHERE id = $1::uuid`, [ids.S1511_1011003084]);
+
+    await stepSto1511(client);
+
+    const m = async (key: string) => (await client.query(`SELECT master_vessel_id::text AS m FROM shipments WHERE id = $1::uuid`, [ids[key]])).rows[0].m;
+    expect(await m('S1511_1011003026')).toBe(masterLuminorId);
+    expect(await m('S1511_251')).toBe(masterLuminorId);
+    expect(await m('S1511_1011003084')).toBeNull();
+    await client.query('ROLLBACK TO SAVEPOINT s7');
+  }, 60_000);
+
   it('STO 1511 refuses when the siblings disagree on the vessel', async () => {
     await client.query('SAVEPOINT s3');
     await client.query(`UPDATE shipments SET vessel_name = 'PRIMA SAMUDRA IV' WHERE id = $1::uuid`, [ids.S1511_251]);
