@@ -12,6 +12,8 @@ type Call = { text: string; params?: unknown[] };
 function fakeDb(answers: {
   row?: { shipment_id: string | null; operation_id: string | null } | null;
   sibling?: string | null;
+  /** Operations the multi-PO-STO lookup finds (exactly one = adopt it). */
+  planned?: string[];
   maxSeqPlusOne?: number;
   updated?: boolean;
   afterRace?: string | null;
@@ -23,6 +25,8 @@ function fakeDb(answers: {
       query: async (text: string, params?: unknown[]) => {
         calls.push({ text, params });
         if (/SELECT shipment_id, operation_id FROM shipments/.test(text)) return { rows: answers.row ? [answers.row] : [] };
+        if (/FROM sap_processed_data/.test(text)) return { rows: (answers.planned ?? []).map((operation_id) => ({ operation_id })) };
+        if (/WITH sto_rows AS/.test(text)) return { rows: [] };
         if (/FROM shipments sib/.test(text)) return { rows: answers.sibling ? [{ operation_id: answers.sibling }] : [] };
         if (/AS n/.test(text)) return { rows: [{ n: answers.maxSeqPlusOne ?? 1 }] };
         if (/UPDATE shipments/.test(text)) return { rows: answers.updated === false ? [] : [{ operation_id: params?.[1] }] };
@@ -93,6 +97,28 @@ describe('ensureSapShellOperationId', () => {
     expect(siblingSql).toMatch(/other\.operation_id = sib\.operation_id AND other\.shipment_id IS DISTINCT FROM sib\.shipment_id/);
     // the plain number that equals the STO itself is the other adoptable convention
     expect(siblingSql).toMatch(/sib\.operation_id = sib\.shipment_id/);
+  });
+
+  it('a multi-PO STO takes the one voyage a user planned for exactly its POs (no sibling lookup, no new OP-SEA id)', async () => {
+    const { db, calls } = fakeDb({ row: { shipment_id: '1006020666', operation_id: null }, planned: ['OP-1004032737-34122029'], sibling: 'OP-SEA-130920260007' });
+    expect(await ensureSapShellOperationId(db, 'uuid-1', NOW)).toBe('OP-1004032737-34122029');
+    const update = calls.find((c) => /UPDATE shipments/.test(c.text))!;
+    expect(update.params).toEqual(['uuid-1', 'OP-1004032737-34122029', SAP_IMPORT_OPERATION_ID_SOURCE]);
+    expect(calls.some((c) => /FROM shipments sib/.test(c.text))).toBe(false);
+    expect(calls.some((c) => /AS n/.test(c.text))).toBe(false);
+  });
+
+  it('does not adopt when the lookup finds no voyage or more than one', async () => {
+    const none = fakeDb({ row: { shipment_id: '1006020666', operation_id: null }, planned: [], maxSeqPlusOne: 3 });
+    expect(await ensureSapShellOperationId(none.db, 'uuid-1', NOW)).toBe('OP-SEA-141020260003');
+    const two = fakeDb({ row: { shipment_id: '1006020666', operation_id: null }, planned: ['OP-A-1', 'OP-B-2'], maxSeqPlusOne: 4 });
+    expect(await ensureSapShellOperationId(two.db, 'uuid-1', NOW)).toBe('OP-SEA-141020260004');
+  });
+
+  it('after writing an id it pulls the STO\'s other SAP-assigned rows onto one operation', async () => {
+    const { db, calls } = fakeDb({ row: { shipment_id: '1006019385', operation_id: null }, sibling: 'OP-SEA-130920260007' });
+    await ensureSapShellOperationId(db, 'uuid-1', NOW);
+    expect(calls.some((c) => /WITH sto_rows AS/.test(c.text))).toBe(true);
   });
 
   it('the write only fills an EMPTY operation_id (a user value set meanwhile wins)', async () => {

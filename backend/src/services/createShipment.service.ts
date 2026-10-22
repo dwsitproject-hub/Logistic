@@ -140,8 +140,15 @@ export async function findReusableShipmentForPlan(args: {
   contractUuid: string;
   operationId: string | null;
   vesselName?: string | null;
+  /**
+   * Every contract the plan covers. A SAP STO shell is one STO's row for ONE contract; the STO may span several (one vessel, several POs).
+   * When given, an untouched shell is only filled in by a plan that covers ALL the contracts of its STO - a plan for one PO of a multi-PO STO
+   * must not take the shell, or that PO's operation gets the STO and the STO's other POs sit in another operation (STO 1006020666: PO 1001032737 on
+   * AS MARINA 12 took the shell of the STO that AS MARINA 10 carries for PO 1001032425 + 1001032737).
+   */
+  planContractUuids?: string[];
 }): Promise<string | null> {
-  const { contractUuid, operationId, vesselName } = args;
+  const { contractUuid, operationId, vesselName, planContractUuids } = args;
   if (operationId) {
     const byOp = await query(
       `SELECT id FROM shipments WHERE contract_id = $1::uuid AND operation_id = $2 LIMIT 1`,
@@ -175,9 +182,33 @@ export async function findReusableShipmentForPlan(args: {
   );
   for (const row of candidates.rows) {
     const id = String(row.id);
-    if (!(await hasKlipShipmentActivity(query, id, contractUuid))) return id;
+    if (await hasKlipShipmentActivity(query, id, contractUuid)) continue;
+    if (planContractUuids && (await stoSpansContractsOutsidePlan(id, planContractUuids))) continue;
+    return id;
   }
   return null;
+}
+
+/**
+ * True when the shipment is a SAP STO shell (digits-only shipment_id) and another active row of the SAME STO belongs to a contract the plan does not cover.
+ * Other shapes (MNL-/MSEA- rows, a single-PO STO) never span contracts outside the plan.
+ */
+export async function stoSpansContractsOutsidePlan(
+  shipmentUuid: string,
+  planContractUuids: string[],
+  db: { query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }> } = { query },
+): Promise<boolean> {
+  const res = await db.query(
+    `SELECT 1
+       FROM shipments cand
+       JOIN shipments sib ON sib.shipment_id = cand.shipment_id AND COALESCE(sib.status, '') <> 'CANCELLED'
+      WHERE cand.id = $1::uuid
+        AND cand.shipment_id ~ '^[0-9]+$'
+        AND NOT (sib.contract_id = ANY($2::uuid[]))
+      LIMIT 1`,
+    [shipmentUuid, planContractUuids],
+  );
+  return res.rows.length > 0;
 }
 
 export async function createShipmentsFromContracts(
@@ -366,6 +397,7 @@ export async function createShipmentsFromContracts(
       contractUuid: contract.id,
       operationId: resolvedOperationId,
       vesselName,
+      planContractUuids: (contractCheck.rows as Array<{ id: string }>).map((r) => String(r.id)),
     });
 
     let resultId: string;

@@ -67,6 +67,36 @@ describe('findReusableShipmentForPlan', () => {
     expect(candidateSql).toContain("NULLIF(TRIM(vessel_name), '') IS NULL");
   });
 
+  it('a plan for ONE PO does not fill the shell of an STO that also covers another PO (the operation would get an STO its PO set does not match)', async () => {
+    queryMock.mockImplementation(async (sql: string) => {
+      const flat = String(sql).replace(/\s+/g, ' ');
+      if (flat.includes('operation_id = $2')) return { rows: [] };
+      if (flat.includes('LOWER(TRIM(s.vessel_name))')) return { rows: [] };
+      if (flat.includes('ORDER BY created_at DESC')) return { rows: [{ id: 'sto-666-shell' }] };
+      if (flat.includes('sib.shipment_id = cand.shipment_id')) return { rows: [{ '?column?': 1 }] }; // the STO has a row on a contract outside the plan
+      throw new Error('unexpected query: ' + flat.slice(0, 80));
+    });
+    activityMock.mockResolvedValue(false);
+    await expect(
+      findReusableShipmentForPlan({ contractUuid: CONTRACT, operationId: 'OP-NEW', vesselName: 'AS MARINA 12', planContractUuids: [CONTRACT] }),
+    ).resolves.toBeNull();
+  });
+
+  it('a plan that covers every PO of the STO still fills its shell', async () => {
+    queryMock.mockImplementation(async (sql: string) => {
+      const flat = String(sql).replace(/\s+/g, ' ');
+      if (flat.includes('operation_id = $2')) return { rows: [] };
+      if (flat.includes('LOWER(TRIM(s.vessel_name))')) return { rows: [] };
+      if (flat.includes('ORDER BY created_at DESC')) return { rows: [{ id: 'sto-666-shell' }] };
+      if (flat.includes('sib.shipment_id = cand.shipment_id')) return { rows: [] };
+      throw new Error('unexpected query: ' + flat.slice(0, 80));
+    });
+    activityMock.mockResolvedValue(false);
+    await expect(
+      findReusableShipmentForPlan({ contractUuid: CONTRACT, operationId: 'OP-NEW', vesselName: 'AS MARINA 10', planContractUuids: [CONTRACT, 'other'] }),
+    ).resolves.toBe('sto-666-shell');
+  });
+
   it('skips a touched row and takes the first untouched one, newest first', async () => {
     answer({ candidates: ['touched-newest', 'shell-older'] });
     activityMock.mockImplementation(async (_db: unknown, id: string) => id === 'touched-newest');
