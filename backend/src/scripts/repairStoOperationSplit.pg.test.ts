@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PoolClient } from 'pg';
 import { getClient } from '../database/connection';
-import { stepSto185, stepSto342, stepSto396, stepSto666 } from './repairStoOperationSplit';
+import { stepSto1511, stepSto185, stepSto342, stepSto396, stepSto666 } from './repairStoOperationSplit';
 import { swapShipmentContents } from '../utils/swapShipmentContents';
 
 /**
@@ -14,6 +14,7 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
   const STRAY = 'OP-1004032737-73921060';
   const OP269 = 'OP-1004032269-31300699';
   const ids: Record<string, string> = {};
+  let masterLuminorId = '';
   const contractIds: Record<string, string> = {};
 
   async function contractFor(po: string): Promise<string> {
@@ -42,7 +43,20 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
   beforeAll(async () => {
     client = await getClient();
     await client.query('BEGIN');
-    for (const po of ['1001032425', '1001032737', '1001032269', '1001030968', '1001031610', '1001031763']) contractIds[po] = await contractFor(po);
+    for (const po of ['1001032425', '1001032737', '1001032269', '1001030968', '1001031610', '1001031763', '1011003026', '1011003084', '1011003192', '1011003251', '1011003268', '1011003269']) {
+      contractIds[po] = await contractFor(po);
+    }
+    // STO 1511: five SAP rows on BG. LUMINOR 8 and PO 251's KLIP-planned row still on PRIMA SAMUDRA IV, all in one operation
+    const mv = await client.query(
+      `INSERT INTO master_vessels (vessel_code, vessel_name, normalized_vessel_name) VALUES ('MBGLUMINOR', 'BG. LUMINOR 8', 'luminor 8') RETURNING id`,
+    );
+    masterLuminorId = mv.rows[0].id as string;
+    for (const po of ['1011003026', '1011003084', '1011003192', '1011003268', '1011003269']) {
+      await ship(`S1511_${po}`, po, '1016011511', 'OP-SEA-180920260006', 'BG. LUMINOR 8', 'SAILED');
+      await client.query(`UPDATE shipments SET operation_id_source = 'SAP_IMPORT', vessel_code = 'MBGLUMINOR', vessel_owner = 'LUMINOR OWNER' WHERE id = $1::uuid`, [ids[`S1511_${po}`]]);
+    }
+    await ship('S1511_251', '1011003251', '1016011511', 'OP-SEA-180920260006', 'PRIMA SAMUDRA IV', 'SAILED');
+    await client.query(`UPDATE shipments SET vessel_code = 'PRIMA4', vessel_owner = 'PRIMA OWNER', operation_id_source = NULL WHERE id = $1::uuid`, [ids.S1511_251]);
     // STO 185 (Eminence VII) and STO 396 (Widmarino): PO 1610 sits in the other voyage's operation / its own OP-SEA
     await ship('S185_968', '1001030968', '1006020185', 'OP-1004030968-92261225', 'EMINENCE VII', 'COMPLETED');
     await ship('S185_610', '1001031610', '1006020185', 'OP-1004031610-45984098', 'EMINENCE VII', 'COMPLETED');
@@ -120,6 +134,76 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
     await client.query('SAVEPOINT s1');
     await expect(stepSto666(client)).rejects.toThrow(/expected exactly one row/);
     await client.query('ROLLBACK TO SAVEPOINT s1');
+  }, 60_000);
+
+  it('STO 1511: PO 251 takes the siblings\' vessel identity; operation, dates and ports are untouched; a second run refuses', async () => {
+    await client.query(`INSERT INTO vessel_loading_ports (shipment_id, port_name) VALUES ($1::uuid, 'TALANG DUKU')`, [ids.S1511_251]);
+    await client.query(`UPDATE shipments SET ata_sailed = DATE '2026-10-15' WHERE id = $1::uuid`, [ids.S1511_251]);
+
+    await stepSto1511(client);
+
+    const r = await client.query(
+      `SELECT vessel_name, vessel_code, vessel_owner, master_vessel_id::text AS master_vessel_id, operation_id, operation_id_source, ata_sailed::text AS ata_sailed FROM shipments WHERE id = $1::uuid`,
+      [ids.S1511_251],
+    );
+    expect(r.rows[0]).toEqual({
+      vessel_name: 'BG. LUMINOR 8',
+      vessel_code: 'MBGLUMINOR',
+      vessel_owner: 'LUMINOR OWNER',
+      master_vessel_id: masterLuminorId,
+      operation_id: 'OP-SEA-180920260006',
+      operation_id_source: null,
+      ata_sailed: '2026-10-15',
+    });
+    const ports = await client.query(`SELECT port_name FROM vessel_loading_ports WHERE shipment_id = $1::uuid`, [ids.S1511_251]);
+    expect(ports.rows).toEqual([{ port_name: 'TALANG DUKU' }]);
+    // the five siblings are unchanged
+    const sibs = await client.query(`SELECT DISTINCT vessel_name, vessel_code FROM shipments WHERE id = ANY($1::uuid[])`, [Object.entries(ids).filter(([k]) => k.startsWith('S1511_') && k !== 'S1511_251').map(([, v]) => v)]);
+    expect(sibs.rows).toEqual([{ vessel_name: 'BG. LUMINOR 8', vessel_code: 'MBGLUMINOR' }]);
+
+    // run again: PO 251 no longer says Prima Samudra IV, so the step refuses and changes nothing
+    await client.query('SAVEPOINT s2');
+    await expect(stepSto1511(client)).rejects.toThrow(/expected vessel containing "prima samudra"/);
+    await client.query('ROLLBACK TO SAVEPOINT s2');
+  }, 60_000);
+
+  it('STO 1511 refuses when the siblings disagree on the vessel', async () => {
+    await client.query('SAVEPOINT s3');
+    await client.query(`UPDATE shipments SET vessel_name = 'PRIMA SAMUDRA IV' WHERE id = $1::uuid`, [ids.S1511_251]);
+    await client.query(`UPDATE shipments SET vessel_code = 'OTHER' WHERE id = $1::uuid`, [ids.S1511_1011003026]);
+    await expect(stepSto1511(client)).rejects.toThrow(/do not share one vessel identity/);
+    await client.query('ROLLBACK TO SAVEPOINT s3');
+  }, 60_000);
+
+  it('STO 1511 refuses when the master vessel under the SAP code has another name, or none exists', async () => {
+    await client.query('SAVEPOINT s4');
+    await client.query(`UPDATE shipments SET vessel_name = 'PRIMA SAMUDRA IV' WHERE id = $1::uuid`, [ids.S1511_251]);
+    await client.query(`UPDATE master_vessels SET vessel_name = 'BG. LUMINOR 9' WHERE id = $1::uuid`, [masterLuminorId]);
+    await expect(stepSto1511(client)).rejects.toThrow(/does not match the siblings' vessel/);
+    await client.query('ROLLBACK TO SAVEPOINT s4');
+
+    await client.query('SAVEPOINT s5');
+    await client.query(`UPDATE shipments SET vessel_name = 'PRIMA SAMUDRA IV' WHERE id = $1::uuid`, [ids.S1511_251]);
+    await client.query(`DELETE FROM master_vessels WHERE id = $1::uuid`, [masterLuminorId]);
+    // a database may also hold the SAP code as an alias of another master vessel: drop it so that nothing resolves
+    await client.query(`DELETE FROM master_vessel_code_aliases WHERE UPPER(BTRIM(vessel_code)) = 'MBGLUMINOR'`);
+    await expect(stepSto1511(client)).rejects.toThrow(/expected exactly one master vessel/);
+    await client.query('ROLLBACK TO SAVEPOINT s5');
+  }, 60_000);
+
+  it('STO 1511 also resolves the master vessel through an alias (the SAP code is not its primary code)', async () => {
+    await client.query('SAVEPOINT s6');
+    await client.query(`UPDATE shipments SET vessel_name = 'PRIMA SAMUDRA IV' WHERE id = $1::uuid`, [ids.S1511_251]);
+    await client.query(`DELETE FROM master_vessel_code_aliases WHERE UPPER(BTRIM(vessel_code)) = 'MBGLUMINOR'`);
+    await client.query(`UPDATE master_vessels SET vessel_code = 'MLUMTEST' WHERE id = $1::uuid`, [masterLuminorId]);
+    await client.query(
+      `INSERT INTO master_vessel_code_aliases (master_vessel_id, vessel_code, source, namespace) VALUES ($1::uuid, 'MBGLUMINOR', 'sap_import', 'SAP')`,
+      [masterLuminorId],
+    );
+    await stepSto1511(client);
+    const r = await client.query(`SELECT master_vessel_id::text AS m, vessel_name FROM shipments WHERE id = $1::uuid`, [ids.S1511_251]);
+    expect(r.rows[0]).toEqual({ m: masterLuminorId, vessel_name: 'BG. LUMINOR 8' });
+    await client.query('ROLLBACK TO SAVEPOINT s6');
   }, 60_000);
 
   it('swapShipmentContents refuses the same row twice', async () => {

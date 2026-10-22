@@ -12,6 +12,8 @@
  *
  *   sto-1006020185  STO 185 = PO 968, 1128, 1286, 1426, 1610, one Eminence VII voyage. PO 1610's shell leaves OP-1004031610-45984098 for the operation of its sisters.
  *   sto-1006020396  STO 396, Widmarino voyage: PO 1610's shell (OP-SEA-300920260009) joins the four sisters in OP-1004031610-45984098. Run AFTER sto-1006020185.
+ *   sto-1016011511  STO 1016011511 = six POs, one voyage (SAP: BG. LUMINOR 8 for all). PO 1011003251 alone still names PRIMA SAMUDRA IV (KLIP-planned 18 Sep): its vessel
+ *                   identity is aligned to its siblings'. Run only after confirming that Luminor 8 is the vessel that really carried it.
  *
  * Every step checks the rows it expects (PO, STO, operation, vessel) and stops without changing anything when they are not exactly as expected.
  *
@@ -160,6 +162,76 @@ export async function stepSto396(db: Db): Promise<void> {
   await db.query(`UPDATE shipments SET operation_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1::uuid`, [stray.id, TARGET]);
 }
 
+/**
+ * STO 1016011511 = PO 1011003026, 1011003084, 1011003192, 1011003251, 1011003268, 1011003269, one voyage in OP-SEA-180920260006.
+ * SAP names BG. LUMINOR 8 (code MBGLUMINOR) for all six, and all six carry the same ATA (sailed / loading complete 15 Oct). Only PO 1011003251's row, planned in KLIP on
+ * 18 Sep and so never overwritten by the SAP import (operation_id_source NULL), still says PRIMA SAMUDRA IV. Its vessel identity is set to the siblings' (name, code, owner)
+ * and linked to the master vessel registered under that SAP code (MBGLUMINOR); the step stops when the master vessel is missing, ambiguous or named differently. Dates, ports, documents and the operation are not touched. The old identity is printed so it can be put back.
+ *
+ * Only run it once it is confirmed that Luminor 8, not Prima Samudra IV, is the vessel that really carried PO 1011003251.
+ */
+export async function stepSto1511(db: Db): Promise<void> {
+  const STO = '1016011511';
+  const OP = 'OP-SEA-180920260006';
+  const ODD_PO = '1011003251';
+  const SIBLING_POS = ['1011003026', '1011003084', '1011003192', '1011003268', '1011003269'];
+
+  const odd = exactlyOne(await findRows(db, { po: ODD_PO, shipmentId: STO, operationId: OP }), `STO ${STO} / PO ${ODD_PO} / ${OP}`);
+  if (odd.src !== null) throw new Error(`PO ${ODD_PO} row has operation_id_source "${odd.src}": expected NULL (a KLIP-planned row)`);
+  vesselHas(odd, 'prima samudra', `shell ${STO} PO ${ODD_PO}`);
+
+  const sib = await db.query(
+    `SELECT TRIM(c.po_number::text) AS po, s.vessel_name, s.vessel_code, s.vessel_owner, s.master_vessel_id::text AS master_vessel_id
+       FROM shipments s JOIN contracts c ON c.id = s.contract_id
+      WHERE s.shipment_id = $1 AND s.operation_id = $2 AND s.id <> $3::uuid AND COALESCE(s.status, '') <> 'CANCELLED'
+      ORDER BY 1`,
+    [STO, OP, odd.id],
+  );
+  const poList = sib.rows.map((r) => String(r.po));
+  if (poList.join(',') !== SIBLING_POS.join(',')) throw new Error(`expected the sibling POs ${SIBLING_POS.join(', ')}, found ${poList.join(', ') || 'none'}`);
+  if (sib.rows.some((r) => !String(r.vessel_name ?? '').toLowerCase().includes('luminor'))) throw new Error('a sibling row is not BG. LUMINOR 8');
+  const identities = new Set(sib.rows.map((r) => JSON.stringify([r.vessel_name, r.vessel_code, r.vessel_owner, r.master_vessel_id])));
+  if (identities.size !== 1) throw new Error(`the siblings do not share one vessel identity: ${[...identities].join(' | ')}`);
+  const target = sib.rows[0];
+
+  // The vessel must be the one the master vessel list holds under the SAP code (primary code first, then an alias, as the SAP import resolves it).
+  const code = String(target.vessel_code ?? '').trim();
+  if (!code) throw new Error('the siblings carry no SAP vessel code');
+  const byCode = await db.query(`SELECT id::text AS id, vessel_name, vessel_code, vessel_owner FROM master_vessels WHERE UPPER(BTRIM(vessel_code)) = UPPER($1) LIMIT 2`, [code]);
+  const master =
+    byCode.rows.length > 0
+      ? byCode.rows
+      : (
+          await db.query(
+            `SELECT mv.id::text AS id, mv.vessel_name, mv.vessel_code, mv.vessel_owner FROM master_vessel_code_aliases a JOIN master_vessels mv ON mv.id = a.master_vessel_id WHERE UPPER(BTRIM(a.vessel_code)) = UPPER($1) LIMIT 2`,
+            [code],
+          )
+        ).rows;
+  if (master.length !== 1) throw new Error(`expected exactly one master vessel for SAP code "${code}", found ${master.length}`);
+  const squash = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (squash(master[0].vessel_name) !== squash(target.vessel_name)) {
+    throw new Error(`master vessel "${master[0].vessel_name}" (${code}) does not match the siblings' vessel "${target.vessel_name}"`);
+  }
+  if (target.master_vessel_id && target.master_vessel_id !== master[0].id) {
+    throw new Error(`the siblings point at master vessel ${target.master_vessel_id}, not ${master[0].id} (${code})`);
+  }
+  console.log('master vessel:', JSON.stringify(master[0]));
+
+  const before = await db.query(`SELECT vessel_name, vessel_code, vessel_owner, master_vessel_id::text AS master_vessel_id FROM shipments WHERE id = $1::uuid`, [odd.id]);
+  console.log('previous vessel identity of PO', ODD_PO, '(to restore):', JSON.stringify(before.rows[0]));
+
+  await db.query(
+    `UPDATE shipments SET vessel_name = $2, vessel_code = $3, vessel_owner = $4, master_vessel_id = $5::uuid, updated_at = CURRENT_TIMESTAMP WHERE id = $1::uuid`,
+    [odd.id, target.vessel_name, target.vessel_code, target.vessel_owner, master[0].id],
+  );
+
+  const check = await db.query(
+    `SELECT COUNT(DISTINCT LOWER(BTRIM(vessel_name)))::int AS n FROM shipments WHERE operation_id = $1 AND COALESCE(status, '') <> 'CANCELLED'`,
+    [OP],
+  );
+  if (check.rows[0].n !== 1) throw new Error(`postcondition failed: ${OP} holds ${check.rows[0].n} vessel names`);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const apply = args.includes('--apply');
@@ -170,6 +242,7 @@ async function main() {
     'sto-1006020342': { run: stepSto342, pos: ['1001032269', '1001032425', '1001032737'], stos: ['1006020342', '1006020666'] },
     'sto-1006020185': { run: stepSto185, pos: ['1001030968', '1001031128', '1001031286', '1001031426', '1001031610'], stos: ['1006020185', '1006020396'] },
     'sto-1006020396': { run: stepSto396, pos: ['1001031610', '1001031763', '1001031908', '1001032031', '1001032184', '1001032347'], stos: ['1006020396', '1006020185'] },
+    'sto-1016011511': { run: stepSto1511, pos: ['1011003026', '1011003084', '1011003192', '1011003251', '1011003268', '1011003269'], stos: ['1016011511'] },
   };
   if (!steps[step]) {
     console.error(`Usage: --step <${Object.keys(steps).join('|')}> [--apply]`);
