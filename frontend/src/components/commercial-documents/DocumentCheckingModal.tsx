@@ -120,6 +120,10 @@ export function DocumentCheckingModal({
   const [uploadError, setUploadError] = useState<{ type: CommercialDocumentType; message: string } | null>(
     null,
   )
+  /** Files/history could not be loaded (proxy 502, network drop, ...). Shown with a Retry button instead of escaping as an unhandled rejection. */
+  const [loadError, setLoadError] = useState<string | null>(null)
+  /** A Download click failed, typically because the file record exists but the file is gone ("Document not found", "File not found on server"). */
+  const [downloadError, setDownloadError] = useState<string | null>(null)
 
   const closePdfPreview = useCallback(() => {
     setPdfPreview((prev) => {
@@ -134,6 +138,7 @@ export function DocumentCheckingModal({
     const contractExtNo = String(current?.contract_ext_no || '').trim()
     if (!current || !poNumber) return
     setLoading(true)
+    setLoadError(null)
     try {
       const qs = contractExtNo
         ? `?contract_ext_no=${encodeURIComponent(contractExtNo)}`
@@ -155,6 +160,13 @@ export function DocumentCheckingModal({
       } else {
         setB2bParties([])
       }
+    } catch (err: unknown) {
+      // Callers start this with `void loadModalData()`, so a rejection would escape as an unhandled error and the user would see nothing.
+      const e = err as { code?: string; name?: string }
+      if (e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError') return
+      setFiles([])
+      setHistory([])
+      setLoadError('Could not load documents. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -287,15 +299,24 @@ export function DocumentCheckingModal({
   }
 
   const downloadPdf = async (fileId: string, fileName: string) => {
-    const response = await api.get(`/commercial-documents/file/${fileId}/download`, {
-      responseType: 'blob',
-    })
-    const url = window.URL.createObjectURL(new Blob([response.data]))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName
-    a.click()
-    window.URL.revokeObjectURL(url)
+    setDownloadError(null)
+    try {
+      const response = await api.get(`/commercial-documents/file/${fileId}/download`, {
+        responseType: 'blob',
+      })
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = fileName
+      a.click()
+      window.URL.revokeObjectURL(url)
+    } catch (e) {
+      // `void downloadPdf(...)` at the call sites: without this a 404 escaped as an unhandled AxiosError.
+      // With responseType 'blob' the server's JSON message arrives as a Blob.
+      const data = (e as { response?: { data?: unknown } })?.response?.data
+      const fromBlob = data instanceof Blob ? await messageFromPdfBlob(data) : null
+      setDownloadError(`Could not download "${fileName}": ${fromBlob || 'download failed. Please try again.'}`)
+    }
   }
 
   const deleteFile = async (
@@ -357,6 +378,28 @@ export function DocumentCheckingModal({
               </div>
             ) : (
               <>
+                {loadError && (
+                  <div
+                    role="alert"
+                    className="flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+                  >
+                    <span>{loadError}</span>
+                    <Button type="button" variant="outline" size="sm" onClick={() => void loadModalData()}>
+                      Retry
+                    </Button>
+                  </div>
+                )}
+                {downloadError && (
+                  <div
+                    role="alert"
+                    className="flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+                  >
+                    <span>{downloadError}</span>
+                    <Button type="button" variant="ghost" size="icon" onClick={() => setDownloadError(null)} title="Dismiss">
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
                 <section>
                   <h3 className="text-sm font-semibold text-gray-800 mb-3">Contract Information</h3>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3 text-sm">
