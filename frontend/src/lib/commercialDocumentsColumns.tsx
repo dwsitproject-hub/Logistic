@@ -7,8 +7,8 @@ import {
 } from '@/lib/commercialDocumentsTypes'
 import {
   formatCommercialDate,
-  formatCommercialIdr,
-  formatCommercialQtyKg,
+  formatCommercialPriceCell,
+  formatCommercialQtyCell,
   formatCommercialSapAmount,
   COMMERCIAL_TOTAL_PRICE_FORMULA_HELP,
 } from '@/lib/commercialDocumentsFormat'
@@ -55,7 +55,6 @@ export const COMMERCIAL_DOCS_DEFAULT_VISIBLE_COLUMNS = [
 export const COMMERCIAL_DOCS_HIDDEN_BY_DEFAULT_COLUMNS = [
   'buyer',
   'plant_site',
-  'transport_mode',
   'b2b_flag',
   'vessel_oa_budget',
   'vessel_oa_actual',
@@ -225,38 +224,38 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
     },
     {
       id: 'contract_qty',
-      label: 'Contract Qty',
+      label: 'Contract Qty (kg)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.quantity_ordered,
       render: (r) => (
         <span className="text-sm tabular-nums whitespace-nowrap">
-          {formatCommercialQtyKg(r.quantity_ordered)}
+          {formatCommercialQtyCell(r.quantity_ordered)}
         </span>
       ),
     },
     {
       id: 'unit_price',
-      label: 'Unit Price',
+      label: 'Unit Price (IDR)',
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.unit_price,
       render: (r) => (
         <span className="text-sm tabular-nums whitespace-nowrap">
-          {formatCommercialIdr(r.unit_price, r.currency)}
+          {formatCommercialPriceCell(r.unit_price, r.currency)}
         </span>
       ),
     },
     {
       id: 'total_price',
-      label: 'Total Price',
+      label: 'Total Price (IDR)',
       defaultVisible: true,
       sortable: true,
       formulaHelp: COMMERCIAL_TOTAL_PRICE_FORMULA_HELP,
       getSortValue: (r) => r.total_price,
       render: (r) => (
         <span className="text-sm tabular-nums whitespace-nowrap">
-          {formatCommercialIdr(r.total_price, r.currency)}
+          {formatCommercialPriceCell(r.total_price, r.currency)}
         </span>
       ),
     },
@@ -275,14 +274,6 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       sortable: true,
       getSortValue: (r) => r.plant_site || '',
       render: (r) => <span className="text-sm">{formatSapDisplayValue(r.plant_site)}</span>,
-    },
-    {
-      id: 'transport_mode',
-      label: 'Sea/Land',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (r) => r.transport_mode || '',
-      render: (r) => <span className="text-sm">{formatSapDisplayValue(r.transport_mode)}</span>,
     },
     {
       id: 'b2b_flag',
@@ -367,7 +358,6 @@ export const COMMERCIAL_DOCS_COLUMN_WIDTH_PX: Readonly<Record<string, number>> =
   doc_invoice_fp_full: 104,
   buyer: 88,
   plant_site: 96,
-  transport_mode: 88,
   b2b_flag: 64,
   vessel_oa_budget: 112,
   vessel_oa_actual: 112,
@@ -412,9 +402,9 @@ export function formatCommercialDocsDynamicCell(
   colId: string,
   row: Pick<CommercialDocumentRow, 'quantity_ordered' | 'unit_price' | 'total_price' | 'currency'>,
 ): string {
-  if (colId === 'contract_qty') return formatCommercialQtyKg(row.quantity_ordered)
-  if (colId === 'unit_price') return formatCommercialIdr(row.unit_price, row.currency)
-  if (colId === 'total_price') return formatCommercialIdr(row.total_price, row.currency)
+  if (colId === 'contract_qty') return formatCommercialQtyCell(row.quantity_ordered)
+  if (colId === 'unit_price') return formatCommercialPriceCell(row.unit_price, row.currency)
+  if (colId === 'total_price') return formatCommercialPriceCell(row.total_price, row.currency)
   return ''
 }
 
