@@ -183,6 +183,15 @@ export function contractHasSeaVesselStoOnContractSql(contractAlias = 'c'): strin
  * Add New does not take an STO. The voyage is the OP- id. A SAP import keeps operation_id_source
  * SAP_IMPORT (or a numeric STO id), so the V and T legs of that imported voyage stay one group.
  * Changing the vessel on a second OP- must not write the first voyage.
+ *
+ * An OP- id is NOT a voyage of its own when the SAP shell of this row's STO sits in that very operation
+ * (a shipment with operation_id_source 'SAP_IMPORT', the same shipment_id = the STO, same operation_id).
+ * Matching on the row's own shipment_id (not the contract's STO pick) keeps the lookup an index hit on operation_id.
+ * That operation IS the STO's voyage. Its other POs were planned or touched by a user (source NULL), but they
+ * belong to the same voyage as the shell, so they share the shell's key. Without this test the shell (key =
+ * STO) and its sisters (key = OP- id) were two list rows with the same STO and the same operation id
+ * (STO 1006020396 / OP-1004031610-45984098). A real Add New voyage has an id the shell does not carry.
+ * The shell lookup is last, and only evaluated for OP- rows that no SAP import marked: operation_id is indexed.
  */
 export function sqlKlipOwnVoyageOperationIdExpr(shipmentAlias = 's', contractAlias = 'c'): string {
   const operationId = `NULLIF(TRIM(${shipmentAlias}.operation_id::text), '')`;
@@ -193,6 +202,14 @@ export function sqlKlipOwnVoyageOperationIdExpr(shipmentAlias = 's', contractAli
       AND ${operationId} IS DISTINCT FROM NULLIF(TRIM(${contractAlias}.sto_number::text), '')
       AND ${operationId} IS DISTINCT FROM NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '')
       AND ${operationId} IS DISTINCT FROM (${seaStoPick})
+      AND NOT EXISTS (
+        SELECT 1
+        FROM shipments sap_op_shell
+        WHERE sap_op_shell.operation_id = ${shipmentAlias}.operation_id
+          AND sap_op_shell.operation_id_source = 'SAP_IMPORT'
+          AND COALESCE(sap_op_shell.status, '') <> 'CANCELLED'
+          AND sap_op_shell.shipment_id = ${shipmentAlias}.shipment_id
+      )
     THEN ${operationId}
     ELSE NULL
   END`;
