@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PoolClient } from 'pg';
 import { getClient } from '../database/connection';
-import { stepSto1511, stepSto185, stepSto342, stepSto396, stepSto666 } from './repairStoOperationSplit';
+import { stepSto1511, stepSto185, stepSto342, stepSto396, stepSto396Po347, stepSto666 } from './repairStoOperationSplit';
 import { swapShipmentContents } from '../utils/swapShipmentContents';
 
 /**
@@ -15,6 +15,7 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
   const OP269 = 'OP-1004032269-31300699';
   const ids: Record<string, string> = {};
   let masterLuminorId = '';
+  let masterWidmarinoId = '';
   const contractIds: Record<string, string> = {};
 
   async function contractFor(po: string): Promise<string> {
@@ -43,7 +44,7 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
   beforeAll(async () => {
     client = await getClient();
     await client.query('BEGIN');
-    for (const po of ['1001032425', '1001032737', '1001032269', '1001030968', '1001031610', '1001031763', '1011003026', '1011003084', '1011003192', '1011003251', '1011003268', '1011003269']) {
+    for (const po of ['1001032425', '1001032737', '1001032269', '1001030968', '1001031610', '1001031763', '1001031908', '1001032031', '1001032184', '1001032347', '1001032470', '1011003026', '1011003084', '1011003192', '1011003251', '1011003268', '1011003269']) {
       contractIds[po] = await contractFor(po);
     }
     // STO 1511: five SAP rows on BG. LUMINOR 8 and PO 251's KLIP-planned row still on PRIMA SAMUDRA IV, all in one operation
@@ -62,6 +63,20 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
     await ship('S185_610', '1001031610', '1006020185', 'OP-1004031610-45984098', 'EMINENCE VII', 'COMPLETED');
     await ship('S396_763', '1001031763', '1006020396', 'OP-1004031610-45984098', 'BG. WIDMARINO R18', 'COMPLETED');
     await ship('S396_610', '1001031610', '1006020396', 'OP-SEA-300920260009', 'Widmarino 18', 'COMPLETED');
+    // STO 396 also holds PO 347, stuck in the Eminence VII voyage planned on top of it (Eminence name and code, Widmarino master vessel id)
+    // a database may already hold this master vessel: use it (the transaction is rolled back, so the rename below is not kept)
+    const mw = await client.query(
+      `INSERT INTO master_vessels (vessel_code, vessel_name, normalized_vessel_name) VALUES ('MWIDMARR18', 'BG. WIDMARINO R18', 'widmarino r18')
+       ON CONFLICT (vessel_code) DO UPDATE SET vessel_name = 'BG. WIDMARINO R18' RETURNING id`,
+    );
+    masterWidmarinoId = mw.rows[0].id as string;
+    for (const po of ['1001032031', '1001032184', '1001031908']) await ship(`S396_${po}`, po, '1006020396', 'OP-1004031610-45984098', 'BG. WIDMARINO R18', 'COMPLETED');
+    for (const key of ['S396_763', 'S396_1001032031', 'S396_1001032184', 'S396_1001031908']) {
+      await client.query(`UPDATE shipments SET vessel_code = 'MWIDMARR18', vessel_owner = 'WID OWNER', master_vessel_id = $2::uuid WHERE id = $1::uuid`, [ids[key], masterWidmarinoId]);
+    }
+    await ship('S396_347', '1001032347', '1006020396', 'OP-1004032347-29056503', 'EMINENCE VII', 'COMPLETED');
+    await client.query(`UPDATE shipments SET vessel_code = 'MEMINEN', vessel_owner = 'EMI OWNER', master_vessel_id = $2::uuid WHERE id = $1::uuid`, [ids.S396_347, masterWidmarinoId]);
+    await ship('MNL_470', '1001032470', 'MNL-29100732-1004032470', 'OP-1004032347-29056503', 'EMINENCE VII', 'PLANNED');
     await ship('M', '1001032737', 'MNL-56416716-1004032737', VOYAGE, 'BG. AS MARINA 10');
     await ship('S737', '1001032737', '1006020666', SECOND, 'BG. AS MARINA 12');
     await ship('S425', '1001032425', '1006020666', STRAY, 'BG. AS MARINA 10');
@@ -127,6 +142,37 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
     // the Widmarino operation now holds one vessel, and PO 1610's two shells sit in two different operations
     const vessels = await client.query(`SELECT DISTINCT LOWER(vessel_name) AS v FROM shipments WHERE operation_id = $1 ORDER BY 1`, ['OP-1004031610-45984098']);
     expect(vessels.rows.map((r) => r.v).every((v: string) => v.includes('widmarino'))).toBe(true);
+  }, 60_000);
+
+  it('STO 396 / PO 347: the shell leaves the planned Eminence VII voyage for the Widmarino operation and takes the Widmarino identity; the planned rows stay', async () => {
+    // refuses while PO 1610's shell is not yet in the Widmarino operation (sto-1006020396 not run)
+    await client.query('SAVEPOINT p0');
+    await client.query(`UPDATE shipments SET operation_id = 'OP-SEA-300920260009' WHERE id = $1::uuid`, [ids.S396_610]);
+    await expect(stepSto396Po347(client)).rejects.toThrow(/run sto-1006020396 first/);
+    await client.query('ROLLBACK TO SAVEPOINT p0');
+
+    await stepSto396Po347(client);
+    const r = await client.query(
+      `SELECT operation_id, vessel_name, vessel_code, vessel_owner, master_vessel_id::text AS master_id FROM shipments WHERE id = $1::uuid`,
+      [ids.S396_347],
+    );
+    expect(r.rows[0]).toEqual({
+      operation_id: 'OP-1004031610-45984098',
+      vessel_name: 'BG. WIDMARINO R18',
+      vessel_code: 'MWIDMARR18',
+      vessel_owner: 'WID OWNER',
+      master_id: masterWidmarinoId,
+    });
+    // the planned Eminence VII row stays where it was, untouched
+    expect(await row('MNL_470')).toMatchObject({ shipment_id: 'MNL-29100732-1004032470', operation_id: 'OP-1004032347-29056503', vessel_name: 'EMINENCE VII' });
+    // STO 396 is now in one operation
+    const ops = await client.query(`SELECT DISTINCT operation_id FROM shipments WHERE shipment_id = '1006020396' AND id = ANY($1::uuid[])`, [[ids.S396_347, ids.S396_610, ids.S396_763]]);
+    expect(ops.rows).toEqual([{ operation_id: 'OP-1004031610-45984098' }]);
+
+    // a second run finds PO 347 no longer in the Eminence VII operation and refuses
+    await client.query('SAVEPOINT p1');
+    await expect(stepSto396Po347(client)).rejects.toThrow(/expected exactly one row/);
+    await client.query('ROLLBACK TO SAVEPOINT p1');
   }, 60_000);
 
   it('stops without changing anything when the rows are not as expected', async () => {
