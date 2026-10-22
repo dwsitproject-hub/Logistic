@@ -10,6 +10,9 @@
  *   sto-1006020342  STO 342 = PO 1001032269 + 1001032425, one vessel (AS MARINA 12, completed). PO 425's shell moves out of OP-1004032737-34122029 (the
  *                   AS MARINA 10 voyage) to the operation of PO 269's shell.
  *
+ *   sto-1006020185  STO 185 = PO 968, 1128, 1286, 1426, 1610, one Eminence VII voyage. PO 1610's shell leaves OP-1004031610-45984098 for the operation of its sisters.
+ *   sto-1006020396  STO 396, Widmarino voyage: PO 1610's shell (OP-SEA-300920260009) joins the four sisters in OP-1004031610-45984098. Run AFTER sto-1006020185.
+ *
  * Every step checks the rows it expects (PO, STO, operation, vessel) and stops without changing anything when they are not exactly as expected.
  *
  * Usage (inside the backend container):
@@ -116,6 +119,47 @@ export async function stepSto342(db: Db): Promise<void> {
   );
 }
 
+async function operationVessels(db: Db, operationId: string): Promise<string[]> {
+  const r = await db.query(
+    `SELECT DISTINCT LOWER(BTRIM(vessel_name)) AS v FROM shipments WHERE operation_id = $1 AND COALESCE(status, '') <> 'CANCELLED' AND NULLIF(BTRIM(vessel_name), '') IS NOT NULL`,
+    [operationId],
+  );
+  return r.rows.map((x) => String(x.v));
+}
+
+/**
+ * STO 1006020185 = PO 968, 1128, 1286, 1426, 1610: one Eminence VII voyage (ETA 15 Sep, all completed). PO 1001031610's shell sits in OP-1004031610-45984098,
+ * the operation of the Widmarino voyage; it moves to the operation its four sister POs share. Run this BEFORE sto-1006020396.
+ */
+export async function stepSto185(db: Db): Promise<void> {
+  const STO = '1006020185';
+  const sister = exactlyOne(await findRows(db, { po: '1001030968', shipmentId: STO }), `STO ${STO} / PO 1001030968`);
+  const stray = exactlyOne(await findRows(db, { po: '1001031610', shipmentId: STO, operationId: 'OP-1004031610-45984098' }), `STO ${STO} / PO 1001031610`);
+  vesselHas(sister, 'eminence', `shell ${STO} PO 1001030968`);
+  vesselHas(stray, 'eminence', `shell ${STO} PO 1001031610`);
+  if (!sister.operation_id) throw new Error(`shell ${STO} PO 1001030968 has no operation id`);
+  const others = await operationVessels(db, sister.operation_id);
+  if (others.some((v) => !v.includes('eminence'))) throw new Error(`${sister.operation_id} holds another vessel: ${others.join(', ')}`);
+  await db.query(`UPDATE shipments SET operation_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1::uuid`, [stray.id, sister.operation_id]);
+}
+
+/**
+ * STO 1006020396, Widmarino voyage (ETA 3 Oct): PO 763, 908, 1032, 1184 are in OP-1004031610-45984098 and PO 1001031610 in OP-SEA-300920260009 (the same vessel,
+ * spelled "Widmarino 18" there and "BG. WIDMARINO R18" here). PO 1001031610 joins the others. PO 347 (Eminence VII, ETA 24 Oct) is another voyage and stays.
+ * Refuses to run while 45984098 still holds a vessel other than Widmarino (that is sto-1006020185's job, run it first).
+ */
+export async function stepSto396(db: Db): Promise<void> {
+  const STO = '1006020396';
+  const TARGET = 'OP-1004031610-45984098';
+  const stray = exactlyOne(await findRows(db, { po: '1001031610', shipmentId: STO, operationId: 'OP-SEA-300920260009' }), `STO ${STO} / PO 1001031610`);
+  const sister = exactlyOne(await findRows(db, { po: '1001031763', shipmentId: STO, operationId: TARGET }), `STO ${STO} / PO 1001031763`);
+  vesselHas(stray, 'widmarino', `shell ${STO} PO 1001031610`);
+  vesselHas(sister, 'widmarino', `shell ${STO} PO 1001031763`);
+  const vessels = await operationVessels(db, TARGET);
+  if (vessels.some((v) => !v.includes('widmarino'))) throw new Error(`${TARGET} still holds another vessel (${vessels.join(', ')}): run sto-1006020185 first`);
+  await db.query(`UPDATE shipments SET operation_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1::uuid`, [stray.id, TARGET]);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const apply = args.includes('--apply');
@@ -124,6 +168,8 @@ async function main() {
   const steps: Record<string, { run: (db: Db) => Promise<void>; pos: string[]; stos: string[] }> = {
     'sto-1006020666': { run: stepSto666, pos: ['1001032425', '1001032737'], stos: ['1006020666'] },
     'sto-1006020342': { run: stepSto342, pos: ['1001032269', '1001032425', '1001032737'], stos: ['1006020342', '1006020666'] },
+    'sto-1006020185': { run: stepSto185, pos: ['1001030968', '1001031128', '1001031286', '1001031426', '1001031610'], stos: ['1006020185', '1006020396'] },
+    'sto-1006020396': { run: stepSto396, pos: ['1001031610', '1001031763', '1001031908', '1001032031', '1001032184', '1001032347'], stos: ['1006020396', '1006020185'] },
   };
   if (!steps[step]) {
     console.error(`Usage: --step <${Object.keys(steps).join('|')}> [--apply]`);

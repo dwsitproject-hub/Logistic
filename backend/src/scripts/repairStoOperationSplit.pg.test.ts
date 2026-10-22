@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PoolClient } from 'pg';
 import { getClient } from '../database/connection';
-import { stepSto342, stepSto666 } from './repairStoOperationSplit';
+import { stepSto185, stepSto342, stepSto396, stepSto666 } from './repairStoOperationSplit';
 import { swapShipmentContents } from '../utils/swapShipmentContents';
 
 /**
@@ -42,7 +42,12 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
   beforeAll(async () => {
     client = await getClient();
     await client.query('BEGIN');
-    for (const po of ['1001032425', '1001032737', '1001032269']) contractIds[po] = await contractFor(po);
+    for (const po of ['1001032425', '1001032737', '1001032269', '1001030968', '1001031610', '1001031763']) contractIds[po] = await contractFor(po);
+    // STO 185 (Eminence VII) and STO 396 (Widmarino): PO 1610 sits in the other voyage's operation / its own OP-SEA
+    await ship('S185_968', '1001030968', '1006020185', 'OP-1004030968-92261225', 'EMINENCE VII', 'COMPLETED');
+    await ship('S185_610', '1001031610', '1006020185', 'OP-1004031610-45984098', 'EMINENCE VII', 'COMPLETED');
+    await ship('S396_763', '1001031763', '1006020396', 'OP-1004031610-45984098', 'BG. WIDMARINO R18', 'COMPLETED');
+    await ship('S396_610', '1001031610', '1006020396', 'OP-SEA-300920260009', 'Widmarino 18', 'COMPLETED');
     await ship('M', '1001032737', 'MNL-56416716-1004032737', VOYAGE, 'BG. AS MARINA 10');
     await ship('S737', '1001032737', '1006020666', SECOND, 'BG. AS MARINA 12');
     await ship('S425', '1001032425', '1006020666', STRAY, 'BG. AS MARINA 10');
@@ -91,6 +96,23 @@ describe('repairStoOperationSplit (run in Postgres)', () => {
     // the voyage keeps only the AS MARINA 10 rows
     const vessels = await client.query(`SELECT DISTINCT vessel_name FROM shipments WHERE operation_id = $1`, [VOYAGE]);
     expect(vessels.rows).toEqual([{ vessel_name: 'BG. AS MARINA 10' }]);
+  }, 60_000);
+
+  it('STO 396 refuses to run while the Widmarino operation still holds Eminence VII; STO 185 first, then 396', async () => {
+    await client.query('SAVEPOINT s0');
+    await expect(stepSto396(client)).rejects.toThrow(/run sto-1006020185 first/);
+    await client.query('ROLLBACK TO SAVEPOINT s0');
+
+    await stepSto185(client);
+    expect((await row('S185_610')).operation_id).toBe('OP-1004030968-92261225');
+    expect((await row('S185_968')).operation_id).toBe('OP-1004030968-92261225');
+
+    await stepSto396(client);
+    expect((await row('S396_610')).operation_id).toBe('OP-1004031610-45984098');
+    expect((await row('S396_763')).operation_id).toBe('OP-1004031610-45984098');
+    // the Widmarino operation now holds one vessel, and PO 1610's two shells sit in two different operations
+    const vessels = await client.query(`SELECT DISTINCT LOWER(vessel_name) AS v FROM shipments WHERE operation_id = $1 ORDER BY 1`, ['OP-1004031610-45984098']);
+    expect(vessels.rows.map((r) => r.v).every((v: string) => v.includes('widmarino'))).toBe(true);
   }, 60_000);
 
   it('stops without changing anything when the rows are not as expected', async () => {
