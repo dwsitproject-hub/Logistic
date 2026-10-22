@@ -77,6 +77,7 @@ import { DecimalDotInput } from '@/components/shared/DecimalDotInput'
 import {
   seedKlipQtyFromShipmentHeader,
   sapContractDetailQtyToKg,
+  shipmentModalGrandTotalSource,
   shipmentModalGrandTotalsKg,
   shipmentStoredQtyKg,
 } from '@/lib/shipmentQuantityUnits'
@@ -1036,6 +1037,18 @@ export function EditShipmentModal({
       }),
     [qtyTotals, poTableQtyTotals, contractSapClosed, sapQtyShared, shipmentCompletedForQty],
   )
+  // The footer under the Klip columns adds up the Klip column. The View Table total can be SAP's instead (a COMPLETED shipment, or no Klip quantity),
+  // so it is a line of its own, with its source, and only when it differs from what the columns add up to.
+  const grandTotalSource = useMemo(
+    () => ({
+      delivered: shipmentModalGrandTotalSource(grandTotalKg.delivered, qtyTotals.quantity_delivered, poTableQtyTotals.sapDelivered),
+      receive: shipmentModalGrandTotalSource(grandTotalKg.receive, qtyTotals.quantity_receive, poTableQtyTotals.sapReceive),
+    }),
+    [grandTotalKg, qtyTotals, poTableQtyTotals],
+  )
+  const viewTableTotalDiffers =
+    !quantityKgValuesEqual(grandTotalKg.delivered, qtyTotals.quantity_delivered) ||
+    !quantityKgValuesEqual(grandTotalKg.receive, qtyTotals.quantity_receive)
 
   const isTcCharter = isTcCharterType(vesselMeta.charter_type)
   const headerVesselOaBudget = parseApiNumber(shipmentInfo.vessel_oa_budget)
@@ -2809,17 +2822,41 @@ export function EditShipmentModal({
                           <MtQtyReadOnly valueKg={poTableQtyTotals.shipmentPlan} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={grandTotalKg.delivered} />
+                          <MtQtyReadOnly valueKg={qtyTotals.quantity_delivered} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={grandTotalKg.receive} />
+                          <MtQtyReadOnly valueKg={qtyTotals.quantity_receive} />
                         </TableCell>
                       </TableRow>
+                      {viewTableTotalDiffers ? (
+                        <TableRow className={VESSEL_MODAL_TABLE_FOOTER_CLASS} data-testid="view-table-total-row">
+                          <TableCell colSpan={8} className={`${VESSEL_MODAL_COMPACT_TD} text-right font-normal text-muted-foreground`}>
+                            Total on Shipments View Table
+                          </TableCell>
+                          <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                            <MtQtyReadOnly valueKg={grandTotalKg.delivered} />
+                            {grandTotalSource.delivered ? (
+                              <div className="text-[10px] font-normal text-muted-foreground">
+                                {grandTotalSource.delivered === 'SAP' ? 'from SAP' : 'from Klip'}
+                              </div>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                            <MtQtyReadOnly valueKg={grandTotalKg.receive} />
+                            {grandTotalSource.receive ? (
+                              <div className="text-[10px] font-normal text-muted-foreground">
+                                {grandTotalSource.receive === 'SAP' ? 'from SAP' : 'from Klip'}
+                              </div>
+                            ) : null}
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
                     </TableFooter>
                   </Table>
                 </div>
                 <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  Grand Total Delivered / Received Qty is the STO total shown on Shipments View Table: the Klip quantity, or SAP when no Klip quantity is entered
+                  Grand Total under the Klip columns adds up the Klip quantities. When the STO total shown on Shipments View Table differs, it appears on the line below with its source:
+                  the Klip quantity, or SAP when no Klip quantity is entered or the shipment is COMPLETED
                   (Klip only when the PO is also in another shipment: SAP books the PO, not each shipment).
                   One PO with several STOs: each shipment row is that STO only.
                 </p>

@@ -11,8 +11,39 @@ import {
   shipmentListOutstandingKgForViewTable,
   shipmentListReceiveKgForViewTable,
   shipmentModalGrandTotalsKg,
+  shipmentModalGrandTotalSource,
   shipmentListShipmentPlanKg,
 } from './shipmentQuantityUnits'
+
+/**
+ * STO 1006020396 (production 2026-10-22): the footer of Delivered / Received (Klip) read 3,000 / 2,991 MT under a column that adds up to 2,800 / 0,
+ * because the COMPLETED shipment shows SAP's totals there. The modal now adds a line saying which source the View Table total comes from.
+ */
+describe('shipmentModalGrandTotalSource labels where the View Table total comes from', () => {
+  it('the SAP total of a COMPLETED shipment is labelled SAP, not Klip', () => {
+    expect(shipmentModalGrandTotalSource(3_000_000, 2_800_000, 3_000_000)).toBe('SAP')
+    expect(shipmentModalGrandTotalSource(2_991_000, 0, 2_991_000)).toBe('SAP')
+  })
+
+  it('a total equal to the Klip column is labelled Klip, including when SAP happens to match', () => {
+    expect(shipmentModalGrandTotalSource(2_800_000, 2_800_000, 3_000_000)).toBe('KLIP')
+    expect(shipmentModalGrandTotalSource(1_000, 1_000, 1_000)).toBe('KLIP')
+  })
+
+  it('an empty total, or one that equals neither column, gets no label', () => {
+    expect(shipmentModalGrandTotalSource(null, 1_000, 2_000)).toBeNull()
+    expect(shipmentModalGrandTotalSource(5_000, 1_000, 2_000)).toBeNull()
+    expect(shipmentModalGrandTotalSource(0, null, null)).toBeNull()
+  })
+
+  it('the three STO 1006020396 figures resolve to SAP through the real rule', () => {
+    const totals = { klipDeliveredKg: 2_800_000, klipReceiveKg: 0, sapDeliveredKg: 3_000_000, sapReceiveKg: 2_991_000, contractSapClosed: false, shipmentCompleted: true }
+    const grand = shipmentModalGrandTotalsKg(totals)
+    expect(grand).toEqual({ delivered: 3_000_000, receive: 2_991_000 })
+    expect(shipmentModalGrandTotalSource(grand.delivered, totals.klipDeliveredKg, totals.sapDeliveredKg)).toBe('SAP')
+    expect(shipmentModalGrandTotalSource(grand.receive, totals.klipReceiveKg, totals.sapReceiveKg)).toBe('SAP')
+  })
+})
 
 describe('sapDeliveredOrReceiveMtToKg', () => {
   it('converts SAP MT to kg unconditionally', () => {

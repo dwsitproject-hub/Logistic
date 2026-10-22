@@ -332,6 +332,22 @@ export function shipmentModalGrandTotalsKg(totals: {
   }
 }
 
+/**
+ * Where a Grand Total shown on the View Table comes from, for the label beside it in the Edit Shipment modal.
+ * 'KLIP' when it equals the sum of the Klip column, 'SAP' when it equals the SAP column's sum, null when the total is empty
+ * or equals neither (nothing honest to say). Compared to the gram: the totals are kg sums of the same numbers.
+ */
+export function shipmentModalGrandTotalSource(
+  totalKg: number | null,
+  klipSumKg: number | null,
+  sapSumKg: number | null,
+): 'KLIP' | 'SAP' | null {
+  if (totalKg === null || !Number.isFinite(totalKg)) return null
+  if (klipSumKg !== null && Math.abs(totalKg - klipSumKg) < 0.5) return 'KLIP'
+  if (sapSumKg !== null && Math.abs(totalKg - sapSumKg) < 0.5) return 'SAP'
+  return null
+}
+
 /** Prefer hydrated SAP; use the shell only when hydrate is null/0 (do not keep an inflated header SUM). */
 export function preferHydratedQty(
   hydrated: number | string | null | undefined,
