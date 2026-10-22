@@ -28,6 +28,12 @@ import { formatDateTimeDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import {
+  downloadCommercialDocument,
+  loadCommercialDocumentPreview,
+  revokePreviewUrl,
+} from '@/lib/commercialDocumentFileAccess'
+import { PdfPreviewPanel, type PdfPreviewState } from '@/components/commercial-documents/PdfPreviewPanel'
 
 type B2bParty = {
   po_number?: string | null
@@ -37,18 +43,6 @@ type B2bParty = {
   buyer?: string | null
   product?: string | null
   quantity_ordered?: number | null
-}
-
-type PdfPreviewState = {
-  fileId: string
-  fileName: string
-  documentType: CommercialDocumentType
-  url: string
-  error?: string
-}
-
-function revokePreviewUrl(url: string | null | undefined) {
-  if (url) window.URL.revokeObjectURL(url)
 }
 
 function isPdfFile(file: File): boolean {
@@ -66,24 +60,6 @@ function uploadErrorMessage(err: unknown): string {
     (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
       ?.message || 'Upload failed. Please try again.'
   )
-}
-
-async function messageFromPdfBlob(blob: Blob): Promise<string | null> {
-  const type = String(blob.type || '').toLowerCase()
-  if (type.includes('json') || type.includes('text') || type.includes('html')) {
-    try {
-      const text = await blob.text()
-      const parsed = JSON.parse(text) as { error?: { message?: string }; message?: string }
-      return parsed?.error?.message || parsed?.message || 'Failed to load document preview'
-    } catch {
-      return 'Failed to load document preview'
-    }
-  }
-  const sig = new TextDecoder().decode(await blob.slice(0, 5).arrayBuffer())
-  if (!sig.startsWith('%PDF')) {
-    return 'This file is not a valid PDF and cannot be previewed.'
-  }
-  return null
 }
 
 type Props = {
@@ -261,37 +237,13 @@ export function DocumentCheckingModal({
     setPdfPreview(null)
     setPdfPreviewLoading(true)
     try {
-      const response = await api.get(`/commercial-documents/file/${file.id}/view`, {
-        responseType: 'blob',
-      })
-      const raw = response.data instanceof Blob ? response.data : new Blob([response.data])
-      const invalid = await messageFromPdfBlob(raw)
-      if (invalid) {
-        setPdfPreview({
-          fileId: file.id,
-          fileName: file.file_name,
-          documentType: type,
-          url: '',
-          error: invalid,
-        })
-        return
-      }
-      const url = window.URL.createObjectURL(new Blob([raw], { type: 'application/pdf' }))
+      const result = await loadCommercialDocumentPreview(file.id)
       setPdfPreview({
         fileId: file.id,
         fileName: file.file_name,
         documentType: type,
-        url,
-      })
-    } catch (e) {
-      const data = (e as { response?: { data?: Blob } })?.response?.data
-      const fromBlob = data instanceof Blob ? await messageFromPdfBlob(data) : null
-      setPdfPreview({
-        fileId: file.id,
-        fileName: file.file_name,
-        documentType: type,
-        url: '',
-        error: fromBlob || 'Failed to load document preview',
+        url: result.url,
+        ...(result.error ? { error: result.error } : {}),
       })
     } finally {
       setPdfPreviewLoading(false)
@@ -300,23 +252,8 @@ export function DocumentCheckingModal({
 
   const downloadPdf = async (fileId: string, fileName: string) => {
     setDownloadError(null)
-    try {
-      const response = await api.get(`/commercial-documents/file/${fileId}/download`, {
-        responseType: 'blob',
-      })
-      const url = window.URL.createObjectURL(new Blob([response.data]))
-      const a = document.createElement('a')
-      a.href = url
-      a.download = fileName
-      a.click()
-      window.URL.revokeObjectURL(url)
-    } catch (e) {
-      // `void downloadPdf(...)` at the call sites: without this a 404 escaped as an unhandled AxiosError.
-      // With responseType 'blob' the server's JSON message arrives as a Blob.
-      const data = (e as { response?: { data?: unknown } })?.response?.data
-      const fromBlob = data instanceof Blob ? await messageFromPdfBlob(data) : null
-      setDownloadError(`Could not download "${fileName}": ${fromBlob || 'download failed. Please try again.'}`)
-    }
+    const failure = await downloadCommercialDocument(fileId, fileName)
+    if (failure) setDownloadError(failure)
   }
 
   const deleteFile = async (
@@ -692,53 +629,6 @@ export function DocumentCheckingModal({
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-function PdfPreviewPanel({
-  preview,
-  onClose,
-  onDownload,
-  className,
-}: {
-  preview: PdfPreviewState
-  onClose: () => void
-  onDownload: () => void
-  className?: string
-}) {
-  return (
-    <div className={cn('flex flex-col bg-white overflow-hidden', className)}>
-      <div className="flex items-start justify-between gap-3 px-4 py-3 border-b bg-white shrink-0">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-gray-900">
-            {COMMERCIAL_DOCUMENT_LABELS[preview.documentType]}
-          </div>
-          <div className="text-xs text-gray-500 truncate mt-0.5" title={preview.fileName}>
-            {preview.fileName}
-          </div>
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <Button variant="outline" size="sm" onClick={onDownload}>
-            <Download className="h-4 w-4 mr-1" />
-            Download
-          </Button>
-          <Button variant="ghost" size="icon" onClick={onClose} title="Close preview">
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-      {preview.error ? (
-        <div className="flex-1 min-h-[280px] lg:min-h-0 flex items-center justify-center px-6 text-center text-sm text-gray-600 bg-gray-50">
-          {preview.error}
-        </div>
-      ) : (
-        <iframe
-          src={`${preview.url}#toolbar=1`}
-          title={preview.fileName}
-          className="w-full flex-1 min-h-[280px] lg:min-h-0 bg-gray-100 border-0"
-        />
-      )}
     </div>
   )
 }

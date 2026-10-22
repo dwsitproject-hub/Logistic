@@ -54,6 +54,7 @@ import { ContractPerfTableSortHeader } from '@/components/performance/ContractPe
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import { CommercialDocumentsSummaryCards } from '@/components/commercial-documents/CommercialDocumentsSummaryCards'
 import { DocumentCheckingModal } from '@/components/commercial-documents/DocumentCheckingModal'
+import { DocumentViewModal, type DocumentViewTarget } from '@/components/commercial-documents/DocumentViewModal'
 import { TandaTerimaDownloadModal } from '@/components/commercial-documents/TandaTerimaDownloadModal'
 import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
@@ -195,6 +196,12 @@ function CommercialDocumentsPageContent() {
   const [sortKey, setSortKey] = useState<CommercialDocsColumnId>('contract_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [modalRow, setModalRow] = useState<CommercialDocumentRow | null>(null)
+  /** A checked document cell was clicked: the read-only View Document modal for that contract and document type. */
+  const [viewTarget, setViewTarget] = useState<DocumentViewTarget | null>(null)
+  const cellRenderContext = useMemo(
+    () => ({ onOpenDocument: (row: CommercialDocumentRow, type: CommercialDocumentType) => setViewTarget({ row, type }) }),
+    [],
+  )
   const [selectedContractExtNos, setSelectedContractExtNos] = useState<Set<string>>(() => new Set())
   const [tandaTerimaModalOpen, setTandaTerimaModalOpen] = useState(false)
 
@@ -1061,7 +1068,7 @@ function CommercialDocumentsPageContent() {
                                   row as unknown as Record<string, unknown>,
                                 )
                               : null
-                            const rendered = col.render(row)
+                            const rendered = col.render(row, cellRenderContext)
                             return (
                               <td
                                 key={col.id}
@@ -1152,6 +1159,8 @@ function CommercialDocumentsPageContent() {
         contractExtNos={selectedExtNoList}
         onClose={() => setTandaTerimaModalOpen(false)}
       />
+
+      <DocumentViewModal target={viewTarget} onClose={() => setViewTarget(null)} />
 
       <DocumentCheckingModal
         row={modalRow}

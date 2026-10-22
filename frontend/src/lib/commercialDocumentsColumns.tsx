@@ -75,18 +75,49 @@ export type CommercialDocsColumnMeta = {
   formulaHelp?: string
   centerCell?: boolean
   getSortValue?: (row: CommercialDocumentRow) => string | number
-  render: (row: CommercialDocumentRow) => ReactNode
+  render: (row: CommercialDocumentRow, ctx?: CommercialDocsRenderContext) => ReactNode
+}
+
+/** What a page can hand to the cells it renders. A checked document cell becomes a button when `onOpenDocument` is given. */
+export type CommercialDocsRenderContext = {
+  onOpenDocument?: (row: CommercialDocumentRow, type: CommercialDocumentType) => void
 }
 
 export function isCommercialDocStatusColumn(id: CommercialDocsColumnId): boolean {
   return DOC_STATUS_COLUMN_IDS.has(id)
 }
 
-function DocStatusCell({ checked }: { checked: boolean }) {
-  if (checked) {
+/**
+ * One document-status cell. Checked = at least one file of this type is uploaded. With `onOpen` the check is a button that opens that
+ * document (view + download); without it, or when unchecked, nothing is clickable.
+ */
+export function DocStatusCell({
+  checked,
+  onOpen,
+  title,
+}: {
+  checked: boolean
+  onOpen?: () => void
+  /** Accessible name of the button, e.g. "View Contract". */
+  title?: string
+}) {
+  if (!checked) {
+    return <span className="text-sm text-gray-400">-</span>
+  }
+  if (!onOpen) {
     return <Check className="h-4 w-4 text-green-600" aria-label="Checked" />
   }
-  return <span className="text-sm text-gray-400">-</span>
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={title}
+      aria-label={title}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-green-600 transition hover:bg-green-50 hover:text-green-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+    >
+      <Check className="h-4 w-4" aria-hidden />
+    </button>
+  )
 }
 
 const DOC_COL_MAP: Record<
@@ -292,7 +323,13 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
         sortable: true,
         centerCell: true,
         getSortValue: (r) => (r[field] ? 1 : 0),
-        render: (r) => <DocStatusCell checked={Boolean(r[field])} />,
+        render: (r, ctx) => (
+          <DocStatusCell
+            checked={Boolean(r[field])}
+            title={`View ${COMMERCIAL_DOCUMENT_LABELS[type]}`}
+            onOpen={ctx?.onOpenDocument ? () => ctx.onOpenDocument?.(r, type) : undefined}
+          />
+        ),
       }
     },
   )
