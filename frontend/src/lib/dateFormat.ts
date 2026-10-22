@@ -23,6 +23,23 @@ function parseForDisplay(input: string): Date | null {
   return Number.isNaN(fallback.getTime()) ? null : fallback
 }
 
+/**
+ * Parse an event timestamp (audit log, upload, import) for a display that shows the time.
+ * parseForDisplay keeps only the calendar day of anything that starts with YYYY-MM-DD, which is right for a
+ * date column and wrong for `2026-10-22T07:58:14.000Z`: every "Latest activity" row read 00:00. A string with a
+ * time part is a real instant, so it goes through parseISO (Z / offset honoured, shown in the viewer's timezone).
+ */
+const HAS_TIME_PART = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/
+
+function parseEventTimestamp(input: string): Date | null {
+  const s = String(input).trim()
+  if (HAS_TIME_PART.test(s)) {
+    const d = parseISO(s)
+    if (isValid(d)) return d
+  }
+  return parseForDisplay(s)
+}
+
 /** Normalize UI/API date input to `YYYY-MM-DD` for Postgres `date` columns. */
 export function toApiDateOnly(input: string | Date | null | undefined): string | null {
   if (input === null || input === undefined || input === '') return null
@@ -66,7 +83,7 @@ export function formatDateTimeDMY(input: string | Date | null | undefined): stri
   if (input instanceof Date) {
     return Number.isNaN(input.getTime()) ? '-' : format(input, 'dd/MM/yyyy HH:mm')
   }
-  const d = parseForDisplay(input)
+  const d = parseEventTimestamp(input)
   if (!d) return '-'
   return format(d, 'dd/MM/yyyy HH:mm')
 }
@@ -77,7 +94,7 @@ export function formatTimeHMS(input: string | Date | null | undefined): string {
   if (input instanceof Date) {
     return Number.isNaN(input.getTime()) ? '-' : format(input, 'HH:mm:ss')
   }
-  const d = parseForDisplay(input)
+  const d = parseEventTimestamp(input)
   if (!d) return '-'
   return format(d, 'HH:mm:ss')
 }
