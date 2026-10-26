@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, type DragEvent, type ReactNode } from 'react'
 import { X, Upload, Eye, Download, Loader2, Trash2 } from 'lucide-react'
 import api from '@/lib/api'
+import { withNetworkRetry } from '@/lib/apiRetry'
 import { Button } from '@/components/ui/button'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -119,9 +120,10 @@ export function DocumentCheckingModal({
       const qs = contractExtNo
         ? `?contract_ext_no=${encodeURIComponent(contractExtNo)}`
         : ''
+      // Both are idempotent GETs; one retry absorbs a dropped connection (axios ERR_NETWORK) before the user sees an error.
       const [filesRes, historyRes] = await Promise.all([
-        api.get(`/commercial-documents/files/${encodeURIComponent(poNumber)}${qs}`),
-        api.get(`/commercial-documents/history/${encodeURIComponent(poNumber)}${qs}`),
+        withNetworkRetry(() => api.get(`/commercial-documents/files/${encodeURIComponent(poNumber)}${qs}`)),
+        withNetworkRetry(() => api.get(`/commercial-documents/history/${encodeURIComponent(poNumber)}${qs}`)),
       ])
       setFiles(filesRes.data?.data || [])
       setHistory(historyRes.data?.data || [])

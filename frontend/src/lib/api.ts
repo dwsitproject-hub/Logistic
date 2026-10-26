@@ -94,12 +94,18 @@ api.interceptors.response.use(
       const baseURL = configuredBase;
 
       if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
-        console.error('❌ Network Error: Cannot connect to backend API');
-        console.error('   API URL:', baseURL);
-        console.error('   Make sure backend is running on port 5001');
-        console.error('   Test: http://127.0.0.1:5001/health');
-        if (baseURL.includes('localhost')) {
-          console.error('   Tip: On Windows, use http://127.0.0.1:5001/api instead of localhost');
+        console.error('❌ Network Error: no response from the API', {
+          method: String(error.config?.method || 'get').toUpperCase(),
+          url: requestUrl,
+          baseURL,
+        });
+        // Local-dev hints only. In staging/production the API is same-origin `/api` behind nginx.
+        if (isLocalDevFrontendHost()) {
+          console.error('   Make sure the backend is running on port 5001');
+          console.error('   Test: http://127.0.0.1:5001/health');
+          if (baseURL.includes('localhost')) {
+            console.error('   Tip: On Windows, use http://127.0.0.1:5001/api instead of localhost');
+          }
         }
       } else if (error.response) {
         const { data } = error.response;
