@@ -11,6 +11,9 @@ backend/node_modules/
 
 # Build outputs
 frontend/.next/
+frontend-commercial/.next/
+frontend-commercial/node_modules/
+frontend-commercial/*.tsbuildinfo
 frontend/out/
 backend/dist/
 

@@ -51,6 +51,20 @@ Then prove the new UI is in the bundle, with a text only the new code has:
 cd /opt/klip && docker compose -f docker-compose.frontend.yml exec -T frontend sh -c "grep -rl '<text only the new code has>' .next | head -3"
 ```
 
+## 3b. Commercial Documents app (ECS-App) - only when the release changes `frontend-commercial/`
+
+Its own container (`klip-commercial-docs`) next to KLIP's, on the same backend. Check first:
+```bash
+cd /opt/klip && git fetch origin && git diff --stat HEAD origin/main -- frontend-commercial | tail -1
+```
+Empty = nothing to deploy. Otherwise:
+```bash
+cd /opt/klip && git fetch origin && git show origin/main:docs/scripts/deploy-commercial-docs.sh > /tmp/deploy-commercial-docs.sh && bash /tmp/deploy-commercial-docs.sh prod
+```
+Must end with `healthy` and the expected `commit now`. First time only: the Nginx block on port 8081
+(`docs/nginx/commercial-docs.conf.example`, production backend address), port 8081 open for users, and on ECS-DB
+`COMMERCIAL_DOCS_URL=http://<ECS-App IP>:8081` in `backend/.env` followed by a backend restart.
+
 ## 4. After the deploy (ECS-DB)
 
 Outstanding / OS releases - the same check as step 1, compare with the BEFORE figures:

@@ -1,0 +1,72 @@
+# Commercial Documents vhost, on the KLIP frontend host. Same backend, same DB, same Synology as KLIP.
+#
+# Until the app has its own domain it is served on the SAME host as KLIP, on port 8081:
+#   SIT        http://172.28.92.56:8081     backend 172.28.92.57:5001
+#   Production http://<ECS-App IP>:8081     backend 172.28.80.51:5001
+# When the domain exists, point it at the same IP and use the second server block (port 80, server_name).
+#
+# Install (as for klip-kpndomain.conf - read that file's notes on default_server first):
+#   sudo cp docs/nginx/commercial-docs.conf.example /etc/nginx/sites-available/commercial-docs.conf
+#   (edit the backend address below for the host: SIT or production)
+#   sudo ln -s /etc/nginx/sites-available/commercial-docs.conf /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+# and open TCP 8081 in the host firewall / cloud security group for the users' network.
+#
+# Rollback: remove the symlink, `sudo nginx -t && sudo systemctl reload nginx`. KLIP is untouched either way.
+#
+# Cookies are per HOST, not per port: while both apps live on one IP, signing in to one also signs the browser in to the other
+# with the same account (it is the same backend session), and signing out of one signs out of both. That is expected and ends
+# once the app has its own domain.
+
+server {
+    listen 8081;
+    listen [::]:8081;
+    server_name _;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    # Document uploads are capped at 15 MB by the backend; leave headroom for the multipart envelope.
+    client_max_body_size 20m;
+    proxy_read_timeout    300s;
+    proxy_send_timeout    300s;
+    proxy_connect_timeout 15s;
+
+    location /api/ {
+        proxy_pass http://172.28.92.57:5001;   # SIT backend - production: http://172.28.80.51:5001
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /auth/ {
+        proxy_pass http://172.28.92.57:5001;   # same backend as /api/
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3002;      # klip-commercial-docs (docker-compose.frontend-commercial.yml)
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+    }
+}
+
+# Later, on the app's own domain (same IP as KLIP). Copy the three locations above into it, then drop the 8081 block once users
+# have moved, and change COMMERCIAL_DOCS_URL on the backend host to the domain.
+#
+# server {
+#     listen 80;
+#     listen [::]:80;
+#     server_name commercial-docs.kpndomain.com;
+#     ...same add_header / limits / locations as above...
+# }
