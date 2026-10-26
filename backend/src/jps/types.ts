@@ -1,4 +1,4 @@
-/** Wire types for the JPS partner API (Shipping Instruction, v4.2). */
+/** Wire types for the JPS partner API (Shipping Instruction, up to v5.6). */
 
 /**
  * Partner status values JPS reports back. Copied verbatim; KLIP does not translate them.
@@ -67,6 +67,13 @@ export interface JpsSubmitPayload {
   port_hub_code?: string;
   /** Older submissions stored this. New ones send `port_hub_code` and leave it off. */
   port_id?: number;
+  /**
+   * v5.6. The operating company (DataHub organisation, `master_companies.code_dhm`), not the cargo shipper.
+   * JPS requires it when the port has more than one mapped company, stores the single company when it is omitted for
+   * a port with one, and refuses any code for a port with none - so it is only sent after GET /catalog/company says
+   * which of those the port is (companies.ts).
+   */
+  company_hub_code?: string;
   vessel_hub_code?: string;
   vessel_name?: string;
   voyage_no?: string;
@@ -97,6 +104,10 @@ export interface JpsInstruction {
   eta?: string | null;
   etd?: string | null;
   port_id?: number | null;
+  port_hub_code?: string | null;
+  /** v5.6: echoed on the 201, GET and webhook `data`. Absent from older responses. */
+  company_hub_code?: string | null;
+  company_name?: string | null;
   allocation?: {
     jetty_name?: string | null;
     /** v5.0. */

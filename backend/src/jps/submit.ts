@@ -2,6 +2,7 @@
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { jpsRequest } from './client';
+import { companiesForPort, fetchJpsPortCompanies } from './companies';
 import {
   jpsMaxSubmitsPerSweep,
   jpsRegionSite,
@@ -10,7 +11,18 @@ import {
 } from './config';
 import { findEligibleStos } from './eligibility';
 import { buildJpsExternalReference, buildJpsSubmitPayload } from './mapper';
-import type { JpsInstruction, JpsSubmitPayload } from './types';
+import type { JpsErrorDetail, JpsInstruction, JpsSubmitPayload } from './types';
+
+/**
+ * One validation detail as a line for `last_error`. JPS puts the allowed values next to the issue (`valid_cargo_hub_codes`,
+ * `valid_company_hub_codes`, ...); a rejection that does not say what would have been accepted cannot be fixed from KLIP.
+ */
+export function describeJpsDetail(detail: JpsErrorDetail): string {
+  const allowed = Object.entries(detail)
+    .filter(([key, value]) => key.startsWith('valid_') && Array.isArray(value))
+    .map(([key, value]) => `${key}=${(value as unknown[]).join('|')}`);
+  return `${detail.field ?? '?'}: ${detail.issue ?? ''}${allowed.length ? ` [${allowed.join('; ')}]` : ''}`;
+}
 
 export interface JpsSubmitSummary {
   considered: number;
@@ -122,10 +134,15 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
   });
   summary.considered = eligible.length;
 
+  // v5.6: which companies JPS maps to each port decides whether company_hub_code goes out. Asked only when there is
+  // something to send, and cached, so a quiet sweep costs nothing.
+  const portCatalog = eligible.length > 0 ? await fetchJpsPortCompanies() : null;
+
   for (const sto of eligible) {
     const revision = await nextRevision(sto.sto_key);
     const built = buildJpsSubmitPayload(
       { ...sto, revision },
+      { portCompanies: companiesForPort(portCatalog, sto.port_hub_code) },
     );
 
     if (!built.payload) {
@@ -191,9 +208,7 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
       continue;
     }
 
-    const detail = (res.details ?? [])
-      .map((d) => `${d.field ?? '?'}: ${d.issue ?? ''}`)
-      .join('; ');
+    const detail = (res.details ?? []).map(describeJpsDetail).join('; ');
     await recordFailed(
       sto.sto_key,
       revision,

@@ -2,7 +2,7 @@
 
 **Audience:** JPS administrators with **Admin** page permission.
 
-**Related:** Partner self-service contract — [INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md](./INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md) (v5.5). TECH-SPEC **§0.37**, **§0.42**.
+**Related:** Partner self-service contract — [INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md](./INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md) (v5.6). TECH-SPEC **§0.37**, **§0.42**, **§0.43**.
 
 ---
 
@@ -57,6 +57,12 @@ Partners may send HTTPS links on submit:
 - `bl_document_url`
 
 JPS stores URLs on the shipping instruction; operators see **Partner document links** in the SI detail modal (read-only). JPS does not download or mirror partner files.
+
+---
+
+## Operating company (v5.6)
+
+Partners send **`company_hub_code`** on submit (required when that port has more than one mapped company). JPS stores it on the shipping instruction. GET and webhook payloads echo **`company_hub_code`** and **`company_name`**. This is the operating company, not the cargo-line shipper.
 
 ---
 

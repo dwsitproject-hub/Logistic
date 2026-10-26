@@ -6,6 +6,7 @@
  *
  *   trade_term, surveyor_name, and per cargo line: po_no, so_no, shipper_name
  *   plus shipping_instruction_document_url, contract_document_url, bl_document_url
+ *   plus (v5.6) company_hub_code, the operating company
  *
  * `eta` and `etd` are NOT amendable. So a discharge ETA that moves after submission stays wrong at
  * JPS and there is nothing this can do about it - that needs either a new field on their PATCH or a
@@ -29,6 +30,7 @@
 import { query } from './../database/connection';
 import logger from '../utils/logger';
 import { jpsRequest } from './client';
+import { companiesForPort, fetchJpsPortCompanies } from './companies';
 import { jpsRegionSite } from './config';
 import { findEligibleStos } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
@@ -49,6 +51,8 @@ interface CargoPatch {
 
 interface AmendBody {
   trade_term?: string;
+  /** v5.6: corrects the operating company while Pending. Omitting it leaves the stored company as it is. */
+  company_hub_code?: string;
   shipping_instruction_document_url?: string;
   contract_document_url?: string;
   bl_document_url?: string;
@@ -71,6 +75,12 @@ export function buildJpsAmendBody(
     // Only a real term can be sent. Going from FOB to "no term" is not expressible - JPS has no way
     // to clear one - so a term that has become unmappable is left as it was rather than guessed at.
     if (current.trade_term) body.trade_term = current.trade_term;
+  }
+
+  // Same rule as trade_term: only a real code is sent. A company that is no longer resolvable (current has none) is left
+  // as it was; JPS stores the company it was given or, for a one-company port, its own.
+  if (current.company_hub_code && current.company_hub_code !== (sent.company_hub_code ?? '')) {
+    body.company_hub_code = current.company_hub_code;
   }
 
   // Same rule as trade_term: a new or replaced link is sent. A document that was deleted in KLIP
@@ -129,6 +139,8 @@ export async function amendPendingInstructions(limit = 50): Promise<JpsAmendSumm
     stoKeys: [...byKey.keys()],
   });
 
+  const portCatalog = sources.length > 0 ? await fetchJpsPortCompanies() : null;
+
   for (const source of sources) {
     const row = byKey.get(source.sto_key);
     if (!row) continue;
@@ -136,6 +148,7 @@ export async function amendPendingInstructions(limit = 50): Promise<JpsAmendSumm
 
     const built = buildJpsSubmitPayload(
       { ...source, revision: Number(row.revision ?? 1) },
+      { portCompanies: companiesForPort(portCatalog, source.port_hub_code) },
     );
     if (!built.payload) {
       // The STO no longer builds a valid payload at all - a product lost its mapping, say. Nothing

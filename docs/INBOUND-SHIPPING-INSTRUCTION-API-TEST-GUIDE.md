@@ -1,7 +1,7 @@
 # Inbound Shipping Instruction API — Test Guide
 
-> **Version:** 1.3 (API v4.2) · **Audience:** JPS developers and operators who need to test the partner integration API locally.
-> **Hand off to external developers:** Use [INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md](./INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md) (v4.2) — it includes the full API contract, **staging environment**, and self-service test walkthrough.
+> **Version:** 1.8 (API v5.6) · **Audience:** JPS developers and operators who need to test the partner integration API locally.
+> **Hand off to external developers:** Use [INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md](./INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md) (v5.6) — hub-only POST, **`company_hub_code`**, catalog, webhooks, **`cargo_ops_start_at`** / **`cargo_ops_end_at`** (KLIP Hose On/Off), staging walkthrough.
 
 ---
 
@@ -13,7 +13,8 @@ You simulate an **external system** (ERP, agency software, etc.) that:
 2. **Submits** a Shipping Instruction to JPS (`POST`) — including optional PO/SO, shipper, trade term on breakdown lines
 3. **Updates** PO/SO while Pending (`PATCH`)
 4. **Polls** for review status (`GET`)
-5. **Observes** the lifecycle: `Pending` → `Approved` / `Rejected` → `Allocated`
+5. **Registers a webhook** (v5.0) or **polls** enriched GET for approval + milestones
+6. **Observes** the lifecycle: `Pending` → `Approved` / `Rejected` → `Allocated` → `Sailed`
 
 The operator review (approve, reject, allocate a jetty) happens in the normal JPS web app — that is how you complete the end-to-end test.
 
@@ -84,7 +85,7 @@ docker exec jps-api node scripts/create-integration-api-key.mjs --list
 docker exec jps-api node scripts/create-integration-api-key.mjs --deactivate 1
 ```
 
-Keys are not port-scoped. Partners pass a valid `port_id` in each request payload; on a typical local dev database, port `1` is **BONTANG**.
+Keys are not port-scoped. Partners pass **`port_hub_code`** and **`cargo[].cargo_hub_code`** on each POST (v5.3). Use **`GET /catalog/port`** and **`GET /catalog/cargo-type`** for live codes.
 
 ### 2.4 Valid master data
 
@@ -92,8 +93,8 @@ Your test payload must use values that exist in JPS master data:
 
 | Field | Rule |
 |-------|------|
-| `port_id` | Must be a valid JPS port (e.g. `1`); keys are not port-scoped |
-| `cargo[].cargo_type` | Must match a commodity **short name** in JPS (case-insensitive), e.g. `CPO`, `CPKO`, `POME` |
+| `port_hub_code` | Required on POST — DHM/JPS port hub code from `GET /catalog/port` |
+| `cargo[].cargo_hub_code` | Required on each line — commodity hub code from `GET /catalog/cargo-type` (not `cargo_type`) |
 | `cargo[].unit` | `MT` or `KL` only |
 | `purpose` | `Loading` or `Unloading` |
 | `trade_term` | Optional; must match a code from `GET /terms` (e.g. `FOB`, `CIF`) |
@@ -101,7 +102,8 @@ Your test payload must use values that exist in JPS master data:
 | `cargo[].shipper_name` | Optional; shipper must exist — create first via `POST /shippers` |
 | `cargo[].po_no` / `so_no` | Optional; stored on breakdown lines; can also be set later via `PATCH` |
 | `vessel_hub_code` | **Preferred** vessel identifier — sufficient alone; must exist in `master_vessels` |
-| `vessel_name` | Required only when `vessel_hub_code` omitted; must match exactly one master vessel |
+| `company_hub_code` | Operating company (not the cargo shipper). Required when `GET /catalog/company` shows more than one company for that port. Omit when the port has exactly one — JPS stores that company. |
+| `vessel_name` | Optional cross-check when `vessel_hub_code` is sent; **vessel_name alone is not accepted on POST (v5.3)** |
 
 Pick a test `vessel_hub_code` from your local master data (DB column is `hub_code`):
 
@@ -109,11 +111,17 @@ Pick a test `vessel_hub_code` from your local master data (DB column is `hub_cod
 docker exec jps-api node -e "import('pg').then(async ({default:pg})=>{const p=new pg.Pool({connectionString:process.env.DATABASE_URL});const r=await p.query('SELECT hub_code,vessel_name FROM master_vessels WHERE deleted_at IS NULL AND hub_code IS NOT NULL ORDER BY id LIMIT 5');r.rows.forEach(x=>console.log(x.hub_code+' | '+x.vessel_name));await p.end();})"
 ```
 
-#### Commodity mapping (`cargo_type` → JPS short name)
+#### Commodity hub codes (`cargo_hub_code`)
 
-Send the **JPS short_name** value in `cargo_type`. Full display names are **not** accepted.
+Send **`cargo_hub_code`** on each cargo line. **`cargo_type`** (short name) is **rejected on POST in v5.3**.
 
-| JPS short_name (`cargo_type`) | JPS display name | Type |
+```powershell
+curl.exe "$BASE/catalog/cargo-type" -H "x-api-key: $API_KEY"
+```
+
+Use `referenceRows[].hub_code` in your POST body. Short names below are for lookup only:
+
+| JPS short_name (informational) | JPS display name | Type |
 |-------------------------------|------------------|------|
 | `CG` | CRUDE GLYCERINE | Liquid |
 | `CPKO` | CRUDE PALM KERNEL OIL | Liquid |
@@ -144,7 +152,7 @@ To refresh this list from your database:
 docker exec jps-api node -e "import('pg').then(async ({default:pg})=>{const p=new pg.Pool({connectionString:process.env.DATABASE_URL});const r=await p.query('SELECT short_name, name, commodity_type FROM si_commodities WHERE deleted_at IS NULL ORDER BY short_name');r.rows.forEach(x=>console.log(x.short_name+' | '+x.name+' | '+x.commodity_type));await p.end();})"
 ```
 
-If you send an unknown `cargo_type`, the API returns `400` with a list of valid short names in `valid_cargo_types` — use that list to fix your payload.
+If you send an unknown **`cargo_hub_code`**, the API returns `400` with **`valid_cargo_hub_codes`** in `error.details`. Sending **`cargo_type`** returns `legacy cargo_type is not accepted; use cargo_hub_code`.
 
 ---
 
@@ -221,7 +229,7 @@ Use a **unique** `external_reference` each run:
 @'
 {
   "external_reference": "SI-TEST-001",
-  "port_id": 1,
+  "port_hub_code": "PASTE_PORT_HUB_FROM_CATALOG",
   "vessel_hub_code": "PASTE_HUB_CODE_FROM_QUERY_ABOVE",
   "voyage_no": "VY-001",
   "purpose": "Loading",
@@ -233,7 +241,7 @@ Use a **unique** `external_reference` each run:
   "notes": "My first API test",
   "cargo": [
     {
-      "cargo_type": "CPO",
+      "cargo_hub_code": "PASTE_CMD_HUB_FROM_CATALOG",
       "description": "Main lot",
       "tonnage": 25000,
       "unit": "MT",
@@ -307,8 +315,9 @@ curl.exe "$BASE/shipping-instructions?external_reference=SI-TEST-001" -H "x-api-
 |------|---------|----------|
 | Duplicate submit | Re-run POST from §4.3.3 unchanged | `409 DUPLICATE_REFERENCE` |
 | Bad API key | `curl.exe "$BASE/shipping-instructions/41" -H "x-api-key: jps_live_wrong"` | `401 INVALID_API_KEY` |
-| Unknown port | Change `"port_id": 99` + new `external_reference` in JSON file | `400 VALIDATION_ERROR` |
-| Unknown cargo | Change `"cargo_type": "FAKE_CARGO"` + new reference | `400` with `valid_cargo_types` |
+| Unknown port | Change `"port_hub_code": "PORT-9999"` + new `external_reference` | `400 VALIDATION_ERROR` |
+| Legacy cargo_type | Send `"cargo_type": "CPO"` instead of `cargo_hub_code` | `400` legacy cargo_type message |
+| Unknown cargo hub | Change `"cargo_hub_code": "CMD-9999"` + new reference | `400` with `valid_cargo_hub_codes` |
 | Unknown shipper | Use `"shipper_name": "Does Not Exist"` on POST | `400` — create via `POST /shippers` first |
 | Unknown vessel_hub_code | Use `"vessel_hub_code": "INVALID-HUB"` on POST | `400` on `vessel_hub_code` field |
 | PATCH after approve | PATCH same SI after operator approves in UI | `409 INVALID_STATE` |
@@ -392,8 +401,16 @@ The API only submits and reads status. To see `Approved` or `Allocated`, an oper
 | Operator approved | `Approved` | `allocation: null` |
 | Jetty assigned | `Allocated` | `allocation.jetty_name`, `allocation.planned_berthing_time` |
 | Operator rejected | `Rejected` | `rejection_reason` populated |
+| Berthing milestones saved | `Allocated` (typical) | `data.schedule` populated (`ta`, `tb`, `etc`, …); response header **`X-JPS-API-Version: 5.6`** |
+| Cargo Operations window saved | `Allocated` (typical) | `data.schedule.cargo_ops_start_at` / `cargo_ops_end_at` (Hose On/Off); **`schedule.updated`** if registered |
 
 Poll every few minutes in real integrations — operator review is a human process, not instant.
+
+### Verify Hose On/Off (`cargo_ops_start_at` / `cargo_ops_end_at`) after allocation
+
+1. In JPS, open the operation → **Cargo Operations** → set **Operation Window → Start** and **End** and save.
+2. **`GET /shipping-instructions/{id}`** — confirm `data.schedule.cargo_ops_start_at` and `cargo_ops_end_at` match the window (ISO UTC).
+3. Optional: register **`schedule.updated`** and confirm delivery when the window changes (partner guide §3.4).
 
 ---
 
@@ -453,6 +470,9 @@ Always note `request_id` when reporting failures — it helps trace the request 
 - [ ] Plan visible in JPS web app (Shipment Plans / approval)
 - [ ] Approve in UI → `GET` shows `Approved`; PATCH → `409 INVALID_STATE`
 - [ ] Allocate jetty in UI → `GET` shows `Allocated`
+- [ ] Response header includes **`X-JPS-API-Version: 5.6`** on integration routes
+- [ ] Multi-company port: POST without `company_hub_code` returns **400** and `valid_company_hub_codes`; POST with a mapped hub code returns **201** and echoes `company_hub_code` / `company_name`
+- [ ] After Cargo Operations **operation window** save → `GET` shows **`cargo_ops_start_at`** / **`cargo_ops_end_at`** (or `null` until set)
 
 ---
 
@@ -461,8 +481,8 @@ Always note `request_id` when reporting failures — it helps trace the request 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | `401 INVALID_API_KEY` | Missing/wrong header | Add `-H "x-api-key: jps_live_..."` |
-| `400` unknown port | `port_id` is not a valid JPS port | Use a real `port_id` (e.g. `1` on staging) |
-| `400` unknown cargo | Typo in `cargo_type` or full name instead of short code | Use commodity short name from §2.4 mapping table or `valid_cargo_types` in the error |
+| `400` unknown port | Invalid `port_hub_code` or legacy `port_id` on POST | Use hub code from `GET /catalog/port` |
+| `400` unknown cargo | Invalid `cargo_hub_code` or legacy `cargo_type` on POST | Use `cargo_hub_code` from catalog; see `valid_cargo_hub_codes` in the error |
 | `400` vessel_hub_code / vessel_name | Missing or unknown vessel identifier | Send valid **`vessel_hub_code`** from master data (preferred) |
 | `409 DUPLICATE_REFERENCE` | Reused `external_reference` | Change to a new reference for each test |
 | `409 INVALID_STATE` on PATCH | SI no longer Pending | Submit new instruction or PATCH only before approval |
@@ -506,7 +526,8 @@ Both columns should show table names, not `null`.
 
 | File | Purpose |
 |------|---------|
-| [INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md](./INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md) | Full API contract for external partners (v4.0) |
+| [INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md](./INBOUND-SHIPPING-INSTRUCTION-PARTNER-API.md) | Full API contract for external partners (v5.6) |
+| [PARTNER-INTEGRATION-WEBHOOKS-ADMIN.md](./PARTNER-INTEGRATION-WEBHOOKS-ADMIN.md) | Admin webhook onboarding and delivery log |
 | [Backend/scripts/run-integration-self-test.ps1](../../Backend/scripts/run-integration-self-test.ps1) | Automated local self-test + report |
 | [Backend/scripts/create-integration-api-key.mjs](../../Backend/scripts/create-integration-api-key.mjs) | Create/list/revoke API keys |
 | [Backend/src/routes/integrations.js](../../Backend/src/routes/integrations.js) | SI submit/GET/PATCH routes |
@@ -520,6 +541,11 @@ Both columns should show table names, not `null`.
 
 | Version | Date | Notes |
 |---------|------|-------|
+| 1.8 | 2026-10-26 | API v5.6: **`company_hub_code`** on POST/PATCH; catalog entity **`company`**; header **`X-JPS-API-Version: 5.6`** |
+| 1.7 | 2026-10-05 | API v5.5: Hose On/Off window test steps; **`cargo_ops_end_at`** |
+| 1.6 | 2026-10-05 | API v5.4: **`schedule.cargo_ops_start_at`** (ATS) test steps; checklist for API version header |
+| 1.5 | 2026-10-02 | API v5.3 hub-only POST (`port_hub_code`, `cargo_hub_code`); catalog references |
+| 1.4 | 2026-10-01 | API v5.2 hub codes; webhooks and enriched GET notes |
 | 1.3 | 2026-09-23 | v4.2 API: renamed **`hub_code`** → **`vessel_hub_code`** |
 | 1.2 | 2026-09-23 | v4.1 API: **vessel_hub_code** primary vessel identifier; self-test resolves master vessel from DB |
 | 1.1 | 2026-09-21 | v4.0 API: master data + PATCH tests; automated `run-integration-self-test.ps1`; fixed duplicate §4 numbering; PowerShell file-based JSON guidance; `INVALID_STATE` and shipper prerequisites |

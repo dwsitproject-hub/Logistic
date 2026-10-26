@@ -83,6 +83,17 @@ export interface JpsShipmentSource {
   eta_discharge_arrival: unknown;
   eta_discharge_complete: unknown;
   incoterm: string | null;
+  /**
+   * The operating company of the STO, from the SAP Company Code its contracts carry, through Master Company (Internal).
+   * `company_hub_code` is that master's `code_dhm` (a DataHub organisation, ORG-xxxx). Empty when the contracts carry no
+   * Company Code, the code has no Master Company, or that master has no DHM code yet.
+   */
+  company_code?: string | null;
+  company_hub_code?: string | null;
+  /** The Master Company was deleted in DHM: no code is sent, and the hold says why. */
+  company_deleted?: boolean;
+  /** The STO's contracts carry more than one SAP Company Code. One instruction names one company, so none is sent. */
+  company_conflict?: string[] | null;
   requested_by?: string | null;
   /** Already-built download links. Omitted from the payload when empty. */
   contract_document_url?: string | null;
@@ -95,6 +106,67 @@ export interface JpsPayloadResult {
   payload?: JpsSubmitPayload;
   /** Reasons the STO cannot be submitted as-is. Empty when `payload` is set. */
   problems: string[];
+}
+
+export interface JpsCompanyDecision {
+  /** The code to put on the payload. Absent when none should be sent. */
+  companyHubCode?: string;
+  /** Why the STO cannot be submitted without a company. Set only when JPS would refuse the submit for lack of one. */
+  problem?: string;
+}
+
+function sameCode(a: string, b: string): boolean {
+  return a.trim().toUpperCase() === b.trim().toUpperCase();
+}
+
+/**
+ * Whether the payload carries `company_hub_code`, given what JPS says about the port (companies.ts: `portCompanies`).
+ *
+ *   unknown (null)  nothing is sent and nothing is held - what KLIP did before v5.6.
+ *   none mapped     nothing is sent; JPS refuses any code for a port without companies.
+ *   exactly one     omitted unless KLIP's company is that one; JPS stores the port's company either way.
+ *   two or more     required. KLIP's company must be one of them, otherwise the STO is held with the reason and is picked up
+ *                   again once the master data is fixed - instead of going out to a 400 that is recorded as FAILED for good.
+ */
+export function decideJpsCompany(
+  source: Pick<
+    JpsShipmentSource,
+    'port_hub_code' | 'company_code' | 'company_hub_code' | 'company_deleted' | 'company_conflict'
+  >,
+  portCompanies: string[] | null | undefined,
+): JpsCompanyDecision {
+  if (!portCompanies || portCompanies.length === 0) return {};
+
+  const hub = String(source.company_hub_code ?? '').trim();
+  const match = hub ? portCompanies.find((code) => sameCode(code, hub)) : undefined;
+  if (portCompanies.length === 1) return match ? { companyHubCode: hub } : {};
+  if (match) return { companyHubCode: hub };
+
+  const port = String(source.port_hub_code ?? '').trim() || 'this port';
+  const valid = portCompanies.join(', ');
+  const code = String(source.company_code ?? '').trim();
+  const conflict = (source.company_conflict ?? []).filter(Boolean);
+  let reason: string;
+  if (conflict.length > 1) {
+    reason = `the STO's contracts carry different SAP Company Codes (${conflict.join(', ')}), and one instruction names one company`;
+  } else if (!code) {
+    reason = 'the STO\'s contracts carry no SAP Company Code';
+  } else if (source.company_deleted) {
+    reason = `Master Company "${code}" was deleted in DHM`;
+  } else if (!hub) {
+    reason = `no DHM code on Master Company for SAP Company Code "${code}"`;
+  } else {
+    reason = `Master Company "${code}" (${hub}) is not mapped to ${port} at JPS`;
+  }
+  return { problem: `JPS needs an operating company at ${port} (valid: ${valid}), but ${reason}` };
+}
+
+export interface BuildJpsPayloadOptions {
+  /**
+   * The companies JPS maps to the STO's port (companiesForPort in companies.ts): a list when the catalog was read, null
+   * when it could not be, which leaves `company_hub_code` out and holds nothing for it.
+   */
+  portCompanies?: string[] | null;
 }
 
 /** KLIP stores quantities in kilograms; JPS wants MT. */
@@ -121,7 +193,10 @@ function absoluteDocumentUrl(value: string | null | undefined): string | undefin
  * master ("unknown shipper: ... Create it first via POST /shippers", verified on staging), and the
  * 57 suppliers in BONTANG scope do not match its 25 registered names without a human mapping.
  */
-export function buildJpsSubmitPayload(source: JpsShipmentSource): JpsPayloadResult {
+export function buildJpsSubmitPayload(
+  source: JpsShipmentSource,
+  options: BuildJpsPayloadOptions = {},
+): JpsPayloadResult {
   const problems: string[] = [];
 
   const eta = toJpsDateTime(source.eta_discharge_arrival);
@@ -147,6 +222,9 @@ export function buildJpsSubmitPayload(source: JpsShipmentSource): JpsPayloadResu
         : `no DHM code on Master Vessel for "${vesselName}"`,
     );
   }
+
+  const company = decideJpsCompany(source, options.portCompanies);
+  if (company.problem) problems.push(company.problem);
 
   const cargo: JpsCargoLine[] = [];
   for (const line of source.cargo) {
@@ -192,6 +270,7 @@ export function buildJpsSubmitPayload(source: JpsShipmentSource): JpsPayloadResu
   const payload: JpsSubmitPayload = {
     external_reference: buildJpsExternalReference(source.sto_key, source.revision),
     port_hub_code: portHubCode,
+    ...(company.companyHubCode ? { company_hub_code: company.companyHubCode } : {}),
     vessel_hub_code: vesselHubCode,
     purpose: 'Unloading',
     eta: eta as string,

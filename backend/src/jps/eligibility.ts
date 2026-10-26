@@ -229,6 +229,42 @@ export async function findEligibleStos(
       WHERE ${STO_KEY_SQL} = e.sto_key
       GROUP BY e.sto_key
     ),
+    company AS (
+      -- The operating company (JPS v5.6 company_hub_code): the SAP Company Code the STO's contracts carry, resolved through
+      -- Master Company (Internal), whose code_dhm is the DataHub organisation code JPS calls company_hub_code. One
+      -- instruction names one company, so when the contracts carry different codes none is chosen (company_codes lists them).
+      -- master_companies.company_code is unique on upper(trim(...)), so a code resolves to at most one master row.
+      SELECT x.sto_key,
+             x.company_codes,
+             (SELECT (ARRAY_AGG(mc.code_dhm))[1]
+                FROM master_companies mc
+               WHERE UPPER(TRIM(mc.company_code)) = x.company_codes[1]
+                 AND NULLIF(TRIM(mc.code_dhm), '') IS NOT NULL
+                 AND COALESCE(mc.dhm_is_deleted, FALSE) IS NOT TRUE) AS company_hub_code,
+             COALESCE((SELECT BOOL_OR(COALESCE(mc.dhm_is_deleted, FALSE))
+                         FROM master_companies mc
+                        WHERE UPPER(TRIM(mc.company_code)) = x.company_codes[1]), FALSE) AS company_deleted
+      FROM (
+        SELECT e.sto_key,
+               ARRAY_AGG(DISTINCT cc.company_code ORDER BY cc.company_code)
+                 FILTER (WHERE cc.company_code IS NOT NULL) AS company_codes
+        FROM eligible e
+        INNER JOIN shipments s ON TRUE
+        INNER JOIN contracts c ON c.id = s.contract_id
+        LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
+        CROSS JOIN LATERAL (
+          SELECT UPPER(NULLIF(TRIM(COALESCE(
+            l.data->'contract'->>'company_code',
+            l.data->'raw'->>'Company Code',
+            l.data->'raw'->>'company code',
+            l.data->>'Company Code',
+            l.data->>'company code'
+          )), '')) AS company_code
+        ) cc
+        WHERE ${STO_KEY_SQL} = e.sto_key
+        GROUP BY e.sto_key
+      ) x
+    ),
     terms AS (
       -- One instruction carries one trade term, so the STO's contracts have to agree. When they do
       -- not, none is sent - the field is optional and a wrong term is worse than a missing one.
@@ -335,6 +371,9 @@ export async function findEligibleStos(
            p.port_hub_code,
            p.port_deleted,
            t.incoterm,
+           co.company_codes,
+           co.company_hub_code,
+           co.company_deleted,
            d.contract_document_id,
            d.si_document_id,
            d.bl_document_id,
@@ -343,6 +382,7 @@ export async function findEligibleStos(
     LEFT JOIN vessel v ON v.sto_key = e.sto_key
     LEFT JOIN port p ON p.sto_key = e.sto_key
     LEFT JOIN terms t ON t.sto_key = e.sto_key
+    LEFT JOIN company co ON co.sto_key = e.sto_key
     LEFT JOIN docs d ON d.sto_key = e.sto_key
     LEFT JOIN cargo g ON g.sto_key = e.sto_key
     -- Filtered here rather than in the CTE's HAVING: the STO key is a grouped EXPRESSION, and a
@@ -355,7 +395,11 @@ export async function findEligibleStos(
     params,
   );
 
-  return result.rows.map((row: Record<string, unknown>) => ({
+  return result.rows.map((row: Record<string, unknown>) => {
+    const companyCodes = Array.isArray(row.company_codes) ? (row.company_codes as unknown[]).map(String) : [];
+    // Contracts of one STO that carry different Company Codes have no single company: the code of "the first" would be a guess.
+    const companyConflict = companyCodes.length > 1;
+    return {
     sto_key: String(row.sto_key),
     revision: 1,
     vessel_name: (row.vessel_name as string | null) ?? null,
@@ -366,6 +410,10 @@ export async function findEligibleStos(
     eta_discharge_arrival: row.eta_discharge_arrival,
     eta_discharge_complete: row.eta_discharge_complete,
     incoterm: (row.incoterm as string | null) ?? null,
+    company_code: companyConflict ? null : companyCodes[0] ?? null,
+    company_hub_code: companyConflict ? null : (row.company_hub_code as string | null) ?? null,
+    company_deleted: !companyConflict && row.company_deleted === true,
+    company_conflict: companyConflict ? companyCodes : null,
     contract_document_url: jpsDocumentDownloadUrl(row.contract_document_id as string | null),
     shipping_instruction_document_url: jpsDocumentDownloadUrl(row.si_document_id as string | null),
     bl_document_url: jpsDocumentDownloadUrl(row.bl_document_id as string | null),
@@ -380,5 +428,6 @@ export async function findEligibleStos(
       contract_quantity_kg:
         line.contract_quantity_kg == null ? null : Number(line.contract_quantity_kg),
     })),
-  }));
+    };
+  });
 }
