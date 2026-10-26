@@ -21,6 +21,10 @@
 # On the BACKEND host set COMMERCIAL_DOCS_URL to this app's public origin (e.g. http://172.28.92.56:8081), so reset and
 # invitation e-mails requested from this app link back to it.
 
+# Its own compose project. Without it the project is "klip" (the folder name), shared with docker-compose.frontend.yml, and
+# each file reports the other's container as an orphan - one `--remove-orphans` would delete KLIP's frontend.
+name: klip-commercial-docs
+
 services:
   frontend-commercial:
     build:

@@ -94,6 +94,15 @@ step "pulling"
 git pull --ff-only origin "$BRANCH"
 [[ -f "$COMPOSE_FILE" ]] || die "$COMPOSE_FILE is missing after the pull - is the app merged into $BRANCH?"
 
+# The first SIT deploy (2026-10-26) ran before the compose file named its project, so that container belongs to project
+# "klip". Compose will not take over a container_name owned by another project; remove it once so the new project can.
+OWNER="$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+if [[ -n "$OWNER" && "$OWNER" != "klip-commercial-docs" ]]; then
+  printf '  removing %s from compose project "%s" (it moves to its own project)
+' "$CONTAINER" "$OWNER"
+  docker rm -f "$CONTAINER" >/dev/null
+fi
+
 step "building and starting $SERVICE"
 docker compose -f "$COMPOSE_FILE" up -d --build "$SERVICE"
 
