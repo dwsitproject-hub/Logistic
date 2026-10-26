@@ -18,10 +18,13 @@ export type CommercialDocumentsListParams = {
   search?: string | null;
   documentType?: string | null;
   documentStatus?: 'checked' | 'unchecked' | null;
-  incoterm?: string | null;
-  product?: string | null;
-  supplier?: string | null;
+  /** One value or several (any of them matches). */
+  incoterm?: string | string[] | null;
+  product?: string | string[] | null;
+  supplier?: string | string[] | null;
   plant?: string | string[] | null;
+  /** complete = all nine types, empty = none, incomplete = anything short of all nine. */
+  completeness?: 'complete' | 'incomplete' | 'empty' | null;
   page?: number;
   limit?: number;
   sortKey?: string | null;
@@ -257,6 +260,15 @@ export type CommercialDocumentsScopeParams = Pick<
   'dateFrom' | 'dateTo' | 'search' | 'incoterm' | 'product' | 'supplier' | 'plant'
 >;
 
+function valueList(value: string | string[] | null | undefined): string[] {
+  return (Array.isArray(value) ? value : value ? [value] : []).map((v) => String(v).trim()).filter(Boolean);
+}
+
+/** How many of the nine checklist types a contract has (0-9). */
+function uploadedTypesExpr(): string {
+  return COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.map((flag) => `(CASE WHEN e.${flag} THEN 1 ELSE 0 END)`).join(' + ');
+}
+
 function buildScopeWhere(params: CommercialDocumentsScopeParams): { where: string[]; values: unknown[]; nextIndex: number } {
   const values: unknown[] = [];
   let idx = 1;
@@ -280,17 +292,20 @@ function buildScopeWhere(params: CommercialDocumentsScopeParams): { where: strin
     values.push(term);
     idx++;
   }
-  if (params.incoterm?.trim()) {
-    where.push(`UPPER(TRIM(COALESCE(e.incoterm, ''))) = UPPER($${idx++})`);
-    values.push(params.incoterm.trim());
+  const incoterms = valueList(params.incoterm).map((v) => v.toUpperCase());
+  if (incoterms.length) {
+    where.push(`UPPER(TRIM(COALESCE(e.incoterm, ''))) = ANY($${idx++}::text[])`);
+    values.push(incoterms);
   }
-  if (params.product?.trim()) {
-    where.push(`TRIM(COALESCE(e.product, '')) = $${idx++}`);
-    values.push(params.product.trim());
+  const products = valueList(params.product);
+  if (products.length) {
+    where.push(`TRIM(COALESCE(e.product, '')) = ANY($${idx++}::text[])`);
+    values.push(products);
   }
-  if (params.supplier?.trim()) {
-    where.push(`TRIM(COALESCE(e.supplier, '')) = $${idx++}`);
-    values.push(params.supplier.trim());
+  const suppliers = valueList(params.supplier);
+  if (suppliers.length) {
+    where.push(`TRIM(COALESCE(e.supplier, '')) = ANY($${idx++}::text[])`);
+    values.push(suppliers);
   }
   const plants = (Array.isArray(params.plant) ? params.plant : params.plant ? [params.plant] : [])
     .map((p) => String(p).trim())
@@ -323,6 +338,9 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
       where.push(params.documentStatus === 'checked' ? `e.${col} = true` : `e.${col} = false`);
     }
   }
+  if (params.completeness === 'complete') where.push(`(${uploadedTypesExpr()}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT}`);
+  if (params.completeness === 'incomplete') where.push(`(${uploadedTypesExpr()}) < ${COMMERCIAL_DOCUMENT_SLOT_COUNT}`);
+  if (params.completeness === 'empty') where.push(`(${uploadedTypesExpr()}) = 0`);
 
   const whereSql = where.join(' AND ');
   const base = buildCommercialDocumentsBaseCte();
@@ -374,9 +392,7 @@ export function buildCommercialDocumentsCompletenessByPlantQuery(
   params: CommercialDocumentsScopeParams,
 ): { sql: string; values: unknown[] } {
   const scope = buildScopeWhere(params);
-  const uploadedExpr = COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.map(
-    (flag) => `(CASE WHEN e.${flag} THEN 1 ELSE 0 END)`,
-  ).join(' + ');
+  const uploadedExpr = uploadedTypesExpr();
   const plantExpr = `CASE
       WHEN NULLIF(TRIM(e.plant_site), '') IS NULL
         OR UPPER(TRIM(e.plant_site)) IN ('BLANK', 'UNASSIGNED')
@@ -389,7 +405,9 @@ export function buildCommercialDocumentsCompletenessByPlantQuery(
       ${plantExpr} AS plant_site,
       COUNT(*)::int AS contract_count,
       COALESCE(SUM(${uploadedExpr}), 0)::int AS uploaded_slots,
-      (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS total_slots
+      (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS total_slots,
+      COUNT(*) FILTER (WHERE (${uploadedExpr}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_count,
+      COUNT(*) FILTER (WHERE (${uploadedExpr}) = 0)::int AS empty_count
     FROM enriched e
     WHERE ${scope.where.join(' AND ')}
     GROUP BY 1
@@ -421,7 +439,9 @@ export function buildCommercialDocumentsSummaryQuery(params: CommercialDocuments
       ${count('doc_delivery_order')} AS uploaded_delivery_order,
       ${count('doc_invoice_fp_dp')} AS uploaded_invoice_fp_dp,
       ${count('doc_invoice_fp_payoff')} AS uploaded_invoice_fp_payoff,
-      ${count('doc_invoice_fp_full')} AS uploaded_invoice_fp_full
+      ${count('doc_invoice_fp_full')} AS uploaded_invoice_fp_full,
+      COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_contract_count,
+      COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = 0)::int AS empty_contract_count
     FROM enriched e
     WHERE ${scope.where.join(' AND ')}
   `;

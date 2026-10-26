@@ -165,3 +165,26 @@ describe('commercialDocuments completeness by plant', () => {
     expect(commercialCompletenessPct(0, 0)).toBe(0);
   });
 });
+
+describe('commercialDocumentsQuerySql filters for the Commercial Documents app', () => {
+  it('takes several products, suppliers and incoterms (any of them), and a single value still works', () => {
+    const many = buildCommercialDocumentsListQuery({ product: ['CPO', 'PK'], supplier: ['PT A'], incoterm: ['fob', 'CIF'] });
+    expect(many.sql).toContain("TRIM(COALESCE(e.product, '')) = ANY(");
+    expect(many.values).toEqual(expect.arrayContaining([['CPO', 'PK'], ['PT A'], ['FOB', 'CIF']]));
+    const one = buildCommercialDocumentsListQuery({ product: 'CPO' });
+    expect(one.values).toContainEqual(['CPO']);
+  });
+
+  it('completeness narrows to all nine, none, or anything short of nine', () => {
+    const n = COMMERCIAL_DOCUMENT_SLOT_COUNT;
+    expect(buildCommercialDocumentsListQuery({ completeness: 'complete' }).countSql).toContain(`) = ${n}`);
+    expect(buildCommercialDocumentsListQuery({ completeness: 'incomplete' }).countSql).toContain(`) < ${n}`);
+    expect(buildCommercialDocumentsListQuery({ completeness: 'empty' }).countSql).toContain(') = 0');
+    expect(buildCommercialDocumentsListQuery({}).countSql).not.toContain(') = 0');
+  });
+
+  it('summary and per-plant queries count complete and empty contracts', () => {
+    expect(buildCommercialDocumentsSummaryQuery({}).sql).toMatch(/AS complete_contract_count[\s\S]*AS empty_contract_count/);
+    expect(buildCommercialDocumentsCompletenessByPlantQuery({}).sql).toMatch(/AS complete_count[\s\S]*AS empty_count/);
+  });
+});

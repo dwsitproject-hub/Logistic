@@ -9,21 +9,24 @@ export const getAuditLogs = async (req: AuthRequest, res: Response) => {
       userId,
       action,
       entityType,
+      search,
       dateFrom,
       dateTo,
       page = 1,
       limit = 50
     } = req.query;
 
-    const offset = (Number(page) - 1) * Number(limit);
+    const pageSize = Math.min(200, Math.max(1, Number(limit) || 50));
+    const offset = (Math.max(1, Number(page) || 1) - 1) * pageSize;
 
     const result = await AuditService.getLogs({
       userId: userId as string,
-      action: action as string,
-      entityType: entityType as string,
+      action: action as string | string[],
+      entityType: entityType as string | string[],
+      search: typeof search === 'string' ? search : undefined,
       dateFrom: dateFrom as string,
       dateTo: dateTo as string,
-      limit: Number(limit),
+      limit: pageSize,
       offset
     });
 
@@ -34,8 +37,8 @@ export const getAuditLogs = async (req: AuthRequest, res: Response) => {
         pagination: {
           total: result.total,
           page: Number(page),
-          limit: Number(limit),
-          totalPages: Math.ceil(result.total / Number(limit))
+          limit: pageSize,
+          totalPages: Math.ceil(result.total / pageSize)
         }
       }
     });

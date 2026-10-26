@@ -50,8 +50,11 @@ export class AuditService {
    */
   static async getLogs(filters: {
     userId?: string;
-    action?: string;
-    entityType?: string;
+    /** One value or several (any of them matches). */
+    action?: string | string[];
+    entityType?: string | string[];
+    /** Free text: user name, username, the entity id, or anything in after_data (PO, file name, ...). */
+    search?: string;
     dateFrom?: string;
     dateTo?: string;
     limit?: number;
@@ -68,15 +71,31 @@ export class AuditService {
         paramIndex++;
       }
 
-      if (filters.action) {
-        whereConditions.push(`a.action = $${paramIndex}`);
-        params.push(filters.action);
+      const list = (value: string | string[] | undefined) =>
+        (Array.isArray(value) ? value : value ? String(value).split(',') : []).map((v) => v.trim()).filter(Boolean);
+
+      const actions = list(filters.action);
+      if (actions.length) {
+        whereConditions.push(`a.action = ANY($${paramIndex}::text[])`);
+        params.push(actions);
         paramIndex++;
       }
 
-      if (filters.entityType) {
-        whereConditions.push(`a.entity_type = $${paramIndex}`);
-        params.push(filters.entityType);
+      const entityTypes = list(filters.entityType);
+      if (entityTypes.length) {
+        whereConditions.push(`a.entity_type = ANY($${paramIndex}::text[])`);
+        params.push(entityTypes);
+        paramIndex++;
+      }
+
+      if (filters.search?.trim()) {
+        whereConditions.push(`(
+          u.full_name ILIKE $${paramIndex}
+          OR u.username ILIKE $${paramIndex}
+          OR a.entity_id::text ILIKE $${paramIndex}
+          OR a.after_data::text ILIKE $${paramIndex}
+        )`);
+        params.push(`%${filters.search.trim()}%`);
         paramIndex++;
       }
 
@@ -121,7 +140,7 @@ export class AuditService {
 
       // Get total count
       const countResult = await query(
-        `SELECT COUNT(*) as total FROM audit_logs a ${whereClause}`,
+        `SELECT COUNT(*) as total FROM audit_logs a LEFT JOIN users u ON a.user_id = u.id ${whereClause}`,
         params
       );
 

@@ -135,6 +135,10 @@ function parseDocumentStatus(value: string | undefined): 'checked' | 'unchecked'
   return null;
 }
 
+function parseCompleteness(value: unknown): 'complete' | 'incomplete' | 'empty' | null {
+  return value === 'complete' || value === 'incomplete' || value === 'empty' ? value : null;
+}
+
 function parseQueryStringList(value: unknown): string[] {
   if (value == null || value === '') return [];
   const arr = Array.isArray(value) ? value : [value];
@@ -156,9 +160,10 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
       search: q.search || null,
       documentType: q.documentType || null,
       documentStatus: parseDocumentStatus(q.documentStatus),
-      incoterm: q.incoterm || null,
-      product: q.product || null,
-      supplier: q.supplier || null,
+      completeness: parseCompleteness(q.completeness),
+      incoterm: parseQueryStringList(req.query.incoterm),
+      product: parseQueryStringList(req.query.product),
+      supplier: parseQueryStringList(req.query.supplier),
       plant: parseQueryStringList(req.query.plant),
       page,
       limit,
@@ -202,9 +207,9 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
       dateFrom,
       dateTo,
       search: q.search || null,
-      incoterm: q.incoterm || null,
-      product: q.product || null,
-      supplier: q.supplier || null,
+      incoterm: parseQueryStringList(req.query.incoterm),
+      product: parseQueryStringList(req.query.product),
+      supplier: parseQueryStringList(req.query.supplier),
       plant: parseQueryStringList(req.query.plant),
     });
     const result = await query(summaryQuery.sql, summaryQuery.values);
@@ -226,6 +231,13 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
           invoice_fp_dp: card('uploaded_invoice_fp_dp'),
           invoice_fp_payoff: card('uploaded_invoice_fp_payoff'),
           invoice_fp_full: card('uploaded_invoice_fp_full'),
+        },
+        // All nine / none / anything short of nine - the list's completeness filter returns the same rows.
+        contracts: {
+          totalCount,
+          completeCount: Number(row.complete_contract_count ?? 0),
+          incompleteCount: totalCount - Number(row.complete_contract_count ?? 0),
+          emptyCount: Number(row.empty_contract_count ?? 0),
         },
         filters: { dateFrom, dateTo },
       },
@@ -259,6 +271,8 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
         totalSlots,
         missingSlots: Math.max(0, totalSlots - uploadedSlots),
         completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
+        completeCount: Number(row.complete_count) || 0,
+        emptyCount: Number(row.empty_count) || 0,
       };
     });
     const contractCount = plants.reduce((sum, row) => sum + row.contractCount, 0);
@@ -274,6 +288,8 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
           totalSlots,
           missingSlots: Math.max(0, totalSlots - uploadedSlots),
           completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
+          completeCount: plants.reduce((sum, row) => sum + row.completeCount, 0),
+          emptyCount: plants.reduce((sum, row) => sum + row.emptyCount, 0),
         },
         filters: { dateFrom, dateTo },
       },
