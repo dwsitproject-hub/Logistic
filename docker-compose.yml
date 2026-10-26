@@ -51,6 +51,8 @@ services:
       SSO_LEGACY_BRIDGE: ${SSO_LEGACY_BRIDGE:-false}
       APP_PUBLIC_ORIGIN: ${APP_PUBLIC_ORIGIN:-http://localhost:3001}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
+      # CommDocs app origin: reset/invite links requested from it open it (local: http://localhost:3002). Empty = KLIP.
+      COMMDOCS_URL: ${COMMDOCS_URL:-}
       KLIP_ENV: ${KLIP_ENV:-local}
       KLIP_COMMERCIAL_DOCS_SHARE: ${KLIP_COMMERCIAL_DOCS_SHARE:-0}
       SESSION_SECRET: ${SESSION_SECRET:-}
