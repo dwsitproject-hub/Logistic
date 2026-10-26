@@ -7,7 +7,7 @@ import Layout from '@/components/Layout'
 import { DashboardContent } from '../dashboard/DashboardContent'
 import { canViewNavItem, getFirstAccessibleRoute, parsePermissionsResponse } from '@/lib/navigationAccess'
 import { NAV_ITEMS } from '@/lib/navigationConfig'
-import { commercialAppDestination, navigateTo } from '@/lib/commercialDocsApp'
+import { commercialAppDestination, navigateTo } from '@/lib/commdocsApp'
 
 export default function ManagementDashboardPage() {
   const router = useRouter()

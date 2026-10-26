@@ -1,7 +1,7 @@
 import { canViewPermission, type PermFlags } from '@/components/PermissionsContext'
 
 /**
- * Commercial Documents moves to its own app (frontend-commercial/, same backend). The switch is NEXT_PUBLIC_COMMERCIAL_DOCS_URL,
+ * Commercial Documents moves to its own app (frontend-commdocs/, same backend). The switch is NEXT_PUBLIC_COMMDOCS_URL,
  * that app's public origin - read at BUILD time, so it must be an ARG in frontend/Dockerfile. Empty = KLIP is unchanged.
  *
  * When set:
@@ -9,7 +9,7 @@ import { canViewPermission, type PermFlags } from '@/components/PermissionsConte
  * - their old KLIP addresses forward to the same page in the new app (bookmarks keep working);
  * - a user with no KLIP page left who may use the new app (the document-only roles) is sent there instead of "no access".
  */
-export function commercialDocsUrl(raw: string | undefined = process.env.NEXT_PUBLIC_COMMERCIAL_DOCS_URL): string | null {
+export function commdocsUrl(raw: string | undefined = process.env.NEXT_PUBLIC_COMMDOCS_URL): string | null {
   const value = String(raw || '').trim().replace(/\/+$/, '')
   return /^https?:\/\//i.test(value) ? value : null
 }
@@ -20,12 +20,12 @@ export const MOVED_TO_COMMERCIAL_APP: Record<string, string> = {
   '/commercial-dashboard': '/dashboard',
 }
 
-export function withoutMovedPages<T extends { href: string }>(items: T[], appUrl: string | null = commercialDocsUrl()): T[] {
+export function withoutMovedPages<T extends { href: string }>(items: T[], appUrl: string | null = commdocsUrl()): T[] {
   return appUrl ? items.filter((item) => !(item.href in MOVED_TO_COMMERCIAL_APP)) : items
 }
 
 /** The new app's address for a KLIP path that moved there, or null. */
-export function movedPageUrl(pathname: string, appUrl: string | null = commercialDocsUrl()): string | null {
+export function movedPageUrl(pathname: string, appUrl: string | null = commdocsUrl()): string | null {
   if (!appUrl) return null
   const hit = Object.keys(MOVED_TO_COMMERCIAL_APP).find((p) => pathname === p || pathname.startsWith(`${p}/`))
   return hit ? `${appUrl}${MOVED_TO_COMMERCIAL_APP[hit]}` : null
@@ -34,7 +34,7 @@ export function movedPageUrl(pathname: string, appUrl: string | null = commercia
 /** Where a user with no KLIP page goes: the new app when their role may open one of its pages, else nowhere (null). */
 export function commercialAppDestination(
   perms: { byKey: Record<string, PermFlags>; loaded: boolean },
-  appUrl: string | null = commercialDocsUrl(),
+  appUrl: string | null = commdocsUrl(),
 ): string | null {
   if (!appUrl) return null
   const may = canViewPermission(perms, 'page.commercial_documents') || canViewPermission(perms, 'page.commercial_dashboard')

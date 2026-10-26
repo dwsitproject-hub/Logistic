@@ -10,7 +10,7 @@ import {
   BarChart3,
 } from 'lucide-react'
 import { StitchNavIcons } from '@/components/shared/stitchIcons'
-import { withoutMovedPages } from '@/lib/commercialDocsApp'
+import { withoutMovedPages } from '@/lib/commdocsApp'
 
 export type NavGroup = 'performance' | 'operations' | 'master' | 'system'
 
@@ -32,7 +32,7 @@ export const NAV_GROUP_LABELS: Record<NavGroup, string> = {
 
 export const NAV_GROUP_ORDER: NavGroup[] = ['performance', 'operations', 'master', 'system']
 
-/** Every menu entry, before the Commercial Documents go-live switch (see lib/commercialDocsApp.ts). */
+/** Every menu entry, before the Commercial Documents go-live switch (see lib/commdocsApp.ts). */
 export const ALL_NAV_ITEMS: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['ALL'], permissionKey: 'page.dashboard' },
   {

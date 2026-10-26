@@ -20,7 +20,7 @@ import {
 } from '@/components/PermissionsContext'
 import { NAV_GROUP_LABELS, NAV_GROUP_ORDER, NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
-import { commercialAppDestination, movedPageUrl } from '@/lib/commercialDocsApp'
+import { commercialAppDestination, movedPageUrl } from '@/lib/commdocsApp'
 import { clearClientDataCache } from '@/lib/clientDataCache'
 import {
   fetchCurrentUser,

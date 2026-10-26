@@ -19,10 +19,10 @@ export default function ForgotPasswordPage() {
     setBusy(true)
     setError('')
     try {
-      // app: 'commercial' makes the e-mailed link open this app instead of KLIP (when the server knows this app's URL).
+      // app: 'commdocs' makes the e-mailed link open this app instead of KLIP (when the server knows this app's URL).
       await apiJson('/auth/forgot-password', {
         method: 'POST',
-        body: { email: email.trim(), app: 'commercial' },
+        body: { email: email.trim(), app: 'commdocs' },
         expectAuthError: true,
       })
       setSent(true)

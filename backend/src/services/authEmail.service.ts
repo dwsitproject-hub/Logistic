@@ -1,21 +1,22 @@
 import { sendEmail } from './email.service';
-import { commercialDocsUrl, frontendUrl } from './sessionAuth.service';
+import { commdocsUrl, frontendUrl } from './sessionAuth.service';
 import { INVITE_TTL_HOURS, RESET_TTL_MINUTES } from './authToken.service';
 
 /** E-mails that carry a set-password link. Wording is English, like the rest of the UI. */
 
 /**
- * Which front end a link opens: both apps share this backend and its users. 'commercial' is honoured only when COMMERCIAL_DOCS_URL
+ * Which front end a link opens: both apps share this backend and its users. 'commdocs' is honoured only when COMMDOCS_URL
  * is configured, and the host always comes from the server's env - a request can pick the app, never the URL.
  */
-export type AuthEmailApp = 'klip' | 'commercial';
+export type AuthEmailApp = 'klip' | 'commdocs';
 
 export function authEmailAppFrom(value: unknown): AuthEmailApp {
-  return value === 'commercial' && commercialDocsUrl() ? 'commercial' : 'klip';
+  // 'commercial' is the value the first build sent; still honoured.
+  return (value === 'commdocs' || value === 'commercial') && commdocsUrl() ? 'commdocs' : 'klip';
 }
 
 function appBaseUrl(app: AuthEmailApp): string {
-  return (app === 'commercial' && commercialDocsUrl()) || frontendUrl();
+  return (app === 'commdocs' && commdocsUrl()) || frontendUrl();
 }
 
 function escapeHtml(value: string): string {
@@ -56,8 +57,8 @@ export function buildInvitationEmail(input: { fullName: string | null; link: str
   html: string;
 } {
   const name = escapeHtml(input.fullName?.trim() || 'there');
-  const product = input.app === 'commercial' ? 'Commercial Documents' : 'KLIP';
-  const longProduct = input.app === 'commercial' ? 'Commercial Documents' : 'KLIP (KPN Logistics Intelligence Platform)';
+  const product = input.app === 'commdocs' ? 'Commercial Documents' : 'KLIP';
+  const longProduct = input.app === 'commdocs' ? 'Commercial Documents' : 'KLIP (KPN Logistics Intelligence Platform)';
   return {
     subject: `Your ${product} account is ready - set your password`,
     html: layout(
@@ -76,7 +77,7 @@ export function buildPasswordResetEmail(input: { fullName: string | null; link: 
   html: string;
 } {
   const name = escapeHtml(input.fullName?.trim() || 'there');
-  const product = input.app === 'commercial' ? 'Commercial Documents' : 'KLIP';
+  const product = input.app === 'commdocs' ? 'Commercial Documents' : 'KLIP';
   return {
     subject: `Reset your ${product} password`,
     html: layout(

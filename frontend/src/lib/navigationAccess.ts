@@ -7,7 +7,7 @@ import {
   seedPermissionsCache,
   type PermFlags,
 } from '@/components/PermissionsContext'
-import { commercialAppDestination } from '@/lib/commercialDocsApp'
+import { commercialAppDestination } from '@/lib/commdocsApp'
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { navRoleAllowed } from '@/lib/userRoles'
 

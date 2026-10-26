@@ -1,4 +1,4 @@
-# Commercial Documents (frontend-commercial)
+# Commercial Documents (frontend-commdocs)
 
 Its own front end for document management per PO, on the **same KLIP backend, database and Synology storage**. Users, roles,
 permissions and the audit trail are KLIP's; a password changed here changes for KLIP too. There is no second backend on
@@ -26,6 +26,6 @@ npm run typecheck && npm test && npm run build
 
 ## Deploy
 
-`docker-compose.frontend-commercial.yml`, `docs/nginx/commercial-docs.conf.example` and
-`docs/scripts/deploy-commercial-docs.sh sit|prod` (frontend host). On the backend host set `COMMERCIAL_DOCS_URL` to this
+`docker-compose.commdocs.yml`, `docs/nginx/commdocs.conf.example` and
+`docs/scripts/deploy-commdocs.sh sit|prod` (frontend host). On the backend host set `COMMDOCS_URL` to this
 app's public origin so reset and invitation e-mails sent from here link back here.

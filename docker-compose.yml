@@ -143,8 +143,8 @@ services:
         NEXT_PUBLIC_HUB_SDK_KEY: ${NEXT_PUBLIC_HUB_SDK_KEY:-}
         NEXT_PUBLIC_HUB_SDK_DEBUG: ${NEXT_PUBLIC_HUB_SDK_DEBUG:-false}
         NEXT_PUBLIC_GIT_SHA: ${NEXT_PUBLIC_GIT_SHA:-}
-        # Commercial Documents go-live switch (frontend/src/lib/commercialDocsApp.ts). Empty = unchanged.
-        NEXT_PUBLIC_COMMERCIAL_DOCS_URL: ${NEXT_PUBLIC_COMMERCIAL_DOCS_URL:-}
+        # Commercial Documents go-live switch (frontend/src/lib/commdocsApp.ts). Empty = unchanged.
+        NEXT_PUBLIC_COMMDOCS_URL: ${NEXT_PUBLIC_COMMDOCS_URL:-}
     container_name: klip-frontend
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:5001/api}

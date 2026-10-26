@@ -1,5 +1,5 @@
 {
-  "name": "klip-commercial-documents",
+  "name": "klip-commdocs",
   "version": "1.0.0",
   "private": true,
   "description": "Commercial Documents - its own front end on the KLIP backend (same API, DB and Synology storage).",

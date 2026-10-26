@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Deploy the Commercial Documents front end (frontend-commercial/) on the KLIP FRONTEND host.
+# Deploy the Commercial Documents front end (frontend-commdocs/) on the KLIP FRONTEND host.
 #
-#   cd /opt/klip && bash docs/scripts/deploy-commercial-docs.sh sit     # SIT frontend host 172.28.92.56, branch SIT
-#   cd /opt/klip && bash docs/scripts/deploy-commercial-docs.sh prod    # ECS-App, branch main
+#   cd /opt/klip && bash docs/scripts/deploy-commdocs.sh sit     # SIT frontend host 172.28.92.56, branch SIT
+#   cd /opt/klip && bash docs/scripts/deploy-commdocs.sh prod    # ECS-App, branch main
 #
 # The app has no backend of its own: it calls the KLIP backend through Nginx (/api, /auth). Deploy the BACKEND first when the
-# release changes backend/ - this script only rebuilds the klip-commercial-docs container and never touches klip-frontend.
+# release changes backend/ - this script only rebuilds the klip-commdocs container and never touches klip-frontend.
 #
 # Self-contained on purpose (fetched with `git show origin/<branch>:<path> > /tmp/...` before the pull), and wrapped in main()
 # so an in-place overwrite mid-run cannot make bash execute fragments - see deploy-prod-frontend.sh for both reasons.
@@ -19,7 +19,7 @@ TARGET="${1:-}"
 case "$TARGET" in
   sit) BRANCH="${DEPLOY_BRANCH:-SIT}" ;;
   prod) BRANCH="${DEPLOY_BRANCH:-main}" ;;
-  *) printf '\n  usage: bash docs/scripts/deploy-commercial-docs.sh sit|prod\n\n' >&2; exit 1 ;;
+  *) printf '\n  usage: bash docs/scripts/deploy-commdocs.sh sit|prod\n\n' >&2; exit 1 ;;
 esac
 
 die() { printf '\n  ERROR: %s\n\n' "$*" >&2; exit 1; }
@@ -33,9 +33,9 @@ case "$(hostname)" in
   ECS-DB|iZk1a4m0oobaw170notm7pZ) die "this is a BACKEND host ($(hostname)). Run this on the frontend host." ;;
 esac
 
-COMPOSE_FILE=docker-compose.frontend-commercial.yml
-SERVICE=frontend-commercial
-CONTAINER=klip-commercial-docs
+COMPOSE_FILE=docker-compose.commdocs.yml
+SERVICE=frontend-commdocs
+CONTAINER=klip-commdocs
 
 step "where we are"
 printf '  host      : %s\n' "$(hostname)"
@@ -73,19 +73,19 @@ fi
 
 step "settings from .env"
 env_value() { grep -E "^$1=" .env | tail -n 1 | cut -d= -f2- | sed 's/^"//; s/"$//' || true; }
-PORT_MAP="$(env_value COMMERCIAL_DOCS_PORT)"
-printf '  COMMERCIAL_DOCS_PORT            = %s\n' "${PORT_MAP:-127.0.0.1:3002 (default: only Nginx can reach it)}"
-printf '  COMMERCIAL_BACKEND_INTERNAL_URL = %s\n' "$(env_value COMMERCIAL_BACKEND_INTERNAL_URL || true)"
-printf '  COMMERCIAL_KLIP_URL             = %s\n' "$(env_value COMMERCIAL_KLIP_URL || true)"
-if [[ -z "$(env_value COMMERCIAL_BACKEND_INTERNAL_URL)" && "${PORT_MAP:-}" != 127.0.0.1:* && -n "${PORT_MAP:-}" ]]; then
-  printf '\n  NOTE: the container is published on %s without COMMERCIAL_BACKEND_INTERNAL_URL - that only works when Nginx\n' "$PORT_MAP"
-  printf '  proxies /api and /auth on that port. Without Nginx, set COMMERCIAL_BACKEND_INTERNAL_URL (build-time).\n'
+PORT_MAP="$(env_value COMMDOCS_PORT)"
+printf '  COMMDOCS_PORT            = %s\n' "${PORT_MAP:-127.0.0.1:3002 (default: only Nginx can reach it)}"
+printf '  COMMDOCS_BACKEND_INTERNAL_URL = %s\n' "$(env_value COMMDOCS_BACKEND_INTERNAL_URL || true)"
+printf '  COMMDOCS_KLIP_URL             = %s\n' "$(env_value COMMDOCS_KLIP_URL || true)"
+if [[ -z "$(env_value COMMDOCS_BACKEND_INTERNAL_URL)" && "${PORT_MAP:-}" != 127.0.0.1:* && -n "${PORT_MAP:-}" ]]; then
+  printf '\n  NOTE: the container is published on %s without COMMDOCS_BACKEND_INTERNAL_URL - that only works when Nginx\n' "$PORT_MAP"
+  printf '  proxies /api and /auth on that port. Without Nginx, set COMMDOCS_BACKEND_INTERNAL_URL (build-time).\n'
 fi
 
 if [[ "${DEPLOY_FORCE:-}" != "1" ]]; then
-  printf '\n  This deploys Commercial Documents to %s. Type "commercial" to continue: ' "${TARGET^^}"
+  printf '\n  This deploys Commercial Documents to %s. Type "commdocs" to continue: ' "${TARGET^^}"
   read -r CONFIRM
-  [[ "${CONFIRM,,}" == "commercial" ]] || die "aborted - nothing deployed"
+  [[ "${CONFIRM,,}" == "commdocs" ]] || die "aborted - nothing deployed"
 fi
 
 IMAGE_BEFORE="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null || echo none)"
@@ -94,10 +94,15 @@ step "pulling"
 git pull --ff-only origin "$BRANCH"
 [[ -f "$COMPOSE_FILE" ]] || die "$COMPOSE_FILE is missing after the pull - is the app merged into $BRANCH?"
 
-# The first SIT deploy (2026-10-26) ran before the compose file named its project, so that container belongs to project
-# "klip". Compose will not take over a container_name owned by another project; remove it once so the new project can.
+# The first SIT deploy (2026-10-26) ran before the rename to CommDocs: its container is klip-commercial-docs, in compose project
+# "klip", and still holds port 3002. Remove it once, or the new container cannot bind the port.
+if docker inspect klip-commercial-docs >/dev/null 2>&1; then
+  printf '  removing the pre-rename container klip-commercial-docs\n'
+  docker rm -f klip-commercial-docs >/dev/null
+fi
+# Compose will not take over a container_name owned by another project; remove it once so this project can.
 OWNER="$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
-if [[ -n "$OWNER" && "$OWNER" != "klip-commercial-docs" ]]; then
+if [[ -n "$OWNER" && "$OWNER" != "klip-commdocs" ]]; then
   printf '  removing %s from compose project "%s" (it moves to its own project)\n' "$CONTAINER" "$OWNER"
   docker rm -f "$CONTAINER" >/dev/null
 fi

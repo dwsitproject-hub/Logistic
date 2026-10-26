@@ -1,46 +1,46 @@
-# Commercial Documents - its own front end (frontend-commercial/) on the SAME KLIP backend, DB and Synology storage.
+# Commercial Documents - its own front end (frontend-commdocs/) on the SAME KLIP backend, DB and Synology storage.
 # Runs on the frontend host, next to klip-frontend:
 #
-#   docker compose -f docker-compose.frontend-commercial.yml up -d --build
-#   (or: bash docs/scripts/deploy-commercial-docs.sh sit|prod)
+#   docker compose -f docker-compose.commdocs.yml up -d --build
+#   (or: bash docs/scripts/deploy-commdocs.sh sit|prod)
 #
 # Two ways to reach it (pick one per host):
 #
 #  A. Behind Nginx (preferred): Nginx listens on 8081 - later on the app's own domain - and proxies / here and /api, /auth
-#     to the backend. Keep COMMERCIAL_DOCS_PORT=127.0.0.1:3002 so only Nginx can reach the container.
-#     See docs/nginx/commercial-docs.conf.example.
-#  B. No Nginx: publish the container directly (COMMERCIAL_DOCS_PORT=8081) and set COMMERCIAL_BACKEND_INTERNAL_URL to the
+#     to the backend. Keep COMMDOCS_PORT=127.0.0.1:3002 so only Nginx can reach the container.
+#     See docs/nginx/commdocs.conf.example.
+#  B. No Nginx: publish the container directly (COMMDOCS_PORT=8081) and set COMMDOCS_BACKEND_INTERNAL_URL to the
 #     backend (e.g. http://172.28.92.57:5001) so Next proxies /api and /auth itself. That URL is fixed at BUILD time.
 #
 # .env keys (in /opt/klip/.env on the frontend host). They are deliberately NOT named NEXT_PUBLIC_*: the KLIP frontend deploy
 # script requires every NEXT_PUBLIC_* in .env to be an ARG of frontend/Dockerfile, and these belong to this app only.
-#   COMMERCIAL_DOCS_PORT            host port mapping, default 127.0.0.1:3002
-#   COMMERCIAL_BACKEND_INTERNAL_URL only for option B
-#   COMMERCIAL_KLIP_URL             where the "KLIP" link in the sidebar points, e.g. http://172.28.92.56 (empty = no link)
+#   COMMDOCS_PORT            host port mapping, default 127.0.0.1:3002
+#   COMMDOCS_BACKEND_INTERNAL_URL only for option B
+#   COMMDOCS_KLIP_URL             where the "KLIP" link in the sidebar points, e.g. http://172.28.92.56 (empty = no link)
 #
-# On the BACKEND host set COMMERCIAL_DOCS_URL to this app's public origin (e.g. http://172.28.92.56:8081), so reset and
+# On the BACKEND host set COMMDOCS_URL to this app's public origin (e.g. http://172.28.92.56:8081), so reset and
 # invitation e-mails requested from this app link back to it.
 
 # Its own compose project. Without it the project is "klip" (the folder name), shared with docker-compose.frontend.yml, and
 # each file reports the other's container as an orphan - one `--remove-orphans` would delete KLIP's frontend.
-name: klip-commercial-docs
+name: klip-commdocs
 
 services:
-  frontend-commercial:
+  frontend-commdocs:
     build:
-      context: ./frontend-commercial
+      context: ./frontend-commdocs
       dockerfile: Dockerfile
       args:
-        BACKEND_INTERNAL_URL: ${COMMERCIAL_BACKEND_INTERNAL_URL:-}
-        NEXT_PUBLIC_KLIP_URL: ${COMMERCIAL_KLIP_URL:-}
-    container_name: klip-commercial-docs
+        BACKEND_INTERNAL_URL: ${COMMDOCS_BACKEND_INTERNAL_URL:-}
+        NEXT_PUBLIC_KLIP_URL: ${COMMDOCS_KLIP_URL:-}
+    container_name: klip-commdocs
     environment:
       NODE_ENV: production
       PORT: 3002
       HOST: 0.0.0.0
       HOSTNAME: 0.0.0.0
     ports:
-      - "${COMMERCIAL_DOCS_PORT:-127.0.0.1:3002}:3002"
+      - "${COMMDOCS_PORT:-127.0.0.1:3002}:3002"
     restart: unless-stopped
     healthcheck:
       test:

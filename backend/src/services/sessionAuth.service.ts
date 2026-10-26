@@ -95,8 +95,9 @@ export function saveSession(req: Request): Promise<void> {
 }
 
 /** The Commercial Documents app's public origin, or null when it is not deployed (links then stay on KLIP). */
-export function commercialDocsUrl(): string | null {
-  const value = String(process.env.COMMERCIAL_DOCS_URL || '').trim().replace(/\/$/, '');
+export function commdocsUrl(): string | null {
+  // COMMERCIAL_DOCS_URL is the name this had before the app was renamed CommDocs (SIT .env set it on 2026-10-26).
+  const value = String(process.env.COMMDOCS_URL || process.env.COMMERCIAL_DOCS_URL || '').trim().replace(/\/$/, '');
   return value || null;
 }
 

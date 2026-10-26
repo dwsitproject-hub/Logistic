@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { fetchCurrentUser, readUserLocally } from '@/lib/authSession'
-import { navigateTo } from '@/lib/commercialDocsApp'
+import { navigateTo } from '@/lib/commdocsApp'
 import { resolvePostAuthRedirect } from '@/lib/navigationAccess'
 
 export default function Home() {

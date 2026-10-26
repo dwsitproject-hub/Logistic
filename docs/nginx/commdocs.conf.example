@@ -6,9 +6,9 @@
 # When the domain exists, point it at the same IP and use the second server block (port 80, server_name).
 #
 # Install (as for klip-kpndomain.conf - read that file's notes on default_server first):
-#   sudo cp docs/nginx/commercial-docs.conf.example /etc/nginx/sites-available/commercial-docs.conf
+#   sudo cp docs/nginx/commdocs.conf.example /etc/nginx/sites-available/commdocs.conf
 #   (edit the backend address below for the host: SIT or production)
-#   sudo ln -s /etc/nginx/sites-available/commercial-docs.conf /etc/nginx/sites-enabled/
+#   sudo ln -s /etc/nginx/sites-available/commdocs.conf /etc/nginx/sites-enabled/
 #   sudo nginx -t && sudo systemctl reload nginx
 # and open TCP 8081 in the host firewall / cloud security group for the users' network.
 #
@@ -50,7 +50,7 @@ server {
     }
 
     location / {
-        proxy_pass http://127.0.0.1:3002;      # klip-commercial-docs (docker-compose.frontend-commercial.yml)
+        proxy_pass http://127.0.0.1:3002;      # klip-commdocs (docker-compose.commdocs.yml)
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
@@ -62,11 +62,11 @@ server {
 }
 
 # Later, on the app's own domain (same IP as KLIP). Copy the three locations above into it, then drop the 8081 block once users
-# have moved, and change COMMERCIAL_DOCS_URL on the backend host to the domain.
+# have moved, and change COMMDOCS_URL on the backend host to the domain.
 #
 # server {
 #     listen 80;
 #     listen [::]:80;
-#     server_name commercial-docs.kpndomain.com;
+#     server_name commdocs.kpndomain.com;
 #     ...same add_header / limits / locations as above...
 # }

@@ -79,8 +79,8 @@ export default function UsersPage() {
     setBusy(true)
     const path = u.is_first_login ? 'resend-invitation' : 'reset-password'
     try {
-      // app: 'commercial' - the link in the e-mail opens this app.
-      const res = await apiJson<{ email_sent: boolean }>(`/users/${u.id}/${path}`, { method: 'POST', body: { app: 'commercial' } })
+      // app: 'commdocs' - the link in the e-mail opens this app.
+      const res = await apiJson<{ email_sent: boolean }>(`/users/${u.id}/${path}`, { method: 'POST', body: { app: 'commdocs' } })
       toast(res.message || `A link was sent to ${u.email}.`, !res.data?.email_sent)
     } catch (err) {
       toast(errorMessage(err), true)
@@ -357,7 +357,7 @@ function UserModal({
         await apiJson(`/users/${user.id}`, { method: 'PUT', body: changed })
         onSaved('User saved')
       } else {
-        const res = await apiJson<{ invitation_sent: boolean }>('/users', { method: 'POST', body: { ...body, app: 'commercial' } })
+        const res = await apiJson<{ invitation_sent: boolean }>('/users', { method: 'POST', body: { ...body, app: 'commdocs' } })
         onSaved(
           res.data?.invitation_sent
             ? `User added · invitation sent to ${email.trim()}`
