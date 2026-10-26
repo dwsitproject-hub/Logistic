@@ -98,8 +98,7 @@ git pull --ff-only origin "$BRANCH"
 # "klip". Compose will not take over a container_name owned by another project; remove it once so the new project can.
 OWNER="$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
 if [[ -n "$OWNER" && "$OWNER" != "klip-commercial-docs" ]]; then
-  printf '  removing %s from compose project "%s" (it moves to its own project)
-' "$CONTAINER" "$OWNER"
+  printf '  removing %s from compose project "%s" (it moves to its own project)\n' "$CONTAINER" "$OWNER"
   docker rm -f "$CONTAINER" >/dev/null
 fi
 
