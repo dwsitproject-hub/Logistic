@@ -2,6 +2,11 @@ import { Response, NextFunction } from 'express';
 import { AuthRequest } from './auth';
 import { AuditService } from '../services/audit.service';
 
+/** Never copy a password or token a client sent into audit_logs. */
+function withoutSecrets(body: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(body).filter(([key]) => !/password|token|secret/i.test(key)));
+}
+
 /**
  * Middleware to automatically log create, update, delete actions
  */
@@ -15,7 +20,7 @@ export const auditLog = (action: string, entityType: string) => {
     // Store request body for 'before' data on updates (only fields the client attempted to change)
     const beforeData =
       req.method === 'PUT' || req.method === 'PATCH'
-        ? (req.body && typeof req.body === 'object' ? { ...req.body } : {})
+        ? (req.body && typeof req.body === 'object' ? withoutSecrets(req.body) : {})
         : undefined;
 
     // Override res.json to capture response data

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildInvitationEmail, buildPasswordResetEmail, buildSetPasswordUrl } from './authEmail.service';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { authEmailAppFrom, buildInvitationEmail, buildPasswordResetEmail, buildSetPasswordUrl } from './authEmail.service';
 
 describe('buildSetPasswordUrl', () => {
   it('points at the set-password page with the token in the query', () => {
@@ -47,5 +47,30 @@ describe('auth e-mails', () => {
     const mail = buildPasswordResetEmail({ fullName: 'A', link: 'https://k.test/set-password?token=a&b="x"' });
     expect(mail.html).not.toContain('token=a&b="x"');
     expect(mail.html).toContain('token=a&amp;b=&quot;x&quot;');
+  });
+});
+
+describe('Commercial Documents links', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('honours app=commercial only when COMMERCIAL_DOCS_URL is configured', () => {
+    vi.stubEnv('COMMERCIAL_DOCS_URL', '');
+    expect(authEmailAppFrom('commercial')).toBe('klip');
+    vi.stubEnv('COMMERCIAL_DOCS_URL', 'https://docs.example.test/');
+    expect(authEmailAppFrom('commercial')).toBe('commercial');
+    expect(authEmailAppFrom('https://evil.test')).toBe('klip');
+    expect(authEmailAppFrom(undefined)).toBe('klip');
+  });
+
+  it('names the Commercial Documents app instead of KLIP', () => {
+    const link = 'https://docs.example.test/set-password?token=abc';
+    const invite = buildInvitationEmail({ fullName: 'A', link, app: 'commercial' });
+    expect(invite.subject).toBe('Your Commercial Documents account is ready - set your password');
+    expect(invite.html).not.toContain('KLIP');
+    const reset = buildPasswordResetEmail({ fullName: 'A', link, app: 'commercial' });
+    expect(reset.subject).toBe('Reset your Commercial Documents password');
+    expect(reset.html).not.toContain('KLIP');
   });
 });

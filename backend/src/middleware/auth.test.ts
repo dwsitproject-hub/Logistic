@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import jwt from 'jsonwebtoken';
-import { authenticateToken, authorize, authorizeSapImportsUpload, authorizeSapImportsView, AuthRequest } from './auth';
+import { authenticateToken, authorize, authorizeAnyPermission, authorizeSapImportsUpload, authorizeSapImportsView, AuthRequest } from './auth';
 import type { Response, NextFunction } from 'express';
 
 vi.mock('../database/connection', () => ({
@@ -227,5 +227,41 @@ describe('authorizeSapImportsView', () => {
     await authorizeSapImportsView(req, res, next);
     expect(res.statusCode).toBe(403);
     expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe('authorizeAnyPermission', () => {
+  const user = { id: 'u1', username: 'bc', email: 'bc@x.com', role: 'BC' };
+
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+  });
+
+  it('passes when the second key grants the flag', async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce({ rows: [{ allowed: false }] } as never)
+      .mockResolvedValueOnce({ rows: [{ allowed: true }] } as never);
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    await authorizeAnyPermission(['page.a', 'page.b'], 'can_view')({ user } as AuthRequest, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(vi.mocked(query).mock.calls.map((c) => (c[1] as unknown[])[2])).toEqual(['page.a', 'page.b']);
+  });
+
+  it('403 when no key grants the flag', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    await authorizeAnyPermission(['page.a', 'page.b'], 'can_view')({ user } as AuthRequest, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('ADMIN passes without a lookup', async () => {
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    await authorizeAnyPermission(['page.a'], 'can_view')({ user: { ...user, role: 'ADMIN' } } as AuthRequest, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
   });
 });

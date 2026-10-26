@@ -22,7 +22,7 @@ const PAGE_ENTITY_TYPES: Record<string, string[] | null> = {
   trucking: ['TRUCKING_OPERATION'],
   finance: ['PAYMENT'],
   documents: ['DOCUMENT'],
-  users: ['USER'],
+  users: ['USER', 'ROLE', 'ROLE_PERMISSIONS'],
   audit: null,
   'sap-imports': null,
   'sap-master-v2': null,
@@ -33,6 +33,9 @@ const PAGE_ENTITY_TYPES: Record<string, string[] | null> = {
   'master-product-configuration': null,
   'master-vessel': null,
   'master-loading-port': null,
+  'commercial-documents': ['COMMERCIAL_DOCUMENT'],
+  'commercial-dashboard': ['COMMERCIAL_DOCUMENT'],
+  roles: ['ROLE', 'ROLE_PERMISSIONS'],
 };
 
 function resolveEntityTypes(pageKey: string): string[] | null {

@@ -94,6 +94,12 @@ export function saveSession(req: Request): Promise<void> {
   });
 }
 
+/** The Commercial Documents app's public origin, or null when it is not deployed (links then stay on KLIP). */
+export function commercialDocsUrl(): string | null {
+  const value = String(process.env.COMMERCIAL_DOCS_URL || '').trim().replace(/\/$/, '');
+  return value || null;
+}
+
 export function frontendUrl(): string {
   return String(process.env.FRONTEND_URL || process.env.APP_PUBLIC_ORIGIN || 'http://localhost:3001').replace(
     /\/$/,

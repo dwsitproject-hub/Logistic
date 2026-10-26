@@ -10,6 +10,7 @@ import {
   updateRole,
 } from '../controllers/role.controller';
 import { body } from 'express-validator';
+import { auditLog } from '../middleware/audit';
 
 const router = express.Router();
 
@@ -31,15 +32,17 @@ router.post(
     body('role_name').notEmpty().matches(/^[A-Z_]+$/),
     body('display_name').notEmpty(),
   ],
+  auditLog('CREATE', 'ROLE'),
   createRole
 );
 
-router.put('/:id', authorize('ADMIN'), updateRole);
+router.put('/:id', authorize('ADMIN'), auditLog('UPDATE', 'ROLE'), updateRole);
 
 router.put(
   '/:id/permissions',
   authorize('ADMIN'),
   [body('permissions').isArray()],
+  auditLog('UPDATE', 'ROLE_PERMISSIONS'),
   updateRolePermissions
 );
 

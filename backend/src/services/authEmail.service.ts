@@ -1,8 +1,22 @@
 import { sendEmail } from './email.service';
-import { frontendUrl } from './sessionAuth.service';
+import { commercialDocsUrl, frontendUrl } from './sessionAuth.service';
 import { INVITE_TTL_HOURS, RESET_TTL_MINUTES } from './authToken.service';
 
 /** E-mails that carry a set-password link. Wording is English, like the rest of the UI. */
+
+/**
+ * Which front end a link opens: both apps share this backend and its users. 'commercial' is honoured only when COMMERCIAL_DOCS_URL
+ * is configured, and the host always comes from the server's env - a request can pick the app, never the URL.
+ */
+export type AuthEmailApp = 'klip' | 'commercial';
+
+export function authEmailAppFrom(value: unknown): AuthEmailApp {
+  return value === 'commercial' && commercialDocsUrl() ? 'commercial' : 'klip';
+}
+
+function appBaseUrl(app: AuthEmailApp): string {
+  return (app === 'commercial' && commercialDocsUrl()) || frontendUrl();
+}
 
 function escapeHtml(value: string): string {
   return String(value ?? '')
@@ -37,14 +51,19 @@ function layout(title: string, bodyHtml: string, link: string, buttonLabel: stri
 </html>`;
 }
 
-export function buildInvitationEmail(input: { fullName: string | null; link: string }): { subject: string; html: string } {
+export function buildInvitationEmail(input: { fullName: string | null; link: string; app?: AuthEmailApp }): {
+  subject: string;
+  html: string;
+} {
   const name = escapeHtml(input.fullName?.trim() || 'there');
+  const product = input.app === 'commercial' ? 'Commercial Documents' : 'KLIP';
+  const longProduct = input.app === 'commercial' ? 'Commercial Documents' : 'KLIP (KPN Logistics Intelligence Platform)';
   return {
-    subject: 'Your KLIP account is ready - set your password',
+    subject: `Your ${product} account is ready - set your password`,
     html: layout(
-      'Welcome to KLIP',
+      `Welcome to ${product}`,
       `<p style="margin:0 0 12px;">Hi ${name},</p>
-        <p style="margin:0;">An administrator created a KLIP (KPN Logistics Intelligence Platform) account for this e-mail address. Click the button below to choose your password and sign in for the first time.</p>`,
+        <p style="margin:0;">An administrator created a ${longProduct} account for this e-mail address. Click the button below to choose your password and sign in for the first time.</p>`,
       input.link,
       'Set my password',
       `This link works once and expires in ${INVITE_TTL_HOURS} hours. If you did not expect this e-mail, you can ignore it.`,
@@ -52,14 +71,18 @@ export function buildInvitationEmail(input: { fullName: string | null; link: str
   };
 }
 
-export function buildPasswordResetEmail(input: { fullName: string | null; link: string }): { subject: string; html: string } {
+export function buildPasswordResetEmail(input: { fullName: string | null; link: string; app?: AuthEmailApp }): {
+  subject: string;
+  html: string;
+} {
   const name = escapeHtml(input.fullName?.trim() || 'there');
+  const product = input.app === 'commercial' ? 'Commercial Documents' : 'KLIP';
   return {
-    subject: 'Reset your KLIP password',
+    subject: `Reset your ${product} password`,
     html: layout(
       'Reset your password',
       `<p style="margin:0 0 12px;">Hi ${name},</p>
-        <p style="margin:0;">We received a request to reset the password of your KLIP account. Click the button below to choose a new one.</p>`,
+        <p style="margin:0;">We received a request to reset the password of your ${product} account. Click the button below to choose a new one.</p>`,
       input.link,
       'Reset my password',
       `This link works once and expires in ${RESET_TTL_MINUTES} minutes. If you did not ask for this, ignore this e-mail - your current password stays as it is.`,
@@ -67,12 +90,20 @@ export function buildPasswordResetEmail(input: { fullName: string | null; link: 
   };
 }
 
-export async function sendInvitationEmail(user: { email: string; fullName: string | null }, token: string): Promise<boolean> {
-  const mail = buildInvitationEmail({ fullName: user.fullName, link: buildSetPasswordUrl(token) });
+export async function sendInvitationEmail(
+  user: { email: string; fullName: string | null },
+  token: string,
+  app: AuthEmailApp = 'klip',
+): Promise<boolean> {
+  const mail = buildInvitationEmail({ fullName: user.fullName, link: buildSetPasswordUrl(token, appBaseUrl(app)), app });
   return sendEmail({ to: [user.email], subject: mail.subject, html: mail.html });
 }
 
-export async function sendPasswordResetEmail(user: { email: string; fullName: string | null }, token: string): Promise<boolean> {
-  const mail = buildPasswordResetEmail({ fullName: user.fullName, link: buildSetPasswordUrl(token) });
+export async function sendPasswordResetEmail(
+  user: { email: string; fullName: string | null },
+  token: string,
+  app: AuthEmailApp = 'klip',
+): Promise<boolean> {
+  const mail = buildPasswordResetEmail({ fullName: user.fullName, link: buildSetPasswordUrl(token, appBaseUrl(app)), app });
   return sendEmail({ to: [user.email], subject: mail.subject, html: mail.html });
 }

@@ -9,7 +9,7 @@ import { canonicalizeUserRegionSites } from '../utils/userRegionSite';
 import { findAssignableRole } from '../services/roleAssignment.service';
 import { AuditService } from '../services/audit.service';
 import { issueToken, unusablePasswordHash } from '../services/authToken.service';
-import { sendInvitationEmail, sendPasswordResetEmail } from '../services/authEmail.service';
+import { authEmailAppFrom, sendInvitationEmail, sendPasswordResetEmail } from '../services/authEmail.service';
 
 type UserAssociations = {
   groupPlantsByUser: Map<string, string[]>;
@@ -358,6 +358,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     const invitationSent = await sendInvitationEmail(
       { email: normalizedEmail, fullName: full_name ?? null },
       invitation.token,
+      authEmailAppFrom(req.body?.app),
     );
     await AuditService.log({
       userId: req.user?.id ?? userId,
@@ -611,7 +612,9 @@ async function sendPasswordLinkToUser(
   const { token } = await issueToken({ query }, String(user.id), purpose);
   const person = { email: String(user.email), fullName: (user.full_name as string | null) ?? null };
   const sent =
-    purpose === 'INVITE' ? await sendInvitationEmail(person, token) : await sendPasswordResetEmail(person, token);
+    purpose === 'INVITE'
+      ? await sendInvitationEmail(person, token, authEmailAppFrom(req.body?.app))
+      : await sendPasswordResetEmail(person, token, authEmailAppFrom(req.body?.app));
 
   await AuditService.log({
     userId: req.user?.id ?? String(user.id),

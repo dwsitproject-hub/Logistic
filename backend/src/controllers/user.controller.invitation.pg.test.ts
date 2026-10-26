@@ -40,6 +40,7 @@ vi.mock('../services/audit.service', () => ({
 vi.mock('../services/authEmail.service', () => ({
   sendInvitationEmail: vi.fn(),
   sendPasswordResetEmail: vi.fn(),
+  authEmailAppFrom: vi.fn(() => 'klip'),
 }));
 
 import { AuditService } from '../services/audit.service';

@@ -196,6 +196,12 @@ export const authorizeSapImportsUpload = async (
 export const authorizePermission = (
   permissionKey: string,
   flag: 'can_view' | 'can_create' | 'can_edit' | 'can_delete',
+) => authorizeAnyPermission([permissionKey], flag);
+
+/** As authorizePermission, passing when ANY of the keys grants the flag (a route two pages share). */
+export const authorizeAnyPermission = (
+  permissionKeys: string[],
+  flag: 'can_view' | 'can_create' | 'can_edit' | 'can_delete',
 ) => {
   return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {
@@ -212,15 +218,11 @@ export const authorizePermission = (
     }
 
     try {
-      const allowed = await userHasPermissionFlag(
-        req.user.id,
-        req.user.role,
-        permissionKey,
-        flag,
-      );
-      if (allowed) {
-        next();
-        return;
+      for (const permissionKey of permissionKeys) {
+        if (await userHasPermissionFlag(req.user.id, req.user.role, permissionKey, flag)) {
+          next();
+          return;
+        }
       }
     } catch (error) {
       logger.error('authorizePermission lookup failed:', error);

@@ -22,7 +22,7 @@ import {
   peekToken,
   secondsSinceLastToken,
 } from '../services/authToken.service';
-import { sendPasswordResetEmail } from '../services/authEmail.service';
+import { authEmailAppFrom, sendPasswordResetEmail } from '../services/authEmail.service';
 
 /*
  * There is no public self-registration. `POST /api/auth/register` used to live here: it took the role from the request body and handed back a
@@ -201,7 +201,7 @@ export const INVALID_LINK_MESSAGE = 'This link is invalid or has expired. Please
 
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** POST /api/auth/forgot-password { email } (public). */
+/** POST /api/auth/forgot-password { email, app? } (public). app='commercial' sends a link to the Commercial Documents app. */
 export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
   try {
     if (!isLocalLoginEnabled()) {
@@ -234,6 +234,7 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
         void sendPasswordResetEmail(
           { email: String(user.email), fullName: (user.full_name as string | null) ?? null },
           token,
+          authEmailAppFrom(req.body?.app),
         ).then((sent) => {
           if (!sent) logger.warn('Password reset e-mail was not sent (SMTP not configured or failed)', { userId });
         });

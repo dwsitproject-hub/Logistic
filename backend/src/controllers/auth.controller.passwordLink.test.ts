@@ -18,6 +18,7 @@ vi.mock('../services/sessionAuth.service', () => ({
 }));
 vi.mock('../services/authEmail.service', () => ({
   sendPasswordResetEmail: vi.fn().mockResolvedValue(true),
+  authEmailAppFrom: vi.fn(() => 'klip'),
 }));
 vi.mock('../services/authToken.service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/authToken.service')>()),
@@ -92,6 +93,7 @@ describe('POST /auth/forgot-password', () => {
     expect(sendPasswordResetEmail).toHaveBeenCalledWith(
       { email: 'sari@example.test', fullName: 'Sari Dewi' },
       'raw-token',
+      'klip',
     );
     expect(AuditService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'PASSWORD_RESET_REQUESTED', userId: 'user-1' }));
   });

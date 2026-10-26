@@ -32,6 +32,17 @@ import {
   type TandaTerimaContractLine,
 } from '../services/tandaTerimaPdf.service';
 import { buildTandaTerimaContractsByExtNoSql } from '../utils/tandaTerimaQuerySql';
+import { logAudit } from '../middleware/audit';
+
+/**
+ * One audit_logs row per upload, view, download, delete and Tanda Terima - the Audit trail page of the Commercial Documents app.
+ * Never awaited by the caller and never throws: a failed audit write must not fail the document request.
+ */
+function auditCommercial(req: AuthRequest, action: string, entityId: string | undefined, details: Record<string, unknown>): void {
+  void logAudit(req, action, 'COMMERCIAL_DOCUMENT', entityId, undefined, details).catch((error) =>
+    logger.warn('commercial document audit failed', { action, error: error instanceof Error ? error.message : String(error) }),
+  );
+}
 
 function defaultYtdRange(): { dateFrom: string; dateTo: string } {
   const d = new Date();
@@ -550,6 +561,9 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       [contractExtNo, poNumber, documentType, actionType, relativePath, storedName, userId, userName],
     );
 
+    auditCommercial(req, 'UPLOAD', savedFile.id, {
+      po_number: poNumber, contract_ext_no: contractExtNo, document_type: documentType, file_name: storedName, action_type: actionType,
+    });
     return res.json({
       success: true,
       message: actionType === 'ADD' ? 'Document uploaded' : 'New document version uploaded',
@@ -573,6 +587,9 @@ async function streamCommercialFile(req: AuthRequest, res: Response, disposition
     if (!fs.existsSync(absPath)) {
       return res.status(404).json({ success: false, error: { message: 'File not found on server' } });
     }
+    auditCommercial(req, disposition === 'inline' ? 'VIEW' : 'DOWNLOAD', doc.id, {
+      po_number: doc.po_number, contract_ext_no: doc.contract_ext_no, document_type: doc.document_type, file_name: doc.file_name,
+    });
     res.setHeader('Content-Type', doc.mime_type || 'application/pdf');
     if (disposition === 'inline') {
       res.setHeader('Content-Disposition', `inline; filename="${doc.file_name}"`);
@@ -614,12 +631,13 @@ export const deleteCommercialDocument = async (req: AuthRequest, res: Response) 
        INSERT INTO commercial_document_history
          (contract_ext_no, po_number, document_type, action_type, file_path, file_name, user_id, user_name)
        SELECT contract_ext_no, po_number, document_type, 'DELETE', file_path, file_name, $2::uuid, $3 FROM removed
-       RETURNING document_type, file_name`,
+       RETURNING document_type, file_name, po_number, contract_ext_no`,
       [id, userId, userName],
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: { message: 'Document not found' } });
     }
+    auditCommercial(req, 'DELETE', id, result.rows[0]);
     return res.json({ success: true, message: 'Document deleted', data: result.rows[0] });
   } catch (err) {
     logger.error('deleteCommercialDocument error:', err);
@@ -702,6 +720,7 @@ export const downloadTandaTerima = async (req: AuthRequest, res: Response) => {
     });
 
     const filename = tandaTerimaDownloadFilename(sendDateIso);
+    auditCommercial(req, 'DOWNLOAD_TANDA_TERIMA', undefined, { contract_ext_nos: contractExtNos, send_date: sendDateIso });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(Buffer.from(pdfBytes));

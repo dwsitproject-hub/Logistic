@@ -11,6 +11,7 @@ import {
   changePassword,
 } from '../controllers/user.controller';
 import { body } from 'express-validator';
+import { auditLog } from '../middleware/audit';
 
 const router = express.Router();
 
@@ -62,6 +63,7 @@ router.put(
     body('products').optional({ nullable: true }).isArray(),
     body('products.*').optional().isString(),
   ],
+  auditLog('UPDATE', 'USER'),
   updateUser
 );
 
@@ -71,7 +73,7 @@ router.post('/:id/reset-password', authorize('ADMIN'), resetUserPassword);
 // Send the invitation again to a user who has not activated the account.
 router.post('/:id/resend-invitation', authorize('ADMIN'), resendInvitation);
 
-router.delete('/:id', authorize('ADMIN'), deleteUser);
+router.delete('/:id', authorize('ADMIN'), auditLog('DELETE', 'USER'), deleteUser);
 
 export default router;
 
