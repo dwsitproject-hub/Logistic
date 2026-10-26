@@ -1,4 +1,5 @@
 import { query } from '../database/connection';
+import logger from '../utils/logger';
 import { dhmDataName, dhmRefCode } from './mapper';
 import { asDhmUuid, persistMasterReplica, rememberDhmOrganization, replicaCode } from './masterReplica';
 import { shouldApplyDhmRecord, type DhmApplyOptions } from './versionGuard';
@@ -36,32 +37,63 @@ async function applyCommodity(record: DhmRecord): Promise<void> {
   const name = commodityText(record.data, 'short_name') || dhmDataName(record.data);
   const longName = commodityText(record.data, 'long_name');
   const commodityType = commodityText(record.data, 'type');
+  const materialCodeRaw = commodityText(record.data, 'material_code');
+  const materialGroup = commodityText(record.data, 'material_group');
+  const hsCode = commodityText(record.data, 'hs_code');
+  const uom = commodityText(record.data, 'uom');
   const code = replicaCode(record, null);
   const dhmId = asDhmUuid(record.id);
   const existing =
     (dhmId && (await findId(`SELECT id FROM products WHERE dhm_id = $1::uuid LIMIT 1`, [dhmId]))) ||
     (code && (await findId(`SELECT id FROM products WHERE code_dhm = $1 LIMIT 1`, [code]))) ||
+    // The SAP material number is the stable identity of a product, so it comes before the name.
+    (materialCodeRaw &&
+      (await findId(`SELECT id FROM products WHERE upper(trim(material_code)) = upper(trim($1)) LIMIT 1`, [materialCodeRaw]))) ||
     (name && (await findId(`SELECT id FROM products WHERE upper(trim(product_name)) = upper(trim($1)) LIMIT 1`, [name])));
+  // material_code is unique in KLIP. A record whose code another product already holds must not make the record fail
+  // (the sync would skip it and the DHM link would never be stored): keep the other product's code, drop this one.
+  let materialCode = materialCodeRaw;
+  if (materialCodeRaw) {
+    const holder = await findId(
+      `SELECT id FROM products WHERE upper(trim(material_code)) = upper(trim($1)) AND ($2::uuid IS NULL OR id <> $2::uuid) LIMIT 1`,
+      [materialCodeRaw, existing || null],
+    );
+    if (holder) {
+      logger.warn('DHM commodity material_code already belongs to another product; it was not copied', {
+        code,
+        materialCode: materialCodeRaw,
+      });
+      materialCode = null;
+    }
+  }
   if (existing) {
     await query(
       `UPDATE products
        SET product_name = COALESCE($2, product_name),
            long_name = COALESCE($3, long_name),
            commodity_type = COALESCE($4, commodity_type),
+           material_code = COALESCE($5, material_code),
+           material_group = COALESCE($6, material_group),
+           hs_code = COALESCE($7, hs_code),
+           uom = COALESCE($8, uom),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`,
-      [existing, name, longName, commodityType],
+      [existing, name, longName, commodityType, materialCode, materialGroup, hsCode, uom],
     );
     await persistMasterReplica('products', existing, record, code);
     return;
   }
   if (!name) return;
   const inserted = await query(
-    `INSERT INTO products (product_name, long_name, commodity_type, code_dhm, dhm_id, dhm_version, dhm_updated_at, dhm_is_deleted, dhm_payload)
-     VALUES ($1, $2, $3, $4, $5::uuid, $6, $7::timestamptz, $8, $9::jsonb)
+    `INSERT INTO products (product_name, long_name, commodity_type, code_dhm, dhm_id, dhm_version, dhm_updated_at, dhm_is_deleted, dhm_payload, material_code, material_group, hs_code, uom)
+     VALUES ($1, $2, $3, $4, $5::uuid, $6, $7::timestamptz, $8, $9::jsonb, $10, $11, $12, $13)
      ON CONFLICT (product_name) DO UPDATE SET
        long_name = COALESCE(EXCLUDED.long_name, products.long_name),
        commodity_type = COALESCE(EXCLUDED.commodity_type, products.commodity_type),
+       material_code = COALESCE(EXCLUDED.material_code, products.material_code),
+       material_group = COALESCE(EXCLUDED.material_group, products.material_group),
+       hs_code = COALESCE(EXCLUDED.hs_code, products.hs_code),
+       uom = COALESCE(EXCLUDED.uom, products.uom),
        code_dhm = COALESCE(EXCLUDED.code_dhm, products.code_dhm),
        dhm_id = COALESCE(EXCLUDED.dhm_id, products.dhm_id),
        dhm_version = EXCLUDED.dhm_version,
@@ -70,7 +102,21 @@ async function applyCommodity(record: DhmRecord): Promise<void> {
        dhm_payload = EXCLUDED.dhm_payload,
        updated_at = CURRENT_TIMESTAMP
      RETURNING id`,
-    [name, longName, commodityType, code, dhmId, record.version || null, record.updatedAt || null, record.isDeleted, JSON.stringify(record.data ?? {})],
+    [
+      name,
+      longName,
+      commodityType,
+      code,
+      dhmId,
+      record.version || null,
+      record.updatedAt || null,
+      record.isDeleted,
+      JSON.stringify(record.data ?? {}),
+      materialCode,
+      materialGroup,
+      hsCode,
+      uom,
+    ],
   );
   if (inserted.rows[0]?.id) await persistMasterReplica('products', String(inserted.rows[0].id), record, code);
 }

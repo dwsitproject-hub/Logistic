@@ -10,6 +10,7 @@ export {
   pushMasterVesselToDhm,
   pushNamedMasterToDhm,
 } from './pushTracked';
+export { productDhmExtra, DHM_COMMODITY_TYPES } from './productExtra';
 export { retryDhmPushes, listDhmPushStates } from './pushRetry';
 export { pushUnlinkedSapVessels } from './pushSapVessels';
 export { attachDhmPushState } from './pushState';

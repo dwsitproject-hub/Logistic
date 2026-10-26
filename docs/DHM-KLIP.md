@@ -12,7 +12,7 @@ KLIP implements DHM patterns **A + C** for Master Vessel and the CPO masters bel
 | KLIP master | DHM slug | Payload |
 | --- | --- | --- |
 | Master Vessel | `vessel` | Vessel hub fields. `vessel_code` is `Vessel_Code_SAP`. |
-| Master Product | `commodity` | `name`. When the catalog also lists `short_name` and `long_name`, those are filled from the product name. |
+| Master Product | `commodity` | `short_name` (the product name), `long_name`, `type`, `material_code`, `material_group`, `hs_code`, `uom` (see below). |
 | Master Incoterm | `incoterm` | `name` |
 | Master Company (Ext) | `shipper` (or `external_party` when that is the allowlisted slug) | `name` = Ext Company Name. `group` is sent only when the catalog has that field. |
 | Company (Int) | `company`, then `site` | Company `name` = company name. Site `name` = plant name (or plant code) and `company_id` = company code. `code_dhm` is the site code. `dhm_org_code` is the company code. |
@@ -30,3 +30,5 @@ SIT API (from the KLIP backend host): `DHM_BASE_URL=http://172.28.92.56:2001/api
 The portal on `:2001` is not the API. SIT's `/api` proxy strips `X-DHM-*` headers — KLIP uses `POST /auth/token` then `Authorization: Bearer`.
 
 Keys stay in `/opt/klip/.env` or `/opt/klip/backend/.env` on `172.28.92.57`. Do not commit them.
+
+**Master Product (`commodity`), catalog checked 2026-10-26 on SIT.** DHM requires `material_code` (unique), `short_name`, `long_name` and `type`; `material_group`, `hs_code` and `uom` are optional. `type` is an enum: `liquid`, `solid`, `Fuel, Greases, & Lub`, `Chemical`, `Civil Supplies (Building)` (the Hub's Integrator edits it; the Master Product dropdown mirrors it in `DHM_COMMODITY_TYPES`). KLIP builds the payload in one place, `backend/src/dhm/productExtra.ts`, for the save, the Sync button and the retry job. `material_code` comes from the SAP import (planned, the SAP team is adjusting the extract); until a product has it, or has no type, it is not sent and its push is noted as failed with `DHM commodity needs material_code, type`, then retried by the push-retry job once filled in. Migration 248 adds `products.material_code` (unique, ignoring case and spaces, only where set) and `material_group`. The pull stores the four optional/identity fields back; a `material_code` another product already holds is not copied (a warning is logged) so the record is not skipped.

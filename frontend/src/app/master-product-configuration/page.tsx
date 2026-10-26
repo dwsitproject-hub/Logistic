@@ -30,6 +30,10 @@ interface Product {
   product_name: string
   long_name?: string | null
   commodity_type?: string | null
+  material_code?: string | null
+  material_group?: string | null
+  hs_code?: string | null
+  uom?: string | null
   code_klip?: string | null
   code_dhm?: string | null
   percent_produce: number | null
@@ -38,12 +42,20 @@ interface Product {
   working_days_per_year: number | null
 }
 
+// What DHM accepts for a commodity type today (GET /v1/catalog, 2026-10-26). The Hub's Integrator edits the list; a
+// value saved earlier that is not in it stays selectable so it is not wiped by an edit.
+const COMMODITY_TYPES = ['liquid', 'solid', 'Fuel, Greases, & Lub', 'Chemical', 'Civil Supplies (Building)']
+
 const PRODUCT_COLUMNS: MasterListTableColumn<Product>[] = [
   { id: 'code_klip', label: 'Product Code (KLIP)', getText: (row) => row.code_klip || '-' },
   { id: 'code_dhm', label: 'Product Code (DHM)', getText: (row) => row.code_dhm || '-' },
+  { id: 'material_code', label: 'Material Code (SAP)', getText: (row) => row.material_code || '-' },
   { id: 'product_name', label: 'Product', getText: (row) => row.product_name || '-' },
   { id: 'long_name', label: 'Long Name', getText: (row) => row.long_name || '-' },
   { id: 'commodity_type', label: 'Type', getText: (row) => row.commodity_type || '-' },
+  { id: 'material_group', label: 'Material Group', getText: (row) => row.material_group || '-' },
+  { id: 'hs_code', label: 'HS Code', getText: (row) => row.hs_code || '-' },
+  { id: 'uom', label: 'UoM', getText: (row) => row.uom || '-' },
   dhmStatusListColumn<Product>(),
 ]
 
@@ -64,7 +76,7 @@ export default function MasterProductConfigurationPage() {
   const [sortKey, setSortKey] = useState('product_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [isAdmin, setIsAdmin] = useState(false)
-  const productColumns = useListColumnLayout('master-product.visibleColumns.v4', PRODUCT_COLUMNS)
+  const productColumns = useListColumnLayout('master-product.visibleColumns.v5', PRODUCT_COLUMNS)
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit])
 
@@ -121,6 +133,10 @@ export default function MasterProductConfigurationPage() {
         product_name: form.product_name,
         long_name: form.long_name || null,
         commodity_type: form.commodity_type || null,
+        material_code: form.material_code || null,
+        material_group: form.material_group || null,
+        hs_code: form.hs_code || null,
+        uom: form.uom || null,
       }
       const noun = 'product'
       if (editing) {
@@ -285,9 +301,47 @@ export default function MasterProductConfigurationPage() {
               </div>
               <div className="space-y-1">
                 <Label>Type</Label>
-                <Input
+                <select
+                  className="w-full rounded-md border px-3 py-2 text-sm"
                   value={form.commodity_type ?? ''}
                   onChange={(e) => setForm((f: Product) => ({ ...f, commodity_type: e.target.value }))}
+                >
+                  <option value="">Select a type</option>
+                  {form.commodity_type && !COMMODITY_TYPES.includes(form.commodity_type) ? (
+                    <option value={form.commodity_type}>{form.commodity_type}</option>
+                  ) : null}
+                  {COMMODITY_TYPES.map((type) => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label>Material Code (SAP)</Label>
+                <Input
+                  value={form.material_code ?? ''}
+                  placeholder="Filled from the SAP import"
+                  onChange={(e) => setForm((f: Product) => ({ ...f, material_code: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Material Group</Label>
+                <Input
+                  value={form.material_group ?? ''}
+                  onChange={(e) => setForm((f: Product) => ({ ...f, material_group: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>HS Code</Label>
+                <Input
+                  value={form.hs_code ?? ''}
+                  onChange={(e) => setForm((f: Product) => ({ ...f, hs_code: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>UoM</Label>
+                <Input
+                  value={form.uom ?? ''}
+                  onChange={(e) => setForm((f: Product) => ({ ...f, uom: e.target.value }))}
                 />
               </div>
               <div className="col-span-full flex justify-end gap-2 mt-2">

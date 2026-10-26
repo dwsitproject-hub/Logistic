@@ -1,7 +1,7 @@
 import { wantsExcludeDhmDeleted } from '../utils/dhmDeletedFilter';
 import { Request, Response } from 'express';
 import { query } from '../database/connection';
-import { attachDhmPushState, pushNamedMasterToDhm } from '../dhm';
+import { attachDhmPushState, productDhmExtra, pushNamedMasterToDhm } from '../dhm';
 import logger from '../utils/logger';
 
 interface AuthRequest extends Request { user?: { id: string; role: string } }
@@ -18,21 +18,22 @@ function textOrNull(value: unknown): string | null {
   return text || null;
 }
 
+/** A unique-index violation on products: the Material Code index says so by name, everything else is the product name. */
+function duplicateMessage(error: { constraint?: string }): string {
+  return String(error?.constraint || '').includes('material_code')
+    ? 'Another product already has this Material Code'
+    : 'Product with this name already exists';
+}
+
 async function pushProduct(row: Record<string, unknown>, overwrite: boolean) {
   const name = String(row.product_name ?? '').trim();
-  const extra: Record<string, string> = {};
-  if (name) extra.short_name = name;
-  const longName = textOrNull(row.long_name);
-  const commodityType = textOrNull(row.commodity_type);
-  if (longName) extra.long_name = longName;
-  if (commodityType) extra.type = commodityType;
   return pushNamedMasterToDhm(
     'products',
     String(row.id),
     'commodity',
     name,
     row.code_dhm != null ? String(row.code_dhm) : null,
-    { overwrite, extra },
+    { overwrite, extra: productDhmExtra(row) },
   );
 }
 
@@ -49,7 +50,7 @@ export const listProducts = async (req: AuthRequest, res: Response): Promise<voi
     if (wantsExcludeDhmDeleted(excludeDeleted)) where.push('COALESCE(dhm_is_deleted, FALSE) IS NOT TRUE');
     if (search) {
       params.push(`%${search}%`);
-      where.push(`(product_name ILIKE $${params.length} OR long_name ILIKE $${params.length} OR commodity_type ILIKE $${params.length} OR code_klip ILIKE $${params.length} OR code_dhm ILIKE $${params.length})`);
+      where.push(`(product_name ILIKE $${params.length} OR long_name ILIKE $${params.length} OR commodity_type ILIKE $${params.length} OR material_code ILIKE $${params.length} OR code_klip ILIKE $${params.length} OR code_dhm ILIKE $${params.length})`);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -80,9 +81,10 @@ export const createProduct = async (req: AuthRequest, res: Response): Promise<vo
     const sql = `
       INSERT INTO ${TABLE} (
         product_name, long_name, commodity_type,
-        percent_produce, working_hours_per_day, working_days_per_month, working_days_per_year
+        percent_produce, working_hours_per_day, working_days_per_month, working_days_per_year,
+        material_code, material_group, hs_code, uom
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *
     `;
     const result = await query(sql, [
       product_name.trim(),
@@ -92,13 +94,17 @@ export const createProduct = async (req: AuthRequest, res: Response): Promise<vo
       working_hours_per_day,
       working_days_per_month,
       working_days_per_year,
+      textOrNull(req.body.material_code),
+      textOrNull(req.body.material_group),
+      textOrNull(req.body.hs_code),
+      textOrNull(req.body.uom),
     ]);
     const saved = result.rows[0] as Record<string, unknown>;
     const dhm = await pushProduct(saved, wantsDhmOverwrite(req));
     const refreshed = await query(`SELECT * FROM ${TABLE} WHERE id = $1`, [saved.id]);
     res.status(201).json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
   } catch (error: any) {
-    const msg = error?.code === '23505' ? 'Product with this name already exists' : (error?.message || 'Failed to create product');
+    const msg = error?.code === '23505' ? duplicateMessage(error) : (error?.message || 'Failed to create product');
     logger.error('Error creating product:', error);
     res.status(500).json({ success: false, error: { message: msg } });
   }
@@ -107,10 +113,10 @@ export const createProduct = async (req: AuthRequest, res: Response): Promise<vo
 export const updateProduct = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const fields = ['product_name','long_name','commodity_type','percent_produce','working_hours_per_day','working_days_per_month','working_days_per_year'];
+    const fields = ['product_name','long_name','commodity_type','percent_produce','working_hours_per_day','working_days_per_month','working_days_per_year','material_code','material_group','hs_code','uom'];
     const set: string[] = [];
     const params: any[] = [];
-    const normalize = (v: any) => (v === '' || v === undefined ? null : v);
+    const normalize = (v: any) => (v === '' || v === undefined ? null : typeof v === 'string' ? v.trim() || null : v);
     fields.forEach((f) => {
       if (f in req.body) {
         params.push(normalize((req.body as any)[f]));
@@ -126,9 +132,10 @@ export const updateProduct = async (req: AuthRequest, res: Response): Promise<vo
     const dhm = await pushProduct(saved, wantsDhmOverwrite(req));
     const refreshed = await query(`SELECT * FROM ${TABLE} WHERE id = $1`, [id]);
     res.json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
-  } catch (error) {
+  } catch (error: any) {
     logger.error('Error updating product:', error);
-    res.status(500).json({ success: false, error: { message: 'Failed to update product' } });
+    const message = error?.code === '23505' ? duplicateMessage(error) : 'Failed to update product';
+    res.status(error?.code === '23505' ? 409 : 500).json({ success: false, error: { message } });
   }
 };
 

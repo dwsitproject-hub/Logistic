@@ -3,6 +3,7 @@ import { isDhmEnabled } from './config';
 import { pushNamedMasterToDhm, pushMasterCompanyToDhm, pushMasterExternalPartyToDhm, pushMasterPlantToDhm, pushMasterPortToDhm, pushMasterSiteToDhm } from './pushMaster';
 import { pushMasterVesselToDhm, type DhmPushAttachment } from './pushVessel';
 import { recordPushOutcome } from './pushState';
+import { productDhmExtra } from './productExtra';
 import type { KlipVesselForDhm } from './types';
 
 export const DHM_SYNC_MASTERS = ['vessel', 'product', 'port', 'plant', 'site', 'company', 'ext_company', 'incoterm'] as const;
@@ -126,15 +127,9 @@ async function pushRowUntracked(master: DhmSyncMaster, row: Record<string, unkno
     );
   }
   const name = String(row.product_name ?? '').trim();
-  const extra: Record<string, string> = {};
-  if (name) extra.short_name = name;
-  const longName = String(row.long_name ?? '').trim();
-  const commodityType = String(row.commodity_type ?? '').trim();
-  if (longName) extra.long_name = longName;
-  if (commodityType) extra.type = commodityType;
   return pushNamedMasterToDhm('products', id, 'commodity', name, row.code_dhm != null ? String(row.code_dhm) : null, {
     overwrite,
-    extra,
+    extra: productDhmExtra(row),
   });
 }
 
