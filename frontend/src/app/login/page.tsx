@@ -2,10 +2,9 @@
 
 import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Lock, Mail } from 'lucide-react'
+import { AuthFrame } from '@/components/auth/AuthFrame'
+import { AuthAlert, AuthField, AuthLoading } from '@/components/auth/AuthParts'
 import ChangePasswordModal from '@/components/ChangePasswordModal'
 import api from '@/lib/api'
 import Link from 'next/link'
@@ -116,11 +115,7 @@ function LoginPageContent() {
   }
 
   if (checkingSession) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-        <p className="text-gray-500">Loading...</p>
-      </div>
-    )
+    return <AuthLoading label="Loading..." />
   }
 
   return (
@@ -133,68 +128,55 @@ function LoginPageContent() {
           onSuccess={handlePasswordChangeSuccess}
         />
       )}
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-3xl font-bold text-center">KLIP</CardTitle>
-          <CardDescription className="text-center">
-            KPN Logistics Intelligence Platform
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-            {localLoginEnabled && (
-              <div className="text-right">
-                <Link href="/forgot-password" className="text-sm text-blue-600 hover:underline">
-                  Forgot password?
-                </Link>
-              </div>
-            )}
-            {error && (
-              <div className="text-sm text-red-500 text-center">{error}</div>
-            )}
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Logging in...' : 'Login'}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-    </div>
+      <AuthFrame>
+        <div>
+          <h1>Sign in</h1>
+          <p className="klip-auth-hint" style={{ marginTop: 4 }}>
+            Use your KLIP email and password.
+          </p>
+        </div>
+        <form onSubmit={handleLogin} style={{ display: 'grid', gap: 18 }}>
+          <AuthField
+            id="email"
+            label="Email"
+            icon={Mail}
+            type="email"
+            autoComplete="username"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+          <AuthField
+            id="password"
+            label="Password"
+            icon={Lock}
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+          <AuthAlert tone="bad">{error}</AuthAlert>
+          <button className="klip-auth-btn" type="submit" disabled={loading}>
+            {loading ? 'Logging in...' : 'Login'}
+          </button>
+        </form>
+        {localLoginEnabled && (
+          <p className="klip-auth-hint">
+            Forgot your password?{' '}
+            <Link className="klip-auth-link" href="/forgot-password">
+              Send me a reset link
+            </Link>
+          </p>
+        )}
+      </AuthFrame>
     </>
   )
 }
 
 export default function LoginPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-          <p className="text-gray-500">Loading...</p>
-        </div>
-      }
-    >
+    <Suspense fallback={<AuthLoading label="Loading..." />}>
       <LoginPageContent />
     </Suspense>
   )

@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { AuthLoading } from '@/components/auth/AuthParts'
 import { fetchCurrentUser, storeUserLocally } from '@/lib/authSession'
 import { redirectAfterAuth } from '@/lib/navigationAccess'
 
@@ -30,22 +31,12 @@ function SsoCallbackContent() {
     })()
   }, [router, searchParams])
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <p className="text-gray-500">{message}</p>
-    </div>
-  )
+  return <AuthLoading label={message} />
 }
 
 export default function SsoCallbackPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-          <p className="text-gray-500">Completing sign-in...</p>
-        </div>
-      }
-    >
+    <Suspense fallback={<AuthLoading label="Completing sign-in..." />}>
       <SsoCallbackContent />
     </Suspense>
   )

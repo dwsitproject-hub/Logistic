@@ -2,10 +2,9 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Mail } from 'lucide-react'
+import { AuthFrame } from '@/components/auth/AuthFrame'
+import { AuthAlert, AuthField } from '@/components/auth/AuthParts'
 import api from '@/lib/api'
 
 export default function ForgotPasswordPage() {
@@ -36,62 +35,46 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-3xl font-bold text-center">KLIP</CardTitle>
-          <CardDescription className="text-center">Forgot your password?</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {doneMessage ? (
-            <div className="space-y-4">
-              <div
-                role="status"
-                className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800"
-              >
-                {doneMessage}
-              </div>
-              <p className="text-xs text-gray-500">
-                The link works once and expires in 60 minutes. Check your spam folder if it does not arrive.
-              </p>
-              <Button asChild className="w-full">
-                <Link href="/login">Back to login</Link>
-              </Button>
-            </div>
-          ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <p className="text-sm text-gray-600">
-                Enter the e-mail address of your KLIP account. We will send you a link to choose a new password.
-              </p>
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="Enter your email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  autoComplete="email"
-                  required
-                />
-              </div>
-              {error && (
-                <div role="alert" className="text-sm text-red-500 text-center">
-                  {error}
-                </div>
-              )}
-              <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? 'Sending...' : 'Send reset link'}
-              </Button>
-              <div className="text-center">
-                <Link href="/login" className="text-sm text-blue-600 hover:underline">
-                  Back to login
-                </Link>
-              </div>
-            </form>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+    <AuthFrame>
+      <div>
+        <h1>Forgot your password?</h1>
+        <p className="klip-auth-hint" style={{ marginTop: 4 }}>
+          Enter the e-mail address of your KLIP account. We will send you a link to choose a new password.
+        </p>
+      </div>
+      {doneMessage ? (
+        <div style={{ display: 'grid', gap: 18 }}>
+          <AuthAlert tone="ok">{doneMessage}</AuthAlert>
+          <p className="klip-auth-hint">
+            The link works once and expires in 60 minutes. Check your spam folder if it does not arrive.
+          </p>
+          <Link className="klip-auth-btn" href="/login">
+            Back to login
+          </Link>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 18 }}>
+          <AuthField
+            id="email"
+            label="Email"
+            icon={Mail}
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+            required
+          />
+          <AuthAlert tone="bad">{error}</AuthAlert>
+          <button className="klip-auth-btn" type="submit" disabled={loading}>
+            {loading ? 'Sending...' : 'Send reset link'}
+          </button>
+          <p className="klip-auth-hint" style={{ textAlign: 'center' }}>
+            <Link className="klip-auth-link" href="/login">
+              Back to login
+            </Link>
+          </p>
+        </form>
+      )}
+    </AuthFrame>
   )
 }

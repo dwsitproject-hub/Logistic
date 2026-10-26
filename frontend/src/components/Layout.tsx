@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
+import Image from 'next/image'
 import { Button } from './ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 import { AppTourProvider, useAppTour } from './AppTourProvider'
@@ -117,7 +118,10 @@ function LayoutChrome({
       >
         <div className="flex h-16 min-h-16 items-center justify-between gap-1 border-b border-gray-200 px-3 shrink-0">
           {sidebarOpen && (
-            <h1 className="text-xl font-bold text-primary leading-snug tracking-tight">KLIP</h1>
+            <div className="flex min-w-0 items-center gap-2">
+              <Image src="/icon.svg" alt="" width={32} height={32} unoptimized className="h-8 w-8 shrink-0" />
+              <h1 className="text-xl font-bold text-primary leading-snug tracking-tight">KLIP</h1>
+            </div>
           )}
           <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}

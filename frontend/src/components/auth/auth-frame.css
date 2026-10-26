@@ -1,0 +1,155 @@
+/*
+ * The frame of the pages a person sees before signing in: login, forgot-password, set-password, SSO callback.
+ * Same layout and look as the Commercial Documents sign-in (frontend-commdocs), in KLIP blue. Every rule is under .klip-auth so it cannot touch the
+ * Tailwind / shadcn styles of the rest of the app.
+ */
+.klip-auth {
+  --a-bg: #f5f7fb;
+  --a-surface: #ffffff;
+  --a-surface-2: #f1f5f9;
+  --a-line: #e2e8f0;
+  --a-line-strong: #cbd5e1;
+  --a-ink: #0f172a;
+  --a-ink-2: #475569;
+  --a-ink-3: #64748b;
+  --a-accent: #2563eb;
+  --a-accent-ink: #1d4ed8;
+  --a-accent-2: #e0e9ff;
+  --a-ok: #1f7a4d;
+  --a-ok-bg: #e5f4ec;
+  --a-bad: #b4322b;
+  --a-bad-bg: #fbe7e5;
+  --a-r: 10px;
+  --a-r-sm: 7px;
+
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  background: var(--a-bg);
+  color: var(--a-ink);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.klip-auth *,
+.klip-auth *::before,
+.klip-auth *::after { box-sizing: border-box; }
+/* Tailwind's preflight zeroes heading weight and size; set them here. Colour is NOT inherited on button/input: it would beat the .klip-auth-btn rule below. */
+.klip-auth h1,
+.klip-auth h2 { margin: 0; text-wrap: balance; font-weight: 700; }
+.klip-auth p { margin: 0; }
+.klip-auth button,
+.klip-auth input { font: inherit; }
+.klip-auth :focus-visible { outline: 2px solid var(--a-accent); outline-offset: 2px; }
+
+/* left panel */
+.klip-auth-art {
+  background: linear-gradient(160deg, #1d4ed8 0%, #1e3a8a 100%);
+  color: #fff;
+  padding: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 32px;
+}
+.klip-auth-art h2 { font-size: 30px; line-height: 1.2; max-width: 16ch; font-weight: 700; }
+.klip-auth-art p { opacity: 0.85; max-width: 44ch; }
+.klip-auth-art .klip-auth-brand { color: #fff; }
+.klip-auth-cards { display: grid; gap: 10px; max-width: 360px; }
+.klip-auth-card {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--a-r);
+  padding: 12px 14px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.klip-auth-card .ic {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.klip-auth-card small { display: block; opacity: 0.75; font-size: 12.5px; }
+
+/* right panel */
+.klip-auth-form {
+  display: grid;
+  place-items: center;
+  padding: 32px max(16px, env(safe-area-inset-right, 0px)) 32px max(16px, env(safe-area-inset-left, 0px));
+}
+.klip-auth-box { width: 100%; max-width: 380px; display: grid; gap: 18px; }
+.klip-auth-box h1 { font-size: 24px; line-height: 1.25; }
+
+.klip-auth-brand { display: flex; gap: 10px; align-items: center; font-weight: 700; font-size: 16px; text-decoration: none; }
+.klip-auth-mark { width: 32px; height: 32px; border-radius: 9px; flex: none; display: block; }
+
+/* fields */
+.klip-auth-field { display: grid; gap: 6px; }
+.klip-auth-field label { font-size: 13px; font-weight: 600; color: var(--a-ink-2); }
+.klip-auth-ic { position: relative; }
+.klip-auth-ic > svg {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  color: var(--a-ink-3);
+  pointer-events: none;
+}
+.klip-auth-input {
+  height: 40px;
+  width: 100%;
+  border: 1px solid var(--a-line-strong);
+  border-radius: var(--a-r-sm);
+  background: var(--a-surface);
+  color: var(--a-ink);
+  padding: 0 12px 0 34px;
+}
+.klip-auth-input:focus { border-color: var(--a-accent); outline: 3px solid var(--a-accent-2); outline-offset: 0; }
+.klip-auth-input:disabled { background: var(--a-surface-2); color: var(--a-ink-3); }
+
+/* buttons, links, notes */
+.klip-auth-btn {
+  width: 100%;
+  height: 42px;
+  border-radius: var(--a-r-sm);
+  border: 1px solid var(--a-accent);
+  background: var(--a-accent);
+  color: #fff;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.klip-auth-btn:hover { background: var(--a-accent-ink); border-color: var(--a-accent-ink); }
+.klip-auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.klip-auth-hint { font-size: 12.5px; color: var(--a-ink-3); }
+.klip-auth-link { color: var(--a-accent); font-weight: 600; cursor: pointer; background: none; border: 0; padding: 0; text-decoration: none; }
+.klip-auth-link:hover { text-decoration: underline; }
+.klip-auth-alert { border-radius: var(--a-r-sm); padding: 10px 12px; font-size: 13px; display: flex; gap: 8px; align-items: flex-start; }
+.klip-auth-alert svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.klip-auth-alert.bad { background: var(--a-bad-bg); color: var(--a-bad); }
+.klip-auth-alert.ok { background: var(--a-ok-bg); color: var(--a-ok); }
+.klip-auth-alert.info { background: var(--a-accent-2); color: var(--a-accent-ink); }
+.klip-auth-center { display: flex; gap: 10px; align-items: center; justify-content: center; color: var(--a-ink-3); }
+.klip-auth-spin { animation: klip-auth-spin 0.9s linear infinite; }
+@keyframes klip-auth-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .klip-auth *, .klip-auth *::before, .klip-auth *::after { transition: none !important; animation: none !important; }
+}
+
+@media (max-width: 760px) {
+  .klip-auth { grid-template-columns: minmax(0, 1fr); }
+  .klip-auth-art { display: none; }
+}
