@@ -61,9 +61,9 @@ Empty = nothing to deploy. Otherwise:
 ```bash
 cd /opt/klip && git fetch origin && git show origin/main:docs/scripts/deploy-commdocs.sh > /tmp/deploy-commdocs.sh && bash /tmp/deploy-commdocs.sh prod
 ```
-Must end with `healthy` and the expected `commit now`. First time only: the Nginx block on port 8081
-(`docs/nginx/commdocs.conf.example`, production backend address), port 8081 open for users, and on ECS-DB
-`COMMDOCS_URL=http://<ECS-App IP>:8081` in `backend/.env` followed by a backend restart.
+Must end with `healthy` and the expected `commit now`. First time only: a DNS record for the production domain -> ECS-App, the Nginx block
+(`docs/nginx/commdocs.conf.example` with that server_name and the production backend address), and on ECS-DB
+`COMMDOCS_URL=http://<domain>` in `backend/.env` followed by a backend deploy.
 
 ## 4. After the deploy (ECS-DB)
 

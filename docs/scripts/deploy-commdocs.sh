@@ -126,7 +126,7 @@ printf '  %s\n' "$STATUS"
 step "result"
 printf '  commit now : %s\n' "$(git log --oneline -1)"
 if [[ "$STATUS" == "healthy" ]]; then
-  printf '  container healthy. Open the app (e.g. http://<this host>:8081/login) and sign in with a document-role account.\n\n'
+  printf '  container healthy. Open the app (SIT: http://test-commdocs.kpndomain.com/login) and sign in with a document-role account.\n\n'
 else
   printf '  NOT HEALTHY - read: docker compose -f %s logs --tail=100 %s\n\n' "$COMPOSE_FILE" "$SERVICE"
   exit 1

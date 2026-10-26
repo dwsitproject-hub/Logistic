@@ -1,27 +1,26 @@
 # Commercial Documents vhost, on the KLIP frontend host. Same backend, same DB, same Synology as KLIP.
 #
-# Until the app has its own domain it is served on the SAME host as KLIP, on port 8081:
-#   SIT        http://172.28.92.56:8081     backend 172.28.92.57:5001
-#   Production http://<ECS-App IP>:8081     backend 172.28.80.51:5001
-# When the domain exists, point it at the same IP and use the second server block (port 80, server_name).
+# Served on its OWN DOMAIN on port 80, next to KLIP's vhost (Ryan, 2026-10-26 - a DNS record instead of opening 8081 in the
+# cloud security group):
+#   SIT        test-commdocs.kpndomain.com -> 172.28.92.56   backend 172.28.92.57:5001   (KLIP: test-klip.kpndomain.com)
+#   Production <domain to request>         -> ECS-App        backend 172.28.80.51:5001
 #
 # Install (as for klip-kpndomain.conf - read that file's notes on default_server first):
 #   sudo cp docs/nginx/commdocs.conf.example /etc/nginx/sites-available/commdocs.conf
-#   (edit the backend address below for the host: SIT or production)
+#   (production: change server_name and the two backend addresses)
 #   sudo ln -s /etc/nginx/sites-available/commdocs.conf /etc/nginx/sites-enabled/
 #   sudo nginx -t && sudo systemctl reload nginx
-# and open TCP 8081 in the host firewall / cloud security group for the users' network.
+# Before DNS exists it can be tested from the host: curl -H "Host: test-commdocs.kpndomain.com" http://127.0.0.1/login
 #
+# Why it cannot disturb the other sites on port 80: one exact server_name, no default_server, everything inside this block.
 # Rollback: remove the symlink, `sudo nginx -t && sudo systemctl reload nginx`. KLIP is untouched either way.
 #
-# Cookies are per HOST, not per port: while both apps live on one IP, signing in to one also signs the browser in to the other
-# with the same account (it is the same backend session), and signing out of one signs out of both. That is expected and ends
-# once the app has its own domain.
+# Its own hostname also means its own cookies: signing in or out of KLIP no longer signs the browser in or out of this app.
 
 server {
-    listen 8081;
-    listen [::]:8081;
-    server_name _;
+    listen 80;
+    listen [::]:80;
+    server_name test-commdocs.kpndomain.com;
 
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
@@ -61,12 +60,5 @@ server {
     }
 }
 
-# Later, on the app's own domain (same IP as KLIP). Copy the three locations above into it, then drop the 8081 block once users
-# have moved, and change COMMDOCS_URL on the backend host to the domain.
-#
-# server {
-#     listen 80;
-#     listen [::]:80;
-#     server_name commdocs.kpndomain.com;
-#     ...same add_header / limits / locations as above...
-# }
+# Fallback without a domain: the same block with `listen 8081;` / `listen [::]:8081;` and `server_name _;`, plus TCP 8081 open
+# in ufw AND the cloud security group (on SIT the security group blocked it, 2026-10-26).

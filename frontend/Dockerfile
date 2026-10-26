@@ -44,7 +44,7 @@ ENV NEXT_PUBLIC_HUB_SDK_KEY=${NEXT_PUBLIC_HUB_SDK_KEY}
 ENV NEXT_PUBLIC_HUB_SDK_DEBUG=${NEXT_PUBLIC_HUB_SDK_DEBUG}
 ENV NEXT_PUBLIC_GIT_SHA=${NEXT_PUBLIC_GIT_SHA}
 
-# Commercial Documents go-live switch: the new app's public origin (e.g. http://172.28.92.56:8081). Set, KLIP drops the two
+# Commercial Documents go-live switch: the new app's public origin (SIT: http://test-commdocs.kpndomain.com). Set, KLIP drops the two
 # Commercial menus and sends document-only users there (src/lib/commdocsApp.ts). Empty = unchanged. Build-time, like
 # every NEXT_PUBLIC_* - see the note on NEXT_PUBLIC_JPS_ENABLED.
 ARG NEXT_PUBLIC_COMMDOCS_URL=

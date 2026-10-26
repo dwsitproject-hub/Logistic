@@ -6,10 +6,10 @@
 #
 # Two ways to reach it (pick one per host):
 #
-#  A. Behind Nginx (preferred): Nginx listens on 8081 - later on the app's own domain - and proxies / here and /api, /auth
+#  A. Behind Nginx (preferred): Nginx serves the app's own domain (SIT test-commdocs.kpndomain.com) and proxies / here and /api, /auth
 #     to the backend. Keep COMMDOCS_PORT=127.0.0.1:3002 so only Nginx can reach the container.
 #     See docs/nginx/commdocs.conf.example.
-#  B. No Nginx: publish the container directly (COMMDOCS_PORT=8081) and set COMMDOCS_BACKEND_INTERNAL_URL to the
+#  B. No Nginx: publish the container directly (e.g. COMMDOCS_PORT=8081) and set COMMDOCS_BACKEND_INTERNAL_URL to the
 #     backend (e.g. http://172.28.92.57:5001) so Next proxies /api and /auth itself. That URL is fixed at BUILD time.
 #
 # .env keys (in /opt/klip/.env on the frontend host). They are deliberately NOT named NEXT_PUBLIC_*: the KLIP frontend deploy
@@ -18,7 +18,7 @@
 #   COMMDOCS_BACKEND_INTERNAL_URL only for option B
 #   COMMDOCS_KLIP_URL             where the "KLIP" link in the sidebar points, e.g. http://172.28.92.56 (empty = no link)
 #
-# On the BACKEND host set COMMDOCS_URL to this app's public origin (e.g. http://172.28.92.56:8081), so reset and
+# On the BACKEND host set COMMDOCS_URL to this app's public origin (SIT: http://test-commdocs.kpndomain.com), so reset and
 # invitation e-mails requested from this app link back to it.
 
 # Its own compose project. Without it the project is "klip" (the folder name), shared with docker-compose.frontend.yml, and
