@@ -10,6 +10,7 @@ import {
   BarChart3,
 } from 'lucide-react'
 import { StitchNavIcons } from '@/components/shared/stitchIcons'
+import { withoutMovedPages } from '@/lib/commercialDocsApp'
 
 export type NavGroup = 'performance' | 'operations' | 'master' | 'system'
 
@@ -31,7 +32,8 @@ export const NAV_GROUP_LABELS: Record<NavGroup, string> = {
 
 export const NAV_GROUP_ORDER: NavGroup[] = ['performance', 'operations', 'master', 'system']
 
-export const NAV_ITEMS: NavItem[] = [
+/** Every menu entry, before the Commercial Documents go-live switch (see lib/commercialDocsApp.ts). */
+export const ALL_NAV_ITEMS: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['ALL'], permissionKey: 'page.dashboard' },
   {
     name: 'Management Dashboard',
@@ -147,3 +149,6 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'system',
   },
 ]
+
+/** What KLIP shows: without Commercial Documents / Commercial Dashboard once they live in their own app. */
+export const NAV_ITEMS: NavItem[] = withoutMovedPages(ALL_NAV_ITEMS)

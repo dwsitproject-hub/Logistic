@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { fetchCurrentUser, readUserLocally } from '@/lib/authSession'
+import { navigateTo } from '@/lib/commercialDocsApp'
 import { resolvePostAuthRedirect } from '@/lib/navigationAccess'
 
 export default function Home() {
@@ -22,7 +23,7 @@ export default function Home() {
       try {
         const route = await resolvePostAuthRedirect(user.role, user.id)
         if (route) {
-          router.replace(route)
+          navigateTo(router, route)
           return
         }
         router.replace('/login?error=no_access')

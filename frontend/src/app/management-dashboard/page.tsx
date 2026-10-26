@@ -7,6 +7,7 @@ import Layout from '@/components/Layout'
 import { DashboardContent } from '../dashboard/DashboardContent'
 import { canViewNavItem, getFirstAccessibleRoute, parsePermissionsResponse } from '@/lib/navigationAccess'
 import { NAV_ITEMS } from '@/lib/navigationConfig'
+import { commercialAppDestination, navigateTo } from '@/lib/commercialDocsApp'
 
 export default function ManagementDashboardPage() {
   const router = useRouter()
@@ -27,7 +28,7 @@ export default function ManagementDashboardPage() {
         const ok = mgmtNav ? canViewNavItem(mgmtNav, userRole, perms) : false
         if (!ok) {
           const fallback = getFirstAccessibleRoute(userRole, perms)
-          router.replace(fallback ?? '/login?error=no_access')
+          navigateTo(router, fallback ?? commercialAppDestination(perms) ?? '/login?error=no_access')
           return
         }
         setReady(true)

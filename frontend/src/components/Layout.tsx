@@ -20,6 +20,7 @@ import {
 } from '@/components/PermissionsContext'
 import { NAV_GROUP_LABELS, NAV_GROUP_ORDER, NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
+import { commercialAppDestination, movedPageUrl } from '@/lib/commercialDocsApp'
 import { clearClientDataCache } from '@/lib/clientDataCache'
 import {
   fetchCurrentUser,
@@ -302,8 +303,21 @@ function LayoutWithPermissions({
   useEffect(() => {
     if (!perms.loaded) return
 
+    // A Commercial page that moved to its own app: forward the old KLIP address to it.
+    const moved = movedPageUrl(pathname)
+    if (moved) {
+      window.location.replace(moved)
+      return
+    }
+
     const allowed = filterNavigationItems(NAV_ITEMS, user.role, perms)
     if (allowed.length === 0) {
+      // A document-only role has no KLIP page left once Commercial Documents is its own app: send it there.
+      const elsewhere = commercialAppDestination(perms)
+      if (elsewhere) {
+        window.location.replace(elsewhere)
+        return
+      }
       // Same two keys as before, through the one function every sign-out uses, so the Hub SDK
       // forgets this user here too.
       clearLocalAuth()

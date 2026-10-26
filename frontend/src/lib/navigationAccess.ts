@@ -7,6 +7,7 @@ import {
   seedPermissionsCache,
   type PermFlags,
 } from '@/components/PermissionsContext'
+import { commercialAppDestination } from '@/lib/commercialDocsApp'
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { navRoleAllowed } from '@/lib/userRoles'
 
@@ -73,13 +74,17 @@ export function isPathAccessible(pathname: string, allowed: NavItem[]): boolean 
   return allowed.some((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
 }
 
+/**
+ * The first KLIP page the user may open; failing that, the Commercial Documents app (an absolute URL) when the user may use it
+ * there; else null.
+ */
 export async function resolvePostAuthRedirect(userRole?: string, userId?: string): Promise<string | null> {
   const byKey = await loadUserPermissionsByKey()
   if (userId) {
     seedPermissionsCache(userId, byKey)
   }
   const perms: NavAccessContext = { byKey, loaded: true, userRole }
-  return getFirstAccessibleRoute(userRole, perms)
+  return getFirstAccessibleRoute(userRole, perms) ?? commercialAppDestination(perms)
 }
 
 export type StoredAuthUser = {
@@ -105,7 +110,8 @@ export async function redirectAfterAuth(
       setError('Your account has no accessible pages. Contact your administrator.')
       return
     }
-    router.push(route)
+    if (/^https?:\/\//i.test(route)) window.location.assign(route)
+    else router.push(route)
   } catch {
     clearLocalAuth()
     setError('Failed to load your permissions. Please try again.')
