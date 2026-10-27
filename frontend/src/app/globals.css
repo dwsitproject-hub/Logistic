@@ -13,6 +13,18 @@
     font-size: 90%;
   }
 
+  /*
+   * Large screens keep the original size. Checked on 2026-10-27: the laptop is 1920x1200 at 150% = 1280 CSS px wide
+   * (dense, 90%); the desktop monitor is 1920x1080 at 100% = 1920 CSS px (original, 100%). 1600 sits between them, with
+   * room for a window that is a little narrower than the screen. The width is in px on purpose: a media query in rem
+   * would be measured against the browser default, not this html size.
+   */
+  @media (min-width: 1600px) {
+    html {
+      font-size: 100%;
+    }
+  }
+
   :root {
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;

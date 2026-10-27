@@ -31,6 +31,8 @@
 * { box-sizing: border-box; }
 /* Laptop density, same as the KLIP app: sizes below are rem, so 90% here is what a 90% browser zoom gave. Hairlines (1px) and @media widths stay px. */
 html { font-size: 90%; }
+/* Large screens (1600 CSS px and wider, e.g. a 1920x1080 monitor at 100%) keep the original size; the 1920x1200 laptop at 150% is 1280 wide and stays dense. */
+@media (min-width: 1600px) { html { font-size: 100%; } }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 0.875rem/1.5 var(--font); }
 button, input, select, textarea { font: inherit; color: inherit; }
