@@ -88,6 +88,13 @@ describe('Shipments list: Jetty send state', () => {
       expect(rejPending.jetty_status).toBe('Pending');
       expect(rejPending.jetty_send_state).toBeNull();
 
+      // an instruction an operator DELETED at JPS is closed too: the newer revision stands for the STO, and alone it still shows
+      await ins('ZZ-DEL-ALONE', 1, 'SUBMITTED', { status: 'Deleted' });
+      expect((await jettyRowFor(client, 'ZZ-DEL-ALONE')).jetty_status).toBe('Deleted');
+      await ins('ZZ-DEL-THEN-PENDING', 1, 'SUBMITTED', { status: 'Deleted' });
+      await ins('ZZ-DEL-THEN-PENDING', 2, 'SUBMITTED', { status: 'Pending' });
+      expect((await jettyRowFor(client, 'ZZ-DEL-THEN-PENDING')).jetty_status).toBe('Pending');
+
       // an accepted instruction still beats a newer failed replacement (unchanged)
       await ins('ZZ-APPROVED-THEN-FAILED', 1, 'SUBMITTED', { status: 'Approved' });
       await ins('ZZ-APPROVED-THEN-FAILED', 2, 'FAILED', { error: 'VALIDATION_ERROR: nope' });

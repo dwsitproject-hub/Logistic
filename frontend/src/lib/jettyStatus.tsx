@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
  *
  * The values are JPS's own partner statuses, passed through untranslated: Pending (waiting for an
  * operator), Approved (accepted, no berth yet), Allocated (berth assigned), Sailed (vessel departed
- * - terminal, added in JPS v5.0), Rejected (declined, with a reason). Anything else means KLIP has
+ * - terminal, added in JPS v5.0), Rejected (declined, with a reason), Deleted (removed by a JPS operator; undocumented in the guide up to v5.6). Anything else means KLIP has
  * not submitted this STO.
  *
  * "Completed (Hose Off)" is the one value JPS does not send: JPS goes from Allocated straight to Sailed, and KLIP shows
@@ -20,6 +20,7 @@ export type JettyStatusValue =
   | 'Allocated'
   | 'Completed (Hose Off)'
   | 'Rejected'
+  | 'Deleted'
   | 'Sailed'
   | null
   | undefined
@@ -58,6 +59,8 @@ const BADGE_CLASS: Record<string, string> = {
   // Terminal and uneventful: the voyage is done, so it reads quieter than Allocated.
   Sailed: 'bg-slate-100 text-slate-700',
   Rejected: 'bg-red-100 text-red-800',
+  // An operator deleted the instruction at JPS (not in the partner guide): closed like Rejected, but nobody refused it, so it reads quieter.
+  Deleted: 'bg-gray-200 text-gray-700',
 }
 
 const NOT_SENT_CLASS = 'bg-gray-100 text-gray-600'

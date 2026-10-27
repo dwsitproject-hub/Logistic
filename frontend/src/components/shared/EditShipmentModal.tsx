@@ -3818,12 +3818,12 @@ export function EditShipmentModal({
               title={
                 requiresEditRemark
                   ? 'Save your changes first: the check reads the saved data'
-                  : jettyStatus?.jetty_status === 'Rejected'
-                    ? 'JPS rejected the last instruction: check what JPS needs and send a new one'
+                  : jettyStatus?.jetty_status === 'Rejected' || jettyStatus?.jetty_status === 'Deleted'
+                    ? 'JPS closed the last instruction (rejected or deleted): check what JPS needs and send a new one'
                     : 'Check what JPS needs for this STO and send it to the Jetty Planning System'
               }
             >
-              {jettyStatus?.jetty_status === 'Rejected' ? 'Resubmit to Jetty' : 'Submit to Jetty'}
+              {jettyStatus?.jetty_status === 'Rejected' || jettyStatus?.jetty_status === 'Deleted' ? 'Resubmit to Jetty' : 'Submit to Jetty'}
             </Button>
           ) : null}
           {jettyDialogOpen && shipmentId ? (

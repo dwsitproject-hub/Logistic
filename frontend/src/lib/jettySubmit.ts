@@ -24,8 +24,10 @@ export interface JettyTracker {
   rejectedAt?: string | null
 }
 
-/** Present when JPS rejected the instruction KLIP sent: sending again creates a NEW instruction under the next revision. */
+/** Present when JPS closed the instruction KLIP sent (rejected, or deleted by an operator): sending again creates a NEW instruction under the next revision. */
 export interface JettyResubmit {
+  /** What JPS says the closed instruction is: 'Rejected' or 'Deleted'. */
+  status?: string
   fromRevision: number
   rejectionReason: string | null
   rejectedAt: string | null
@@ -151,7 +153,7 @@ export function describeJettyRefresh(refresh: JettyRefreshOutcome): { tone: Jett
   switch (refresh.kind) {
     case 'refreshed':
       return refresh.changed
-        ? { tone: refresh.status === 'Rejected' ? 'warning' : 'success', text: `JPS now reports this instruction as ${refresh.status ?? 'unknown'} (it was ${refresh.previousStatus ?? 'unknown'} in KLIP).` }
+        ? { tone: refresh.status === 'Rejected' || refresh.status === 'Deleted' ? 'warning' : 'success', text: `JPS now reports this instruction as ${refresh.status ?? 'unknown'} (it was ${refresh.previousStatus ?? 'unknown'} in KLIP).` }
         : { tone: 'info', text: `JPS still reports ${refresh.status ?? 'no status'}; nothing changed.` }
     case 'too_soon': {
       const minutes = Math.ceil(refresh.retryInSeconds / 60)
@@ -167,10 +169,15 @@ export function describeJettyRefresh(refresh: JettyRefreshOutcome): { tone: Jett
 /** The explanation shown above the requirements when JPS rejected the instruction: why, what sending again does, and a warning if nothing was fixed. */
 export function describeJettyResubmit(resubmit: JettyResubmit): { title: string; lines: string[]; warning: string | null } {
   const when = resubmit.rejectedAt ? ` on ${resubmit.rejectedAt.slice(0, 10)}` : ''
+  const deleted = resubmit.status === 'Deleted'
   return {
-    title: `JPS rejected this instruction${when}`,
+    title: deleted ? `A JPS operator deleted this instruction${when}` : `JPS rejected this instruction${when}`,
     lines: [
-      resubmit.rejectionReason ? `Reason from JPS: ${resubmit.rejectionReason}` : 'JPS gave no reason. Ask the JPS operator, or fix what looks wrong and send again.',
+      resubmit.rejectionReason
+        ? `Reason from JPS: ${resubmit.rejectionReason}`
+        : deleted
+          ? 'JPS gives no reason for a deleted instruction. If it was deleted by mistake or the plan changed, send it again.'
+          : 'JPS gave no reason. Ask the JPS operator, or fix what looks wrong and send again.',
       `Sending again creates a NEW instruction (revision ${resubmit.fromRevision + 1}) with a new reference. The rejected one stays at JPS as history.`,
     ],
     warning:

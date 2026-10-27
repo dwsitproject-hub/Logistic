@@ -43,7 +43,7 @@ describe('checkJpsReadiness (read-only, against the database)', () => {
     for (const c of r.checks.filter((x) => !x.ok && x.key !== 'shipment')) expect(c.fix ?? c.value).toBeTruthy();
     // it cannot be submittable while any requirement fails
     // (an instruction JPS rejected is the one SUBMITTED row that can be sent again, as a new revision)
-    const heldByJps = r.tracker?.state === 'SUBMITTED' && r.tracker.jpsStatus !== 'Rejected';
+    const heldByJps = r.tracker?.state === 'SUBMITTED' && !['Rejected', 'Deleted'].includes(String(r.tracker.jpsStatus));
     expect(r.canSubmit).toBe(r.checks.every((c) => c.ok) && !heldByJps);
 
     const after = await query(`SELECT COUNT(*)::int AS n FROM jps_shipping_instructions`);

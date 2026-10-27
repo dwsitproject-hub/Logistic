@@ -13,6 +13,7 @@ import { isJpsEnabled, jpsDischargePort, jpsRegionSite } from './config';
 import { companiesForPort, fetchJpsPortCompanies } from './companies';
 import { EFFECTIVE_ATA_SQL, STO_KEY_SQL, findEligibleStos } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
+import { isJpsClosedStatus } from './types';
 import { JPS_CURRENT_ROW_ORDER_SQL } from '../utils/shipmentListStoJoinSql';
 
 /** Where the missing thing is fixed: on this shipment, in a KLIP master page, in SAP, or at JPS. */
@@ -40,8 +41,10 @@ export interface JpsTrackerState {
   rejectedAt: string | null;
 }
 
-/** Present when JPS rejected the instruction KLIP sent: the STO can be sent again, as a NEW instruction under the next revision. */
+/** Present when JPS closed the instruction KLIP sent (Rejected, or Deleted by an operator): the STO can be sent again, as a NEW instruction under the next revision. */
 export interface JpsResubmitInfo {
+  /** What JPS says the closed instruction is: 'Rejected' or 'Deleted'. */
+  status: string;
   fromRevision: number;
   rejectionReason: string | null;
   rejectedAt: string | null;
@@ -279,15 +282,15 @@ export async function checkJpsReadiness(shipmentId: string): Promise<JpsReadines
 
   const tracker = await loadTracker(stoKey);
   base.tracker = tracker;
-  // An instruction JPS REJECTED is closed there; the way forward JPS documents is a new instruction under a new reference, which is what a revision is.
+  // An instruction JPS REJECTED (or an operator DELETED) is closed at JPS; the way forward is a new instruction under a new reference, which is what a revision is.
   // Any other status is an instruction JPS holds (accepted or still open), and JPS has no way to replace it.
-  const rejected = tracker?.state === 'SUBMITTED' && tracker.jpsStatus === 'Rejected';
+  const rejected = tracker?.state === 'SUBMITTED' && isJpsClosedStatus(tracker.jpsStatus);
   if (tracker?.state === 'SUBMITTED' && !rejected) {
     base.reason = `Already at JPS (${tracker.jpsStatus ?? 'status pending'}). It cannot be sent again; JPS has no way to replace an accepted instruction.`;
     return base;
   }
   if (rejected && tracker) {
-    base.resubmit = { fromRevision: tracker.revision, rejectionReason: tracker.rejectionReason, rejectedAt: tracker.rejectedAt, payloadUnchanged: null };
+    base.resubmit = { status: tracker.jpsStatus as string, fromRevision: tracker.revision, rejectionReason: tracker.rejectionReason, rejectedAt: tracker.rejectedAt, payloadUnchanged: null };
   }
   if (tracker?.state === 'SKIPPED_PRE_EXISTING') {
     base.reason = 'Marked as already existing at JPS before KLIP went live, so KLIP does not send it.';

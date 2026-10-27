@@ -40,7 +40,7 @@ export const SHIPMENT_LIST_STO_JOIN_SQL = `
       LEFT JOIN po_numbers_agg pna ON pna.sto_key::text = sp.sto_key::text`;
 
 /** Which of an STO's tracker rows stands for it (alias j). The rule is explained on SHIPMENT_LIST_JPS_JOIN_SQL. */
-export const JPS_CURRENT_ROW_ORDER_SQL = `(j.state = 'SUBMITTED' AND COALESCE(j.jps_status, '') <> 'Rejected') DESC, j.revision DESC`;
+export const JPS_CURRENT_ROW_ORDER_SQL = `(j.state = 'SUBMITTED' AND COALESCE(j.jps_status, '') NOT IN ('Rejected', 'Deleted')) DESC, j.revision DESC`;
 
 /**
  * The Jetty Planning System instruction for this STO, if KLIP has submitted one.
@@ -57,7 +57,7 @@ export const JPS_CURRENT_ROW_ORDER_SQL = `(j.state = 'SUBMITTED' AND COALESCE(j.
  * does not change that (it is how this lateral behaved before FAILED was shown). Among rows of the same kind the newest revision wins: a rejected
  * instruction is replaced rather than amended, so an STO can accumulate several rows.
  *
- * A SUBMITTED row JPS has REJECTED does not hold that place: JPS closed it, and it is replaced by a new revision (Submit to Jetty on a rejected instruction),
+ * A SUBMITTED row JPS has REJECTED or DELETED does not hold that place: JPS closed it, and it is replaced by a new revision (Submit to Jetty on a rejected instruction),
  * so a newer row - Pending at JPS, or a refused / held replacement - is where the STO stands. Alone, the rejected row still shows. JPS_CURRENT_ROW_ORDER_SQL is
  * that one rule, used by this list, the Edit Shipment modal and the Submit to Jetty readiness check (alias j in all three).
  */

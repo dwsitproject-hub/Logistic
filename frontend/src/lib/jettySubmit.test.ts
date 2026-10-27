@@ -153,3 +153,22 @@ describe('describeJettyResubmit: a rejected instruction can be sent again, as a 
     expect(v.title).toBe('JPS rejected this instruction')
   })
 })
+
+describe('describeJettyResubmit: an instruction a JPS operator deleted', () => {
+  const deleted = { status: 'Deleted', fromRevision: 1, rejectionReason: null, rejectedAt: null, payloadUnchanged: false }
+
+  it('says it was deleted (nobody refused it), gives no invented reason, and offers a new revision', () => {
+    const v = describeJettyResubmit(deleted)
+    expect(v.title).toBe('A JPS operator deleted this instruction')
+    expect(v.lines[0]).toContain('no reason for a deleted instruction')
+    expect(v.lines.join('\n')).toContain('revision 2')
+  })
+
+  it('a rejection keeps its own wording', () => {
+    expect(describeJettyResubmit({ ...deleted, status: 'Rejected' }).title).toBe('JPS rejected this instruction')
+  })
+
+  it('Refresh reports a deletion as a warning, like a rejection', () => {
+    expect(describeJettyRefresh({ kind: 'refreshed', status: 'Deleted', previousStatus: 'Pending', changed: true }).tone).toBe('warning')
+  })
+})

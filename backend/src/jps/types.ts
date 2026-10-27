@@ -6,7 +6,18 @@
  * `Sailed` arrived with v5.0 and is terminal for a voyage, alongside `Rejected`. `Allocated` is no
  * longer the end of the story: the berthing milestones start arriving after it.
  */
-export type JpsPartnerStatus = 'Pending' | 'Approved' | 'Rejected' | 'Allocated' | 'Sailed';
+export type JpsPartnerStatus = 'Pending' | 'Approved' | 'Rejected' | 'Allocated' | 'Sailed' | 'Deleted';
+
+/**
+ * Statuses in which JPS has CLOSED the instruction: it will not move again, and the way forward is a NEW instruction under a new reference (the next revision).
+ * `Rejected` is documented (the operator declined). `Deleted` is not in any version of the partner guide (up to v5.6, 2026-10-27) but JPS answers it for an
+ * instruction an operator deleted, and told us the STO may be sent again under R<n+1> (2026-10-27).
+ */
+export const JPS_CLOSED_STATUSES = ['Rejected', 'Deleted'] as const;
+
+export function isJpsClosedStatus(status: string | null | undefined): boolean {
+  return (JPS_CLOSED_STATUSES as readonly string[]).includes(String(status ?? ''));
+}
 
 /**
  * The berthing milestones v5.0 added to the GET response.
