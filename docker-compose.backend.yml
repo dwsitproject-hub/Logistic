@@ -85,6 +85,10 @@ services:
       # Add to /opt/klip/backend/.env on the backend host; do not set them here.
       # OIDC SSO — values from /opt/klip/.env or backend/.env (must match Hub Admin registration).
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
+      # Public origin of Commercial Documents: invitation/reset links and Hub SSO tell the two apps apart by it. Set it in /opt/klip/.env like
+      # the OIDC_* keys: this line beats env_file, so a value only in backend/.env would be blanked. (Production had it ONLY in /opt/klip/.env
+      # on 2026-10-27 and the container saw nothing, because it was not passed here.)
+      COMMDOCS_URL: ${COMMDOCS_URL:-}
       CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
       SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
