@@ -88,6 +88,32 @@ export function jettyStatusLabel(row: JettyStatusFields | null | undefined): str
   return 'Not Sent'
 }
 
+/** What the Submit to Jetty button does for the status JPS holds: send (nothing at JPS), resubmit (JPS closed it), or locked (JPS holds a live instruction). */
+export type JettySubmitMode = 'submit' | 'resubmit' | 'locked'
+
+/**
+ * The button follows what JPS says about the instruction KLIP sent:
+ * - Rejected or Deleted: JPS closed it; sending again creates a NEW instruction (next revision), so the wording is "Resubmit to Jetty".
+ * - Any other status JPS holds (Pending, Approved, Allocated, Completed (Hose Off), Sailed): JPS has no way to replace it, so the button is disabled.
+ *   "Hose On" is not a status of its own: it is the ATS time, and the instruction stays Allocated while it happens. An unknown future status locks too,
+ *   which is the safe side: the backend refuses it as well.
+ * - Nothing at JPS (Not Sent, Send Failed, On Hold): the normal Submit to Jetty.
+ */
+export function jettySubmitMode(row: JettyStatusFields | null | undefined): JettySubmitMode {
+  const status = String(row?.jetty_status ?? '').trim()
+  if (!status) return 'submit'
+  return status === 'Rejected' || status === 'Deleted' ? 'resubmit' : 'locked'
+}
+
+/**
+ * Whether asking JPS for the status now can tell us something: the statuses KLIP's own poller keeps polling (an instruction that can still move). A Sailed,
+ * Rejected or Deleted instruction is final and is not asked about again.
+ */
+export function jettyCanRefresh(row: JettyStatusFields | null | undefined): boolean {
+  const status = String(row?.jetty_status ?? '').trim()
+  return ['Pending', 'Approved', 'Allocated', 'Completed (Hose Off)'].includes(status)
+}
+
 /**
  * The extra context a user needs on hover: which berth, when it is planned, or why it was turned
  * down. JPS gives no way to cancel or amend an instruction after approval, so a rejection reason is

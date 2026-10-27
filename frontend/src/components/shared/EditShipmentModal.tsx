@@ -18,8 +18,10 @@ import {
   JETTY_SEND_FAILED,
   JettyStatusBadge,
   formatJettySyncDates,
+  jettyCanRefresh,
   jettySendStateTooltip,
   jettyStatusLabel,
+  jettySubmitMode,
   jettySyncDatesTooltip,
   type JettyStatusFields,
 } from '@/lib/jettyStatus'
@@ -44,6 +46,7 @@ import {
   MapPin,
   MessageSquare,
   Plus,
+  RefreshCw,
   Ship,
   Upload,
   Download,
@@ -69,6 +72,7 @@ import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import api from '@/lib/api'
 import { JETTY_COLUMNS_ENABLED } from '@/lib/jettyFeature'
 import { SubmitToJettyDialog } from '@/components/shared/SubmitToJettyDialog'
+import { describeJettyRefresh, type JettyRefreshResult } from '@/lib/jettySubmit'
 import { drawnPortLabel } from '@/lib/dischargePortFilter'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
@@ -905,6 +909,8 @@ export function EditShipmentModal({
   const [shipmentInfo, setShipmentInfo] = useState<Record<string, unknown>>({})
   const [jettyStatus, setJettyStatus] = useState<JettyStatusFields | null>(null)
   const [jettyDialogOpen, setJettyDialogOpen] = useState(false)
+  const [jettyRefreshing, setJettyRefreshing] = useState(false)
+  const [jettyRefreshNote, setJettyRefreshNote] = useState<string>('')
   /** Show the JPS legend entry only when JPS has actually reported an actual for this shipment. */
   const jpsCoversShipment = Object.values(jettyStatus?.jps_ata ?? {}).some((v) => Boolean(v))
   const [ataFields, setAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
@@ -1195,6 +1201,33 @@ export function EditShipmentModal({
       setJettyStatus((res.data?.data as { jettyStatus?: JettyStatusFields | null } | null)?.jettyStatus ?? null)
     } catch {
       /* the badge refreshes the next time the modal opens */
+    }
+  }
+  /**
+   * Whatever changed the Jetty status (a submission, a resubmission, a refresh that found a new status) must reach the list behind this modal too: the page
+   * re-reads it through onShipmentChanged, as it does after a save. The backend has already cleared its own cache for the list.
+   */
+  const jettyChanged = () => {
+    void refreshJettyStatus()
+    onShipmentChanged?.()
+  }
+  /** Ask JPS now (the icon beside the Jetty Status), so the user does not wait for the next check; shows what JPS said and updates the list when it changed. */
+  const refreshJettyFromJps = async () => {
+    if (!shipmentId || jettyRefreshing) return
+    setJettyRefreshing(true)
+    setJettyRefreshNote('')
+    try {
+      const res = await api.post(`/shipments/${shipmentId}/jetty/refresh`)
+      const data = res.data?.data as JettyRefreshResult | undefined
+      if (data?.refresh) {
+        setJettyRefreshNote(describeJettyRefresh(data.refresh).text)
+        if (data.refresh.kind === 'refreshed' && data.refresh.changed) jettyChanged()
+      }
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: { message?: string } } }; message?: string }
+      setJettyRefreshNote(e?.response?.data?.error?.message || e?.message || 'Could not ask JPS')
+    } finally {
+      setJettyRefreshing(false)
     }
   }
   const showRemarkField =
@@ -2561,6 +2594,18 @@ export function EditShipmentModal({
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-gray-600">Jetty Status</span>
                     <JettyStatusBadge row={jettyStatus} />
+                    {showSubmitToJetty && jettyCanRefresh(jettyStatus) && (
+                      <button
+                        type="button"
+                        onClick={() => void refreshJettyFromJps()}
+                        disabled={jettyRefreshing}
+                        className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50"
+                        title="Ask JPS for the current status now"
+                        aria-label="Refresh Jetty Status from JPS"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${jettyRefreshing ? 'animate-spin' : ''}`} />
+                      </button>
+                    )}
                     {jettyStatus?.jetty_name && (
                       <span className="text-xs text-gray-500">{jettyStatus.jetty_name}</span>
                     )}
@@ -2574,6 +2619,11 @@ export function EditShipmentModal({
                     </span>
                   )}
                 </div>
+                {jettyRefreshNote && (
+                  <div role="status" className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                    {jettyRefreshNote}
+                  </div>
+                )}
                 {jettyStatus?.jetty_rejection_reason && (
                   <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                     Jetty request rejected: {jettyStatus.jetty_rejection_reason}
@@ -3606,6 +3656,7 @@ export function EditShipmentModal({
                             klipEditedBy={describeKlipFieldEdit(klipFieldHistory, portKey)}
                             format="number"
                             compact
+                            zeroIsEmpty
                             hidden={
                               showQualityDifferencesOnly &&
                               !hasKlipSapMismatch(klipVal, sapVal, 'number')
@@ -3651,6 +3702,7 @@ export function EditShipmentModal({
                           klipEditedBy={describeKlipFieldEdit(klipFieldHistory, portKey)}
                           format="number"
                           compact
+                          zeroIsEmpty
                           hidden={
                             showQualityDifferencesOnly &&
                             !hasKlipSapMismatch(klipVal, sapVal, 'number')
@@ -3814,23 +3866,25 @@ export function EditShipmentModal({
             <Button
               className="h-9 bg-green-600 text-white hover:bg-green-700"
               onClick={() => setJettyDialogOpen(true)}
-              disabled={saving || loading || !shipmentId || requiresEditRemark}
+              disabled={saving || loading || !shipmentId || requiresEditRemark || jettySubmitMode(jettyStatus) === 'locked'}
               title={
                 requiresEditRemark
                   ? 'Save your changes first: the check reads the saved data'
-                  : jettyStatus?.jetty_status === 'Rejected' || jettyStatus?.jetty_status === 'Deleted'
-                    ? 'JPS closed the last instruction (rejected or deleted): check what JPS needs and send a new one'
-                    : 'Check what JPS needs for this STO and send it to the Jetty Planning System'
+                  : jettySubmitMode(jettyStatus) === 'locked'
+                    ? `JPS already holds this instruction (${jettyStatusLabel(jettyStatus)}). It cannot be sent again; only a rejected or deleted instruction can be resubmitted.`
+                    : jettySubmitMode(jettyStatus) === 'resubmit'
+                      ? 'JPS closed the last instruction (rejected or deleted): check what JPS needs and send a new one'
+                      : 'Check what JPS needs for this STO and send it to the Jetty Planning System'
               }
             >
-              {jettyStatus?.jetty_status === 'Rejected' || jettyStatus?.jetty_status === 'Deleted' ? 'Resubmit to Jetty' : 'Submit to Jetty'}
+              {jettySubmitMode(jettyStatus) === 'resubmit' ? 'Resubmit to Jetty' : 'Submit to Jetty'}
             </Button>
           ) : null}
           {jettyDialogOpen && shipmentId ? (
             <SubmitToJettyDialog
               shipmentId={shipmentId}
               onClose={() => setJettyDialogOpen(false)}
-              onSent={() => void refreshJettyStatus()}
+              onSent={jettyChanged}
             />
           ) : null}
           </div>

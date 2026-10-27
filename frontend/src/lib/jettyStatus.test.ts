@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { jettySendStateTooltip, jettyStatusLabel, jettyStatusTooltip } from './jettyStatus'
+import { jettyCanRefresh, jettySendStateTooltip, jettyStatusLabel, jettyStatusTooltip, jettySubmitMode } from './jettyStatus'
 
 describe('Jetty Status label', () => {
   it('shows what the server sends, and Not Sent for none', () => {
@@ -50,5 +50,43 @@ describe('Jetty Status tells "never tried" from "tried and failed" from "held ba
   it('has no hover text for Not Sent', () => {
     expect(jettyStatusTooltip({ jetty_status: null })).toBeUndefined()
     expect(jettySendStateTooltip(null)).toBeUndefined()
+  })
+})
+
+describe('Submit to Jetty button: what JPS holds decides what it does', () => {
+  it('Rejected and Deleted can be resubmitted', () => {
+    expect(jettySubmitMode({ jetty_status: 'Rejected' })).toBe('resubmit')
+    expect(jettySubmitMode({ jetty_status: 'Deleted' })).toBe('resubmit')
+  })
+
+  it('every status JPS holds locks it, including the stage after Hose Off and Sailed', () => {
+    for (const status of ['Pending', 'Approved', 'Allocated', 'Completed (Hose Off)', 'Sailed']) {
+      expect(jettySubmitMode({ jetty_status: status })).toBe('locked')
+    }
+  })
+
+  it('a status KLIP does not know yet locks too (the backend refuses it as well)', () => {
+    expect(jettySubmitMode({ jetty_status: 'Something New' })).toBe('locked')
+  })
+
+  it('nothing at JPS (Not Sent, Send Failed, On Hold) is the plain Submit to Jetty', () => {
+    expect(jettySubmitMode(null)).toBe('submit')
+    expect(jettySubmitMode({ jetty_status: null })).toBe('submit')
+    expect(jettySubmitMode({ jetty_status: '  ', jetty_send_state: 'FAILED' })).toBe('submit')
+    expect(jettySubmitMode({ jetty_status: null, jetty_send_state: 'HELD' })).toBe('submit')
+  })
+})
+
+describe('Refresh from JPS: only where the status can still move', () => {
+  it('offered for the statuses the poller keeps polling', () => {
+    for (const status of ['Pending', 'Approved', 'Allocated', 'Completed (Hose Off)']) {
+      expect(jettyCanRefresh({ jetty_status: status })).toBe(true)
+    }
+  })
+
+  it('not offered for a final status, or when nothing is at JPS', () => {
+    for (const status of ['Sailed', 'Rejected', 'Deleted']) expect(jettyCanRefresh({ jetty_status: status })).toBe(false)
+    expect(jettyCanRefresh(null)).toBe(false)
+    expect(jettyCanRefresh({ jetty_status: null, jetty_send_state: 'FAILED' })).toBe(false)
   })
 })
