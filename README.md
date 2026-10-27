@@ -4364,7 +4364,7 @@ the discharge port row, and matches Master Port and the plant aliases on that na
 query found a vessel's Master Vessel only through the shipment's own link or a registered code alias, and `MWARR2` is neither.
 The Shipments page also matches the vessel code and the normalized name, so the JPS query now resolves the vessel with the same
 helper (`sqlResolveMasterVesselIdFromShipment`). A Master Vessel still has to be synced to DHM (its Vessel Code (DHM) filled)
-before it can be sent, and JPS must hold the vessel's LOA.
+before it can be sent. JPS no longer asks for the vessel's LOA, GT or draft (API v5.6, update of 2026-10-27): a blank master value is stored null and the submit goes through; only a value that is present but not a positive number is still refused (400 on `vessel_name`). An instruction already FAILED for "Master vessel LOA is missing" stays FAILED until it is sent again (Submit to Jetty).
 
 **Integrations > JPS and DHM > History.** Every call KLIP makes to JPS or to DHM is recorded, in `jps_api_calls`
 (migration 220) and `dhm_api_calls` (migration 221): kind, method and URL, what names the call (the STO key and

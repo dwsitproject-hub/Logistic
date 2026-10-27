@@ -4,7 +4,7 @@
 >
 > **What you can do:** Sync reference master data, submit Shipping Instructions, update PO/SO while Pending, **name the operating company** (`company_hub_code`), **send HTTP or HTTPS links** to SI / contract / B/L documents, **receive approval and milestone updates via webhooks**, and poll enriched status (including TA, ETB, TB, ETC, TC, **Hose On/Off** (`cargo_ops_start_at` / `cargo_ops_end_at`), cast off, sailed). JPS operators update berthing milestones in the web app — your system receives those changes; you do not write them back via API.
 >
-> **What's new in v5.6:** **`company_hub_code`** on POST and PATCH (Pending) stores the operating company on the Shipping Instruction (`shipping_instructions.company_id`). This is the DataHub organization, not the cargo-line shipper. Required when the port has more than one mapped company; when the port has exactly one, omit it and JPS stores that company. **201**, GET, and webhook `data` echo **`company_hub_code`** and **`company_name`**. Catalog entity **`company`**. Header **`X-JPS-API-Version: 5.6`**.
+> **What's new in v5.6:** **`company_hub_code`** on POST and PATCH (Pending) stores the operating company on the Shipping Instruction (`shipping_instructions.company_id`). This is the DataHub organization, not the cargo-line shipper. Required when the port has more than one mapped company; when the port has exactly one, omit it and JPS stores that company. **201**, GET, and webhook `data` echo **`company_hub_code`** and **`company_name`**. Catalog entity **`company`**. A blank master **LOA**, **GT**, or **draft** is stored null on the plan and no longer returns **400**; a non-positive master value is still **400**. Header **`X-JPS-API-Version: 5.6`**.
 >
 > **What's new in v5.5:** **`schedule.cargo_ops_start_at`** / **`schedule.cargo_ops_end_at`** map KLIP **Hose On** / **Hose Off** to JPS Cargo Operations **operation window** start/end (`operation_operational_activities.start_at` / `end_at` on `cargo_operations`). **`cast_off_at`** remains vessel cast-off (clearance), not Hose Off. Header **`X-JPS-API-Version: 5.5`**. KLIP integrators: use v5.5 fields for ATS/ATC.
 >
@@ -27,7 +27,7 @@
 ### 1.1 How it works
 
 1. Your system **lists** JPS reference data (`GET /terms`, `/agents`, `/surveyors`, `/shippers`) and **registers** agents/shippers via `POST`/`PATCH` when needed.
-2. Your system **submits** a Shipping Instruction via `POST`, identifying the vessel by **`vessel_hub_code`** (preferred) or unique **`vessel_name`**. JPS maps this to master vessel data and snapshots name/LOA/GT/draft on the plan. Optionally include `po_no`, `so_no`, `shipper_name`, `trade_term`, `surveyor_name`.
+2. Your system **submits** a Shipping Instruction via `POST`, identifying the vessel by **`vessel_hub_code`** (preferred) or unique **`vessel_name`**. JPS maps this to master vessel data and snapshots name/LOA/GT/draft on the plan. Optionally include `po_no`, `so_no`, `sto_no`, `shipper_name`, `trade_term`, `surveyor_name`.
 3. If PO/SO are not ready at submit time, your system **PATCH**es the instruction while status is **`Pending`**.
 4. JPS creates a real **Shipment Plan** + **Shipping Instruction** with partner status **`Pending`**.
 5. A JPS operator **reviews** in the web app and **Approves** or **Rejects**.
@@ -251,6 +251,7 @@ curl -sS -X POST "http://172.28.92.56:3080/api/v1/integrations/shipping-instruct
         "contract_no": "CTR-7788",
         "po_no": "PO-12345",
         "so_no": "SO-67890",
+        "sto_no": "STO-4455",
         "shipper_name": "PT TJIM"
       }
     ]
@@ -286,10 +287,10 @@ curl -sS -X POST "http://172.28.92.56:3080/api/v1/integrations/shipping-instruct
 
 | Field | Required? | Description |
 |-------|-----------|-------------|
-| `vessel_hub_code` | **Yes** | DataHub / JPS master vessel code (e.g. `VSL-0001`). JPS resolves `master_vessels` and snapshots name, LOA, GT, draft on the plan. |
+| `vessel_hub_code` | **Yes** | DataHub / JPS master vessel code (e.g. `VSL-0001`). JPS resolves `master_vessels` and snapshots name, LOA, GT, and draft on the plan. A blank master dimension is stored as null. |
 | `vessel_name` | No (optional cross-check) | When sent with `vessel_hub_code`, names must agree (case-insensitive) or **400**. **`vessel_name` alone is not accepted (v5.3+).** |
 
-Partners do **not** send `master_vessel_id`, LOA, GT, or draft — JPS copies those from master internally.
+Partners do **not** send `master_vessel_id`, LOA, GT, or draft. JPS copies them from master. When a master value is blank, the plan column is **null** and the submit still succeeds. A master value that is present but not a positive number returns **400**.
 
 **Common vessel errors (`400 VALIDATION_ERROR`):**
 
@@ -298,7 +299,7 @@ Partners do **not** send `master_vessel_id`, LOA, GT, or draft — JPS copies th
 | Unknown `vessel_hub_code` | `vessel_hub_code` |
 | Name mismatch with `vessel_hub_code` | `vessel_name` |
 | Unknown or ambiguous `vessel_name` | `vessel_name` |
-| Master missing LOA/GT/draft | `vessel_name` |
+| Master LOA, GT, or draft is present but not a positive number | `vessel_name` |
 
 #### Port identification (`port_hub_code`)
 
@@ -459,7 +460,7 @@ curl -sS -X PATCH "http://172.28.92.56:3080/api/v1/integrations/shipping-instruc
     "trade_term": "FOB",
     "surveyor_name": "PT SGS Indonesia",
     "cargo": [
-      { "line_order": 0, "po_no": "PO-12345", "so_no": "SO-67890", "shipper_name": "PT TJIM" }
+      { "line_order": 0, "po_no": "PO-12345", "so_no": "SO-67890", "sto_no": "STO-4455", "shipper_name": "PT TJIM" }
     ]
   }'
 ```
@@ -689,6 +690,7 @@ curl -sS "$JPS_API_BASE_URL/catalog/shipping-instruction" -H "x-api-key: $JPS_AP
 | `contract_no` | string (max 100) | No | Your contract reference. |
 | `po_no` | string (max 100) | No | Purchase order number (breakdown line). |
 | `so_no` | string (max 100) | No | Sales order number (breakdown line). |
+| `sto_no` | string (max 100) | No | Stock transfer order number (STO No) on the breakdown line. |
 | `shipper_name` | string (max 200) | No | Must exist in JPS — create first via **`POST /shippers`**. |
 
 All cargo lines on one instruction must be the same commodity type category (Solid or Liquid).
@@ -702,7 +704,7 @@ At least one field required. Allowed while status is **`Pending`** only.
 | `trade_term` | Update SI trade term (code from **`GET /terms`**) |
 | `surveyor_name` | Update SI surveyor (from **`GET /surveyors`**) |
 | `company_hub_code` | Correct the operating company (same rules as POST). Omit to leave it unchanged. |
-| `cargo[]` | Array of line updates — each line must include **`line_order`** or **`contract_no`** to identify the row, plus any of: `po_no`, `so_no`, `shipper_name` |
+| `cargo[]` | Array of line updates — each line must include **`line_order`** or **`contract_no`** to identify the row, plus any of: `po_no`, `so_no`, `sto_no`, `shipper_name` |
 | `shipping_instruction_document_url` | Update SI document link (HTTP or HTTPS) |
 | `contract_document_url` | Update contract document link |
 | `bl_document_url` | Update B/L document link |
@@ -988,7 +990,7 @@ curl -sS -X POST "$JPS_API_BASE_URL/shippers" \
 curl -sS -X PATCH "$JPS_API_BASE_URL/shipping-instructions/$SI_ID" \
   -H "x-api-key: $JPS_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"cargo":[{"line_order":0,"po_no":"PO-12345","so_no":"SO-67890","shipper_name":"PT TJIM"}]}'
+  -d '{"cargo":[{"line_order":0,"po_no":"PO-12345","so_no":"SO-67890","sto_no":"STO-4455","shipper_name":"PT TJIM"}]}'
 ```
 
 **Check:** PATCH returns `200` and `"status": "Pending"`. After operator approval, PATCH returns **409** `INVALID_STATE`.
@@ -1038,8 +1040,8 @@ Coordinate with the JPS team for operator steps, or request a test login if you 
 3. Add requests:
    - **GET** `{{baseUrl}}/terms` and `{{baseUrl}}/shippers`
    - **POST** `{{baseUrl}}/shippers` — body: `{"name":"PT TJIM"}`
-   - **POST** `{{baseUrl}}/shipping-instructions` — headers: `x-api-key: {{apiKey}}`, body: JSON from Test 2 (add `po_no`, `so_no`, `shipper_name`, `trade_term` as needed)
-   - **PATCH** `{{baseUrl}}/shipping-instructions/{{siId}}` — body: `{"cargo":[{"line_order":0,"po_no":"PO-1","so_no":"SO-1"}]}`
+   - **POST** `{{baseUrl}}/shipping-instructions` — headers: `x-api-key: {{apiKey}}`, body: JSON from Test 2 (add `po_no`, `so_no`, `sto_no`, `shipper_name`, `trade_term` as needed)
+   - **PATCH** `{{baseUrl}}/shipping-instructions/{{siId}}` — body: `{"cargo":[{"line_order":0,"po_no":"PO-1","so_no":"SO-1","sto_no":"STO-1"}]}`
    - **GET** `{{baseUrl}}/shipping-instructions/{{siId}}` — header: `x-api-key: {{apiKey}}`
    - **GET** `{{baseUrl}}/shipping-instructions?external_reference={{externalRef}}`
 
@@ -1100,7 +1102,7 @@ function updatePoSo(jps_id, lines):
 - [ ] `company_hub_code` ← operating company from `GET /catalog/company` for that port (required when the port lists more than one; omit when it lists exactly one)
 - [ ] `trade_term` / `surveyor_name` ← codes/names from `GET /terms` and `GET /surveyors`
 - [ ] `shipper_name` ← create via `POST /shippers` before submit if not in JPS
-- [ ] `po_no` / `so_no` ← on cargo lines at submit, or via `PATCH` while Pending
+- [ ] `po_no` / `so_no` / `sto_no` ← on cargo lines at submit, or via `PATCH` while Pending
 - [ ] `purpose` ← `"Loading"` or `"Unloading"` from your business logic
 - [ ] `eta` / `etd` ← ISO 8601 UTC
 ### 7.4 What you do not need to build
@@ -1145,6 +1147,7 @@ When reporting issues, include:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 5.6 | 2026-10-27 | Optional cargo-line **`sto_no`** (STO No) on POST and Pending PATCH, same pattern as `po_no` / `so_no`. Blank master **LOA**, **GT**, or **draft** is stored null on the partner plan (no longer **400**). A non-positive master value is still **400**. Header unchanged. |
 | 5.6 | 2026-10-26 | **Operating company:** `company_hub_code` on POST and Pending PATCH. Required when the port has more than one mapped company; one mapped company is stored when omitted. **201**, GET, and webhook `data` echo `company_hub_code` and `company_name`. Catalog entity `company`. Header **`X-JPS-API-Version: 5.6`**. |
 | 5.5 | 2026-10-05 | KLIP **Hose On/Off:** **`cargo_ops_start_at`** / **`cargo_ops_end_at`** = Cargo Operations **operation window** start/end. **`cast_off_at`** documented as vessel cast-off only. Header **`X-JPS-API-Version: 5.5`**. |
 | 5.4 | 2026-10-05 | **`schedule.cargo_ops_start_at`** (superseded by v5.5 for KLIP). Header **`X-JPS-API-Version: 5.4`**. |
@@ -1164,3 +1167,4 @@ When reporting issues, include:
 | 1.0 | 2026-04-23 | Initial draft (HMAC-SHA256). |
 
 Owner: JPS Backend/API Team
+

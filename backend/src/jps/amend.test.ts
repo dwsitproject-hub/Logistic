@@ -79,3 +79,31 @@ describe('buildJpsAmendBody', () => {
     expect(buildJpsAmendBody(null, base())).toBeNull();
   });
 });
+
+describe('buildJpsAmendBody: sto_no on the cargo lines (JPS 5.6)', () => {
+  const withLine = (line: Record<string, unknown>): JpsSubmitPayload =>
+    base({ cargo: [{ cargo_hub_code: 'CPO', tonnage: 100, unit: 'MT', contract_no: 'C-1', po_no: 'PO-1', ...line }] });
+
+  it('adds the STO to a Pending instruction that was submitted without one (the first sweep after the field existed)', () => {
+    expect(buildJpsAmendBody(withLine({}), withLine({ sto_no: '1006020269' }))).toEqual({
+      cargo: [{ contract_no: 'C-1', sto_no: '1006020269' }],
+    });
+  });
+
+  it('sends only the field that moved: a new STO does not resend an unchanged PO, and a new PO does not resend an unchanged STO', () => {
+    expect(buildJpsAmendBody(withLine({ sto_no: '1' }), withLine({ sto_no: '2' }))).toEqual({ cargo: [{ contract_no: 'C-1', sto_no: '2' }] });
+    expect(buildJpsAmendBody(withLine({ sto_no: '1' }), withLine({ sto_no: '1', po_no: 'PO-9' }))).toEqual({ cargo: [{ contract_no: 'C-1', po_no: 'PO-9' }] });
+    expect(buildJpsAmendBody(withLine({ sto_no: '1' }), withLine({ sto_no: '2', po_no: 'PO-9' }))).toEqual({
+      cargo: [{ contract_no: 'C-1', po_no: 'PO-9', sto_no: '2' }],
+    });
+  });
+
+  it('sends nothing when the STO is the same, and never invents one for a line that has none', () => {
+    expect(buildJpsAmendBody(withLine({ sto_no: '1006020269' }), withLine({ sto_no: '1006020269' }))).toBeNull();
+    expect(buildJpsAmendBody(withLine({}), withLine({}))).toBeNull();
+  });
+
+  it('does not try to clear an STO that has gone (there is no way to clear one at JPS)', () => {
+    expect(buildJpsAmendBody(withLine({ sto_no: '1006020269' }), withLine({}))).toBeNull();
+  });
+});

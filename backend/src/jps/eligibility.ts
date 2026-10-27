@@ -288,7 +288,8 @@ export async function findEligibleStos(
                'product_hub_code', CASE WHEN COALESCE(pc.dhm_is_deleted, FALSE) THEN NULL ELSE pc.code_dhm END,
                'product_deleted', COALESCE(pc.dhm_is_deleted, FALSE),
                'sto_quantity_kg', x.sto_quantity_kg,
-               'contract_quantity_kg', x.contract_quantity_kg
+               'contract_quantity_kg', x.contract_quantity_kg,
+               'sto_no', x.sto_no
              ) ORDER BY x.contract_no) AS lines
       FROM eligible e
       INNER JOIN LATERAL (
@@ -296,7 +297,9 @@ export async function findEligibleStos(
                c.po_number AS po_no,
                c.product AS product,
                SUM(cs.sto_quantity) AS sto_quantity_kg,
-               MAX(c.quantity_ordered) AS contract_quantity_kg
+               MAX(c.quantity_ordered) AS contract_quantity_kg,
+               -- JPS 5.6 cargo-line sto_no: the STO number of this line. Only a real SAP STO is named here; the arm below has none and sends nothing.
+               MAX(NULLIF(TRIM(cs.sto_number), '')) AS sto_no
         FROM contract_stos cs
         INNER JOIN contracts c ON c.id = cs.contract_id
         WHERE UPPER(TRIM(cs.sto_number)) = UPPER(e.sto_key)
@@ -320,7 +323,9 @@ export async function findEligibleStos(
                c.po_number AS po_no,
                c.product AS product,
                c.quantity_ordered AS sto_quantity_kg,
-               c.quantity_ordered AS contract_quantity_kg
+               c.quantity_ordered AS contract_quantity_kg,
+               -- No STO yet (manual shipment, or a transaction that has none, like CIF): no sto_no, and no other identifier is sent in its place.
+               NULL::text AS sto_no
         FROM contracts c
         WHERE c.id::text = ANY(COALESCE(e.contract_ids, ARRAY[]::text[]))
           AND NOT EXISTS (
@@ -424,6 +429,7 @@ export async function findEligibleStos(
       product: line.product ?? null,
       product_hub_code: line.product_hub_code ?? null,
       product_deleted: line.product_deleted === true,
+      sto_no: String(line.sto_no ?? '').trim() || null,
       sto_quantity_kg: line.sto_quantity_kg == null ? null : Number(line.sto_quantity_kg),
       contract_quantity_kg:
         line.contract_quantity_kg == null ? null : Number(line.contract_quantity_kg),

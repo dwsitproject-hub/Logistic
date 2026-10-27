@@ -92,3 +92,4 @@ Partners map industry labels to fields in webhook/GET **`data.schedule`**:
 | Vessel sailed | `cast_off_at`, `sailed_at` | Clearance / depart — not Hose Off |
 
 **`schedule.updated`** fires when these schedule fields change (including Cargo Operations window start/end on create/update/delete). Load-segment-only edits do not change Hose On/Off.
+

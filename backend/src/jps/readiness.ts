@@ -5,7 +5,7 @@
  * problem list for the master data), plus one query that reads each condition on its own, because the rule only says "not eligible" and the user needs to
  * know which condition. Writes nothing and calls nothing at JPS except the port/company catalog the payload builder asks for.
  *
- * JPS has no dry-run endpoint, so what only JPS can know - its own master data, e.g. a vessel whose LOA is empty - cannot be checked here; it shows
+ * JPS has no dry-run endpoint, so what only JPS can know - its own master data, e.g. a vessel dimension it holds as 0 - cannot be checked here; it shows
  * up in the answer to the real submission.
  */
 import { query } from '../database/connection';

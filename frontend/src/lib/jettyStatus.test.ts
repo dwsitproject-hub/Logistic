@@ -35,11 +35,11 @@ describe('Jetty Status tells "never tried" from "tried and failed" from "held ba
   it('the hover text carries what JPS answered or what is missing, and the time', () => {
     const failed = jettyStatusTooltip({
       jetty_send_state: 'FAILED',
-      jetty_send_error: 'VALIDATION_ERROR: vessel_name: Master vessel LOA is missing',
+      jetty_send_error: 'VALIDATION_ERROR: vessel_name: Master LOA must be a positive number',
       jetty_send_at: '2026-10-27T01:50:00Z',
     })
     expect(failed).toContain('JPS did not accept it')
-    expect(failed).toContain('Master vessel LOA is missing')
+    expect(failed).toContain('Master LOA must be a positive number')
     expect(failed).toContain('Last attempt:')
 
     const held = jettyStatusTooltip({ jetty_send_state: 'HELD', jetty_send_error: 'product POME has no JPS cargo_hub_code' })

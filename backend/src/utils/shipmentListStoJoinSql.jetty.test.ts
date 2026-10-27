@@ -44,11 +44,11 @@ describe('Shipments list: Jetty send state', () => {
       expect((await jettyRowFor(client, 'ZZ-SEEDED')).jetty_send_state).toBeNull();
 
       // tried and refused
-      await ins('ZZ-FAILED', 1, 'FAILED', { error: 'VALIDATION_ERROR: vessel_name: Master vessel LOA is missing' });
+      await ins('ZZ-FAILED', 1, 'FAILED', { error: 'VALIDATION_ERROR: vessel_name: Master LOA must be a positive number' });
       const failed = await jettyRowFor(client, 'ZZ-FAILED');
       expect(failed.jetty_status).toBeNull();
       expect(failed.jetty_send_state).toBe('FAILED');
-      expect(failed.jetty_send_error).toContain('Master vessel LOA is missing');
+      expect(failed.jetty_send_error).toContain('Master LOA must be a positive number');
       expect(failed.jetty_send_at).not.toBeNull();
 
       // held back by KLIP

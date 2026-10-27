@@ -55,7 +55,7 @@ describe('submitOneSto: what happened to one STO, and what was recorded', () => 
       status: 400,
       code: 'VALIDATION_ERROR',
       message: 'Payload validation failed',
-      details: [{ field: 'vessel_name', issue: 'Master vessel LOA is missing' }],
+      details: [{ field: 'vessel_name', issue: 'Master LOA must be a positive number' }],
       requestId: 'req-1',
       retryable: false,
     });
@@ -63,8 +63,8 @@ describe('submitOneSto: what happened to one STO, and what was recorded', () => 
     expect(out.kind).toBe('failed');
     if (out.kind !== 'failed') return;
     expect(out.code).toBe('VALIDATION_ERROR');
-    expect(out.details).toEqual(['vessel_name: Master vessel LOA is missing']);
-    expect(out.message).toContain('Master vessel LOA is missing');
+    expect(out.details).toEqual(['vessel_name: Master LOA must be a positive number']);
+    expect(out.message).toContain('Master LOA must be a positive number');
     expect(out.requestId).toBe('req-1');
     expect(out.listChanged).toBe(true);
     expect(writes().some((t) => t.includes("'FAILED'"))).toBe(true);

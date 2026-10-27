@@ -4,7 +4,7 @@
  * JPS lets a partner amend an instruction only while its status is Pending. v5.2 adds the three
  * document links to that list (catalog: patchable URL fields). The v4.2 set is still:
  *
- *   trade_term, surveyor_name, and per cargo line: po_no, so_no, shipper_name
+ *   trade_term, surveyor_name, and per cargo line: po_no, so_no, sto_no (v5.6), shipper_name
  *   plus shipping_instruction_document_url, contract_document_url, bl_document_url
  *   plus (v5.6) company_hub_code, the operating company
  *
@@ -16,6 +16,8 @@
  *   - `trade_term`, from the contract incoterm. Changes when an STO's contracts stop disagreeing
  *     about it, or when SAP corrects one.
  *   - `po_no` per line, when the STO's contract composition changes between submit and approval.
+ *   - `sto_no` per line (v5.6): sent on submit when the line has an STO, and added here to a Pending instruction that was submitted without it (the first sweep after
+ *     the field existed), or when SAP corrects it. A line with no STO never gets one, and nothing else is sent in its place.
  *   - `surveyor_name` and `shipper_name` are never sent - KLIP has no surveyor, and JPS rejects a
  *     shipper that is not already in its master.
  *   - the three document URLs, when a Contract, SI, or BL file is uploaded after the submit.
@@ -47,6 +49,7 @@ export interface JpsAmendSummary {
 interface CargoPatch {
   contract_no: string;
   po_no?: string;
+  sto_no?: string;
 }
 
 interface AmendBody {
@@ -95,17 +98,20 @@ export function buildJpsAmendBody(
     if (next && next !== (sent[field] ?? '')) body[field] = next;
   }
 
-  const sentByContract = new Map<string, string>();
+  const sentByContract = new Map<string, { po_no: string; sto_no: string }>();
   for (const line of sent.cargo ?? []) {
-    if (line.contract_no) sentByContract.set(line.contract_no, line.po_no ?? '');
+    if (line.contract_no) sentByContract.set(line.contract_no, { po_no: line.po_no ?? '', sto_no: line.sto_no ?? '' });
   }
   const cargo: CargoPatch[] = [];
   for (const line of current.cargo ?? []) {
     if (!line.contract_no) continue;
-    if (!sentByContract.has(line.contract_no)) continue; // a new line; PATCH cannot add one
-    if ((line.po_no ?? '') === sentByContract.get(line.contract_no)) continue;
-    if (!line.po_no) continue; // same reason as trade_term: no way to clear a value
-    cargo.push({ contract_no: line.contract_no, po_no: line.po_no });
+    const before = sentByContract.get(line.contract_no);
+    if (!before) continue; // a new line; PATCH cannot add one
+    const patch: CargoPatch = { contract_no: line.contract_no };
+    // Each field on its own, and only a real value: same rule as trade_term, there is no way to clear one at JPS.
+    if (line.po_no && line.po_no !== before.po_no) patch.po_no = line.po_no;
+    if (line.sto_no && line.sto_no !== before.sto_no) patch.sto_no = line.sto_no;
+    if (patch.po_no !== undefined || patch.sto_no !== undefined) cargo.push(patch);
   }
   if (cargo.length > 0) body.cargo = cargo;
 

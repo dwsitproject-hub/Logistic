@@ -54,6 +54,8 @@ export interface JpsCargoLine {
   contract_no?: string;
   po_no?: string;
   so_no?: string;
+  /** The STO number of the line (JPS 5.6, max 100). Left out when the line has no STO. */
+  sto_no?: string;
   shipper_name?: string;
 }
 

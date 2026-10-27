@@ -67,7 +67,7 @@ export function jpsMinPollIntervalMs(): number {
  *
  * OFF by default, and meant to stay off. A 400 is permanent by definition, so retrying it on a
  * schedule normally just burns the rate limit and delays the real fix. It exists for the case the
- * fix is on the PARTNER's side - a master vessel missing its LOA, say - where the payload was
+ * fix is on the PARTNER's side - a master vessel value JPS holds wrongly, say - where the payload was
  * right all along and there is nothing in KLIP to change. Switch it on while that is being sorted
  * out, then off again.
  *

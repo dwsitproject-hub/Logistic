@@ -87,7 +87,7 @@ set_var JPS_PORT_ID "${JPS_PORT_ID:-1}"
 set_var JPS_REGION_SITE "${JPS_REGION_SITE:-BONTANG}"
 # Testing only: resend submissions JPS rejected outright, once they have gone cold for 5 minutes.
 # Normally a 400 is permanent and retrying it just burns the rate limit - this is for the case the
-# fix is on JPS's side, such as a master vessel missing its LOA. Switch it back to false afterwards.
+# fix is on JPS's side, such as a master vessel value JPS holds wrongly. Switch it back to false afterwards.
 set_var JPS_RETRY_FAILED "${JPS_RETRY_FAILED:-false}"
 # The frontend flag is separate on purpose: JPS_ENABLED only means anything alongside a base URL
 # and a key, and neither may reach the browser. This one only decides whether the two Jetty columns

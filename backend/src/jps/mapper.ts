@@ -57,6 +57,11 @@ export interface JpsCargoSource {
   contract_no: string | null;
   /** contracts.po_number */
   po_no: string | null;
+  /**
+   * The STO number of this line (contract_stos.sto_number), sent as the cargo line's `sto_no` (JPS 5.6). NULL when the line has no STO of its own - a manual
+   * shipment, or a transaction without one such as CIF - and then nothing is sent in its place: no other identifier (operation id, shipment id) stands in for it.
+   */
+  sto_no?: string | null;
   /** contracts.product */
   product: string | null;
   /** products.code_dhm of that product, the DataHub code JPS takes as cargo_hub_code. Empty until Master Product is synced. */
@@ -259,6 +264,7 @@ export function buildJpsSubmitPayload(
       unit: 'MT',
       ...(line.contract_no ? { contract_no: line.contract_no } : {}),
       ...(line.po_no ? { po_no: line.po_no } : {}),
+      ...(String(line.sto_no ?? '').trim() ? { sto_no: String(line.sto_no).trim().slice(0, 100) } : {}),
     });
   }
 

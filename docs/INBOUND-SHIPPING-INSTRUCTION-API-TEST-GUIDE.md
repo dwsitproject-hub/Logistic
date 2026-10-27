@@ -100,7 +100,7 @@ Your test payload must use values that exist in JPS master data:
 | `trade_term` | Optional; must match a code from `GET /terms` (e.g. `FOB`, `CIF`) |
 | `surveyor_name` | Optional; must match a name from `GET /surveyors` |
 | `cargo[].shipper_name` | Optional; shipper must exist — create first via `POST /shippers` |
-| `cargo[].po_no` / `so_no` | Optional; stored on breakdown lines; can also be set later via `PATCH` |
+| `cargo[].po_no` / `so_no` / `sto_no` | Optional; stored on breakdown lines; can also be set later via `PATCH` |
 | `vessel_hub_code` | **Preferred** vessel identifier — sufficient alone; must exist in `master_vessels` |
 | `company_hub_code` | Operating company (not the cargo shipper). Required when `GET /catalog/company` shows more than one company for that port. Omit when the port has exactly one — JPS stores that company. |
 | `vessel_name` | Optional cross-check when `vessel_hub_code` is sent; **vessel_name alone is not accepted on POST (v5.3)** |
@@ -248,6 +248,7 @@ Use a **unique** `external_reference` each run:
       "contract_no": "CTR-001",
       "po_no": "PO-TEST-001",
       "so_no": "SO-TEST-001",
+      "sto_no": "STO-TEST-001",
       "shipper_name": "PT Integration Test Shipper"
     }
   ]
@@ -286,7 +287,7 @@ Replace `41` with your `$SI_ID`:
 
 ```powershell
 @'
-{"cargo":[{"line_order":0,"po_no":"PO-UPDATED-001","so_no":"SO-UPDATED-001"}]}
+{"cargo":[{"line_order":0,"po_no":"PO-UPDATED-001","so_no":"SO-UPDATED-001","sto_no":"STO-UPDATED-001"}]}
 '@ | Set-Content -Path "$env:TEMP\si-patch.json" -Encoding UTF8
 
 curl.exe -X PATCH "$BASE/shipping-instructions/41" `
@@ -375,7 +376,7 @@ Also add:
 |--------|-----|------|
 | `GET` | `{{baseUrl}}/terms` | — |
 | `POST` | `{{baseUrl}}/shippers` | `{"name":"PT Test Shipper"}` |
-| `PATCH` | `{{baseUrl}}/shipping-instructions/{{siId}}` | `{"cargo":[{"line_order":0,"po_no":"PO-1","so_no":"SO-1"}]}` |
+| `PATCH` | `{{baseUrl}}/shipping-instructions/{{siId}}` | `{"cargo":[{"line_order":0,"po_no":"PO-1","so_no":"SO-1","sto_no":"STO-1"}]}` |
 
 ---
 
@@ -550,3 +551,4 @@ Both columns should show table names, not `null`.
 | 1.2 | 2026-09-23 | v4.1 API: **vessel_hub_code** primary vessel identifier; self-test resolves master vessel from DB |
 | 1.1 | 2026-09-21 | v4.0 API: master data + PATCH tests; automated `run-integration-self-test.ps1`; fixed duplicate §4 numbering; PowerShell file-based JSON guidance; `INVALID_STATE` and shipper prerequisites |
 | 1.0 | 2026-06-12 | Initial test guide: curl, Postman, operator lifecycle, checklist |
+

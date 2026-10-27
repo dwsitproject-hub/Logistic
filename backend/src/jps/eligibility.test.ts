@@ -161,3 +161,34 @@ describe('findEligibleStos: masters deleted in DHM give no code', () => {
     expect(sql).toContain('p.port_deleted');
   });
 });
+
+describe('findEligibleStos: the STO number of each cargo line (JPS 5.6 sto_no)', () => {
+  beforeEach(() => vi.mocked(query).mockReset());
+
+  it('names the STO on the lines that come from contract_stos, and sends nothing for the lines that have none', async () => {
+    const sql = (await sqlOf()).replace(/\s+/g, ' ');
+    // the contract_stos arm: the line's own STO number
+    expect(sql).toContain("MAX(NULLIF(TRIM(cs.sto_number), '')) AS sto_no");
+    // the contract-quantity fallback arm (manual shipment, or a transaction without an STO): no STO, and no other id in its place
+    expect(sql).toContain('NULL::text AS sto_no');
+    expect(sql).toContain("'sto_no', x.sto_no");
+  });
+
+  it('carries sto_no through to the cargo source, empty as null', async () => {
+    vi.mocked(query).mockResolvedValue({
+      rows: [
+        {
+          sto_key: '1006020269',
+          cargo: [
+            { contract_no: 'C1', sto_no: ' 1006020269 ', sto_quantity_kg: 1000 },
+            { contract_no: 'C2', sto_no: null, sto_quantity_kg: 2000 },
+            { contract_no: 'C3', sto_no: '  ', sto_quantity_kg: 3000 },
+          ],
+        },
+      ],
+      rowCount: 1,
+    } as any);
+    const [sto] = await findEligibleStos('BONTANG', 10);
+    expect(sto!.cargo.map((l) => l.sto_no)).toEqual(['1006020269', null, null]);
+  });
+});

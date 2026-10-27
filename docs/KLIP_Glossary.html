@@ -1702,11 +1702,12 @@
         <p>KLIP mengirim <strong><code>vessel_hub_code</code></strong>, yaitu <code>master_vessels.dhm_code</code> — kode DataHub yang disinkronkan DHM (format <code>VSL-0041</code>). Bila kode itu belum ada, KLIP jatuh ke <code>vessel_name</code>, yang hanya berhasil jika namanya persis unik di master JPS.</p>
         <p>Vessel dicari melalui <code>shipments.master_vessel_id</code>, atau melalui <code>master_vessel_code_aliases</code> bila shipment hanya membawa <em>vessel code SAP</em>.</p>
         <div class="note">
-          <strong>KLIP tidak mengirim LOA, GT, maupun draft — dan memang tidak bisa.</strong> Dokumen partner menyatakan field-field itu bukan milik partner: JPS menyalinnya sendiri dari master vessel-nya begitu <code>vessel_hub_code</code> berhasil diresolusi. Karena itu penolakan <em>"Master vessel LOA is missing"</em> adalah <strong>kelengkapan data di sisi JPS</strong>, bukan sesuatu yang dapat diperbaiki dari KLIP.
+          <strong>KLIP tidak mengirim LOA, GT, maupun draft — dan memang tidak bisa.</strong> Dokumen partner menyatakan field-field itu bukan milik partner: JPS menyalinnya sendiri dari master vessel-nya begitu <code>vessel_hub_code</code> berhasil diresolusi. Sejak pembaruan 2026-10-27, nilai yang kosong di master JPS disimpan null dan pengiriman tetap berhasil. Hanya nilai yang <em>ada tetapi bukan angka positif</em> yang ditolak, dan itu <strong>kelengkapan data di sisi JPS</strong>, bukan sesuatu yang dapat diperbaiki dari KLIP.
         </div>
 
         <h4 id="jps-cargo">Cargo &amp; tonnage</h4>
         <p><strong>Tonnage diambil dari <code>contract_stos.sto_quantity</code></strong> — kuantitas yang dialokasikan SAP untuk pelayaran ini — bukan dari kuantitas kontrak. KLIP menyimpan Kg, JPS meminta MT (dibagi 1.000, 2 desimal).</p>
+        <p><strong>Nomor STO per baris (<code>sto_no</code>, JPS 5.6).</strong> Baris yang berasal dari <code>contract_stos</code> membawa nomor STO-nya. Baris tanpa STO — shipment manual (<code>MNL-</code> / <code>OP-</code>) atau transaksi yang memang tidak punya STO seperti CIF — <strong>tidak mengirim <code>sto_no</code></strong>, dan tidak ada ID lain (operation id, shipment id) yang dikirim sebagai penggantinya. Instruksi <em>Pending</em> yang terlanjur terkirim tanpa <code>sto_no</code> dilengkapi lewat PATCH pada sweep berikutnya (satu kali per baris).</p>
         <p>Diukur pada salinan produksi: untuk 34% pasangan yang kontraknya tersebar ke beberapa STO, kuantitas kontrak melebih-lebihkan muatan sebesar 80%, dan 43 dari 209 STO akan melampaui kapasitas kapal pengangkutnya sendiri — dibanding 16 bila memakai <code>sto_quantity</code>.</p>
 
         <h5>Pemetaan produk KLIP &rarr; <code>cargo_type</code> JPS</h5>
@@ -1786,7 +1787,7 @@
           <li><strong>Perubahan data KLIP setelah approval tidak diberitahukan.</strong> PATCH hanya diizinkan selama instruction masih <code>Pending</code>. Notifikasi email untuk kasus ini diparkir sebagai enhancement berikutnya.</li>
           <li><strong>Hanya BONTANG.</strong> Jetty lain belum masuk cakupan.</li>
           <li><strong>Tanggal saja, tanpa jam.</strong> ETA/ETD dikirim pada 00:00:00Z; jam sandar sebenarnya ditetapkan operator JPS saat alokasi.</li>
-          <li><strong>Kelengkapan master vessel JPS.</strong> Bila master vessel di JPS belum memuat LOA/GT/draft, pengiriman ditolak dengan <code>VALIDATION_ERROR</code> pada field <code>vessel_name</code> — perbaikannya ada di sisi JPS.</li>
+          <li><strong>Master vessel JPS.</strong> Sejak pembaruan JPS 2026-10-27 (API tetap 5.6), LOA/GT/draft yang kosong di master vessel JPS disimpan null dan <strong>tidak lagi menolak</strong> pengiriman. Yang masih ditolak (<code>VALIDATION_ERROR</code> pada <code>vessel_name</code>) hanya nilai yang ada tetapi bukan angka positif, misalnya 0. Instruksi yang sudah berstatus <em>Send Failed</em> karena "LOA is missing" tidak terkirim ulang sendiri: kirim ulang lewat tombol <strong>Submit to Jetty</strong>.</li>
         </ul>
       </section>
 

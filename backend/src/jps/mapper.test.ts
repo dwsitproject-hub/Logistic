@@ -302,3 +302,45 @@ describe('jpsDocumentDownloadUrl', () => {
     expect(jpsDocumentDownloadUrl('11111111-1111-1111-1111-111111111111')).toBeUndefined();
   });
 });
+
+describe('cargo line sto_no (JPS 5.6)', () => {
+  const line = (over: Record<string, unknown> = {}) => ({
+    contract_no: 'C1',
+    po_no: 'P1',
+    product: 'CPO',
+    product_hub_code: 'CMD-0006',
+    sto_quantity_kg: 1000,
+    contract_quantity_kg: 1000,
+    ...over,
+  });
+
+  it('sends the STO number of a line that has one, trimmed', () => {
+    const { payload, problems } = buildJpsSubmitPayload(source({ cargo: [line({ sto_no: ' 1006020269 ' })] }));
+    expect(problems).toEqual([]);
+    expect(payload?.cargo[0].sto_no).toBe('1006020269');
+  });
+
+  it('sends nothing for a line with no STO (a manual shipment, or a transaction without one such as CIF): no key at all, and no other id in its place', () => {
+    for (const sto_no of [null, undefined, '', '   ']) {
+      const { payload } = buildJpsSubmitPayload(
+        source({ cargo: [line({ sto_no })] }),
+      );
+      expect(payload?.cargo[0]).not.toHaveProperty('sto_no');
+      // nothing stands in for it
+      expect(Object.keys(payload!.cargo[0]).sort()).toEqual(['cargo_hub_code', 'contract_no', 'po_no', 'tonnage', 'unit']);
+    }
+  });
+
+  it('keeps within the 100 characters JPS accepts', () => {
+    const { payload } = buildJpsSubmitPayload(source({ cargo: [line({ sto_no: 'S'.repeat(150) })] }));
+    expect(payload?.cargo[0].sto_no).toHaveLength(100);
+  });
+
+  it('mixed lines: only the line that has an STO carries one', () => {
+    const { payload } = buildJpsSubmitPayload(
+      source({ cargo: [line({ contract_no: 'C1', sto_no: '1006020269' }), line({ contract_no: 'C2', sto_no: null })] }),
+    );
+    expect(payload?.cargo[0].sto_no).toBe('1006020269');
+    expect(payload?.cargo[1]).not.toHaveProperty('sto_no');
+  });
+});

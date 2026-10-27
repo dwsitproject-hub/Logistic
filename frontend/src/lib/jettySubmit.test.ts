@@ -30,14 +30,14 @@ describe('describeJettyResult: what the user is told about a submission', () => 
         revision: 1,
         code: 'VALIDATION_ERROR',
         message: 'Payload validation failed',
-        details: ['vessel_name: Master vessel LOA is missing'],
+        details: ['vessel_name: Master LOA must be a positive number'],
         requestId: 'req-9',
       },
     })
     expect(v.tone).toBe('error')
     const text = v.lines.join('\n')
     expect(text).toContain('VALIDATION_ERROR: Payload validation failed')
-    expect(text).toContain('• vessel_name: Master vessel LOA is missing')
+    expect(text).toContain('• vessel_name: Master LOA must be a positive number')
     expect(text).toContain('req-9')
     expect(text).toContain('Nothing was created at JPS')
   })
