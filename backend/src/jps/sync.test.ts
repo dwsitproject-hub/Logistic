@@ -19,13 +19,14 @@ import { submitEligibleStos } from './submit';
 import { invalidateShipmentsListCache } from '../services/shipmentList.service';
 import { runJpsSync } from './index';
 
-function sweep(opts: { submitted?: number; recovered?: number; changed?: number }) {
+function sweep(opts: { submitted?: number; recovered?: number; changed?: number; held?: number; failed?: number; listChanged?: number }) {
   vi.mocked(submitEligibleStos).mockResolvedValue({
     considered: 1,
     submitted: opts.submitted ?? 0,
     recovered: opts.recovered ?? 0,
-    held: 0,
-    failed: 0,
+    held: opts.held ?? 0,
+    failed: opts.failed ?? 0,
+    listChanged: opts.listChanged ?? 0,
   });
   vi.mocked(amendPendingInstructions).mockResolvedValue({ checked: 0, amended: 0, unchanged: 0, blocked: 0, failed: 0 });
   vi.mocked(pollSubmittedInstructions).mockResolvedValue({ polled: 1, changed: opts.changed ?? 0, errors: 0 });
@@ -53,6 +54,23 @@ describe('runJpsSync and the Shipments list cache', () => {
     sweep({ recovered: 1 });
     await runJpsSync('cron');
     expect(invalidateShipmentsListCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears it when an STO has just failed or been held, so its badge stops reading Not Sent', async () => {
+    sweep({ failed: 1, listChanged: 1 });
+    await runJpsSync('shipment-edit');
+    expect(invalidateShipmentsListCache).toHaveBeenCalledTimes(1);
+
+    vi.mocked(invalidateShipmentsListCache).mockClear();
+    sweep({ held: 1, listChanged: 1 });
+    await runJpsSync('cron');
+    expect(invalidateShipmentsListCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the cache alone when a held or failed STO is looked at again and nothing about it changed', async () => {
+    sweep({ held: 3, failed: 1, listChanged: 0 });
+    await runJpsSync('cron');
+    expect(invalidateShipmentsListCache).not.toHaveBeenCalled();
   });
 
   it('leaves the cache alone on a sweep where nothing visible changed', async () => {

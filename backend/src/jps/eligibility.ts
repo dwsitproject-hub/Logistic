@@ -28,7 +28,7 @@ import type { JpsCargoSource, JpsShipmentSource } from './mapper';
  * ATC Loading and the discharge ATAs, with a KLIP user's edit taking precedence over SAP's value -
  * the same COALESCE shape as sqlEffectiveAtaCompletedLoading() in shipmentAtaOverrideSql.ts.
  */
-const EFFECTIVE_ATA_SQL = `
+export const EFFECTIVE_ATA_SQL = `
   COALESCE(sao.ata_loading_complete,   s.ata_loading_complete)   AS atc_loading,
   COALESCE(sao.ata_discharge_arrival,  s.ata_discharge_arrival)  AS ata_disch_arrival,
   COALESCE(sao.ata_discharge_berthed,  s.ata_discharge_berthed)  AS ata_disch_berthed,
@@ -49,7 +49,7 @@ const EFFECTIVE_ATA_SQL = `
  * It also improves the cargo and trade-term lookups, which match `contract_stos.sto_number`: the
  * key is now a real STO number wherever one exists.
  */
-const STO_KEY_SQL = shipmentListStoKeyExpr('c', 'l', 's');
+export const STO_KEY_SQL = shipmentListStoKeyExpr('c', 'l', 's');
 
 export interface EligibleSto extends JpsShipmentSource {
   shipment_ids: string[];

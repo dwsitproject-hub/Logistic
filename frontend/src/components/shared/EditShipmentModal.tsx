@@ -15,8 +15,11 @@ import {
 } from '@/components/ui/table'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
+  JETTY_SEND_FAILED,
   JettyStatusBadge,
   formatJettySyncDates,
+  jettySendStateTooltip,
+  jettyStatusLabel,
   jettySyncDatesTooltip,
   type JettyStatusFields,
 } from '@/lib/jettyStatus'
@@ -64,6 +67,8 @@ import {
 import { formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import api from '@/lib/api'
+import { JETTY_COLUMNS_ENABLED } from '@/lib/jettyFeature'
+import { SubmitToJettyDialog } from '@/components/shared/SubmitToJettyDialog'
 import { drawnPortLabel } from '@/lib/dischargePortFilter'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
@@ -899,6 +904,7 @@ export function EditShipmentModal({
   const [isMultiPortLoading, setIsMultiPortLoading] = useState(false)
   const [shipmentInfo, setShipmentInfo] = useState<Record<string, unknown>>({})
   const [jettyStatus, setJettyStatus] = useState<JettyStatusFields | null>(null)
+  const [jettyDialogOpen, setJettyDialogOpen] = useState(false)
   /** Show the JPS legend entry only when JPS has actually reported an actual for this shipment. */
   const jpsCoversShipment = Object.values(jettyStatus?.jps_ata ?? {}).some((v) => Boolean(v))
   const [ataFields, setAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
@@ -1179,6 +1185,18 @@ export function EditShipmentModal({
     hasEtaEdits || hasQtyEdits || hasPlanQtyEdits || hasAtaEdits || hasQualityEdits || hasSfalSfbdEdits
   const editRemarkMissing = requiresEditRemark && !editRemark.trim()
   const showSaveButton = canModifyCoreSections || (canEditAtaQuality && hasLimitedEdits)
+  // Submit to Jetty: only where the Jetty columns exist at all (NEXT_PUBLIC_JPS_ENABLED), for someone who may edit shipments, in the edit modal (not View).
+  const showSubmitToJetty = JETTY_COLUMNS_ENABLED && canEditShipment && !readOnly && Boolean(shipmentId)
+  const refreshJettyStatus = async () => {
+    if (!shipmentId) return
+    try {
+      // The Jetty answer is keyed on the shipment's STO, so no `sto` hint is needed to re-read it.
+      const res = await api.get(`/shipments/${shipmentId}/edit-payload`)
+      setJettyStatus((res.data?.data as { jettyStatus?: JettyStatusFields | null } | null)?.jettyStatus ?? null)
+    } catch {
+      /* the badge refreshes the next time the modal opens */
+    }
+  }
   const showRemarkField =
     requiresEditRemark && (canModifyCoreSections || canEditAtaQuality)
 
@@ -2529,8 +2547,9 @@ export function EditShipmentModal({
                 {/*
                   Status row. Both badges sit above the fields because they answer the first two
                   questions a user opens this modal with: where is the shipment, and has a berth
-                  been arranged. Jetty Status reads "Not Sent" for anything not discharging at
-                  BONTANG, which is the correct answer rather than a gap.
+                  been arranged. Jetty Status reads "Not Sent" for anything KLIP has not tried to
+                  send (e.g. not discharging at BONTANG), which is the correct answer rather than a
+                  gap. "Send Failed" and "On Hold" mean KLIP DID try; the banner below says why.
                 */}
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                   <div className="flex items-center gap-2">
@@ -2558,6 +2577,18 @@ export function EditShipmentModal({
                 {jettyStatus?.jetty_rejection_reason && (
                   <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                     Jetty request rejected: {jettyStatus.jetty_rejection_reason}
+                  </div>
+                )}
+                {!jettyStatus?.jetty_status && jettySendStateTooltip(jettyStatus) && (
+                  <div
+                    role="status"
+                    className={`whitespace-pre-line rounded border px-3 py-2 text-xs ${
+                      jettyStatusLabel(jettyStatus) === JETTY_SEND_FAILED
+                        ? 'border-orange-200 bg-orange-50 text-orange-800'
+                        : 'border-violet-200 bg-violet-50 text-violet-800'
+                    }`}
+                  >
+                    {jettySendStateTooltip(jettyStatus)}
                   </div>
                 )}
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -3778,6 +3809,27 @@ export function EditShipmentModal({
                 'Save Changes'
               )}
             </Button>
+          ) : null}
+          {showSubmitToJetty ? (
+            <Button
+              className="h-9 bg-orange-500 text-white hover:bg-orange-600"
+              onClick={() => setJettyDialogOpen(true)}
+              disabled={saving || loading || !shipmentId || requiresEditRemark}
+              title={
+                requiresEditRemark
+                  ? 'Save your changes first: the check reads the saved data'
+                  : 'Check what JPS needs for this STO and send it to the Jetty Planning System'
+              }
+            >
+              Submit to Jetty
+            </Button>
+          ) : null}
+          {jettyDialogOpen && shipmentId ? (
+            <SubmitToJettyDialog
+              shipmentId={shipmentId}
+              onClose={() => setJettyDialogOpen(false)}
+              onSent={() => void refreshJettyStatus()}
+            />
           ) : null}
           </div>
         </div>

@@ -57,7 +57,7 @@ export async function runJpsSync(reason: string): Promise<void> {
     // INVALID_STATE, and the poll that follows records the decision either way.
     const amended = await amendPendingInstructions();
     const polled = await pollSubmittedInstructions();
-    await refreshShipmentsListIfJettyChanged(submitted.submitted + submitted.recovered, polled.changed);
+    await refreshShipmentsListIfJettyChanged(submitted.submitted + submitted.recovered + submitted.listChanged, polled.changed);
     if (submitted.considered > 0 || amended.amended > 0 || polled.changed > 0 || polled.errors > 0) {
       logger.info('JPS sync', { reason, ...submitted, amended: amended.amended, ...polled });
     }

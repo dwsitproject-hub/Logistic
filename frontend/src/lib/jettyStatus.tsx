@@ -34,6 +34,15 @@ export interface JettyStatusFields {
   /** When JPS logged the end of the cargo operation (Hose Off); the reason for "Completed (Hose Off)". */
   jetty_hose_off_at?: string | null
   /**
+   * Why jetty_status is empty, when KLIP did try: 'FAILED' (JPS refused the submission) or 'HELD' (KLIP has not sent it yet, e.g. a product without a JPS
+   * cargo code). Empty means KLIP never tried (the STO is not eligible yet) - the only case that reads "Not Sent".
+   */
+  jetty_send_state?: 'FAILED' | 'HELD' | string | null
+  /** What JPS answered (FAILED) or what is missing (HELD). */
+  jetty_send_error?: string | null
+  /** When that row was last written. */
+  jetty_send_at?: string | null
+  /**
    * JPS actuals, keyed by the KLIP ATA field each corresponds to and already dated in WIB
    * (backend/src/jps/scheduleAtaSql.ts). Only the discharge fields JPS reports are present.
    */
@@ -53,9 +62,27 @@ const BADGE_CLASS: Record<string, string> = {
 
 const NOT_SENT_CLASS = 'bg-gray-100 text-gray-600'
 
+/** KLIP tried and JPS refused: not the same as Rejected, which is a decision JPS made on an instruction it accepted. */
+export const JETTY_SEND_FAILED = 'Send Failed'
+/** KLIP is holding it back (missing cargo code, odd quantity) and will send once the data is fixed. */
+export const JETTY_ON_HOLD = 'On Hold'
+
+const SEND_STATE_CLASS: Record<string, string> = {
+  [JETTY_SEND_FAILED]: 'bg-orange-100 text-orange-800',
+  [JETTY_ON_HOLD]: 'bg-violet-100 text-violet-800',
+}
+
+/**
+ * What the badge says. JPS's own status wins; with none, "Send Failed" / "On Hold" say that KLIP DID try, and "Not Sent" is left for the STO KLIP has
+ * not tried (not eligible yet, or not for JPS at all). Before this, all three read "Not Sent".
+ */
 export function jettyStatusLabel(row: JettyStatusFields | null | undefined): string {
   const status = String(row?.jetty_status ?? '').trim()
-  return status || 'Not Sent'
+  if (status) return status
+  const sendState = String(row?.jetty_send_state ?? '').trim().toUpperCase()
+  if (sendState === 'FAILED') return JETTY_SEND_FAILED
+  if (sendState === 'HELD') return JETTY_ON_HOLD
+  return 'Not Sent'
 }
 
 /**
@@ -64,7 +91,7 @@ export function jettyStatusLabel(row: JettyStatusFields | null | undefined): str
  * the only thing that explains what to do next.
  */
 export function jettyStatusTooltip(row: JettyStatusFields | null | undefined): string | undefined {
-  if (!row?.jetty_status) return undefined
+  if (!row?.jetty_status) return jettySendStateTooltip(row)
   const parts: string[] = []
   if (row.jetty_name) parts.push(`Jetty: ${row.jetty_name}`)
   if (row.jetty_planned_berthing_time) {
@@ -75,6 +102,27 @@ export function jettyStatusTooltip(row: JettyStatusFields | null | undefined): s
   return parts.length > 0 ? parts.join(' · ') : undefined
 }
 
+/** The hover text of "Send Failed" / "On Hold": what happened and what to do. Nothing for "Not Sent". */
+export function jettySendStateTooltip(row: JettyStatusFields | null | undefined): string | undefined {
+  const label = jettyStatusLabel(row)
+  if (label !== JETTY_SEND_FAILED && label !== JETTY_ON_HOLD) return undefined
+  const error = String(row?.jetty_send_error ?? '').trim()
+  const lines =
+    label === JETTY_SEND_FAILED
+      ? [
+          'KLIP sent this STO to JPS and JPS did not accept it.',
+          error ? `JPS answered: ${error}` : null,
+          'KLIP does not resend a refused STO unless retry is switched on. Fix the cause (often JPS master data), then ask an administrator to resend.',
+        ]
+      : [
+          'KLIP is holding this STO back and has not sent it to JPS yet.',
+          error ? `Reason: ${error}` : null,
+          'It is sent on its own once the data is fixed.',
+        ]
+  if (row?.jetty_send_at) lines.push(`Last attempt: ${new Date(row.jetty_send_at).toLocaleString('en-GB')}`)
+  return lines.filter(Boolean).join('\n')
+}
+
 export function JettyStatusBadge({
   row,
   className = '',
@@ -83,7 +131,7 @@ export function JettyStatusBadge({
   className?: string
 }): ReactNode {
   const label = jettyStatusLabel(row)
-  const tone = BADGE_CLASS[label] ?? NOT_SENT_CLASS
+  const tone = BADGE_CLASS[label] ?? SEND_STATE_CLASS[label] ?? NOT_SENT_CLASS
   return (
     <span
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${tone} ${className}`}

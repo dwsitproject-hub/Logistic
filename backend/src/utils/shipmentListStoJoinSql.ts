@@ -43,26 +43,40 @@ export const SHIPMENT_LIST_STO_JOIN_SQL = `
  * The Jetty Planning System instruction for this STO, if KLIP has submitted one.
  *
  * Keyed on sto_key because that is the grain JPS is submitted at - one instruction per STO, not
- * per shipment row. `state = 'SUBMITTED'` excludes the go-live seed and the held rows, which are
- * KLIP bookkeeping and mean nothing to a user looking at the list.
+ * per shipment row.
  *
- * DISTINCT ON keeps the newest revision: a rejected instruction is replaced rather than amended,
- * so an STO can accumulate several rows and only the latest describes where it stands now.
+ * Three states are shown. SUBMITTED is an instruction JPS holds (its own status). FAILED (JPS refused the POST) and SKIPPED_NO_CARGO (KLIP held it
+ * back: no cargo code, odd quantity) are shown too, as "Send Failed" and "On Hold": they used to be left out as KLIP bookkeeping, so every one of them
+ * read "Not Sent", and a user could not tell an STO KLIP never tried from one JPS had turned down. SKIPPED_PRE_EXISTING (the go-live seed) stays out:
+ * it is a deliberate "do not send".
+ *
+ * A SUBMITTED row wins over a FAILED / held one of a newer revision: the instruction JPS holds is where the STO stands, and a replacement that failed
+ * does not change that (it is how this lateral behaved before FAILED was shown). Among rows of the same kind the newest revision wins: a rejected
+ * instruction is replaced rather than amended, so an STO can accumulate several rows.
  */
 export const SHIPMENT_LIST_JPS_JOIN_SQL = `
       LEFT JOIN LATERAL (
         SELECT j.jps_status, j.jetty_name, j.planned_berthing_time, j.rejection_reason,
-               j.submitted_at, j.last_polled_at, j.schedule_cargo_ops_end_at
+               j.submitted_at, j.last_polled_at, j.schedule_cargo_ops_end_at,
+               j.state AS send_state, j.last_error AS send_error, j.updated_at AS send_updated_at
         FROM jps_shipping_instructions j
         WHERE j.sto_key = sp.sto_key::text
-          AND j.state = 'SUBMITTED'
-        ORDER BY j.revision DESC
+          AND j.state IN ('SUBMITTED', 'FAILED', 'SKIPPED_NO_CARGO')
+        ORDER BY (j.state = 'SUBMITTED') DESC, j.revision DESC
         LIMIT 1
       ) jps ON TRUE`;
 
-/** Columns the shipments list and its shell both project for the Jetty columns. */
+/**
+ * Columns the shipments list and its shell both project for the Jetty columns.
+ *
+ * jetty_status stays JPS's own status (or the derived Hose Off stage) and is NULL when JPS holds nothing. jetty_send_state says why it is NULL:
+ * 'FAILED' (JPS refused the submission), 'HELD' (KLIP has not sent it yet, see jetty_send_error), or NULL (never tried, or a seeded STO).
+ */
 export const SHIPMENT_LIST_JPS_SELECT_SQL = `
         ${sqlJettyStatusShown('jps')} AS jetty_status,
+        CASE jps.send_state WHEN 'FAILED' THEN 'FAILED' WHEN 'SKIPPED_NO_CARGO' THEN 'HELD' END AS jetty_send_state,
+        CASE WHEN jps.send_state IN ('FAILED', 'SKIPPED_NO_CARGO') THEN jps.send_error END AS jetty_send_error,
+        CASE WHEN jps.send_state IN ('FAILED', 'SKIPPED_NO_CARGO') THEN jps.send_updated_at END AS jetty_send_at,
         jps.schedule_cargo_ops_end_at AS jetty_hose_off_at,
         jps.jetty_name AS jetty_name,
         jps.planned_berthing_time AS jetty_planned_berthing_time,

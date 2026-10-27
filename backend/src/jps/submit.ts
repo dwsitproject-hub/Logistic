@@ -9,7 +9,7 @@ import {
   jpsRetryFailed,
   jpsRetryFailedAfterMs,
 } from './config';
-import { findEligibleStos } from './eligibility';
+import { findEligibleStos, type EligibleSto } from './eligibility';
 import { buildJpsExternalReference, buildJpsSubmitPayload } from './mapper';
 import type { JpsErrorDetail, JpsInstruction, JpsSubmitPayload } from './types';
 
@@ -30,6 +30,22 @@ export interface JpsSubmitSummary {
   recovered: number;
   held: number;
   failed: number;
+  /**
+   * Held / failed rows whose state or message is NEW or DIFFERENT from what the Shipments list last showed. A held STO is looked at again on every sweep and
+   * an unchanged one must not clear the list's cache each time; one that has just failed, or whose reason has changed, must, or its badge stays "Not Sent"
+   * for up to an hour.
+   */
+  listChanged: number;
+}
+
+/** True when this (sto, revision) is not recorded yet, or is recorded in another state or with another message. */
+async function rowWouldChange(stoKey: string, revision: number, state: string, message: string): Promise<boolean> {
+  const prev = await query(
+    `SELECT state, last_error FROM jps_shipping_instructions WHERE sto_key = $1 AND revision = $2`,
+    [stoKey, revision],
+  );
+  const row = prev.rows[0] as { state?: string; last_error?: string | null } | undefined;
+  return !row || row.state !== state || (row.last_error ?? '') !== message;
 }
 
 /**
@@ -56,7 +72,9 @@ async function nextRevision(stoKey: string): Promise<number> {
   return highest + 1;
 }
 
-async function recordHeld(stoKey: string, revision: number, problems: string[]): Promise<void> {
+/** Returns whether the list would now read differently (see JpsSubmitSummary.listChanged). */
+async function recordHeld(stoKey: string, revision: number, problems: string[]): Promise<boolean> {
+  const changed = await rowWouldChange(stoKey, revision, 'SKIPPED_NO_CARGO', problems.join('; '));
   await query(
     `INSERT INTO jps_shipping_instructions (sto_key, external_reference, revision, state, last_error)
      VALUES ($1, $2, $3, 'SKIPPED_NO_CARGO', $4)
@@ -66,6 +84,7 @@ async function recordHeld(stoKey: string, revision: number, problems: string[]):
        updated_at = CURRENT_TIMESTAMP`,
     [stoKey, buildJpsExternalReference(stoKey, revision), revision, problems.join('; ')],
   );
+  return changed;
 }
 
 async function recordSubmitted(
@@ -103,7 +122,8 @@ async function recordFailed(
   payload: JpsSubmitPayload,
   message: string,
   requestId?: string,
-): Promise<void> {
+): Promise<boolean> {
+  const changed = await rowWouldChange(stoKey, revision, 'FAILED', message);
   await query(
     `INSERT INTO jps_shipping_instructions (
        sto_key, external_reference, revision, state, last_error, request_id, payload
@@ -116,18 +136,121 @@ async function recordFailed(
        updated_at = CURRENT_TIMESTAMP`,
     [stoKey, payload.external_reference, revision, message, requestId ?? null, JSON.stringify(payload)],
   );
+  return changed;
 }
 
+/** What happened to one STO's submission. Written to the tracker for held / failed; a retryable failure writes nothing. */
+export type SubmitOutcome =
+  | { kind: 'submitted'; revision: number; instruction: JpsInstruction }
+  | { kind: 'recovered'; revision: number; instruction: JpsInstruction }
+  | { kind: 'held'; revision: number; problems: string[]; listChanged: boolean }
+  | {
+      kind: 'failed';
+      revision: number;
+      message: string;
+      code?: string;
+      /** JPS's validation details, one line each (field, issue, and the values it would accept). */
+      details: string[];
+      requestId?: string;
+      listChanged: boolean;
+    }
+  | { kind: 'retryable'; message: string; code?: string; status?: number; requestId?: string };
+
 /**
- * One submission pass.
+ * Submit ONE eligible STO: build the payload, POST it, and record the answer. The sweep and the Submit to Jetty button both go through here, so a button press
+ * behaves exactly like a sweep that picked the STO up - same revision rule, same duplicate recovery, same rows.
  *
  * A retryable failure - a timeout, a 429, a 5xx - writes NO row on purpose. The next sweep finds
  * the STO eligible again and resubmits; if JPS did create the instruction before the connection
  * dropped, the resubmit comes back 409 and the id is recovered by reference. That is precisely
  * what `external_reference` is for, and it is the only way a partner can tell the two cases apart.
  */
+export async function submitOneSto(
+  sto: EligibleSto,
+  portCatalog: Awaited<ReturnType<typeof fetchJpsPortCompanies>>,
+): Promise<SubmitOutcome> {
+  const revision = await nextRevision(sto.sto_key);
+  const built = buildJpsSubmitPayload(
+    { ...sto, revision },
+    { portCompanies: companiesForPort(portCatalog, sto.port_hub_code) },
+  );
+
+  if (!built.payload) {
+    const listChanged = await recordHeld(sto.sto_key, revision, built.problems);
+    logger.info('JPS: STO held back', { stoKey: sto.sto_key, problems: built.problems });
+    return { kind: 'held', revision, problems: built.problems, listChanged };
+  }
+
+  const payload = built.payload;
+  const res = await jpsRequest<JpsInstruction>(
+    {
+      method: 'POST',
+      url: '/shipping-instructions',
+      data: payload,
+    },
+    { audit: { stoKey: sto.sto_key, kind: 'submit' } },
+  );
+
+  if (res.ok) {
+    await recordSubmitted(sto.sto_key, revision, payload, res.data);
+    return { kind: 'submitted', revision, instruction: res.data };
+  }
+
+  if (res.code === 'DUPLICATE_REFERENCE') {
+    // JPS already holds this reference - an earlier attempt reached it and the response did not
+    // reach us. Recover the id rather than burning a revision on a duplicate.
+    const found = await jpsRequest<JpsInstruction>(
+      {
+        method: 'GET',
+        url: '/shipping-instructions',
+        params: { external_reference: payload.external_reference },
+      },
+      { audit: { stoKey: sto.sto_key, kind: 'recover' } },
+    );
+    if (found.ok) {
+      await recordSubmitted(sto.sto_key, revision, payload, found.data);
+      return { kind: 'recovered', revision, instruction: found.data };
+    }
+    const message = `duplicate reference, recovery failed: ${found.message}`;
+    const listChanged = await recordFailed(sto.sto_key, revision, payload, message, found.requestId);
+    return { kind: 'failed', revision, message, code: found.code, details: [], requestId: found.requestId, listChanged };
+  }
+
+  if (res.retryable) {
+    // No row: leave the STO eligible so the next sweep tries again.
+    // The message, request id and the reference JPS keys the instruction by are what JPS support needs to find
+    // this call. Without them a 500 INTERNAL_ERROR was a bare status line that nobody on the JPS side could trace.
+    logger.warn('JPS submit will be retried', {
+      stoKey: sto.sto_key,
+      externalReference: payload.external_reference,
+      cargoLines: payload.cargo.length,
+      status: res.status,
+      code: res.code,
+      jpsMessage: res.message,
+      requestId: res.requestId,
+      // A retryable failure writes no row, so this is the only record of what JPS answered 500 to. It holds no
+      // secret (vessel, port, quantities, a reference), and JPS support needs the body to find the cause.
+      payload: JSON.stringify(payload),
+    });
+    return { kind: 'retryable', message: res.message, code: res.code, status: res.status, requestId: res.requestId };
+  }
+
+  const details = (res.details ?? []).map(describeJpsDetail);
+  const detail = details.join('; ');
+  const message = `${res.code}: ${res.message}${detail ? ` (${detail})` : ''}`;
+  const listChanged = await recordFailed(sto.sto_key, revision, payload, message, res.requestId);
+  logger.warn('JPS rejected a submission', {
+    stoKey: sto.sto_key,
+    code: res.code,
+    detail,
+    requestId: res.requestId,
+  });
+  return { kind: 'failed', revision, message, code: res.code, details, requestId: res.requestId, listChanged };
+}
+
+/** One submission pass: every STO the rule owes JPS, up to the per-sweep cap. */
 export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
-  const summary: JpsSubmitSummary = { considered: 0, submitted: 0, recovered: 0, held: 0, failed: 0 };
+  const summary: JpsSubmitSummary = { considered: 0, submitted: 0, recovered: 0, held: 0, failed: 0, listChanged: 0 };
   const eligible = await findEligibleStos(jpsRegionSite(), jpsMaxSubmitsPerSweep(), {
     retryFailed: jpsRetryFailed(),
     retryFailedAfterMs: jpsRetryFailedAfterMs(),
@@ -139,90 +262,16 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
   const portCatalog = eligible.length > 0 ? await fetchJpsPortCompanies() : null;
 
   for (const sto of eligible) {
-    const revision = await nextRevision(sto.sto_key);
-    const built = buildJpsSubmitPayload(
-      { ...sto, revision },
-      { portCompanies: companiesForPort(portCatalog, sto.port_hub_code) },
-    );
-
-    if (!built.payload) {
-      await recordHeld(sto.sto_key, revision, built.problems);
+    const outcome = await submitOneSto(sto, portCatalog);
+    if (outcome.kind === 'submitted') summary.submitted += 1;
+    else if (outcome.kind === 'recovered') summary.recovered += 1;
+    else if (outcome.kind === 'held') {
       summary.held += 1;
-      logger.info('JPS: STO held back', { stoKey: sto.sto_key, problems: built.problems });
-      continue;
-    }
-
-    const payload = built.payload;
-    const res = await jpsRequest<JpsInstruction>(
-      {
-        method: 'POST',
-        url: '/shipping-instructions',
-        data: payload,
-      },
-      { audit: { stoKey: sto.sto_key, kind: 'submit' } },
-    );
-
-    if (res.ok) {
-      await recordSubmitted(sto.sto_key, revision, payload, res.data);
-      summary.submitted += 1;
-      continue;
-    }
-
-    if (res.code === 'DUPLICATE_REFERENCE') {
-      // JPS already holds this reference - an earlier attempt reached it and the response did not
-      // reach us. Recover the id rather than burning a revision on a duplicate.
-      const found = await jpsRequest<JpsInstruction>(
-        {
-          method: 'GET',
-          url: '/shipping-instructions',
-          params: { external_reference: payload.external_reference },
-        },
-        { audit: { stoKey: sto.sto_key, kind: 'recover' } },
-      );
-      if (found.ok) {
-        await recordSubmitted(sto.sto_key, revision, payload, found.data);
-        summary.recovered += 1;
-        continue;
-      }
-      await recordFailed(sto.sto_key, revision, payload, `duplicate reference, recovery failed: ${found.message}`, found.requestId);
+      if (outcome.listChanged) summary.listChanged += 1;
+    } else if (outcome.kind === 'failed') {
       summary.failed += 1;
-      continue;
+      if (outcome.listChanged) summary.listChanged += 1;
     }
-
-    if (res.retryable) {
-      // No row: leave the STO eligible so the next sweep tries again.
-      // The message, request id and the reference JPS keys the instruction by are what JPS support needs to find
-      // this call. Without them a 500 INTERNAL_ERROR was a bare status line that nobody on the JPS side could trace.
-      logger.warn('JPS submit will be retried', {
-        stoKey: sto.sto_key,
-        externalReference: payload.external_reference,
-        cargoLines: payload.cargo.length,
-        status: res.status,
-        code: res.code,
-        jpsMessage: res.message,
-        requestId: res.requestId,
-        // A retryable failure writes no row, so this is the only record of what JPS answered 500 to. It holds no
-        // secret (vessel, port, quantities, a reference), and JPS support needs the body to find the cause.
-        payload: JSON.stringify(payload),
-      });
-      continue;
-    }
-
-    const detail = (res.details ?? []).map(describeJpsDetail).join('; ');
-    await recordFailed(
-      sto.sto_key,
-      revision,
-      payload,
-      `${res.code}: ${res.message}${detail ? ` (${detail})` : ''}`,
-      res.requestId,
-    );
-    summary.failed += 1;
-    logger.warn('JPS rejected a submission', {
-      stoKey: sto.sto_key,
-      code: res.code,
-      detail,
-      requestId: res.requestId,
-    });
   }
 
   return summary;

@@ -543,10 +543,15 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
      FROM shipments s
      INNER JOIN contracts c ON c.id = s.contract_id
      LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
-     INNER JOIN jps_shipping_instructions jps ON jps.sto_key = ${shipmentListStoKeyExpr('c', 'l', 's')}
-     WHERE s.id = $1 AND jps.state = 'SUBMITTED'
-     ORDER BY jps.revision DESC
-     LIMIT 1`,
+     INNER JOIN LATERAL (
+       SELECT j.*, j.state AS send_state, j.last_error AS send_error, j.updated_at AS send_updated_at
+       FROM jps_shipping_instructions j
+       WHERE j.sto_key = ${shipmentListStoKeyExpr('c', 'l', 's')}
+         AND j.state IN ('SUBMITTED', 'FAILED', 'SKIPPED_NO_CARGO')
+       ORDER BY (j.state = 'SUBMITTED') DESC, j.revision DESC
+       LIMIT 1
+     ) jps ON TRUE
+     WHERE s.id = $1`,
     [shipmentId],
   );
   return (res.rows[0] as Record<string, unknown>) ?? null;

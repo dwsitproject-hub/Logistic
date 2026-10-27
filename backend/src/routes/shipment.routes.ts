@@ -1,6 +1,6 @@
 import express from 'express';
 import multer from 'multer';
-import { authenticateToken } from '../middleware/auth';
+import { authenticateToken, authorizePermission } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import { blockWhenWithdrawn } from '../middleware/sapPresenceGuard';
 import {
@@ -45,6 +45,7 @@ import {
   suggestShipmentVessel,
 } from '../controllers/shipmentAiPlanner.controller';
 import { createShipmentRemark, getShipmentRemarks } from '../controllers/remarks.controller';
+import { getShipmentJettyReadiness, submitShipmentToJetty } from '../controllers/shipmentJetty.controller';
 
 const router = express.Router();
 
@@ -107,6 +108,15 @@ router.get('/:id/edit-payload', getShipmentEditPayload);
 router.get('/:id/remarks', getShipmentRemarks);
 router.post('/:id/remarks', blockWhenWithdrawn('shipment'), auditLog('CREATE', 'SHIPMENT'), createShipmentRemark);
 router.get('/:id/available-purchase-orders', getShipmentAvailablePurchaseOrders);
+// Submit to Jetty (JPS): the readiness check is read-only; sending needs the edit right on Shipment Data and is audited.
+router.get('/:id/jetty/readiness', authorizePermission('data.shipments', 'can_view'), getShipmentJettyReadiness);
+router.post(
+  '/:id/jetty/submit',
+  authorizePermission('data.shipments', 'can_edit'),
+  blockWhenWithdrawn('shipment'),
+  auditLog('SUBMIT_TO_JETTY', 'SHIPMENT'),
+  submitShipmentToJetty,
+);
 router.post(
   '/:id/purchase-orders',
   auditLog('CREATE', 'SHIPMENT'),
