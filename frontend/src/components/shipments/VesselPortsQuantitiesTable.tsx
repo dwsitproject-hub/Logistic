@@ -84,7 +84,7 @@ function MtQtyInput({
         title={DECIMAL_DOT_HINT}
         className={`h-8 text-xs pr-10 text-right tabular-nums ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
       />
-      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-500">
+      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[0.625rem] text-gray-500">
         MT
       </span>
     </div>
@@ -184,7 +184,7 @@ export function VesselPortsQuantitiesTable({
                 <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
                   {formatMtRight(row.sto_qty)}
                   {row.locked_from_sap ? (
-                    <span className="ml-1 text-[10px] text-gray-400">(SAP)</span>
+                    <span className="ml-1 text-[0.625rem] text-gray-400">(SAP)</span>
                   ) : null}
                 </TableCell>
                 <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
@@ -272,7 +272,7 @@ export function VesselPortsQuantitiesTable({
         </TableFooter>
       </Table>
       {editingRowKey && receiveLockedFooter ? (
-        <p className="border-t border-amber-100 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+        <p className="border-t border-amber-100 bg-amber-50 px-3 py-2 text-[0.6875rem] text-amber-800">
           Upload SLD or SDD (Edit mode) before changing Received Qty (Klip).
         </p>
       ) : null}

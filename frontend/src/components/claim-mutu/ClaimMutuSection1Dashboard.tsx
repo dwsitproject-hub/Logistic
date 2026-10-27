@@ -129,7 +129,7 @@ function Num({ v, m, strong }: { v: number; m: ClaimMutuMeasure; strong?: boolea
 
 /** OS amount per month for one unit, oldest to newest; only drawn once there are two months. */
 function Sparkline({ values }: { values: number[] }) {
-  if (values.length < 2) return <span className="text-[11px] text-gray-400">-</span>
+  if (values.length < 2) return <span className="text-[0.6875rem] text-gray-400">-</span>
   const max = Math.max(...values, 1)
   const w = 64
   const h = 18
@@ -289,7 +289,7 @@ export function ClaimMutuSection1Dashboard({
                 {' '}· CR date {crDateLabel}
               </div>
               {osOnlyFilterActive ? (
-                <div className="mt-1 text-[11px] text-amber-700">Not narrowed by the Group / Payment Method filters.</div>
+                <div className="mt-1 text-[0.6875rem] text-amber-700">Not narrowed by the Group / Payment Method filters.</div>
               ) : null}
             </>
           ) : (
@@ -438,7 +438,7 @@ function AgingTab({
           <td className={`${TD} text-right`}>
             <Num v={grand} m="amount" strong />
           </td>
-          <td className="px-3 py-1.5 text-[11px] text-gray-500">{grand ? '100%' : '-'}</td>
+          <td className="px-3 py-1.5 text-[0.6875rem] text-gray-500">{grand ? '100%' : '-'}</td>
         </tr>
       </tfoot>
     </TableShell>

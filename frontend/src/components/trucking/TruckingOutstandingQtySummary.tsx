@@ -136,7 +136,7 @@ export function TruckingOutstandingQtySummary({
               >
                 {formatOutstandingQtyMtFromKg(summary.totalKg, { maxFractionDigits: 0 })}
               </div>
-              <p className="mt-1 text-[11px] leading-snug text-gray-500">
+              <p className="mt-1 text-[0.6875rem] leading-snug text-gray-500">
                 Unplanned OS + Planned OS
               </p>
             </div>

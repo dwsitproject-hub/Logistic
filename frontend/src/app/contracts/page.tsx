@@ -4294,7 +4294,7 @@ function ContractsPageContent() {
                           <div key={col.level} className={`rounded-lg border ${style.border} overflow-hidden`}>
                             <div className={`${style.headerBg} px-3 py-2 border-b ${style.border}`}>
                               <div className="text-sm font-semibold text-gray-800">{col.title}</div>
-                              <div className="text-[11px] text-gray-500">{subtitle}</div>
+                              <div className="text-[0.6875rem] text-gray-500">{subtitle}</div>
                             </div>
                             <div className="p-2 max-h-80 overflow-y-auto">
                               {renderUnifiedColumnBody()}
@@ -4899,7 +4899,7 @@ function ContractsPageContent() {
                                       : <ArrowUpDown className="h-3.5 w-3.5" />
                                     }
                                     {activeSort && headerSortPriority != null ? (
-                                      <sup className="ml-0.5 text-[9px] font-semibold leading-none tabular-nums">{headerSortPriority}</sup>
+                                      <sup className="ml-0.5 text-[0.5625rem] font-semibold leading-none tabular-nums">{headerSortPriority}</sup>
                                     ) : null}
                                   </button>
                                 )}
@@ -5182,7 +5182,7 @@ function ContractsPageContent() {
                                     >
                                       Clear
                                     </button>
-                                    <div className="text-[11px] text-gray-500">
+                                    <div className="text-[0.6875rem] text-gray-500">
                                       {filterActive ? 'Filtered' : 'No filter'}
                                     </div>
                                   </div>

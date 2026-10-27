@@ -2105,7 +2105,7 @@ export default function OilLossPage() {
                 </div>
 
                 <div className="min-w-0">
-                  <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
+                  <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-500 leading-none">
                     Avg
                   </div>
                   <div
@@ -2118,7 +2118,7 @@ export default function OilLossPage() {
                 </div>
                 {card.key === 'r4' ? (
                   <div className="mt-2 min-w-0">
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400 leading-none">
+                    <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-400 leading-none">
                       Avg MT
                     </div>
                     <div

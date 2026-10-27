@@ -60,7 +60,7 @@ export function ContractPerfTableSortHeader({
             <ArrowUpDown className="h-3.5 w-3.5" />
           )}
           {activeSort && sortPriority != null ? (
-            <sup className="ml-0.5 text-[9px] font-semibold leading-none tabular-nums">{sortPriority}</sup>
+            <sup className="ml-0.5 text-[0.5625rem] font-semibold leading-none tabular-nums">{sortPriority}</sup>
           ) : null}
         </button>
       )}

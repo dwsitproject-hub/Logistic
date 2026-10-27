@@ -91,7 +91,7 @@ export default function KlipAgentAiPage() {
     <Layout>
       <div className="mx-auto max-w-5xl h-[calc(100vh-140px)] flex flex-col">
         <div className="mb-3 flex items-center gap-2">
-          <Badge variant="outline" className="text-[10px]">Beta</Badge>
+          <Badge variant="outline" className="text-[0.625rem]">Beta</Badge>
         </div>
 
         <div className="flex-1 overflow-y-auto pr-1 space-y-3">

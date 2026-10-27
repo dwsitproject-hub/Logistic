@@ -103,7 +103,7 @@ export function HistoricalRemarksModal({
                           {formatRemarkAuthor(remark)}
                         </span>
                         {categoryLabel ? (
-                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-red-800">
                             {categoryLabel}
                           </span>
                         ) : null}

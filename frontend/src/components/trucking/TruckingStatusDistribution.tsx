@@ -117,7 +117,7 @@ export function TruckingStatusDistribution({
           {count.toLocaleString('en-US')}
         </div>
         <div
-          className={`mt-1.5 border-t border-black/10 pt-1.5 text-[11px] leading-snug ${card.textColor} opacity-80`}
+          className={`mt-1.5 border-t border-black/10 pt-1.5 text-[0.6875rem] leading-snug ${card.textColor} opacity-80`}
         >
           <div className="font-medium">{qtyHeading}</div>
           <div className="mt-0.5 tabular-nums font-semibold opacity-90">{qtyLabel}</div>

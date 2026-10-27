@@ -60,7 +60,7 @@ export function ShareBar({ part, total, tone = 'indigo' }: { part: number; total
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="w-11 text-right text-[11px] tabular-nums text-gray-500">{formatShare(part, total)}</span>
+      <span className="w-11 text-right text-[0.6875rem] tabular-nums text-gray-500">{formatShare(part, total)}</span>
     </div>
   )
 }

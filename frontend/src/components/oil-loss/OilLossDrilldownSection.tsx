@@ -87,7 +87,7 @@ export default function OilLossDrilldownSection({
         <div className="mt-1 h-1 rounded bg-gray-100 overflow-hidden">
           <div className={`h-full ${style.bar}`} style={{ width: `${pct}%` }} />
         </div>
-        <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] leading-tight">
+        <div className="mt-1.5 flex items-center justify-between gap-2 text-[0.625rem] leading-tight">
           <span className="text-gray-600 shrink-0">
             Contract:{' '}
             <span className="font-semibold text-gray-900 tabular-nums">
@@ -187,7 +187,7 @@ export default function OilLossDrilldownSection({
                   <div key={level} className={`min-w-0 rounded-lg border ${style.border} overflow-hidden`}>
                     <div className={`${style.headerBg} px-3 py-2 border-b ${style.border}`}>
                       <div className="text-sm font-semibold text-gray-800">{title}</div>
-                      <div className="text-[11px] text-gray-500 truncate" title={subtitle}>
+                      <div className="text-[0.6875rem] text-gray-500 truncate" title={subtitle}>
                         {subtitle}
                       </div>
                     </div>

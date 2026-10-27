@@ -1166,10 +1166,10 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
 
     const body = (
       <div className="rounded-xl border bg-white px-3.5 py-3 hover:bg-gray-50 transition-colors min-w-0 overflow-hidden">
-        <div className="text-[11px] font-medium text-gray-600 truncate">{label}</div>
+        <div className="text-[0.6875rem] font-medium text-gray-600 truncate">{label}</div>
         <div
           className={[
-            'mt-0.5 text-[18px] font-semibold leading-tight tabular-nums tracking-tight',
+            'mt-0.5 text-[1.125rem] font-semibold leading-tight tabular-nums tracking-tight',
             valueColorClass,
             wrapValue ? 'whitespace-normal break-words' : 'truncate'
           ].join(' ')}
@@ -1178,7 +1178,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
           {value}
         </div>
         {sublabel ? (
-          <div className="mt-1 text-[11px] text-gray-500 leading-snug truncate">
+          <div className="mt-1 text-[0.6875rem] text-gray-500 leading-snug truncate">
             {sublabel}
           </div>
         ) : null}
@@ -1266,7 +1266,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
           <div className="rounded-lg border bg-white overflow-hidden">
             <div className="overflow-x-auto">
               <div className="min-w-[860px]">
-                <div className="grid grid-cols-[minmax(160px,2fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)] gap-3 px-3 py-2 text-[10px] font-semibold text-gray-600 bg-gray-50">
+                <div className="grid grid-cols-[minmax(160px,2fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)] gap-3 px-3 py-2 text-[0.625rem] font-semibold text-gray-600 bg-gray-50">
                   <div>Incoterm</div>
                   <div className="text-right">Total</div>
                   <div className="text-right">Out. Delivery</div>
@@ -1292,11 +1292,11 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 const cs = seg.breakdown ? seg.breakdown.outstandingClaimSusut : 0
                 const done = seg.breakdown ? seg.breakdown.completed : 0
                 const row = (
-                  <div className={`grid grid-cols-[minmax(160px,2fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)] gap-3 px-3 py-2.5 text-[11px] ${onSegmentClick ? 'hover:bg-gray-50' : ''}`}>
+                  <div className={`grid grid-cols-[minmax(160px,2fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)_minmax(140px,1fr)] gap-3 px-3 py-2.5 text-[0.6875rem] ${onSegmentClick ? 'hover:bg-gray-50' : ''}`}>
                     <div className="flex items-center gap-2 min-w-0">
                       <span className={`h-2 w-2 rounded-full ${dot} shrink-0`} />
                       <span className="text-gray-700 font-medium truncate">{segDisplay(seg.label)}</span>
-                      <span className="text-[10px] text-gray-500 tabular-nums shrink-0">({pctText(v, total)})</span>
+                      <span className="text-[0.625rem] text-gray-500 tabular-nums shrink-0">({pctText(v, total)})</span>
                     </div>
                     <div className="text-right tabular-nums font-semibold text-gray-900 whitespace-nowrap truncate" title={fmt(v)}>
                       {fmt(v)}
@@ -1351,11 +1351,11 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 <div className={`rounded-md border bg-white px-2 py-2 min-w-0 ${onSegmentClick ? 'hover:bg-gray-50' : ''}`}>
                   <div className="flex items-center gap-2 min-w-0">
                     <span className={`h-2 w-2 rounded-full ${dot} shrink-0`} />
-                    <span className="text-[11px] text-gray-600 leading-snug break-words">{segDisplay(seg.label)}</span>
+                    <span className="text-[0.6875rem] text-gray-600 leading-snug break-words">{segDisplay(seg.label)}</span>
                   </div>
                   <div className="mt-1 flex items-baseline justify-between gap-2 min-w-0">
-                    <span className="text-[11px] font-semibold text-gray-900 tabular-nums whitespace-nowrap">{fmt(v)}</span>
-                    <span className="text-[11px] text-gray-500 font-medium tabular-nums whitespace-nowrap">
+                    <span className="text-[0.6875rem] font-semibold text-gray-900 tabular-nums whitespace-nowrap">{fmt(v)}</span>
+                    <span className="text-[0.6875rem] text-gray-500 font-medium tabular-nums whitespace-nowrap">
                       ({pctText(v, total)})
                     </span>
                   </div>
@@ -1401,7 +1401,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
     }
     return (
       <div className="rounded-xl border bg-white p-3">
-        {baseLabel ? <div className="text-[11px] text-gray-600 mb-2">{baseLabel}</div> : null}
+        {baseLabel ? <div className="text-[0.6875rem] text-gray-600 mb-2">{baseLabel}</div> : null}
         <div className="space-y-2">
           {items.map((it) => {
             const v = Number.isFinite(it.value) ? it.value : 0
@@ -1410,9 +1410,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div className={`rounded-lg border bg-gray-50 px-3 py-2 ${onItemClick ? 'hover:bg-gray-100 transition-colors' : ''}`}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-[11px] font-semibold text-gray-700 truncate">{it.label}</div>
+                    <div className="text-[0.6875rem] font-semibold text-gray-700 truncate">{it.label}</div>
                   </div>
-                  <div className="text-[12px] font-semibold text-gray-900 tabular-nums whitespace-nowrap">
+                  <div className="text-[0.75rem] font-semibold text-gray-900 tabular-nums whitespace-nowrap">
                     {fmt(v)}
                   </div>
                 </div>
@@ -1468,7 +1468,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
         <div className="text-xs font-medium text-gray-700 mb-2">
           Payment overlap breakdown (not additive)
         </div>
-        <p className="text-[10px] text-gray-500 mb-2 leading-snug">
+        <p className="text-[0.625rem] text-gray-500 mb-2 leading-snug">
           Bar width and {pctLabel}. Categories overlap, so the three shares can add up to more than 100%.
         </p>
         <div className="space-y-2">
@@ -1481,7 +1481,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 className="w-full text-left"
                 onClick={() => openPaymentsDrilldown({ title: r.label, extraParams: { status: r.status } })}
               >
-                <div className="flex items-center justify-between text-[11px] text-gray-700 mb-1">
+                <div className="flex items-center justify-between text-[0.6875rem] text-gray-700 mb-1">
                   <span>{r.label}</span>
                   <span className="tabular-nums">
                     {money(r.value)} ({pct(r.value, portfolioDenom)}%)
@@ -1510,9 +1510,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       <div className="rounded-xl border bg-blue-50/30 p-3">
         <div className="flex items-center justify-between gap-3 mb-2">
           <div className="text-xs font-semibold text-gray-800">Overlap (not additive)</div>
-          <div className="text-[10px] text-gray-500 tabular-nums">Base: outstanding delivery</div>
+          <div className="text-[0.625rem] text-gray-500 tabular-nums">Base: outstanding delivery</div>
         </div>
-        <p className="text-[11px] text-gray-600 mb-2 leading-snug">
+        <p className="text-[0.6875rem] text-gray-600 mb-2 leading-snug">
           Outstanding Payment can overlap with Outstanding Delivery.
         </p>
         <button
@@ -1525,7 +1525,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
             })
           }
         >
-          <div className="flex items-center justify-between text-[11px] text-gray-700 mb-1">
+          <div className="flex items-center justify-between text-[0.6875rem] text-gray-700 mb-1">
             <span className="font-medium">Outstanding Payment (subset of OD)</span>
             <span className="tabular-nums">
               {formatKg(outstandingPayment)} <span className="text-gray-500">({pct(outstandingPayment, base)}% of OD)</span>
@@ -2188,7 +2188,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   <CardTitle className="text-base flex items-center gap-2">
                     Quantity Performance
                     <FieldHelp text={FIELD_HELP.dashboardKpiQuantity} />
-                    <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                    <Badge variant="outline" className="text-[0.625rem]">Qty: {quantityUnitLabel}</Badge>
                   </CardTitle>
                   <CardDescription>
                     Quantities for delivery; IDR amounts (contract value share) for outstanding payment and claims
@@ -2296,7 +2296,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   <CardTitle className="text-base flex items-center gap-2">
                     Shipment Performance
                     <FieldHelp text={FIELD_HELP.dashboardKpiShipments} />
-                    <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                    <Badge variant="outline" className="text-[0.625rem]">Qty: {quantityUnitLabel}</Badge>
                   </CardTitle>
                   <CardDescription>Status mix and delay focus</CardDescription>
                 </div>
@@ -2369,7 +2369,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   <CardTitle className="text-base flex items-center gap-2">
                     Trucking Performance
                     <FieldHelp text={FIELD_HELP.dashboardKpiTrucking} />
-                    <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                    <Badge variant="outline" className="text-[0.625rem]">Qty: {quantityUnitLabel}</Badge>
                   </CardTitle>
                   <CardDescription>Status mix and late risk</CardDescription>
                 </div>
@@ -2440,7 +2440,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   <CardTitle className="text-base flex items-center gap-2">
                     Payment Performance
                     <FieldHelp text={FIELD_HELP.dashboardKpiFinance} />
-                    <Badge variant="outline" className="text-[10px]">Amt: {amountUnitLabel}</Badge>
+                    <Badge variant="outline" className="text-[0.625rem]">Amt: {amountUnitLabel}</Badge>
                   </CardTitle>
                   <CardDescription>Cash position and risk</CardDescription>
                 </div>
@@ -2508,13 +2508,13 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div>
                 <CardTitle className="text-base flex items-center gap-2">
                   Contract Profiling (by Quantity)
-                  <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                  <Badge variant="outline" className="text-[0.625rem]">Qty: {quantityUnitLabel}</Badge>
                 </CardTitle>
                 <CardDescription>
                   {isManagementDashboard ? (
                     <span className="block space-y-1 text-left">
                       <span className="block">Top products with incoterm distribution.</span>
-                      <span className="block text-muted-foreground text-[11px] leading-snug">
+                      <span className="block text-muted-foreground text-[0.6875rem] leading-snug">
                         Each product includes a full breakdown: Incoterm → Plant/Site → Source Type → LT/SPOT (same plant/site rules as the main Dashboard).
                         Total Delay, Cargo Readiness Issue, Aging O/S, Delivery Issue, and DP/Payoff deviations are per contract — open any product or click a number in the breakdown to view them in the contracts list.
                       </span>
@@ -2641,14 +2641,14 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               </div>
                               <div className="min-w-0">
                                 <div className="font-semibold text-sm truncate text-gray-900">{formatSapGroupDisplayLabel(p.product)}</div>
-                                <div className="text-[11px] text-gray-500">
+                                <div className="text-[0.6875rem] text-gray-500">
                                   {p.summary.contract_count} contracts • {p.summary.supplier_count} suppliers
                                 </div>
                               </div>
                             </div>
                             <div className="text-right shrink-0">
-                              <div className="text-[13px] font-semibold tabular-nums text-gray-900">{formatKg(p.summary.total_quantity)}</div>
-                              <div className="text-[10px] text-gray-500">Total</div>
+                              <div className="text-[0.8125rem] font-semibold tabular-nums text-gray-900">{formatKg(p.summary.total_quantity)}</div>
+                              <div className="text-[0.625rem] text-gray-500">Total</div>
                             </div>
                           </div>
 
@@ -2859,7 +2859,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                         })}
                                     </tbody>
                                   </table>
-                                  <div className="mt-1 text-[10px] text-gray-500">
+                                  <div className="mt-1 text-[0.625rem] text-gray-500">
                                     Scroll to see all rows. Click any number to open the contracts list (includes delay, aging, and payment deviation columns).
                                   </div>
                                 </div>
@@ -2883,7 +2883,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div>
                 <CardTitle className="text-base flex items-center gap-2">
                   Contract Profiling (by Amount)
-                  <Badge variant="outline" className="text-[10px]">Amt: {amountUnitLabel}</Badge>
+                  <Badge variant="outline" className="text-[0.625rem]">Amt: {amountUnitLabel}</Badge>
                 </CardTitle>
                 <CardDescription>Top products with incoterm distribution</CardDescription>
               </div>
@@ -3016,14 +3016,14 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                               </div>
                               <div className="min-w-0">
                                 <div className="font-semibold text-sm truncate text-gray-900">{formatSapGroupDisplayLabel(p.product)}</div>
-                                <div className="text-[11px] text-gray-500">
+                                <div className="text-[0.6875rem] text-gray-500">
                                   {p.summary.contract_count} contracts • {p.summary.supplier_count} suppliers
                                 </div>
                               </div>
                             </div>
                             <div className="text-right shrink-0">
-                              <div className="text-[13px] font-semibold tabular-nums text-gray-900">{formatRupiah(p.summary.total_contract_value)}</div>
-                              <div className="text-[10px] text-gray-500">Total</div>
+                              <div className="text-[0.8125rem] font-semibold tabular-nums text-gray-900">{formatRupiah(p.summary.total_contract_value)}</div>
+                              <div className="text-[0.625rem] text-gray-500">Total</div>
                             </div>
                           </div>
 
@@ -3124,7 +3124,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div>
                 <CardTitle className="text-lg flex items-center gap-2">
                   Contract Quantity by Plant/Site
-                  <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                  <Badge variant="outline" className="text-[0.625rem]">Qty: {quantityUnitLabel}</Badge>
                 </CardTitle>
                 <CardDescription>Total, outstanding delivery/payment, completed, and incoterm mix per plant/site</CardDescription>
               </div>
@@ -3233,7 +3233,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 <div className="text-sm font-semibold text-gray-900 truncate" title={formatSapGroupDisplayLabel(p.plant)}>
                                   {formatSapGroupDisplayLabel(p.plant)}
                                 </div>
-                                <div className="text-[11px] text-gray-500">
+                                <div className="text-[0.6875rem] text-gray-500">
                                   {formatNumber(p.summary.contract_count)} contracts
                                 </div>
                               </div>
@@ -3241,7 +3241,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                           </div>
 
                           <div className="mt-2 grid grid-cols-2 lg:grid-cols-6 gap-2">
-                            <div className="text-[11px]">
+                            <div className="text-[0.6875rem]">
                               <span className="text-gray-500">Total:</span>
                               <button
                                 type="button"
@@ -3254,7 +3254,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 {formatKg(p.summary.total_quantity)}
                               </button>
                             </div>
-                            <div className="text-[11px]">
+                            <div className="text-[0.6875rem]">
                               <span className="text-gray-500">Outstanding delivery:</span>
                               <button
                                 type="button"
@@ -3267,7 +3267,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 {formatKg(p.summary.outstanding_quantity)}
                               </button>
                             </div>
-                            <div className="text-[11px]">
+                            <div className="text-[0.6875rem]">
                               <span className="text-gray-500">Outstanding payment:</span>
                               <button
                                 type="button"
@@ -3280,7 +3280,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 {formatKg(p.summary.outstanding_payment_quantity)}
                               </button>
                             </div>
-                            <div className="text-[11px]">
+                            <div className="text-[0.6875rem]">
                               <span className="text-gray-500">Outstanding Claim Mutu:</span>
                               <button
                                 type="button"
@@ -3293,7 +3293,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 {formatKg((p.summary as any).outstanding_claim_mutu_qty || 0)}
                               </button>
                             </div>
-                            <div className="text-[11px]">
+                            <div className="text-[0.6875rem]">
                               <span className="text-gray-500">Outstanding Claim Susut:</span>
                               <button
                                 type="button"
@@ -3306,7 +3306,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                                 {formatKg((p.summary as any).outstanding_claim_susut_qty || 0)}
                               </button>
                             </div>
-                            <div className="text-[11px] lg:text-right">
+                            <div className="text-[0.6875rem] lg:text-right">
                               <span className="text-gray-500">Completed:</span>
                               <button
                                 type="button"
@@ -3360,7 +3360,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div>
                 <CardTitle className="text-lg flex items-center gap-2">
                   Top 5 Suppliers
-                  <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                  <Badge variant="outline" className="text-[0.625rem]">Qty: {quantityUnitLabel}</Badge>
                 </CardTitle>
                 <CardDescription>By total quantity</CardDescription>
               </div>
@@ -3409,7 +3409,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div>
                 <CardTitle className="text-lg flex items-center gap-2">
                   Top 5 Trucking Owners
-                  <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                  <Badge variant="outline" className="text-[0.625rem]">Qty: {quantityUnitLabel}</Badge>
                 </CardTitle>
                 <CardDescription>By quantity sent</CardDescription>
               </div>
@@ -3458,7 +3458,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <div>
                 <CardTitle className="text-lg flex items-center gap-2">
                   Top 5 Vessels
-                  <Badge variant="outline" className="text-[10px]">Qty: {quantityUnitLabel}</Badge>
+                  <Badge variant="outline" className="text-[0.625rem]">Qty: {quantityUnitLabel}</Badge>
                 </CardTitle>
                 <CardDescription>By quantity shipped</CardDescription>
               </div>
@@ -4061,7 +4061,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   <p className="text-xs font-medium text-gray-600 mb-1">
                     Total contract value by Plant/Site
                   </p>
-                  <p className="text-[10px] text-gray-500 mb-2 leading-snug">
+                  <p className="text-[0.625rem] text-gray-500 mb-2 leading-snug">
                     LAND → truck discharge (unloading); SEA → vessel discharge port. Similar names (≥60% match) are merged.
                     Based on full filtered payment results.
                   </p>
@@ -4099,9 +4099,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                           await fetchPaymentsDrilldownPage(1, q)
                         }}
                       >
-                        <div className="text-[11px] text-gray-500 truncate">{formatSapGroupDisplayLabel(s.plantSite)}</div>
+                        <div className="text-[0.6875rem] text-gray-500 truncate">{formatSapGroupDisplayLabel(s.plantSite)}</div>
                         <div className="text-sm font-semibold tabular-nums">{money(s.totalContractValue)}</div>
-                        <div className="text-[11px] text-gray-500">{formatNumber(s.contracts)} contracts</div>
+                        <div className="text-[0.6875rem] text-gray-500">{formatNumber(s.contracts)} contracts</div>
                       </button>
                     ))}
                   </div>

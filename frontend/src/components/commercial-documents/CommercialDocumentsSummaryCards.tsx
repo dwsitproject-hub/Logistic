@@ -56,7 +56,7 @@ export function CommercialDocumentsSummaryCards({ summary, loading = false, acti
                   <div className="line-clamp-2 min-h-[2.5rem] text-base font-semibold leading-snug text-gray-800">
                     {label}
                   </div>
-                  <div className="text-[11px] font-medium leading-none text-gray-500">Contract</div>
+                  <div className="text-[0.6875rem] font-medium leading-none text-gray-500">Contract</div>
                   <div
                     className={cn(
                       'mt-1 text-xl font-semibold tabular-nums leading-tight text-gray-900',

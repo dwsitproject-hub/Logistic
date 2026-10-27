@@ -26,7 +26,7 @@ export function SortStackSummary<K extends string>({ stack, labelFor, onReset, m
         <span key={entry.key} className="inline-flex items-center gap-1.5">
           {index > 0 ? <ChevronRight className="h-3 w-3 text-gray-400" aria-hidden /> : null}
           <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 font-medium text-blue-800">
-            <span className="tabular-nums text-[10px] text-blue-500">{index + 1}</span>
+            <span className="tabular-nums text-[0.625rem] text-blue-500">{index + 1}</span>
             {labelFor(entry.key)}
             {entry.dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
           </span>

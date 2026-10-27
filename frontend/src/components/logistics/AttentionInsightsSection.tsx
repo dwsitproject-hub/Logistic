@@ -26,7 +26,7 @@ function formatMtCompact(kg: number): string {
 
 function SubBullet({ children }: { children: ReactNode }) {
   return (
-    <li className="ml-4 list-none text-[11px] leading-snug text-gray-600 before:mr-1.5 before:text-gray-400 before:content-['•']">
+    <li className="ml-4 list-none text-[0.6875rem] leading-snug text-gray-600 before:mr-1.5 before:text-gray-400 before:content-['•']">
       {children}
     </li>
   )
@@ -169,11 +169,11 @@ export function AttentionInsightsSection({
                 </span>
                 <span>Aging overdue</span>
               </div>
-              <p className="mt-1 text-[11px] leading-snug text-gray-500">
+              <p className="mt-1 text-[0.6875rem] leading-snug text-gray-500">
                 Due date &lt; today &amp; remaining O/S &gt; 0
               </p>
             </div>
-            <Badge variant="outline" className="shrink-0 text-[10px] font-medium text-gray-500">
+            <Badge variant="outline" className="shrink-0 text-[0.625rem] font-medium text-gray-500">
               MT
             </Badge>
           </div>
@@ -181,7 +181,7 @@ export function AttentionInsightsSection({
           <div className="mt-3 overflow-hidden rounded-md border border-rose-100">
             <table className="w-full text-xs">
               <thead>
-                <tr className="bg-rose-50/80 text-[10px] font-semibold tracking-wide text-rose-700">
+                <tr className="bg-rose-50/80 text-[0.625rem] font-semibold tracking-wide text-rose-700">
                   <th className="px-3 py-2 text-left">Bucket</th>
                   <th className="px-3 py-2 text-right">OS qty</th>
                 </tr>

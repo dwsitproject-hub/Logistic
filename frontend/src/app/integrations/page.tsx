@@ -233,7 +233,7 @@ function IntegrationCard({
         ) : null}
 
         {needsRestart ? (
-          <p className="text-[11px] text-gray-500">
+          <p className="text-[0.6875rem] text-gray-500">
             Field bertanda <span className="font-medium text-amber-700">restart</span> dibaca sekali saat backend
             start - perubahan baru berlaku setelah backend di-restart.
           </p>
@@ -250,18 +250,18 @@ function IntegrationCard({
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-xs font-medium text-gray-800">{s.label}</span>
                     <span
-                      className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${badge.className}`}
+                      className={`rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide ${badge.className}`}
                       title={badge.title}
                     >
                       {badge.label}
                     </span>
                     {s.requiresRestart ? (
-                      <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700">
+                      <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-amber-700">
                         restart
                       </span>
                     ) : null}
                   </div>
-                  <p className="mt-0.5 font-mono text-[10px] text-gray-400">{s.key}</p>
+                  <p className="mt-0.5 font-mono text-[0.625rem] text-gray-400">{s.key}</p>
                 </div>
 
                 <div className="min-w-0 space-y-1">
@@ -305,15 +305,15 @@ function IntegrationCard({
                     />
                   )}
 
-                  {s.help ? <p className="text-[11px] text-gray-500">{s.help}</p> : null}
+                  {s.help ? <p className="text-[0.6875rem] text-gray-500">{s.help}</p> : null}
                   {s.error ? (
-                    <p className="flex items-center gap-1 text-[11px] text-red-600">
+                    <p className="flex items-center gap-1 text-[0.6875rem] text-red-600">
                       <AlertTriangle className="h-3 w-3" />
                       Nilai tersimpan tidak bisa dibaca ({s.error}) - sementara memakai .env.
                     </p>
                   ) : null}
                   {s.source === 'database' && s.updatedAt ? (
-                    <p className="text-[10px] text-gray-400">
+                    <p className="text-[0.625rem] text-gray-400">
                       Diubah {formatWhen(s.updatedAt)}
                       {s.updatedByName ? ` oleh ${s.updatedByName}` : ''}
                     </p>
@@ -321,7 +321,7 @@ function IntegrationCard({
                   {editing && s.source === 'database' ? (
                     <button
                       type="button"
-                      className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline"
+                      className="inline-flex items-center gap-1 text-[0.6875rem] text-blue-600 hover:underline"
                       onClick={() => toggleRevert(s.key)}
                     >
                       <RotateCcw className="h-3 w-3" />

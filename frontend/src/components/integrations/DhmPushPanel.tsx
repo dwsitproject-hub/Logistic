@@ -145,7 +145,7 @@ export function DhmPushPanel() {
       {items.length > 0 ? (
         <div className="overflow-x-auto">
           <table className="min-w-full text-xs">
-            <thead className="text-left text-[10px] uppercase tracking-wide text-gray-500">
+            <thead className="text-left text-[0.625rem] uppercase tracking-wide text-gray-500">
               <tr>
                 <th className="px-2 py-1">Master</th>
                 <th className="px-2 py-1">Nama</th>

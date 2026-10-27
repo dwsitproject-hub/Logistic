@@ -119,7 +119,7 @@ function StatusBadge({ row }: { row: CallRow }) {
   const label = row.response_status ? String(row.response_status) : 'no response'
   return (
     <span
-      className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${
+      className={`inline-flex rounded-full px-2 py-0.5 text-[0.6875rem] font-medium ${
         row.ok ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
       }`}
       title={row.error_code ? `${row.error_code}${row.error_message ? `: ${row.error_message}` : ''}` : undefined}
@@ -142,11 +142,11 @@ function JsonBlock({ title, value }: { title: string; value: unknown }) {
   return (
     <div className="min-w-0">
       <div className="mb-1 flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{title}</p>
+        <p className="text-[0.6875rem] font-semibold uppercase tracking-wide text-gray-500">{title}</p>
         {text !== '-' ? (
           <button
             type="button"
-            className={`inline-flex items-center gap-1 text-[11px] hover:underline ${
+            className={`inline-flex items-center gap-1 text-[0.6875rem] hover:underline ${
               copied === 'failed' ? 'text-red-600' : copied === 'ok' ? 'text-green-700' : 'text-blue-600'
             }`}
             onClick={() => void copy()}
@@ -156,7 +156,7 @@ function JsonBlock({ title, value }: { title: string; value: unknown }) {
           </button>
         ) : null}
       </div>
-      <pre className="max-h-72 overflow-auto rounded border border-gray-200 bg-gray-50 p-2 text-[11px] leading-snug text-gray-800">
+      <pre className="max-h-72 overflow-auto rounded border border-gray-200 bg-gray-50 p-2 text-[0.6875rem] leading-snug text-gray-800">
         {text}
       </pre>
     </div>
@@ -244,17 +244,17 @@ function CallRowView({
       <tr className={`cursor-pointer hover:bg-gray-50 ${open ? 'bg-gray-50' : ''}`} onClick={onToggle}>
         <td className="whitespace-nowrap px-3 py-2 tabular-nums text-gray-700">{formatWib(row.created_at)}</td>
         <td className="px-3 py-2 text-gray-700">{row.kind}</td>
-        <td className="px-3 py-2 font-mono text-[11px] text-gray-700">
+        <td className="px-3 py-2 font-mono text-[0.6875rem] text-gray-700">
           <span className="font-semibold">{row.method}</span> {row.url}
         </td>
-        <td className="px-3 py-2 font-mono text-[11px] text-gray-700">{row.subject ?? '-'}</td>
-        <td className="px-3 py-2 font-mono text-[11px] text-gray-700">
+        <td className="px-3 py-2 font-mono text-[0.6875rem] text-gray-700">{row.subject ?? '-'}</td>
+        <td className="px-3 py-2 font-mono text-[0.6875rem] text-gray-700">
           {integration === 'dhm' ? row.reference ?? '-' : ''}
         </td>
         <td className="px-3 py-2">
           <StatusBadge row={row} />
         </td>
-        <td className="px-3 py-2 font-mono text-[11px] text-gray-600">{row.request_id ?? '-'}</td>
+        <td className="px-3 py-2 font-mono text-[0.6875rem] text-gray-600">{row.request_id ?? '-'}</td>
         <td className="px-3 py-2 text-right tabular-nums text-gray-600">{row.duration_ms ?? '-'}</td>
       </tr>
       {open ? (
@@ -313,7 +313,7 @@ export function ApiCallHistory({ integration }: { integration: IntegrationId }) 
   return (
     <div className="space-y-3 rounded border border-gray-200 bg-gray-50/60 p-3">
       <div className="flex flex-wrap items-end gap-2">
-        <label className="text-[11px] text-gray-500">
+        <label className="text-[0.6875rem] text-gray-500">
           Jenis
           <select
             className="mt-0.5 block h-8 rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-800"
@@ -328,7 +328,7 @@ export function ApiCallHistory({ integration }: { integration: IntegrationId }) 
             ))}
           </select>
         </label>
-        <label className="text-[11px] text-gray-500">
+        <label className="text-[0.6875rem] text-gray-500">
           Hasil
           <select
             className="mt-0.5 block h-8 rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-800"
@@ -340,7 +340,7 @@ export function ApiCallHistory({ integration }: { integration: IntegrationId }) 
             <option value="false">Gagal</option>
           </select>
         </label>
-        <label className="min-w-[14rem] flex-1 text-[11px] text-gray-500">
+        <label className="min-w-[14rem] flex-1 text-[0.6875rem] text-gray-500">
           Cari ({wording.subject}, {wording.reference.toLowerCase()}, request id)
           <Input
             className="mt-0.5 h-8 text-xs"
@@ -365,7 +365,7 @@ export function ApiCallHistory({ integration }: { integration: IntegrationId }) 
 
       <div className="overflow-x-auto rounded border border-gray-200 bg-white">
         <table className="w-full min-w-[60rem] text-left text-xs">
-          <thead className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
+          <thead className="bg-gray-50 text-[0.6875rem] uppercase tracking-wide text-gray-500">
             <tr>
               <th className="px-3 py-2 font-medium">Waktu (WIB)</th>
               <th className="px-3 py-2 font-medium">Jenis</th>
@@ -424,7 +424,7 @@ export function ApiCallHistory({ integration }: { integration: IntegrationId }) 
           </Button>
         </div>
       </div>
-      <p className="text-[11px] text-gray-400">
+      <p className="text-[0.6875rem] text-gray-400">
         Riwayat disimpan 30 hari. Kredensial (API key, private key) tidak pernah ikut tercatat.
         {integration === 'dhm' ? ' Respons bacaan yang berhasil (sync, katalog) hanya disimpan 2.000 karakter pertama.' : ''}
       </p>

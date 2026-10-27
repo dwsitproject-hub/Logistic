@@ -432,7 +432,7 @@ function ReadOnlyInfoField({
       <label
         className={
           compact
-            ? 'mb-1 block text-[10px] font-medium text-gray-600'
+            ? 'mb-1 block text-[0.625rem] font-medium text-gray-600'
             : 'mb-1 block text-xs font-medium text-gray-600'
         }
       >
@@ -521,7 +521,7 @@ function MtQtyInput({
           onValueChange={(mt) => onChange(mt === null ? 0 : mt * 1000)}
           className={`h-7 px-2 py-1 pr-9 text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}
         />
-        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-normal text-gray-500">
+        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[0.625rem] font-normal text-gray-500">
           MT
         </span>
       </div>
@@ -563,7 +563,7 @@ function MetricDecimalInput({
         className={`h-9 text-right ${unit ? 'pr-12' : ''}`}
       />
       {unit && (
-        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-normal text-gray-500">
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[0.625rem] font-normal text-gray-500">
           {unit}
         </span>
       )}
@@ -2266,14 +2266,14 @@ export function EditShipmentModal({
                 {provenanceNote ? (
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <span
-                      className="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                      className="rounded bg-amber-50 px-2 py-0.5 text-[0.6875rem] font-medium text-amber-800"
                       title="Dihitung dari perbandingan nilai KLIP terhadap referensi SAP pada setiap port"
                     >
                       {provenanceNote}
                     </span>
                     <button
                       type="button"
-                      className="text-[11px] font-medium text-blue-700 underline-offset-2 hover:underline"
+                      className="text-[0.6875rem] font-medium text-blue-700 underline-offset-2 hover:underline"
                       onClick={() => {
                         const next = !(showAtaDifferencesOnly && showQualityDifferencesOnly)
                         setShowAtaDifferencesOnly(next)
@@ -2303,7 +2303,7 @@ export function EditShipmentModal({
               <div key={step.num} className="flex items-center">
                 <div className="flex items-center gap-1.5">
                   <div
-                    className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${
+                    className={`flex h-6 w-6 items-center justify-center rounded-full text-[0.6875rem] font-bold transition-colors ${
                       step.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'
                     }`}
                   >
@@ -2572,7 +2572,7 @@ export function EditShipmentModal({
                 </div>
 
                 {canModifyCoreSections && (
-                  <p className="text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
+                  <p className="text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT}</p>
                 )}
 
                 {editContext?.has_sap_sto && !readOnly && (
@@ -2585,7 +2585,7 @@ export function EditShipmentModal({
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label className="text-xs font-semibold text-gray-700">Add PO to shipment</label>
-                      <span className="text-[10px] text-gray-500">OS Qty (Actual) &gt; 0</span>
+                      <span className="text-[0.625rem] text-gray-500">OS Qty (Actual) &gt; 0</span>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                       <div className="min-w-0 flex-1">
@@ -2714,7 +2714,7 @@ export function EditShipmentModal({
                               )}
                               {qtyLocked ? (
                                 <span
-                                  className="block text-[10px] font-normal text-amber-700"
+                                  className="block text-[0.625rem] font-normal text-amber-700"
                                   title="This PO has no active shipment on this STO / operation (its shipment was cancelled, or it is only linked in SAP), so a quantity cannot be saved for it here."
                                 >
                                   No active shipment
@@ -2836,7 +2836,7 @@ export function EditShipmentModal({
                           <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                             <MtQtyReadOnly valueKg={grandTotalKg.delivered} />
                             {grandTotalSource.delivered ? (
-                              <div className="text-[10px] font-normal text-muted-foreground">
+                              <div className="text-[0.625rem] font-normal text-muted-foreground">
                                 {grandTotalSource.delivered === 'SAP' ? 'from SAP' : 'from Klip'}
                               </div>
                             ) : null}
@@ -2844,7 +2844,7 @@ export function EditShipmentModal({
                           <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                             <MtQtyReadOnly valueKg={grandTotalKg.receive} />
                             {grandTotalSource.receive ? (
-                              <div className="text-[10px] font-normal text-muted-foreground">
+                              <div className="text-[0.625rem] font-normal text-muted-foreground">
                                 {grandTotalSource.receive === 'SAP' ? 'from SAP' : 'from Klip'}
                               </div>
                             ) : null}
@@ -2854,14 +2854,14 @@ export function EditShipmentModal({
                     </TableFooter>
                   </Table>
                 </div>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                <p className="mt-1.5 text-[0.6875rem] text-muted-foreground">
                   Grand Total under the Klip columns adds up the Klip quantities. When the STO total shown on Shipments View Table differs, it appears on the line below with its source:
                   the Klip quantity, or SAP when no Klip quantity is entered or the shipment is COMPLETED
                   (Klip only when the PO is also in another shipment: SAP books the PO, not each shipment).
                   One PO with several STOs: each shipment row is that STO only.
                 </p>
                 {detailRows.some((row) => isMultiStoPo(row.po_sto_count)) ? (
-                  <p className="mt-1 text-[11px] text-muted-foreground">
+                  <p className="mt-1 text-[0.6875rem] text-muted-foreground">
                     OS Qty of a PO with several STOs is the PO&apos;s: Contract Qty less the total Delivery / Receive of all its STOs, the same as the Shipments View Table.
                     Hover the (i) beside it to see each STO&apos;s Delivery | Receive.
                   </p>
@@ -2893,7 +2893,7 @@ export function EditShipmentModal({
                           value={sfalQty === null ? null : sfalQty / 1000}
                           onChange={(mt) => setSfalQty(mt === null ? null : mt * 1000)}
                         />
-                        <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
+                        <p className="mt-1 text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT}</p>
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">SFBD Qty (MT)</label>
@@ -2901,7 +2901,7 @@ export function EditShipmentModal({
                           value={sfbdQty === null ? null : sfbdQty / 1000}
                           onChange={(mt) => setSfbdQty(mt === null ? null : mt * 1000)}
                         />
-                        <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
+                        <p className="mt-1 text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT}</p>
                       </div>
                     </>
                   ) : (
@@ -2960,7 +2960,7 @@ export function EditShipmentModal({
                             }}
                           >
                             <p className="text-xs font-medium text-gray-800">{label}</p>
-                            <p className="mt-0.5 text-[11px] text-gray-500">
+                            <p className="mt-0.5 text-[0.6875rem] text-gray-500">
                               {canModifyCoreSections
                                 ? 'PDF. Drop one or more files here, or use Upload.'
                                 : 'PDF.'}
@@ -2999,7 +2999,7 @@ export function EditShipmentModal({
                               </>
                             ) : null}
                             {docs.length === 0 ? (
-                              <p className="mt-2 text-[11px] text-gray-400">No file yet.</p>
+                              <p className="mt-2 text-[0.6875rem] text-gray-400">No file yet.</p>
                             ) : (
                               <ul className="mt-2 space-y-1.5">
                                 {docs.map((doc) => (
@@ -3011,7 +3011,7 @@ export function EditShipmentModal({
                                       {doc.file_name}
                                     </p>
                                     {doc.created_at ? (
-                                      <p className="text-[10px] tabular-nums text-gray-500">
+                                      <p className="text-[0.625rem] tabular-nums text-gray-500">
                                         {formatDateTimeDMY(doc.created_at)}
                                       </p>
                                     ) : null}
@@ -3020,7 +3020,7 @@ export function EditShipmentModal({
                                         type="button"
                                         variant="outline"
                                         size="sm"
-                                        className="h-7 px-2 text-[11px]"
+                                        className="h-7 px-2 text-[0.6875rem]"
                                         disabled={viewingDocId === doc.id}
                                         onClick={() => void handleViewDocument(doc.id, doc.file_name)}
                                       >
@@ -3035,7 +3035,7 @@ export function EditShipmentModal({
                                         type="button"
                                         variant="outline"
                                         size="sm"
-                                        className="h-7 px-2 text-[11px]"
+                                        className="h-7 px-2 text-[0.6875rem]"
                                         onClick={() => void handleDownloadDocument(doc.id, doc.file_name)}
                                       >
                                         <Download className="mr-1 h-3 w-3" />
@@ -3109,7 +3109,7 @@ export function EditShipmentModal({
                     {etaBlocks.map((block, portIndex) => (
                       <div key={block.id} className="rounded-lg border border-blue-100 bg-white p-3">
                         <div className="mb-3 flex flex-wrap items-center gap-2">
-                          <Badge className="bg-blue-600 text-white text-[10px]">
+                          <Badge className="bg-blue-600 text-white text-[0.625rem]">
                             Loading Port {portIndex + 1}
                           </Badge>
                           <span className="text-xs text-gray-600">
@@ -3130,7 +3130,7 @@ export function EditShipmentModal({
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                           {LOADING_ETA_FIELD_ROWS.map(({ key, label }) => (
                             <div key={`${block.id}-${key}`}>
-                              <label className="mb-1 block text-[10px] font-medium text-gray-600">
+                              <label className="mb-1 block text-[0.625rem] font-medium text-gray-600">
                                 {label}
                               </label>
                               {etaSectionEditing && canModifyCoreSections ? (
@@ -3150,7 +3150,7 @@ export function EditShipmentModal({
 
                     <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
                       <div className="mb-3 flex items-center gap-2">
-                        <Badge variant="outline" className="border-indigo-300 text-[10px] text-indigo-700">
+                        <Badge variant="outline" className="border-indigo-300 text-[0.625rem] text-indigo-700">
                           Shared discharge Estimation
                         </Badge>
                         <span className="text-xs text-gray-600">
@@ -3160,7 +3160,7 @@ export function EditShipmentModal({
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                         {DISCHARGE_ETA_FIELD_ROWS.map(({ key, label }) => (
                           <div key={key}>
-                            <label className="mb-1 block text-[10px] font-medium text-gray-600">
+                            <label className="mb-1 block text-[0.625rem] font-medium text-gray-600">
                               {label}
                             </label>
                             {etaSectionEditing && canModifyCoreSections ? (
@@ -3185,8 +3185,8 @@ export function EditShipmentModal({
                       <Badge
                         className={
                           activeEtaBlock.isDraft
-                            ? 'bg-amber-600 text-white text-[10px]'
-                            : 'bg-blue-600 text-white text-[10px]'
+                            ? 'bg-amber-600 text-white text-[0.625rem]'
+                            : 'bg-blue-600 text-white text-[0.625rem]'
                         }
                       >
                         {activeEtaBlock.isDraft ? 'New Estimation' : 'Active Estimation'}
@@ -3232,7 +3232,7 @@ export function EditShipmentModal({
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                       {ETA_FIELD_ROWS.map(({ key, label }) => (
                         <div key={key}>
-                          <label className="mb-1 block text-[10px] font-medium text-gray-600">{label}</label>
+                          <label className="mb-1 block text-[0.625rem] font-medium text-gray-600">{label}</label>
                           {activeEtaBlock.isEditing && canModifyCoreSections ? (
                             <DateInputDdMmYyyy
                               valueIso={activeEtaBlock.fields[key]}
@@ -3251,7 +3251,7 @@ export function EditShipmentModal({
                 {historicalEtaBlocks.map((block) => (
                   <div key={block.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-80">
                     <div className="mb-2 flex items-center gap-2">
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-[0.625rem]">
                         Previous Estimation (historical)
                       </Badge>
                       <span className="text-xs text-gray-500">
@@ -3268,7 +3268,7 @@ export function EditShipmentModal({
                     <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
                       {ETA_FIELD_ROWS.map(({ key, label }) => (
                         <div key={key}>
-                          <div className="mb-1 text-[10px] text-gray-500">{label}</div>
+                          <div className="mb-1 text-[0.625rem] text-gray-500">{label}</div>
                           <ModalReadonlyDateInput valueIso={block.fields[key]} compact />
                         </div>
                       ))}
@@ -3330,7 +3330,7 @@ export function EditShipmentModal({
                           className="rounded-lg border border-emerald-100 bg-white p-3"
                         >
                           <div className="mb-3 flex flex-wrap items-center gap-2">
-                            <Badge className="bg-emerald-600 text-white text-[10px]">
+                            <Badge className="bg-emerald-600 text-white text-[0.625rem]">
                               Loading Port {portIndex + 1}
                             </Badge>
                             <span className="text-xs text-gray-600">
@@ -3392,7 +3392,7 @@ export function EditShipmentModal({
                     })}
                     <div className="rounded-lg border border-emerald-100 bg-white p-3">
                       <div className="mb-3 flex flex-wrap items-center gap-2">
-                        <p className="text-[10px] font-medium text-gray-600">Discharge Port</p>
+                        <p className="text-[0.625rem] font-medium text-gray-600">Discharge Port</p>
                         <ModalPortKlipSapLabel
                           portRow={dischargePortRow ?? { is_discharge_port: true }}
                           shipmentInfo={shipmentInfo}
@@ -3453,7 +3453,7 @@ export function EditShipmentModal({
                           Boolean(jettyStatus?.jps_ata?.[key]) &&
                           normalizeShipmentStatusKey(shipmentStatus) !== 'COMPLETED',
                       ) ? (
-                        <p className="mt-2 text-[10px] text-gray-500">
+                        <p className="mt-2 text-[0.625rem] text-gray-500">
                           Tanggal yang sudah dikirim JPS tidak bisa diubah di sini selama shipment belum Completed
                           (prioritas pembacaan: JPS, lalu KLIP, lalu SAP).
                         </p>
@@ -3545,11 +3545,11 @@ export function EditShipmentModal({
                   >
                     <div className="mb-3 flex flex-wrap items-center gap-2">
                       {isMultiPortLoading ? (
-                        <Badge className="bg-violet-600 text-white text-[10px]">
+                        <Badge className="bg-violet-600 text-white text-[0.625rem]">
                           Loading Port {portIndex + 1}
                         </Badge>
                       ) : null}
-                      <span className="text-[10px] font-medium text-gray-600">Quality at Loading</span>
+                      <span className="text-[0.625rem] font-medium text-gray-600">Quality at Loading</span>
                       {isMultiPortLoading ? (
                         <span className="text-xs text-gray-600">
                           <ModalPortKlipSapLabel
@@ -3596,7 +3596,7 @@ export function EditShipmentModal({
                 )})}
                 <div className="rounded-lg border border-violet-100 bg-white p-3">
                   <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <p className="text-[10px] font-medium text-gray-600">Quality at Discharge</p>
+                    <p className="text-[0.625rem] font-medium text-gray-600">Quality at Discharge</p>
                   </div>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                     {QUALITY_METRICS.map(({ portKey, label }) => {
@@ -3674,7 +3674,7 @@ export function EditShipmentModal({
                               {formatShipmentRemarkAuthor(remark)}
                             </span>
                             {formatShipmentRemarkCategory(remark.category) ? (
-                              <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                              <span className="rounded-full bg-red-100 px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-red-800">
                                 {formatShipmentRemarkCategory(remark.category)}
                               </span>
                             ) : null}
@@ -3743,7 +3743,7 @@ export function EditShipmentModal({
                 placeholder="Explain why Estimation, quantities, ATA, or Quality were changed…"
                 className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-300"
               />
-              <p className="mt-1 text-[11px] text-amber-800">
+              <p className="mt-1 text-[0.6875rem] text-amber-800">
                 Required when changing Estimation, Quantity Delivered (Klip), Received Qty (Klip), ATA, or Quality.
               </p>
             </div>

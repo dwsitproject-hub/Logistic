@@ -15,7 +15,7 @@ export const COMPACT_TABLE_HEADER_ROW_PERF_CLASS =
 
 /** List pages that share the Stitch table chrome. Master tables keep the class above. */
 export const LIST_PAGE_TABLE_HEADER_ROW_CLASS =
-  'text-[11px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 border-b border-slate-200 klip-compact-table-header-row'
+  'text-[0.6875rem] font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 border-b border-slate-200 klip-compact-table-header-row'
 
 export const COMPACT_TABLE_HEADER_ROW_OPERATIONAL_CLASS = COMPACT_TABLE_HEADER_ROW_PERF_CLASS
 

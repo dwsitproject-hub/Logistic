@@ -6788,7 +6788,7 @@ function ShipmentsPageContent() {
                     </div>
                     <div className="text-2xl font-semibold text-gray-900">{bucket.count}</div>
                     {isActive && (
-                      <div className="mt-1 text-[11px] text-blue-700">
+                      <div className="mt-1 text-[0.6875rem] text-blue-700">
                         Click again to clear filter
                       </div>
                     )}
@@ -6880,7 +6880,7 @@ function ShipmentsPageContent() {
                     </div>
                     <div className="text-2xl font-semibold text-gray-900">{bucket.count}</div>
                     {isActive && (
-                      <div className="mt-1 text-[11px] text-blue-700">
+                      <div className="mt-1 text-[0.6875rem] text-blue-700">
                         Click again to clear filter
                       </div>
                     )}
@@ -6901,7 +6901,7 @@ function ShipmentsPageContent() {
                 <div>
                   <CardTitle className="text-base flex flex-wrap items-center gap-2">
                     Daily Planning Deliverables — Calendar
-                    <Badge variant="outline" className="text-[10px]">Unit: Kg</Badge>
+                    <Badge variant="outline" className="text-[0.625rem]">Unit: Kg</Badge>
                   </CardTitle>
                   <div className="text-xs text-gray-600 mt-1 max-w-xl">
                     SEA shipment daily planning deliverables. Upload CSV/Excel (Contract Ext No, date, quantity) — validation matches the website (due date range, B/L quantity caps).
@@ -7090,14 +7090,14 @@ function ShipmentsPageContent() {
                           <tr key={r.id} className="hover:bg-gray-50">
                             <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[220px] align-top">
                               <div className="text-gray-900 truncate" title={r.shipment_id}>{r.shipment_id}</div>
-                              <div className="text-[10px] text-gray-500 truncate" title={r.sto_number || ''}>
+                              <div className="text-[0.625rem] text-gray-500 truncate" title={r.sto_number || ''}>
                                 STO: {resolveShipmentDisplayStoNumber(r.sto_number)}
                               </div>
-                              <div className="text-[10px] text-gray-500 truncate" title={r.vessel_name || ''}>Vessel: {r.vessel_name || '—'}</div>
+                              <div className="text-[0.625rem] text-gray-500 truncate" title={r.vessel_name || ''}>Vessel: {r.vessel_name || '—'}</div>
                             </td>
                             <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[260px] align-top">
                               <div className="text-gray-900 whitespace-normal break-words" title={r.contract_ext_no || ''}>{r.contract_ext_no || '—'}</div>
-                              <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={resolveShipmentListSuppliers(r) || ''}>{resolveShipmentListSuppliers(r) || '—'}</div>
+                              <div className="text-[0.625rem] text-gray-500 whitespace-normal break-words" title={resolveShipmentListSuppliers(r) || ''}>{resolveShipmentListSuppliers(r) || '—'}</div>
                             </td>
                             {shipCalendarMetaOrderIds.map((id) => {
                               if (id === 'due_start') return <td key={id} className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueStart}</td>
@@ -7899,7 +7899,7 @@ function ShipmentsPageContent() {
                                                   onMouseDown={() => handleSelectVesselForEdit(v)}
                                                 >
                                                   <div className="text-xs font-medium truncate">{v.vessel_name}</div>
-                                                  <div className="text-[11px] text-gray-500 truncate">
+                                                  <div className="text-[0.6875rem] text-gray-500 truncate">
                                                     {v.vessel_code} {v.vessel_owner ? `• ${v.vessel_owner}` : ''}
                                                   </div>
                                                 </div>
@@ -7962,7 +7962,7 @@ function ShipmentsPageContent() {
                                                 >
                                                   <div className="text-xs font-medium truncate">{p.port}</div>
                                                   {p.region && (
-                                                    <div className="text-[11px] text-gray-500 truncate">{p.region}</div>
+                                                    <div className="text-[0.6875rem] text-gray-500 truncate">{p.region}</div>
                                                   )}
                                                 </div>
                                               ))}
@@ -8322,7 +8322,7 @@ function ShipmentsPageContent() {
                                   {resolveShipmentDisplayStoNumber(shipment.sto_number)}
                                 </div>
                                 {shipment.operation_id ? (
-                                  <div className="text-[10px] text-gray-500 truncate">
+                                  <div className="text-[0.625rem] text-gray-500 truncate">
                                     Op: {formatSapDisplayValue(shipment.operation_id)}
                                   </div>
                                 ) : null}
@@ -8640,7 +8640,7 @@ function ShipmentsPageContent() {
                           { label: 'Discharge Port', value: shipmentInfo.vessel_discharge_port_1 || '—', color: 'text-cyan-700' },
                         ].map((m) => (
                           <div key={m.label} className="px-4 py-3">
-                            <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400">{m.label}</div>
+                            <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-400">{m.label}</div>
                             <div className={`text-sm font-semibold mt-0.5 truncate ${m.color}`}>{m.value}</div>
                           </div>
                         ))}
@@ -8755,7 +8755,7 @@ function ShipmentsPageContent() {
                               <div className="flex flex-col gap-2">
                                 <div>
                                   <p className="text-xs font-medium text-amber-900">Upload SLD</p>
-                                  <p className="text-[11px] text-amber-800/80 mt-0.5">
+                                  <p className="text-[0.6875rem] text-amber-800/80 mt-0.5">
                                     SLD document to unlock Received Qty (Klip).
                                   </p>
                                 </div>
@@ -8802,7 +8802,7 @@ function ShipmentsPageContent() {
                               <div className="flex flex-col gap-2">
                                 <div>
                                   <p className="text-xs font-medium text-amber-900">Upload SDD</p>
-                                  <p className="text-[11px] text-amber-800/80 mt-0.5">
+                                  <p className="text-[0.6875rem] text-amber-800/80 mt-0.5">
                                     SDD document to unlock Received Qty (Klip).
                                   </p>
                                 </div>
@@ -8846,7 +8846,7 @@ function ShipmentsPageContent() {
                               </div>
                             </div>
                             {!isQuantityUnlocked && (
-                              <p className="sm:col-span-2 text-[11px] text-amber-800/80">
+                              <p className="sm:col-span-2 text-[0.6875rem] text-amber-800/80">
                                 Received Qty (Klip) stays locked until at least one of SLD or SDD is uploaded.
                               </p>
                             )}
@@ -8880,7 +8880,7 @@ function ShipmentsPageContent() {
                                 disabled={hasMultipleGroupLoadingPorts(loadingPorts)}
                               />
                               {hasMultipleGroupLoadingPorts(loadingPorts) && (
-                                <p className="text-[11px] text-gray-500 mt-1">
+                                <p className="text-[0.6875rem] text-gray-500 mt-1">
                                   Multiple contracts — edit each loading port in the sections below.
                                 </p>
                               )}
@@ -8969,7 +8969,7 @@ function ShipmentsPageContent() {
 
                       {/* ATA Fields Section */}
                       <div className="border-t pt-4 px-4 pb-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ATA &mdash; Actual Time of Arrival</p>
+                        <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-gray-400 mb-2">ATA &mdash; Actual Time of Arrival</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           {[
                             { label: 'Arrival at Loading Port', value: shipmentInfo.ata_vessel_arrival_at_loading_port },
@@ -8992,7 +8992,7 @@ function ShipmentsPageContent() {
 
                       {/* ETA Fields Section */}
                       <div className="border-t pt-4 px-4 pb-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ETA — Estimated Time of Arrival</p>
+                        <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-gray-400 mb-2">ETA — Estimated Time of Arrival</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
                             <div className="text-gray-500">ETA Vessel Arrival at Loading Port</div>
@@ -9107,7 +9107,7 @@ function ShipmentsPageContent() {
                       
                       {/* Quality Fields Section */}
                       <div className="border-t pt-4 px-4 pb-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Loading Loc 1</p>
+                        <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Loading Loc 1</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
                             <div className="text-gray-500">Quality at Loading Loc 1 FFA</div>
@@ -9245,7 +9245,7 @@ function ShipmentsPageContent() {
                       </div>
 
                       <div className="border-t pt-4 px-4 pb-4">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Discharge Loc 1</p>
+                        <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-gray-400 mb-2">Quality at Discharge Loc 1</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                           <div>
                             <div className="text-gray-500">Quality at Discharge Port FFA</div>
@@ -9600,7 +9600,7 @@ function ShipmentsPageContent() {
 
                   {/* Basic Info */}
                   <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Port Info</p>
+                    <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-gray-400 mb-2">Port Info</p>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">STO No</label>
@@ -9687,7 +9687,7 @@ function ShipmentsPageContent() {
 
                   {/* ETA Date Fields */}
                   <div className="border-t pt-4">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2">ETA Date Fields</p>
+                    <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-gray-400 mb-2">ETA Date Fields</p>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
                       {[
                         ['ETA Vessel Arrival at Loading Port', 'eta_vessel_arrival'],

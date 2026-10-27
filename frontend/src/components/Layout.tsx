@@ -150,7 +150,7 @@ function LayoutChrome({
                   return (
                     <div key={group} className="space-y-0.5">
                       {sidebarOpen ? (
-                        <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                        <div className="px-2 pb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-slate-400">
                           {NAV_GROUP_LABELS[group]}
                         </div>
                       ) : (

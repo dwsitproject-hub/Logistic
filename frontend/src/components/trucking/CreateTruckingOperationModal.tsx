@@ -717,7 +717,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       <div className="rounded-lg border border-gray-200 overflow-hidden">
         <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
           <p className="text-xs font-semibold text-gray-700">Daily Actuals (WB)</p>
-          <p className="text-[10px] text-gray-400 mt-0.5">
+          <p className="text-[0.625rem] text-gray-400 mt-0.5">
             From Upload WB — Qty Delivery = Netto PKS, Qty Receive = Netto EUP
           </p>
         </div>
@@ -903,7 +903,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
             ].map((step, i, arr) => (
               <div key={step.num} className="flex items-center">
                 <div className="flex items-center gap-1.5">
-                  <div className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${step.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                  <div className={`flex h-6 w-6 items-center justify-center rounded-full text-[0.6875rem] font-bold transition-colors ${step.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
                     {step.done ? <Check className="h-3.5 w-3.5" /> : step.num}
                   </div>
                   <span className={`text-xs font-medium ${step.done ? 'text-green-700' : 'text-gray-500'}`}>{step.label}</span>
@@ -979,7 +979,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       PO Number <span className="text-red-500">*</span>
                     </label>
                     {!initialPoNumber && !isEditMode && (
-                      <span className="text-[10px] text-gray-400">Type to search PO</span>
+                      <span className="text-[0.625rem] text-gray-400">Type to search PO</span>
                     )}
                   </div>
                   <div className="relative">
@@ -1071,12 +1071,12 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         { label: 'Contract ID', value: cd.contract_id || '—' },
                       ].map((f) => (
                         <div key={f.label} className="px-3 py-2">
-                          <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">{f.label}</div>
+                          <div className="text-[0.625rem] font-medium uppercase tracking-wide text-green-600">{f.label}</div>
                           <div className="text-xs font-semibold text-gray-800 mt-0.5 truncate">{f.value}</div>
                         </div>
                       ))}
                       <div className="px-3 py-2">
-                        <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">PO</div>
+                        <div className="text-[0.625rem] font-medium uppercase tracking-wide text-green-600">PO</div>
                         {poIsClickable ? (
                           <button
                             type="button"
@@ -1094,7 +1094,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-3 divide-x divide-green-100 px-0">
                       <div className="px-3 py-2">
-                        <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">STO Number</div>
+                        <div className="text-[0.625rem] font-medium uppercase tracking-wide text-green-600">STO Number</div>
                         <div className="text-xs font-semibold text-gray-800 mt-0.5 whitespace-pre-line break-words">
                           {(cd.sto_numbers || cd.sto_number || '—')
                             .split(/,\s*/)
@@ -1109,7 +1109,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                         { label: 'Group', value: cd.group_name || '—' },
                       ].map((f) => (
                         <div key={f.label} className="px-3 py-2">
-                          <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">{f.label}</div>
+                          <div className="text-[0.625rem] font-medium uppercase tracking-wide text-green-600">{f.label}</div>
                           <div className="text-xs font-semibold text-gray-800 mt-0.5 truncate">{f.value}</div>
                         </div>
                       ))}
@@ -1228,7 +1228,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 <div className="rounded-lg border border-gray-200 overflow-hidden">
                   <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
                     <p className="text-xs font-semibold text-gray-700">Daily Planning Deliverables</p>
-                    <p className="text-[10px] text-gray-400 mt-0.5">From Daily Planning upload — read only</p>
+                    <p className="text-[0.625rem] text-gray-400 mt-0.5">From Daily Planning upload — read only</p>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-sm">
@@ -1286,7 +1286,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   <>
                     {renderSapActualFields(combineSapStoActuals(stoActuals))}
                     <div className="space-y-2">
-                      <p className="text-[10px] text-gray-500 italic">
+                      <p className="text-[0.625rem] text-gray-500 italic">
                         Combined total across {stoActuals.length} STOs on this PO — WB is uploaded
                         and matched at PO level, not split by STO.
                       </p>

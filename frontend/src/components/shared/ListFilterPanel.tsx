@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
 export const LIST_FILTER_FIELDS_ROW_CLASS = 'flex flex-nowrap items-end gap-2 overflow-x-auto -mx-0.5 px-1 pb-1.5 pt-1'
 
 export const LIST_FILTER_FIELD_LABEL_CLASS =
-  'text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1 block'
+  'text-[0.6875rem] font-semibold uppercase tracking-wide text-slate-500 mb-1 block'
 
 export type ListFilterChip = {
   id: string
@@ -57,7 +57,7 @@ export function ListFilterPanel({
       )}
     >
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">{title}</h2>
+        <h2 className="text-[0.6875rem] font-semibold uppercase tracking-widest text-slate-500">{title}</h2>
         {showReset && onReset ? (
           <button
             type="button"

@@ -27,7 +27,7 @@ export function KlipSapCompareLegend({
   showJps?: boolean
 }) {
   return (
-    <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]', className)}>
+    <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem]', className)}>
       <span className="flex items-center gap-1">
         <span className="rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-800">KLIP</span>
         <span className="text-gray-500">diubah lewat KLIP</span>
@@ -56,7 +56,7 @@ export function KlipSapSourceBadge({
   if (provenance === 'klip') {
     return (
       <span
-        className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700"
+        className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-blue-700"
         title={klipEditedBy ? `Diubah oleh ${klipEditedBy}` : undefined}
       >
         KLIP
@@ -66,7 +66,7 @@ export function KlipSapSourceBadge({
   if (provenance === 'sap') {
     return (
       <span
-        className="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600"
+        className="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-gray-600"
         title="Sama dengan nilai SAP"
       >
         SAP
@@ -76,7 +76,7 @@ export function KlipSapSourceBadge({
   if (provenance === 'jps') {
     return (
       <span
-        className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700"
+        className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-violet-700"
         title="Dilaporkan oleh Jetty Planning System (JPS)"
       >
         JPS
@@ -103,7 +103,7 @@ export function KlipSapReferenceFooter({
 }) {
   const shown = formatKlipSapDisplayValue(sapValue, format)
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
+    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[0.625rem] text-gray-500">
       <KlipSapSourceBadge provenance={source} />
       <span title={textDisplay && format === 'text' && textDisplay(shown) !== shown ? `SAP: ${shown}` : undefined}>
         {textDisplay && format === 'text' ? textDisplay(shown) : shown}
@@ -217,7 +217,7 @@ export function KlipSapCompareField({
   const jpsDelta = formatKlipSapDelta(klipValue, jpsValue, format)
 
   const labelClass = compact
-    ? 'mb-1 block text-[10px] font-medium text-gray-600'
+    ? 'mb-1 block text-[0.625rem] font-medium text-gray-600'
     : 'mb-1 block text-xs font-medium text-gray-600'
 
   const control =

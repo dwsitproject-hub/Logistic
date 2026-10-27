@@ -128,7 +128,7 @@ function SegmentBlock({
           )}
         >
           <div className="flex flex-col items-center gap-0 pointer-events-none min-w-0 w-full">
-            <span className={cn('text-[10px] leading-none', ui.count)}>{ui.label}</span>
+            <span className={cn('text-[0.625rem] leading-none', ui.count)}>{ui.label}</span>
             <span className={cn('text-xs tabular-nums leading-tight mt-0.5 font-medium', ui.count)}>
               {formatSegmentCardQtyMt(metrics.totalQtyKg)}
             </span>
@@ -187,10 +187,10 @@ export function ContractPerfUnifiedNodeCard({
           {node.label}
         </button>
         <div className="flex flex-wrap items-center justify-end gap-1 shrink-0 pt-0.5">
-          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] leading-none font-medium bg-sky-50 text-sky-700 border border-sky-100">
+          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[0.625rem] leading-none font-medium bg-sky-50 text-sky-700 border border-sky-100">
             On Time {onTimeLabel}
           </span>
-          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] leading-none font-medium bg-amber-50 text-amber-800 border border-amber-100">
+          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[0.625rem] leading-none font-medium bg-amber-50 text-amber-800 border border-amber-100">
             Late {lateLabel}
           </span>
         </div>

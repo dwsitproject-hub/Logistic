@@ -140,7 +140,7 @@ function renderCell(c: { id: string; kind?: string }, r: ClaimMutuRow) {
         {bucket ? (
           <span
             className={cn(
-              'rounded px-1 text-[10px] font-medium',
+              'rounded px-1 text-[0.625rem] font-medium',
               bucket === '> 90' ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-gray-600',
             )}
           >

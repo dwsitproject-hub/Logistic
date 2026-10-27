@@ -2810,7 +2810,7 @@ function ShippingPerformancePageContent() {
                                 </div>
                               </div>
                               {isTotal && (
-                                <span className={`shrink-0 px-2 py-1 rounded text-[11px] font-semibold ${style.badge}`}>Total</span>
+                                <span className={`shrink-0 px-2 py-1 rounded text-[0.6875rem] font-semibold ${style.badge}`}>Total</span>
                               )}
                             </div>
                           </button>
@@ -2820,7 +2820,7 @@ function ShippingPerformancePageContent() {
                       const panelHeader = (
                         <div className={`${style.headerBg} px-3 py-2 border-b ${style.border}`}>
                           <div className="text-sm font-semibold text-gray-800">{col.title}</div>
-                          <div className="text-[11px] text-gray-500">{col.subtitle}</div>
+                          <div className="text-[0.6875rem] text-gray-500">{col.subtitle}</div>
                         </div>
                       )
 

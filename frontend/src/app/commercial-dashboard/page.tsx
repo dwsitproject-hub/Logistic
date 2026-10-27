@@ -179,12 +179,12 @@ function CommercialDashboardContent() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
               Commercial Documents Completeness
-              <span className="rounded-full border border-blue-200/60 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+              <span className="rounded-full border border-blue-200/60 bg-blue-50 px-2 py-0.5 text-[0.625rem] font-semibold text-blue-700">
                 Active Scope
               </span>
             </CardTitle>
             <div className="flex items-center gap-2">
-              <span className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500">
+              <span className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[0.6875rem] text-slate-500">
                 <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-red-500" />
                 9 slots / contract
               </span>
@@ -255,7 +255,7 @@ function CommercialDashboardContent() {
 
           <div className="grid grid-cols-12 items-start gap-3">
             <div className="col-span-12 flex h-[188px] flex-col rounded-lg border border-slate-200 bg-slate-50/50 px-2.5 py-2 lg:col-span-5">
-              <div className="mb-1 text-[11px] font-semibold text-slate-700">
+              <div className="mb-1 text-[0.6875rem] font-semibold text-slate-700">
                 {mostUploadProgress
                   ? showAllPlants
                     ? 'All plants by upload progress'
@@ -332,10 +332,10 @@ function CommercialDashboardContent() {
 
             <div className="col-span-12 flex h-[188px] flex-col overflow-hidden rounded-lg border border-slate-200 lg:col-span-7">
               <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-2.5 py-1">
-                <div className="text-[11px] font-semibold text-slate-700">
+                <div className="text-[0.6875rem] font-semibold text-slate-700">
                   {mostUploadProgress ? 'Highest upload progress' : 'Least upload progress'}
                 </div>
-                <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                <div className="flex items-center gap-2 text-[0.625rem] text-slate-400">
                   <span>
                     Showing {displayPlants.length} of {scopedPlants.length}
                   </span>
@@ -352,7 +352,7 @@ function CommercialDashboardContent() {
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 <table className="min-w-full text-xs">
-                  <thead className="sticky top-0 bg-gray-50 text-left text-[10px] font-medium text-gray-500">
+                  <thead className="sticky top-0 bg-gray-50 text-left text-[0.625rem] font-medium text-gray-500">
                     <tr>
                       <th className="px-2.5 py-1">Region/Plant</th>
                       <th className="px-2.5 py-1 text-right">Missing</th>
@@ -467,9 +467,9 @@ function StackedKpi({
         urgent ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-slate-50/70',
       )}
     >
-      <span className="flex min-w-0 items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+      <span className="flex min-w-0 items-center gap-1 text-[0.625rem] font-medium uppercase tracking-wide text-slate-500">
         {urgent ? (
-          <span className="rounded-full bg-red-100 px-1 py-px text-[9px] font-semibold normal-case tracking-normal text-red-700">
+          <span className="rounded-full bg-red-100 px-1 py-px text-[0.5625rem] font-semibold normal-case tracking-normal text-red-700">
             Urgent
           </span>
         ) : icon ? (
@@ -507,7 +507,7 @@ function UpcomingSection({
             <p className="text-xs text-slate-400">{subtitle}</p>
           </div>
         </div>
-        <span className="rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-400">Upcoming</span>
+        <span className="rounded-md bg-slate-100 px-2.5 py-1 text-[0.6875rem] font-medium text-slate-400">Upcoming</span>
       </div>
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
         {slots.map((slot) => (

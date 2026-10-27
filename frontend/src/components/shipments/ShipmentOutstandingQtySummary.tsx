@@ -200,7 +200,7 @@ export function ShipmentOutstandingQtySummary({
                 <StitchAlertIcon className="h-6 w-6" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-1 text-[11px] font-semibold leading-tight text-red-950">
+                <div className="flex flex-wrap items-center gap-1 text-[0.6875rem] font-semibold leading-tight text-red-950">
                   <span>Late ATC</span>
                   <FieldHelp text={FIELD_HELP.shipmentEtcNoAtcDueWithin7d} />
                   {etcNoAtcDueLoading ? (
@@ -218,8 +218,8 @@ export function ShipmentOutstandingQtySummary({
                 >
                   {etcPending ? '—' : etcCount.toLocaleString('en-US')}
                 </div>
-                <p className="mt-0.5 text-[10px] font-medium text-red-950/75">Shipments</p>
-                <div className="mt-2 border-t border-red-200/70 pt-1.5 text-[10px] leading-snug text-red-950">
+                <p className="mt-0.5 text-[0.625rem] font-medium text-red-950/75">Shipments</p>
+                <div className="mt-2 border-t border-red-200/70 pt-1.5 text-[0.625rem] leading-snug text-red-950">
                   <div className="font-medium opacity-75">OS Qty</div>
                   <div
                     className={cn(
@@ -259,7 +259,7 @@ export function ShipmentOutstandingQtySummary({
               >
                 {formatQtyOrPending(summary?.totalKg, pending)}
               </div>
-              <p className="mt-1 text-[11px] leading-snug text-gray-500">
+              <p className="mt-1 text-[0.6875rem] leading-snug text-gray-500">
                 Matches status-card OS sum · 3rd Party + Interco + Other (in help) = Total
               </p>
             </div>

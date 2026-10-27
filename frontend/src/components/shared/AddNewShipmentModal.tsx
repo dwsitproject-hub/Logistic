@@ -204,7 +204,7 @@ function isEtaScheduleCompleteForCreate(
   })
 }
 
-const COMPACT_TH = 'h-8 px-2 py-1 text-[11px] font-semibold text-gray-600 whitespace-nowrap'
+const COMPACT_TH = 'h-8 px-2 py-1 text-[0.6875rem] font-semibold text-gray-600 whitespace-nowrap'
 const COMPACT_TD = 'px-2 py-1.5 text-xs align-middle'
 const COMPACT_DATE_INPUT = 'h-8 text-xs min-w-[7.25rem]'
 const READONLY_FIELD_CLASS = 'bg-gray-50 cursor-not-allowed text-gray-600'
@@ -2332,7 +2332,7 @@ export function AddNewShipmentModal({
               <div key={s.num} className="flex items-center">
                 <div className="flex items-center gap-1.5">
                   <div
-                    className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${
+                    className={`flex h-6 w-6 items-center justify-center rounded-full text-[0.6875rem] font-bold transition-colors ${
                       s.done
                         ? 'bg-green-500 text-white'
                         : 'bg-gray-200 text-gray-500'
@@ -2464,7 +2464,7 @@ export function AddNewShipmentModal({
                   <>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-semibold text-gray-700">PO Number <span className="text-red-500">*</span></label>
-                      <span className="text-[10px] text-gray-400">
+                      <span className="text-[0.625rem] text-gray-400">
                         {isContractScoped
                           ? 'Add POs from this contract only'
                           : 'Type PO Number then press Enter or click Add PO'}
@@ -2530,12 +2530,12 @@ export function AddNewShipmentModal({
                     </div>
                     {isContractScoped && remainingContractScopedPos.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        <span className="text-[10px] text-gray-500 w-full">Quick add:</span>
+                        <span className="text-[0.625rem] text-gray-500 w-full">Quick add:</span>
                         {remainingContractScopedPos.map((po) => (
                           <button
                             key={po.key}
                             type="button"
-                            className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:border-blue-300 hover:bg-blue-50"
+                            className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[0.6875rem] font-medium text-gray-700 hover:border-blue-300 hover:bg-blue-50"
                             onClick={() => void addPoFromOption(po)}
                           >
                             <Plus className="h-3 w-3 mr-0.5" />
@@ -2621,12 +2621,12 @@ export function AddNewShipmentModal({
                                     )}
                                   </div>
                                   {contractExtNo && (
-                                    <div className="text-[10px] text-gray-400 truncate" title={contractExtNo}>
+                                    <div className="text-[0.625rem] text-gray-400 truncate" title={contractExtNo}>
                                       {contractExtNo}
                                     </div>
                                   )}
                                   {validation?.message && !validation.exists && (
-                                    <div className="text-[10px] text-red-600">{validation.message}</div>
+                                    <div className="text-[0.625rem] text-red-600">{validation.message}</div>
                                   )}
                                 </TableCell>
                                 <TableCell className={`${COMPACT_TD} max-w-[10rem]`}>
@@ -2669,7 +2669,7 @@ export function AddNewShipmentModal({
                                       }}
                                       className="h-7 px-2 py-1 pr-8 text-right text-xs tabular-nums"
                                     />
-                                    <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-gray-500">
+                                    <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[0.625rem] text-gray-500">
                                       MT
                                     </span>
                                   </div>
@@ -2698,12 +2698,12 @@ export function AddNewShipmentModal({
                         </TableBody>
                       </Table>
                     </div>
-                    <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT} Optional. Shipment Plan Qty is a plan: it is saved separately and does not reduce OS Qty.</p>
+                    <p className="mt-1 text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT} Optional. Shipment Plan Qty is a plan: it is saved separately and does not reduce OS Qty.</p>
                   </div>
                 )}
               </div>
               {formErrors.contractNumbers && (
-                <p className="text-[11px] text-red-600">{formErrors.contractNumbers}</p>
+                <p className="text-[0.6875rem] text-red-600">{formErrors.contractNumbers}</p>
               )}
             </div>
           </div>
@@ -2761,16 +2761,16 @@ export function AddNewShipmentModal({
                           Vessel Terms; loading and discharge ports come from SAP.
                         </p>
                         {newShipment.contractNumbers.length === 0 ? (
-                          <p className="text-[11px] font-medium text-amber-700">
+                          <p className="text-[0.6875rem] font-medium text-amber-700">
                             Add at least one PO in Section 1 to enable AI suggestions.
                           </p>
                         ) : aiPlannerContextLabel ? (
-                          <p className="text-[11px] text-gray-500">
+                          <p className="text-[0.6875rem] text-gray-500">
                             <span className="font-medium text-gray-700">Selected PO pattern:</span>{' '}
                             {renderAiPatternDimensionList(aiPlannerContextLabel)}
                           </p>
                         ) : (
-                          <p className="text-[11px] text-gray-500">
+                          <p className="text-[0.6875rem] text-gray-500">
                             Loading PO details… if this persists, try removing and re-adding the PO.
                           </p>
                         )}
@@ -2884,7 +2884,7 @@ export function AddNewShipmentModal({
                     {contractDeliveryReferences.map((ref) => (
                       <div key={ref.contractId} className="space-y-0.5">
                         {contractDeliveryReferences.length > 1 ? (
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-blue-700/80">
+                          <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-blue-700/80">
                             PO {ref.label}
                           </p>
                         ) : null}
@@ -2937,7 +2937,7 @@ export function AddNewShipmentModal({
               {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
                 <>
                   {selectedTransportMode === 'mixed' && (
-                    <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
+                    <p className="text-[0.625rem] font-semibold text-gray-500 uppercase tracking-wide">
                       Sea leg ETA (MIX contract)
                     </p>
                   )}
@@ -2971,7 +2971,7 @@ export function AddNewShipmentModal({
 
                           <div className="px-2 py-1.5 border-b bg-white space-y-2">
                             <div className="relative overflow-visible z-0">
-                              <label className="block text-[11px] font-medium text-gray-600 mb-1">
+                              <label className="block text-[0.6875rem] font-medium text-gray-600 mb-1">
                                 Loading Port{etaFieldsRequired ? <span className="text-red-500"> *</span> : null}
                                 <span className="ml-1 font-normal text-gray-500">(from SAP)</span>
                                 {isEditMode && block.contractIds.length === 1 ? (
@@ -2988,7 +2988,7 @@ export function AddNewShipmentModal({
                                 className={`h-8 text-xs w-full bg-gray-100 cursor-not-allowed ${formErrors[`${prefix}_loadingPort`] ? 'border-red-500' : ''}`}
                               />
                               {formErrors[`${prefix}_loadingPort`] && (
-                                <p className="text-[11px] mt-1 text-red-600">{formErrors[`${prefix}_loadingPort`]}</p>
+                                <p className="text-[0.6875rem] mt-1 text-red-600">{formErrors[`${prefix}_loadingPort`]}</p>
                               )}
                             </div>
                             <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
@@ -2996,7 +2996,7 @@ export function AddNewShipmentModal({
                                 Apply to PO <span className="text-red-500">*</span>
                               </span>
                               {!isEditMode && (
-                                <div className="flex gap-2 text-[11px]">
+                                <div className="flex gap-2 text-[0.6875rem]">
                                   <button type="button" className="text-blue-600 hover:underline" onClick={() => setAllPosForEtaBlock(block.id, true)}>
                                     All
                                   </button>
@@ -3045,17 +3045,17 @@ export function AddNewShipmentModal({
                               })}
                             </div>
                             {formErrors[`${prefix}_contract`] && (
-                              <p className="text-[11px] mt-1 text-red-600">{formErrors[`${prefix}_contract`]}</p>
+                              <p className="text-[0.6875rem] mt-1 text-red-600">{formErrors[`${prefix}_contract`]}</p>
                             )}
                           </div>
 
                           <div className="overflow-x-auto">
                             {range ? (
-                              <p className="px-2 pt-2 text-[10px] text-gray-500">
+                              <p className="px-2 pt-2 text-[0.625rem] text-gray-500">
                                 Allowed: {formatDateDMY(range.minIso)} – {formatDateDMY(range.maxIso)}
                               </p>
                             ) : block.contractIds.length > 0 ? (
-                              <p className="px-2 pt-2 text-[10px] text-amber-700">
+                              <p className="px-2 pt-2 text-[0.625rem] text-amber-700">
                                 Select POs with valid due delivery start/end dates to enable Estimation range limits.
                               </p>
                             ) : null}
@@ -3065,7 +3065,7 @@ export function AddNewShipmentModal({
                                   {ETA_FIELD_ROWS.map(({ shortLabel, label }) => (
                                     <th
                                       key={shortLabel}
-                                      className="px-1.5 py-1 text-[10px] font-semibold text-gray-600 whitespace-nowrap text-left"
+                                      className="px-1.5 py-1 text-[0.625rem] font-semibold text-gray-600 whitespace-nowrap text-left"
                                       title={label}
                                     >
                                       {shortLabel}
@@ -3102,7 +3102,7 @@ export function AddNewShipmentModal({
                                         }}
                                       />
                                       {formErrors[`${prefix}_${errorSuffix}`] && (
-                                        <p className="text-[10px] mt-0.5 text-red-600 leading-tight max-w-[7rem]">
+                                        <p className="text-[0.625rem] mt-0.5 text-red-600 leading-tight max-w-[7rem]">
                                           {formErrors[`${prefix}_${errorSuffix}`]}
                                         </p>
                                       )}

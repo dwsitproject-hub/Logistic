@@ -208,7 +208,7 @@ function AiKlipAgentActivityPageContent() {
                           >
                             {row.activity}
                           </div>
-                          <div className="text-[11px] text-gray-400 mt-1">{row.agent_name}</div>
+                          <div className="text-[0.6875rem] text-gray-400 mt-1">{row.agent_name}</div>
                         </td>
                       </tr>
                     ))}

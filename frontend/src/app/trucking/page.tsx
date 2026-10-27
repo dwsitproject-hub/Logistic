@@ -951,7 +951,7 @@ function CalendarDeliverablesTable({
                       style={{ left: 0, minWidth: operationColW, maxWidth: operationColW }}
                     >
                       <div className="text-gray-900 truncate" title={opLabel}>{opLabel}</div>
-                      <div className="text-[10px] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
+                      <div className="text-[0.625rem] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
                         {formatOperationalTableTextDisplay(r.loading_location)} → {formatOperationalTableTextDisplay(r.unloading_location)}
                       </div>
                     </td>
@@ -4167,7 +4167,7 @@ function TruckingPageContent() {
                   {calendarLoading ? (
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                   ) : null}
-                  <Badge variant="outline" className="text-[10px]">Daily qty: MT</Badge>
+                  <Badge variant="outline" className="text-[0.625rem]">Daily qty: MT</Badge>
                 </CardTitle>
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                   <span className="whitespace-nowrap tabular-nums text-gray-700">

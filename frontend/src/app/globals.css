@@ -3,6 +3,16 @@
 @tailwind utilities;
  
 @layer base {
+  /*
+   * Laptop density. Tailwind sizes text, spacing, widths and heights in rem, so one root size scales the whole app the
+   * way a 90% browser zoom does (what users were doing by hand). Sizes written in px (text-[11px], w-[420px], borders)
+   * are not affected. If text-xs (0.75rem = 10.8px here) reads too small, raise this to 92-93% or enlarge text-xs in
+   * tailwind.config instead of undoing it.
+   */
+  html {
+    font-size: 90%;
+  }
+
   :root {
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;

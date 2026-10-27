@@ -395,14 +395,14 @@ function VesselAtaAveragesGrid({ historyShipments }: { historyShipments: VesselH
             className={cn('flex min-w-0 flex-col gap-0.5', metric.spanFull && 'col-span-2 mt-1')}
           >
             <span
-              className="truncate text-[10px] leading-tight text-gray-500"
+              className="truncate text-[0.625rem] leading-tight text-gray-500"
               title={metric.label}
             >
               {metric.label}
             </span>
             <span
               className={cn(
-                'text-[11px] font-bold tabular-nums text-gray-900',
+                'text-[0.6875rem] font-bold tabular-nums text-gray-900',
                 signedCycleDaysClass(value),
               )}
             >
@@ -671,18 +671,18 @@ export default function VesselHistoryModal({
                   ].map((metric) => (
                     <div key={metric.label} className="flex min-w-0 flex-col gap-0.5">
                       <span
-                        className="truncate text-[10px] leading-tight text-gray-500"
+                        className="truncate text-[0.625rem] leading-tight text-gray-500"
                         title={metric.label}
                       >
                         {metric.label}
                       </span>
-                      <span className="text-[11px] font-bold tabular-nums text-gray-900">
+                      <span className="text-[0.6875rem] font-bold tabular-nums text-gray-900">
                         {metric.value}
                       </span>
                     </div>
                   ))}
                 </div>
-                <p className="mt-2 text-[10px] leading-snug text-gray-400">
+                <p className="mt-2 text-[0.625rem] leading-snug text-gray-400">
                   Flow rate = MT ÷ berth→complete days (FOB: Delivered, CIF/CFR: Received).
                   Oil loss shown as avg % · avg MT across the vessel&apos;s closed contracts.
                 </p>
@@ -721,7 +721,7 @@ export default function VesselHistoryModal({
                   ].map((metric) => (
                     <div key={metric.label} className="flex min-w-0 flex-col gap-0.5">
                       <span
-                        className="inline-flex items-center gap-1 truncate text-[10px] leading-tight text-gray-500"
+                        className="inline-flex items-center gap-1 truncate text-[0.625rem] leading-tight text-gray-500"
                         title={metric.label}
                       >
                         {metric.label}
@@ -729,11 +729,11 @@ export default function VesselHistoryModal({
                           <FieldHelp text={metric.helpText} iconClassName="h-3 w-3" />
                         ) : null}
                       </span>
-                      <span className="text-[11px] font-bold tabular-nums text-gray-900">{metric.value}</span>
+                      <span className="text-[0.6875rem] font-bold tabular-nums text-gray-900">{metric.value}</span>
                     </div>
                   ))}
                 </div>
-                <p className="mt-2 text-[10px] leading-snug text-gray-400">
+                <p className="mt-2 text-[0.625rem] leading-snug text-gray-400">
                   Fuel/Freight Actual/Pump Rate/Speed are manually entered per shipment (T/C vessels).
                   Freight Budget is from SAP. Shortage (MT) uses R4 oil loss when quantities allow.
                   Averages across shipments in scope.

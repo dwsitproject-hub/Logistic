@@ -307,7 +307,7 @@ export function ClaimSusutSection1Dashboard({
                       <td className={`${TD} text-right`}>
                         <Idr v={agingTotal} strong />
                       </td>
-                      <td className="px-3 py-1.5 text-[11px] text-gray-500">{agingTotal ? '100%' : '-'}</td>
+                      <td className="px-3 py-1.5 text-[0.6875rem] text-gray-500">{agingTotal ? '100%' : '-'}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -433,7 +433,7 @@ export function ClaimSusutSection1Dashboard({
                         <tr key={key} className="hover:bg-gray-50">
                           <td className="px-3 py-1.5">
                             <span className="font-medium text-gray-900">{v.vendor_name || v.vendor_code || CLAIM_SUSUT_BLANK}</span>
-                            <span className="ml-2 text-[11px] text-gray-500">
+                            <span className="ml-2 text-[0.6875rem] text-gray-500">
                               {v.vendor_code ? `${v.vendor_code} · ` : ''}CR {crs.join(', ')}
                             </span>
                           </td>
@@ -457,7 +457,7 @@ export function ClaimSusutSection1Dashboard({
                       <td className={`${TD} text-right`}>
                         <Idr v={realTotalAmount} strong />
                       </td>
-                      <td className="px-3 py-1.5 text-[11px] text-gray-500">{realTotalAmount ? '100%' : '-'}</td>
+                      <td className="px-3 py-1.5 text-[0.6875rem] text-gray-500">{realTotalAmount ? '100%' : '-'}</td>
                     </tr>
                   </tfoot>
                 </table>

@@ -105,7 +105,7 @@ export function ShipmentStatusDistribution({
         </div>
         {cardQty ? (
           <div
-            className={`mt-1.5 border-t border-black/10 pt-1.5 text-[11px] leading-snug ${card.textColor} opacity-80`}
+            className={`mt-1.5 border-t border-black/10 pt-1.5 text-[0.6875rem] leading-snug ${card.textColor} opacity-80`}
           >
             <div className="font-medium">{cardQty.label}</div>
             <div className="mt-0.5 tabular-nums font-semibold opacity-90">
@@ -114,7 +114,7 @@ export function ShipmentStatusDistribution({
           </div>
         ) : null}
         <div
-          className={`mt-1.5 flex min-h-[3.5rem] flex-1 flex-col border-t border-black/10 pt-1.5 text-[11px] font-medium ${card.textColor}`}
+          className={`mt-1.5 flex min-h-[3.5rem] flex-1 flex-col border-t border-black/10 pt-1.5 text-[0.6875rem] font-medium ${card.textColor}`}
         >
           <div className="flex items-center gap-1 opacity-80">
             <StitchShipIcon className="h-3 w-3 shrink-0" />
