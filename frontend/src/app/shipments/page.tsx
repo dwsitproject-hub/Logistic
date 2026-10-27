@@ -7423,7 +7423,7 @@ function ShipmentsPageContent() {
                       <Button
                         variant="outline"
                         size="sm"
-                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                        className="border-red-600 text-red-700 hover:bg-red-50 hover:text-red-700 disabled:opacity-50 disabled:pointer-events-none"
                         onClick={() => groupingUploadInputRef.current?.click()}
                         disabled={!groupingTemplateEnabled || groupingTemplateUploading}
                       >

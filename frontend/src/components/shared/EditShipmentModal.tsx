@@ -3812,7 +3812,7 @@ export function EditShipmentModal({
           ) : null}
           {showSubmitToJetty ? (
             <Button
-              className="h-9 bg-orange-500 text-white hover:bg-orange-600"
+              className="h-9 bg-green-600 text-white hover:bg-green-700"
               onClick={() => setJettyDialogOpen(true)}
               disabled={saving || loading || !shipmentId || requiresEditRemark}
               title={
