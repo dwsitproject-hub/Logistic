@@ -2,15 +2,17 @@
 #
 # Served on its OWN DOMAIN on port 80, next to KLIP's vhost (Ryan, 2026-10-26 - a DNS record instead of opening 8081 in the
 # cloud security group):
-#   SIT        test-commdocs.kpndomain.com -> 172.28.92.56   backend 172.28.92.57:5001   (KLIP: test-klip.kpndomain.com)
-#   Production <domain to request>         -> ECS-App        backend 172.28.80.51:5001
+#   SIT        test-commercial-docs.kpndomain.com -> 172.28.92.56   backend 172.28.92.57:5001   (KLIP: test-klip.kpndomain.com)   <- THIS FILE
+#   Production commercial-docs.kpndomain.com      -> 172.28.80.50   backend 172.28.80.51:5001   (KLIP: klip.kpndomain.com)        <- commdocs-production.conf.example
+#
+# DNS was registered by Infra on 2026-10-27 (A records to the private IPs above). Both answer on port 80 with nginx's own 404 until this vhost is installed.
 #
 # Install (as for klip-kpndomain.conf - read that file's notes on default_server first):
 #   sudo cp docs/nginx/commdocs.conf.example /etc/nginx/sites-available/commdocs.conf
-#   (production: change server_name and the two backend addresses)
+#   (production: use commdocs-production.conf.example, not this file)
 #   sudo ln -s /etc/nginx/sites-available/commdocs.conf /etc/nginx/sites-enabled/
 #   sudo nginx -t && sudo systemctl reload nginx
-# Before DNS exists it can be tested from the host: curl -H "Host: test-commdocs.kpndomain.com" http://127.0.0.1/login
+# Before DNS exists it can be tested from the host: curl -H "Host: test-commercial-docs.kpndomain.com" http://127.0.0.1/login
 #
 # Why it cannot disturb the other sites on port 80: one exact server_name, no default_server, everything inside this block.
 # Rollback: remove the symlink, `sudo nginx -t && sudo systemctl reload nginx`. KLIP is untouched either way.
@@ -20,7 +22,7 @@
 server {
     listen 80;
     listen [::]:80;
-    server_name test-commdocs.kpndomain.com;
+    server_name test-commercial-docs.kpndomain.com;
 
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
@@ -33,7 +35,7 @@ server {
     proxy_connect_timeout 15s;
 
     location /api/ {
-        proxy_pass http://172.28.92.57:5001;   # SIT backend - production: http://172.28.80.51:5001
+        proxy_pass http://172.28.92.57:5001;   # SIT backend
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;

@@ -1,0 +1,68 @@
+# Commercial Documents vhost, PRODUCTION: commercial-docs.kpndomain.com, on the frontend host 172.28.80.50 (ECS-App), backend 172.28.80.51:5001. Same backend, same DB, same Synology as KLIP.
+#
+# Served on its OWN DOMAIN on port 80, next to KLIP's vhost (Ryan, 2026-10-26 - a DNS record instead of opening 8081 in the
+# cloud security group):
+#   SIT        test-commercial-docs.kpndomain.com -> 172.28.92.56   backend 172.28.92.57:5001   <- commdocs.conf.example
+#   Production commercial-docs.kpndomain.com      -> 172.28.80.50   backend 172.28.80.51:5001   <- THIS FILE
+#
+# DNS was registered by Infra on 2026-10-27 (A records to the private IPs above). Both answer on port 80 with nginx's own 404 until this vhost is installed.
+#
+# This host ALSO serves other applications on 80 and 443: this block adds one vhost with an exact server_name, no default_server, and edits none. Run the read-only inspection
+# first (docs/scripts/prod-inspect-nginx.sh) and read klip-kpndomain.conf's notes on default_server; `sudo nginx -t` must pass before any reload (a bad config takes the OTHER apps down).
+#
+# Install:
+#   sudo cp docs/nginx/commdocs-production.conf.example /etc/nginx/sites-available/commercial-docs.kpndomain.com.conf
+#   sudo ln -s /etc/nginx/sites-available/commercial-docs.kpndomain.com.conf /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+# Before DNS exists it can be tested from the host: curl -H "Host: commercial-docs.kpndomain.com" http://127.0.0.1/login
+#
+# Why it cannot disturb the other sites on port 80: one exact server_name, no default_server, everything inside this block.
+# Rollback: remove the symlink, `sudo nginx -t && sudo systemctl reload nginx`. KLIP is untouched either way.
+#
+# Its own hostname also means its own cookies: signing in or out of KLIP no longer signs the browser in or out of this app.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name commercial-docs.kpndomain.com;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    # Document uploads are capped at 15 MB by the backend; leave headroom for the multipart envelope.
+    client_max_body_size 20m;
+    proxy_read_timeout    300s;
+    proxy_send_timeout    300s;
+    proxy_connect_timeout 15s;
+
+    location /api/ {
+        proxy_pass http://172.28.80.51:5001;   # production backend (a different host from this one)
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /auth/ {
+        proxy_pass http://172.28.80.51:5001;   # same backend as /api/
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3002;      # klip-commdocs (docker-compose.commdocs.yml)
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+    }
+}
+
+# Fallback without a domain: the same block with `listen 8081;` / `listen [::]:8081;` and `server_name _;`, plus TCP 8081 open
+# in ufw AND the cloud security group (on SIT the security group blocked it, 2026-10-26).

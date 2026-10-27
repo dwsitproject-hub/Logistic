@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { commercialAppDestination, commdocsUrl, movedPageUrl, withoutMovedPages } from './commdocsApp'
 import { ALL_NAV_ITEMS } from './navigationConfig'
 
-const APP = 'http://test-commdocs.kpndomain.com'
+const APP = 'http://test-commercial-docs.kpndomain.com'
 const view = { canView: true, canCreate: false, canEdit: false, canDelete: false }
 
 describe('Commercial Documents go-live switch', () => {
@@ -10,7 +10,7 @@ describe('Commercial Documents go-live switch', () => {
     expect(commdocsUrl('')).toBeNull()
     expect(commdocsUrl(undefined)).toBeNull()
     expect(commdocsUrl('docs.example')).toBeNull()
-    expect(commdocsUrl(' http://test-commdocs.kpndomain.com/ ')).toBe(APP)
+    expect(commdocsUrl(' http://test-commercial-docs.kpndomain.com/ ')).toBe(APP)
   })
 
   it('off: KLIP keeps both Commercial menus', () => {
