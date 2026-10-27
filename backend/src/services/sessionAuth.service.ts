@@ -1,4 +1,5 @@
 import { Request } from 'express';
+import { commdocsOrigin } from '../config/appOrigins';
 import { query } from '../database/connection';
 import { fetchUserScopeAssociations } from './userAssociations.service';
 
@@ -96,9 +97,7 @@ export function saveSession(req: Request): Promise<void> {
 
 /** The Commercial Documents app's public origin, or null when it is not deployed (links then stay on KLIP). */
 export function commdocsUrl(): string | null {
-  // COMMERCIAL_DOCS_URL is the name this had before the app was renamed CommDocs (SIT .env set it on 2026-10-26).
-  const value = String(process.env.COMMDOCS_URL || process.env.COMMERCIAL_DOCS_URL || '').trim().replace(/\/$/, '');
-  return value || null;
+  return commdocsOrigin();
 }
 
 export function frontendUrl(): string {

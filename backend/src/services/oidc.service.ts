@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { commdocsOrigin, type AppName } from '../config/appOrigins';
 import logger from '../utils/logger';
 
 export interface OidcDiscoveryMetadata {
@@ -26,19 +27,36 @@ let cachedDiscovery: OidcDiscoveryMetadata | null = null;
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 let cachedJwksUri: string | null = null;
 
-export function isOidcConfigured(): boolean {
-  return Boolean(
-    process.env.OIDC_DISCOVERY_URL?.trim() &&
-      process.env.OIDC_CLIENT_ID?.trim() &&
-      process.env.OIDC_REDIRECT_URI?.trim(),
-  );
+/**
+ * KLIP and Commercial Documents sign in through the same Hub, but the Hub registers each as its own application: its own client id and its own
+ * redirect URI (which must be on the domain the browser started from). KLIP reads OIDC_CLIENT_ID / OIDC_REDIRECT_URI as always. Commercial
+ * Documents reads OIDC_COMMDOCS_CLIENT_ID and OIDC_COMMDOCS_REDIRECT_URI; the redirect URI defaults to <COMMDOCS_URL>/auth/oidc/callback, and the
+ * client id falls back to KLIP's, for a Hub that holds both domains as redirect URIs of one application.
+ */
+function clientIdFor(app: AppName): string {
+  if (app === 'commdocs') return String(process.env.OIDC_COMMDOCS_CLIENT_ID || process.env.OIDC_CLIENT_ID || '').trim();
+  return String(process.env.OIDC_CLIENT_ID || '').trim();
 }
 
-export function getOidcConfig(): OidcConfig {
+function redirectUriFor(app: AppName): string {
+  if (app === 'commdocs') {
+    const explicit = String(process.env.OIDC_COMMDOCS_REDIRECT_URI || '').trim();
+    if (explicit) return explicit;
+    const origin = commdocsOrigin();
+    return origin ? `${origin}/auth/oidc/callback` : '';
+  }
+  return String(process.env.OIDC_REDIRECT_URI || '').trim();
+}
+
+export function isOidcConfigured(app: AppName = 'klip'): boolean {
+  return Boolean(process.env.OIDC_DISCOVERY_URL?.trim() && clientIdFor(app) && redirectUriFor(app));
+}
+
+export function getOidcConfig(app: AppName = 'klip'): OidcConfig {
   return {
     discoveryUrl: String(process.env.OIDC_DISCOVERY_URL).trim(),
-    clientId: String(process.env.OIDC_CLIENT_ID).trim(),
-    redirectUri: String(process.env.OIDC_REDIRECT_URI).trim(),
+    clientId: clientIdFor(app),
+    redirectUri: redirectUriFor(app),
     scopes: String(process.env.OIDC_SCOPES || 'openid email profile').trim(),
   };
 }
@@ -108,11 +126,14 @@ export function buildAuthorizeUrl(params: {
   return url.toString();
 }
 
-export async function exchangeAuthorizationCode(params: {
-  code: string;
-  codeVerifier: string;
-}): Promise<{ idToken: string; accessToken?: string }> {
-  const config = getOidcConfig();
+export async function exchangeAuthorizationCode(
+  params: {
+    code: string;
+    codeVerifier: string;
+  },
+  app: AppName = 'klip',
+): Promise<{ idToken: string; accessToken?: string }> {
+  const config = getOidcConfig(app);
   const metadata = await fetchDiscoveryMetadata();
 
   const response = await fetch(metadata.token_endpoint, {
@@ -151,8 +172,9 @@ export async function exchangeAuthorizationCode(params: {
 export async function verifyIdToken(
   idToken: string,
   expectedNonce?: string,
+  app: AppName = 'klip',
 ): Promise<OidcIdTokenClaims> {
-  const config = getOidcConfig();
+  const config = getOidcConfig(app);
   const metadata = await fetchDiscoveryMetadata();
   const jwks = getJwks(metadata.jwks_uri);
 

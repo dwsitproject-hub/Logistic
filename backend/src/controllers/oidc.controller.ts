@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import logger from '../utils/logger';
 import { AuditService } from '../services/audit.service';
+import { appForRequest, type AppName } from '../config/appOrigins';
 import {
   buildAuthorizeUrl,
   exchangeAuthorizationCode,
@@ -14,6 +15,7 @@ import {
   verifyIdToken,
 } from '../services/oidc.service';
 import {
+  commdocsUrl,
   establishSession,
   frontendUrl,
   loadActiveUserByEmail,
@@ -21,8 +23,13 @@ import {
   saveSession,
 } from '../services/sessionAuth.service';
 
-function redirectLoginError(res: Response, errorCode: string): void {
-  res.redirect(303, `${frontendUrl()}/login?error=${encodeURIComponent(errorCode)}`);
+/** Where the browser goes back to: the app it started from (Commercial Documents has its own domain, and its own session cookie). */
+function appFrontendUrl(app: AppName): string {
+  return (app === 'commdocs' && commdocsUrl()) || frontendUrl();
+}
+
+function redirectLoginError(res: Response, errorCode: string, app: AppName = 'klip'): void {
+  res.redirect(303, `${appFrontendUrl(app)}/login?error=${encodeURIComponent(errorCode)}`);
 }
 
 function oidcNotConfigured(_req: Request, res: Response): void {
@@ -34,14 +41,15 @@ function oidcNotConfigured(_req: Request, res: Response): void {
 
 /** GET /auth/oidc/login — SP-initiated login redirect to Hub. */
 export const oidcLoginHandler = async (req: Request, res: Response): Promise<void> => {
-  if (!isOidcConfigured()) {
+  const app = appForRequest(req);
+  if (!isOidcConfigured(app)) {
     oidcNotConfigured(req, res);
     return;
   }
 
   try {
     const metadata = await fetchDiscoveryMetadata();
-    const config = getOidcConfig();
+    const config = getOidcConfig(app);
     const state = generateOidcState();
     const nonce = generateOidcNonce();
     const { codeVerifier, codeChallenge } = generatePkcePair();
@@ -62,14 +70,15 @@ export const oidcLoginHandler = async (req: Request, res: Response): Promise<voi
     await saveSession(req);
     res.redirect(302, authorizeUrl);
   } catch (error) {
-    logger.error('OIDC login initiation failed', { error });
-    redirectLoginError(res, 'sso_failed');
+    logger.error('OIDC login initiation failed', { error, app });
+    redirectLoginError(res, 'sso_failed', app);
   }
 };
 
 /** GET /auth/oidc/callback — SP-initiated and IdP-initiated (Hub tile) flows. */
 export const oidcCallbackHandler = async (req: Request, res: Response): Promise<void> => {
-  if (!isOidcConfigured()) {
+  const app = appForRequest(req);
+  if (!isOidcConfigured(app)) {
     oidcNotConfigured(req, res);
     return;
   }
@@ -80,13 +89,13 @@ export const oidcCallbackHandler = async (req: Request, res: Response): Promise<
       error: oauthError,
       description: req.query.error_description,
     });
-    redirectLoginError(res, 'sso_failed');
+    redirectLoginError(res, 'sso_failed', app);
     return;
   }
 
   const code = typeof req.query.code === 'string' ? req.query.code : '';
   if (!code) {
-    redirectLoginError(res, 'sso_failed');
+    redirectLoginError(res, 'sso_failed', app);
     return;
   }
 
@@ -106,30 +115,30 @@ export const oidcCallbackHandler = async (req: Request, res: Response): Promise<
       const sessionState = req.session?.oidcState ?? '';
       if (!returnedState || !sessionState || returnedState !== sessionState) {
         logger.warn('OIDC callback state mismatch');
-        redirectLoginError(res, 'sso_failed');
+        redirectLoginError(res, 'sso_failed', app);
         return;
       }
       codeVerifier = req.session?.oidcCodeVerifier ?? '';
       expectedNonce = req.session?.oidcNonce;
       if (!codeVerifier) {
-        redirectLoginError(res, 'sso_failed');
+        redirectLoginError(res, 'sso_failed', app);
         return;
       }
     }
 
-    const { idToken } = await exchangeAuthorizationCode({ code, codeVerifier });
-    const claims = await verifyIdToken(idToken, expectedNonce);
+    const { idToken } = await exchangeAuthorizationCode({ code, codeVerifier }, app);
+    const claims = await verifyIdToken(idToken, expectedNonce, app);
 
     const email = claims.email?.trim().toLowerCase() ?? '';
     if (!email) {
       logger.warn('OIDC id_token missing email claim', { sub: claims.sub });
-      redirectLoginError(res, 'sso_failed');
+      redirectLoginError(res, 'sso_failed', app);
       return;
     }
 
     const userRow = await loadActiveUserByEmail(email);
     if (!userRow) {
-      redirectLoginError(res, 'sso_no_access');
+      redirectLoginError(res, 'sso_no_access', app);
       return;
     }
 
@@ -158,13 +167,13 @@ export const oidcCallbackHandler = async (req: Request, res: Response): Promise<
       { expiresIn: '7d' },
     ) as string;
 
-    logger.info(`OIDC SSO login: user ${userRow.username} via Downstream Hub`);
+    logger.info(`OIDC SSO login: user ${userRow.username} via Downstream Hub (${app})`);
 
     // Pass JWT to frontend (cookie session may not survive cross-site Hub redirect on HTTP SIT).
-    res.redirect(303, `${frontendUrl()}/sso/callback?t=${encodeURIComponent(token)}`);
+    res.redirect(303, `${appFrontendUrl(app)}/sso/callback?t=${encodeURIComponent(token)}`);
   } catch (error) {
-    logger.error('OIDC callback failed', { error });
-    redirectLoginError(res, 'sso_failed');
+    logger.error('OIDC callback failed', { error, app });
+    redirectLoginError(res, 'sso_failed', app);
   }
 };
 

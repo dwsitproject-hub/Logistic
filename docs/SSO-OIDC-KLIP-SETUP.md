@@ -129,6 +129,45 @@ Login page: **Sign in with DWS Hub** → `/auth/oidc/login`.
 
 ---
 
+## Commercial Documents (second Hub application)
+
+Commercial Documents is its own app on its own domain, on the SAME backend and DB. It signs in through the same Hub, as **its own Hub application**
+(own client id, own redirect URI, own tile). There is no "Sign in with DWS Hub" button: like KLIP, users arrive from the Hub tile (IdP-initiated) and
+the email/password form stays. No webhook is involved.
+
+| | KLIP | Commercial Documents |
+|---|---|---|
+| Hub application | Logistic | Commercial Documents (new) |
+| OAuth Client ID | `logistic` | `commdocs` (any id, it only has to match the Hub) |
+| OIDC Redirect URI, SIT | `http://test-klip.kpndomain.com/auth/oidc/callback` | `http://test-commercial-docs.kpndomain.com/auth/oidc/callback` |
+| OIDC Redirect URI, production | `http://klip.kpndomain.com/auth/oidc/callback` | `http://commercial-docs.kpndomain.com/auth/oidc/callback` |
+| Target URL | `<KLIP>/login` | `<Commercial Documents>/login` |
+| SSO Mode | OIDC (strict) | OIDC (strict) |
+
+**Backend `.env`** (the backend host: SIT 172.28.92.57, production ECS-DB). `OIDC_DISCOVERY_URL` and `COMMDOCS_URL` are already there:
+
+```ini
+OIDC_COMMDOCS_CLIENT_ID=commdocs
+# OIDC_COMMDOCS_REDIRECT_URI=   optional; defaults to <COMMDOCS_URL>/auth/oidc/callback
+```
+
+The backend tells the two apps apart by the host the browser used (`COMMDOCS_URL`'s host, see `config/appOrigins.ts`; nginx keeps it with
+`proxy_set_header Host $host`). A request on the Commercial Documents host uses its client id and redirect URI, checks the id_token against that client id,
+and sends the user back to `COMMDOCS_URL/sso/callback?t=<jwt>`; a refused account goes to `COMMDOCS_URL/login?error=sso_no_access`.
+Without `OIDC_COMMDOCS_CLIENT_ID` the KLIP client id is used (a Hub that holds both domains as redirect URIs of ONE application; then it has no tile of its own).
+
+Users are the same table as KLIP (invite-only, matched by email); a user whose role opens no Commercial Documents page lands on `/no-access`.
+
+**Checks** (from the frontend host; `302` to the Hub authorize URL means the app side is fine, `503` means the env is missing):
+
+```bash
+curl -si -H "Host: test-commercial-docs.kpndomain.com" http://127.0.0.1/auth/oidc/login | head -5
+```
+
+The authorize URL must carry `client_id=commdocs` and `redirect_uri=http%3A%2F%2Ftest-commercial-docs.kpndomain.com%2Fauth%2Foidc%2Fcallback`.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

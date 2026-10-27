@@ -9,6 +9,7 @@ import { ErrorNote } from '@/components/ui'
 import { homePath } from '@/lib/access'
 import { errorMessage } from '@/lib/api'
 import { SIGNED_OUT_REASON_KEY, useSession } from '@/lib/session'
+import { ssoErrorMessage } from '@/lib/sso'
 
 export default function LoginPage() {
   const { status, access, signIn } = useSession()
@@ -18,6 +19,12 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  // A sign-in through DWS Hub that did not complete comes back as /login?error=<code>.
+  useEffect(() => {
+    const message = ssoErrorMessage(new URLSearchParams(window.location.search).get('error'))
+    if (message) setError(message)
+  }, [])
 
   useEffect(() => {
     try {

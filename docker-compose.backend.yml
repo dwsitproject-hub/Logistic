@@ -94,6 +94,9 @@ services:
       OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      # Commercial Documents is its own Hub application: its own client id and redirect URI (default <COMMDOCS_URL>/auth/oidc/callback).
+      OIDC_COMMDOCS_CLIENT_ID: ${OIDC_COMMDOCS_CLIENT_ID:-}
+      OIDC_COMMDOCS_REDIRECT_URI: ${OIDC_COMMDOCS_REDIRECT_URI:-}
       OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
       LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-true}
       # Email / SMTP (Contract ETA reminder and future notifications) — set real values in

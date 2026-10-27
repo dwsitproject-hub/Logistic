@@ -5,6 +5,7 @@ import { auditGroupFilter, describeAudit } from './audit'
 import { canonicalType, documentKey, isB2bOrigin, typesDone, uploadProblem, versionsOf } from './documentTypes'
 import { ddmmyy, ddmmyyyy, pageList, parseDdMmYyyy, pct, presetRange, priceCell } from './format'
 import { toCsv } from './files'
+import { ssoErrorMessage } from './sso'
 import type { AuditEntry, DocumentFile, DocumentRow } from './types'
 
 const flags = { canView: true, canCreate: false, canEdit: false, canDelete: false }
@@ -169,5 +170,15 @@ describe('audit trail wording', () => {
   it('groups filter on action and entity type', () => {
     expect(auditGroupFilter('deleted')).toEqual({ action: ['DELETE'], entityType: ['COMMERCIAL_DOCUMENT'] })
     expect(auditGroupFilter('all').action).toBeUndefined()
+  })
+})
+
+describe('Hub SSO error codes on the login page', () => {
+  it('names a refused account and a failed hand-off, and stays quiet for anything else', () => {
+    expect(ssoErrorMessage('sso_no_access')).toContain('not registered for SSO access')
+    expect(ssoErrorMessage('sso_failed')).toContain('SSO login failed')
+    expect(ssoErrorMessage('sso_not_configured')).toBe(ssoErrorMessage('sso_failed'))
+    expect(ssoErrorMessage(null)).toBe('')
+    expect(ssoErrorMessage('whatever')).toBe('')
   })
 })

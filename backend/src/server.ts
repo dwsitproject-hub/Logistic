@@ -76,7 +76,7 @@ import integrationRoutes from './routes/integration.routes';
 import dhmRoutes from './routes/dhm.routes';
 import { loadIntegrationSettings } from './integrations/settingsStore';
 import { ssoHubHandler } from './controllers/sso.controller';
-import { oidcLoginHandler, oidcCallbackHandler, isOidcConfigured } from './controllers/oidc.controller';
+import { oidcLoginHandler, oidcCallbackHandler } from './controllers/oidc.controller';
 import { configureTrustProxy, createSessionMiddleware } from './middleware/session';
 import { frontendUrl } from './services/sessionAuth.service';
 
@@ -214,17 +214,10 @@ if (process.env.SSO_LEGACY_BRIDGE === 'true') {
 }
 
 // OIDC SSO (Authorization Code + PKCE) — primary integration path.
-if (isOidcConfigured()) {
-  app.get('/auth/oidc/login', oidcLoginHandler);
-  app.get('/auth/oidc/callback', oidcCallbackHandler);
-} else {
-  app.get('/auth/oidc/login', (_req, res) => {
-    res.status(503).json({ success: false, error: { message: 'OIDC SSO is not configured' } });
-  });
-  app.get('/auth/oidc/callback', (_req, res) => {
-    res.status(503).json({ success: false, error: { message: 'OIDC SSO is not configured' } });
-  });
-}
+// Always registered: KLIP and Commercial Documents each have their own client and redirect URI, and the handlers answer 503 themselves when the
+// app the request came from (by host) is not configured - so one app being set up no longer depends on the other.
+app.get('/auth/oidc/login', oidcLoginHandler);
+app.get('/auth/oidc/callback', oidcCallbackHandler);
 
 // Routes
 app.use('/api/auth', authRoutes);

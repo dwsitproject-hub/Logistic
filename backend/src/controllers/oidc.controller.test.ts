@@ -22,6 +22,7 @@ vi.mock('../services/oidc.service', () => ({
 }));
 
 vi.mock('../services/sessionAuth.service', () => ({
+  commdocsUrl: vi.fn(() => null),
   buildSessionUserPayload: vi.fn(),
   establishSession: vi.fn(),
   frontendUrl: vi.fn(() => 'http://localhost:3001'),
@@ -30,8 +31,8 @@ vi.mock('../services/sessionAuth.service', () => ({
   saveSession: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { isOidcConfigured, exchangeAuthorizationCode, verifyIdToken } from '../services/oidc.service';
-import { establishSession, loadActiveUserByEmail, saveSession } from '../services/sessionAuth.service';
+import { isOidcConfigured, exchangeAuthorizationCode, getOidcConfig, verifyIdToken } from '../services/oidc.service';
+import { commdocsUrl, establishSession, loadActiveUserByEmail, saveSession } from '../services/sessionAuth.service';
 import { oidcCallbackHandler, oidcLoginHandler } from './oidc.controller';
 
 function mockRes() {
@@ -112,10 +113,13 @@ describe('oidc.controller', () => {
 
     await oidcCallbackHandler(req, res);
 
-    expect(exchangeAuthorizationCode).toHaveBeenCalledWith({
-      code: 'abc',
-      codeVerifier: 'hub-verifier',
-    });
+    expect(exchangeAuthorizationCode).toHaveBeenCalledWith(
+      {
+        code: 'abc',
+        codeVerifier: 'hub-verifier',
+      },
+      'klip',
+    );
     expect(establishSession).toHaveBeenCalledWith(req, 'u1');
     expect(res.statusCode).toBe(303);
     expect(String(res.redirectUrl)).toMatch(/^http:\/\/localhost:3001\/sso\/callback\?t=/);
@@ -138,5 +142,65 @@ describe('oidc.controller', () => {
     await oidcCallbackHandler(req, res);
 
     expect(res.redirectUrl).toContain('error=sso_no_access');
+  });
+
+  describe('on the Commercial Documents domain', () => {
+    const commdocsReq = (extra: Record<string, unknown> = {}) =>
+      ({
+        headers: { host: 'test-commercial-docs.kpndomain.com' },
+        query: { code: 'abc', code_verifier: 'hub-verifier' },
+        session: {},
+        ip: '127.0.0.1',
+        socket: { remoteAddress: '127.0.0.1' },
+        get: () => 'test',
+        ...extra,
+      }) as unknown as Request;
+
+    beforeEach(() => {
+      process.env.COMMDOCS_URL = 'http://test-commercial-docs.kpndomain.com';
+      vi.mocked(commdocsUrl).mockReturnValue('http://test-commercial-docs.kpndomain.com');
+    });
+
+    it('checks and starts the Commercial Documents application, not KLIP', async () => {
+      const res = mockRes();
+      await oidcLoginHandler(commdocsReq({ query: {} }), res);
+      expect(isOidcConfigured).toHaveBeenCalledWith('commdocs');
+      expect(getOidcConfig).toHaveBeenCalledWith('commdocs');
+    });
+
+    it('lands the user back on the Commercial Documents domain, with its token', async () => {
+      vi.mocked(exchangeAuthorizationCode).mockResolvedValue({ idToken: 'id.jwt' });
+      vi.mocked(verifyIdToken).mockResolvedValue({ sub: 'hub-1', email: 'user@kpn.com' });
+      vi.mocked(loadActiveUserByEmail).mockResolvedValue({
+        id: 'u1',
+        username: 'jdoe',
+        email: 'user@kpn.com',
+        full_name: 'John',
+        role: 'LOGISTICS',
+        is_active: true,
+      });
+      const res = mockRes();
+      await oidcCallbackHandler(commdocsReq(), res);
+      expect(exchangeAuthorizationCode).toHaveBeenCalledWith({ code: 'abc', codeVerifier: 'hub-verifier' }, 'commdocs');
+      expect(verifyIdToken).toHaveBeenCalledWith('id.jwt', undefined, 'commdocs');
+      expect(res.statusCode).toBe(303);
+      expect(String(res.redirectUrl)).toMatch(/^http:\/\/test-commercial-docs\.kpndomain\.com\/sso\/callback\?t=/);
+    });
+
+    it("sends a refused account to the Commercial Documents login page, not KLIP's", async () => {
+      vi.mocked(exchangeAuthorizationCode).mockResolvedValue({ idToken: 'id.jwt' });
+      vi.mocked(verifyIdToken).mockResolvedValue({ sub: 'hub-1', email: 'unknown@kpn.com' });
+      vi.mocked(loadActiveUserByEmail).mockResolvedValue(null);
+      const res = mockRes();
+      await oidcCallbackHandler(commdocsReq(), res);
+      expect(res.redirectUrl).toBe('http://test-commercial-docs.kpndomain.com/login?error=sso_no_access');
+    });
+
+    it('answers 503 for this app only when ITS client is not configured', async () => {
+      vi.mocked(isOidcConfigured).mockImplementation((app?: string) => app !== 'commdocs');
+      const res = mockRes();
+      await oidcLoginHandler(commdocsReq({ query: {} }), res);
+      expect(res.statusCode).toBe(503);
+    });
   });
 });
