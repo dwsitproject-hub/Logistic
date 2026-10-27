@@ -556,6 +556,7 @@ export async function getGroupPlantPerformance(groupPlant: string): Promise<Grou
       supplierFilters: [],
       supplierGroupFilters: [],
       planningStatusFilters: [],
+      dischargePorts: [],
     statusNorm: '',
     sqlStatusNorm: '',
     plants: [groupPlant],

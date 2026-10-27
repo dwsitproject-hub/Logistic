@@ -520,6 +520,26 @@ describe('AC2 — Global Filter Propagation', () => {
     }
   })
 
+  it('Discharge Port is sent as the repeated dischargePort param by the cards, the tree and the table, and only when picked', () => {
+    const picked = { ...BASE_GLOBAL, selectedDischargePorts: ['PORT BONTANG', 'PORT BATAM'] }
+    const { scope } = resolveSection3Scope(picked, EMPTY_CONTRACT_PERF_DRILLDOWN)
+    const table = buildContractPerfTableListParams({ scope, section3Mode: 'linked', columnFilters: {}, lateOnTimeFilter: 'ALL', perfDashMode: 'late' })
+    const cards = buildLatePerformanceCardSummaryApiParams(picked)
+    const tree = buildLatePerformanceTreeApiParams(picked)
+    for (const params of [table, cards, tree]) {
+      expect(params.getAll('dischargePort')).toEqual(['PORT BONTANG', 'PORT BATAM'])
+    }
+    // never picked (or the page that builds the bag without the field): no param at all, so every contract stays listed
+    expect(buildLatePerformanceCardSummaryApiParams(BASE_GLOBAL).has('dischargePort')).toBe(false)
+    expect(buildLatePerformanceCardSummaryApiParams({ ...BASE_GLOBAL, selectedDischargePorts: [] }).has('dischargePort')).toBe(false)
+  })
+
+  it('Discharge Port does not turn the page into a filtered scope on its own (the backend applies it whatever the scope)', () => {
+    const only = buildLatePerformanceCardSummaryApiParams({ ...BASE_GLOBAL, summaryCardStatus: 'All', selectedDischargePorts: ['PORT BONTANG'] })
+    const none = buildLatePerformanceCardSummaryApiParams({ ...BASE_GLOBAL, summaryCardStatus: 'All' })
+    expect(only.get('scope')).toBe(none.get('scope'))
+  })
+
   it('resolveEffectiveLateOnTimeFilter passes ALL through for unified drilldown', () => {
     expect(resolveEffectiveLateOnTimeFilter('ALL', 'late')).toBe('ALL')
     expect(resolveEffectiveLateOnTimeFilter('ALL', 'ontrack')).toBe('ALL')

@@ -128,6 +128,11 @@ export type ContractPerformanceGlobalFilters = {
   selectedIncoterms: string[]
   selectedSuppliers: string[]
   selectedGroupPlants: string[]
+  /**
+   * Discharge Port picks (Master Port labels), next to Region/Plant. Optional so the callers that build a global bag without the page (prefetch) need no change; absent
+   * or empty means no filter. Sent as the repeated `dischargePort` param, which both the cards / tree and the table read per contract.
+   */
+  selectedDischargePorts?: string[]
   /** SAP Vendor Group, from the stored contracts.group_name column. */
   selectedSupplierGroups: string[]
   /** 'Planned' / 'Unplanned'. Both selected, or neither, is no filter. */
@@ -912,6 +917,8 @@ export function appendContractPerformanceApiParams(
     if (planning) params.append('planningStatuses', planning)
   }
   resolvedPlants.forEach((plant) => params.append('plant', plant))
+  // Not part of useFilteredScope: the backend applies it whatever the scope, as it does the supplier filters.
+  ;(scope.global.selectedDischargePorts ?? []).forEach((port) => params.append('dischargePort', port))
 }
 
 export function buildLatePerformanceApiParams(
@@ -977,6 +984,7 @@ export function buildContractPerfToolbarGlobal(input: {
   selectedSupplierGroups: string[]
   selectedPlanningStatuses: string[]
   selectedGroupPlants: string[]
+  selectedDischargePorts?: string[]
   lateOnTimeFilter: ContractPerformanceGlobalFilters['lateOnTimeFilter']
   perfDashMode: ContractPerformanceGlobalFilters['perfDashMode']
   perfTransportMode: ContractPerformanceGlobalFilters['perfTransportMode']

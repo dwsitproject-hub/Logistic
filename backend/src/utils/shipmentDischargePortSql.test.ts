@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildContractDischargePortFilter,
+  buildContractGrainDischargePortFilter,
   buildDischargePortFilters,
   buildShipmentDischargePortFilter,
   buildShipmentDischargePortOptionsSql,
@@ -252,5 +253,35 @@ describe('Discharge Port in the Shipments list cache key', () => {
     expect(a).not.toBe(buildShipmentListCacheKey({ ...base }));
     expect(a).toBe(buildShipmentListCacheKey({ ...base, dischargePorts: ['bontang'] }));
     expect(a).not.toBe(buildShipmentListCacheKey({ ...base, dischargePorts: ['DUMAI'] }));
+  });
+});
+
+describe('Contract Performance Discharge Port filter: one predicate per contract', () => {
+  const flat = (x: string) => x.replace(/\s+/g, ' ').trim();
+
+  it('no pick, a Blank pick or a numeric code: no SQL and no parameter, so every contract stays listed', () => {
+    for (const picks of [[], ['Blank'], ['  '], ['0'], ['DISCHARGE PORT']]) {
+      expect(buildContractGrainDischargePortFilter(picks, 5, 'base.contract_id')).toEqual({ sql: '', params: [], nextIndex: 5 });
+    }
+  });
+
+  it('a pick binds ONE text[] of the labels, once, and reads it in both arms', () => {
+    const f = buildContractGrainDischargePortFilter(['port batam', 'PORT BONTANG', 'PORT BATAM'], 7, 'base.contract_id');
+    expect(f.params).toEqual([['PORT BATAM', 'PORT BONTANG']]);
+    expect(f.nextIndex).toBe(8);
+    const sql = flat(f.sql);
+    expect(sql).toContain('$7');
+    expect(sql).not.toContain('$8');
+  });
+
+  it('a contract with a live shipment is decided by its shipments, one with none by SAP (the two arms Shipments unions)', () => {
+    const sql = flat(buildContractGrainDischargePortFilter(['PORT BONTANG'], 1, 'base.contract_id').sql);
+    expect(sql.startsWith('CASE WHEN EXISTS (SELECT 1 FROM shipments dps')).toBe(true);
+    expect(sql).toContain("COALESCE(dps.status, '') <> 'CANCELLED'");
+    expect(sql).toContain('THEN EXISTS (SELECT 1 FROM shipments dps');
+    expect(sql).toContain('ELSE ');
+    expect(sql).toContain('dpc.contract_id = base.contract_id');
+    // the PO the B2B child lookup needs is read from contracts: the row set has no po_number
+    expect(sql).toContain('SELECT dpo.po_number FROM contracts dpo WHERE dpo.contract_id = base.contract_id');
   });
 });

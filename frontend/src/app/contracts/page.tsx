@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
+import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
 import { isAuthenticatedLocally } from '@/lib/authSession'
 import { buildCacheKey, cachedGet } from '@/lib/clientDataCache'
 import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
@@ -1113,6 +1114,37 @@ function ContractsPageContent() {
     mapProducts: mapUserProductsToContractPerfOptions,
   })
   const [contractPerfSelectedSources, setContractPerfSelectedSources] = useState<string[]>([])
+  // Discharge Port (Master Port labels), right of Region/Plant. Filtered by the server on every CP request (`dischargePort` param), per contract.
+  const [contractPerfSelectedDischargePorts, setContractPerfSelectedDischargePorts] = useState<string[]>([])
+  const [availableDischargePorts, setAvailableDischargePorts] = useState<string[]>([])
+  /**
+   * The Discharge Port list is the Shipments page's own: Master Ports only, one entry per port whatever its spelling, and NO Blank. A contract with no discharge
+   * port is not offered as a pick but is still listed while the filter is unused. Loaded on its own so a failure cannot empty the other filter lists.
+   */
+  useEffect(() => {
+    if (!isContractPerformance) return
+    let cancelled = false
+    api
+      .get('/contracts/filter-options/discharge-ports')
+      .then((res) => {
+        if (cancelled) return
+        const ports = (res.data?.data?.dischargePorts || []) as string[]
+        setAvailableDischargePorts(dischargePortOptionsFrom(Array.isArray(ports) ? ports : [], []))
+      })
+      .catch((e) => {
+        if (cancelled) return
+        console.error('Failed to fetch discharge port options:', e)
+        setAvailableDischargePorts([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isContractPerformance])
+  /** What is picked stays listed (and ticked) even if the options have not loaded. */
+  const dischargePortDropdownOptions = useMemo(
+    () => dischargePortOptionsFrom(availableDischargePorts, contractPerfSelectedDischargePorts),
+    [availableDischargePorts, contractPerfSelectedDischargePorts],
+  )
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
   const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
@@ -1426,6 +1458,7 @@ function ContractsPageContent() {
         selectedSupplierGroups,
         selectedPlanningStatuses,
         selectedGroupPlants: contractPerfSelectedGroupPlants,
+        selectedDischargePorts: contractPerfSelectedDischargePorts,
         lateOnTimeFilter,
         perfDashMode,
         perfTransportMode,
@@ -1446,6 +1479,7 @@ function ContractsPageContent() {
       selectedSupplierGroups,
       selectedPlanningStatuses,
       contractPerfSelectedGroupPlants,
+      contractPerfSelectedDischargePorts,
       lateOnTimeFilter,
       perfDashMode,
       perfTransportMode,
@@ -1485,6 +1519,7 @@ function ContractsPageContent() {
       selectedSupplierGroups,
       selectedPlanningStatuses,
       selectedGroupPlants: contractPerfSelectedGroupPlants,
+      selectedDischargePorts: contractPerfSelectedDischargePorts,
       summaryCardStatus,
       lateOnTimeFilter,
       perfDashMode,
@@ -1502,6 +1537,7 @@ function ContractsPageContent() {
       selectedSupplierGroups,
       selectedPlanningStatuses,
       contractPerfSelectedGroupPlants,
+      contractPerfSelectedDischargePorts,
       summaryCardStatus,
       lateOnTimeFilter,
       perfDashMode,
@@ -1549,6 +1585,9 @@ function ContractsPageContent() {
     if (contractPerfSelectedGroupPlants.length > 0) {
       parts.push(contractPerfSelectedGroupPlants.join(', '))
     }
+    if (contractPerfSelectedDischargePorts.length > 0) {
+      parts.push(`Discharge ${contractPerfSelectedDischargePorts.join(', ')}`)
+    }
     if (contractPerfSelectedIncoterms.length > 0) {
       parts.push(contractPerfSelectedIncoterms.join(', '))
     }
@@ -1571,6 +1610,7 @@ function ContractsPageContent() {
     dateTo,
     summaryCardStatus,
     contractPerfSelectedGroupPlants,
+    contractPerfSelectedDischargePorts,
     contractPerfSelectedIncoterms,
     contractPerfSelectedProducts,
     contractPerfSelectedSources,
@@ -1837,6 +1877,7 @@ function ContractsPageContent() {
     setContractPerfSelectedSources([])
     setContractPerfSelectedProducts([])
     setContractPerfSelectedGroupPlants([])
+    setContractPerfSelectedDischargePorts([])
     setContractPerfSelectedIncoterms([])
     setSummaryCardStatus('All')
     setStatusFilter('All Status')
@@ -1863,6 +1904,7 @@ function ContractsPageContent() {
     resetContractPerfUserScopeFilters,
     resetUserScopeFilters,
     setContractPerfSelectedGroupPlants,
+    setContractPerfSelectedDischargePorts,
     setContractPerfSelectedProducts,
   ])
 
@@ -2031,6 +2073,7 @@ function ContractsPageContent() {
     contractPerfSelectedSources,
     contractPerfSelectedProducts,
     contractPerfSelectedGroupPlants,
+    contractPerfSelectedDischargePorts,
     contractPerfSelectedIncoterms,
     appliedDrilldownSelection,
     searchTerm,
@@ -2055,6 +2098,7 @@ function ContractsPageContent() {
     contractPerfSelectedSources,
     contractPerfSelectedProducts,
     contractPerfSelectedGroupPlants,
+    contractPerfSelectedDischargePorts,
     contractPerfSelectedIncoterms,
     dateFrom,
     dateTo,
@@ -3880,6 +3924,22 @@ function ContractsPageContent() {
               emptyMessage="No region/plant values"
               uppercaseOptionLabels
             />
+            <SearchableMultiSelect
+              label="Discharge Port"
+              hideLabel
+              portalMenu
+              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+              options={dischargePortDropdownOptions}
+              selected={contractPerfSelectedDischargePorts}
+              onChange={(values) => {
+                lockSection1FilterChange()
+                setContractPerfSelectedDischargePorts(values)
+                setCurrentPage(1)
+              }}
+              placeholder="Discharge Port"
+              emptyMessage="No discharge ports"
+              uppercaseOptionLabels
+            />
           </HeaderFilterSlot>
           <ListFilterPanel
             onReset={resetContractPerformancePage}
@@ -3887,6 +3947,7 @@ function ContractsPageContent() {
               performancePeriod !== 'YTD' ||
               !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo) ||
               contractPerfSelectedGroupPlants.length > 0 ||
+              contractPerfSelectedDischargePorts.length > 0 ||
               contractPerfSelectedSources.length > 0 ||
               contractPerfSelectedIncoterms.length > 0 ||
               contractPerfSelectedProducts.length > 0 ||
@@ -3921,6 +3982,11 @@ function ContractsPageContent() {
               ...selectionChips('Region/Plant', contractPerfSelectedGroupPlants, (values) => {
                 lockSection1FilterChange()
                 handleContractPerfGroupPlantsChange(values)
+                setCurrentPage(1)
+              }),
+              ...selectionChips('Discharge Port', contractPerfSelectedDischargePorts, (values) => {
+                lockSection1FilterChange()
+                setContractPerfSelectedDischargePorts(values)
                 setCurrentPage(1)
               }),
               ...selectionChips('Product', contractPerfSelectedProducts, (values) => {

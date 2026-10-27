@@ -63,6 +63,7 @@ import {
   sqlB2bOriginEndingChildLateralJoin,
 } from '../utils/b2bOriginEndingSql';
 import { appendRegionSiteFilter, sqlRegionSiteRawFromJsonAndB2b } from '../utils/regionSiteSql';
+import { buildContractGrainDischargePortFilter, parseDischargePortParam } from '../utils/shipmentDischargePortSql';
 import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
@@ -93,6 +94,11 @@ export interface LatePerformanceFilters {
   supplierGroupFilters: string[];
   /** PLANNED / UNPLANNED. Both selected, or neither, means no filter. */
   planningStatusFilters: string[];
+  /**
+   * Discharge Port picks (Master Port labels; repeated `dischargePort` param). Applied to the row set per contract (buildContractGrainDischargePortFilter), on both
+   * the snapshot and the live path, whatever the scope: like the supplier filters and unlike `plants`, which only counts under scope=filtered. Empty = no filter.
+   */
+  dischargePorts: string[];
   /** Open/Close tab filter for tree aggregation (in-memory when part=all). */
   statusNorm: string;
   /** Status filter pushed into SQL — empty for part=all/summary so one row load serves both cards + tree. */
@@ -157,6 +163,8 @@ function buildCacheKey(f: Omit<LatePerformanceFilters, 'cacheKey'>): string {
     supplierFilters: [...f.supplierFilters].sort(),
     supplierGroupFilters: [...f.supplierGroupFilters].sort(),
     planningStatusFilters: [...f.planningStatusFilters].sort(),
+    // ROW_CACHE is keyed by this explicit list: a filter left out of it would be served another filter's rows for five minutes
+    dischargePorts: [...f.dischargePorts].map((p) => p.trim().toUpperCase()).sort(),
   };
   return JSON.stringify(norm);
 }
@@ -207,6 +215,8 @@ export function parseLatePerformanceFilters(
     parseCommaSeparatedQuery((req.query as any).planningStatuses),
   );
 
+  const dischargePorts = parseDischargePortParam((req.query as any).dischargePort);
+
   const now = new Date();
   const y = now.getFullYear();
   const ytdFrom = `${y}-01-01`;
@@ -249,6 +259,7 @@ export function parseLatePerformanceFilters(
     supplierFilters,
     supplierGroupFilters,
     planningStatusFilters,
+    dischargePorts,
     statusNorm,
     sqlStatusNorm,
     plants,
@@ -506,6 +517,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     supplierFilters,
     supplierGroupFilters,
     planningStatusFilters,
+    dischargePorts,
   } = filters;
 
   const queryParams: any[] = [];
@@ -844,6 +856,16 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     queryText += regionSiteFilter.sql;
     queryParams.push(...regionSiteFilter.params);
     paramIndex = regionSiteFilter.nextIndex;
+  }
+
+  // Discharge Port: a predicate per contract over the row set, so the fast (snapshot) and live paths filter alike. Only runs when a port is picked.
+  if (dischargePorts.length > 0) {
+    const portFilter = buildContractGrainDischargePortFilter(dischargePorts, paramIndex, 'base.contract_id');
+    if (portFilter.sql) {
+      queryText += ` AND (${portFilter.sql})`;
+      queryParams.push(...portFilter.params);
+      paramIndex = portFilter.nextIndex;
+    }
   }
 
   if (scope === 'filtered' && selectedIncoterms) {

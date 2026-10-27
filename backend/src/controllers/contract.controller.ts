@@ -172,7 +172,11 @@ import {
   buildShipmentProductOptionsSql,
   shipmentPageOptionsScopeSql,
 } from '../utils/shipmentProductOptionsSql';
-import { buildShipmentMasterPortOptionsSql } from '../utils/shipmentDischargePortSql';
+import {
+  buildContractGrainDischargePortFilter,
+  buildShipmentMasterPortOptionsSql,
+  parseDischargePortParam,
+} from '../utils/shipmentDischargePortSql';
 import { loadMasterPortMapEntries } from '../services/masterPortResolver.service';
 import { SHIPMENT_MASTER_PORT_OPTIONS_MEMO_KEY } from '../utils/masterPortSapNames';
 
@@ -723,6 +727,18 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     queryText += groupPlantFilter.sql;
     queryParams.push(...groupPlantFilter.params);
     paramIndex = groupPlantFilter.nextIndex;
+
+    // Discharge Port (Contract Performance toolbar): one predicate per contract, the same one the cards and tree use (late-performance). Master Port labels, repeated
+    // `dischargePort` param; no pick = no SQL, so every contract is listed, those with no discharge port included.
+    const dischargePortPicks = parseDischargePortParam((req.query as any).dischargePort);
+    if (dischargePortPicks.length > 0) {
+      const portFilter = buildContractGrainDischargePortFilter(dischargePortPicks, paramIndex, 'base.contract_id');
+      if (portFilter.sql) {
+        queryText += ` AND (${portFilter.sql})`;
+        queryParams.push(...portFilter.params);
+        paramIndex = portFilter.nextIndex;
+      }
+    }
 
     const globalSearch =
       typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';

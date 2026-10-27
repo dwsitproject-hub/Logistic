@@ -185,6 +185,43 @@ export function buildShipmentDischargePortFilter(
   return { sql: f.shipmentSql, params: f.params, nextIndex: f.nextIndex };
 }
 
+/**
+ * The picked ports at CONTRACT grain, for Contract Performance (its rows, cards and tree nodes are contracts, not shipments or STOs).
+ *
+ * The same two arms the Shipments page unions, applied per contract: a contract with a live (not cancelled) shipment is at the port its shipments discharge at
+ * (any one of them: shipmentSql), and a contract with none is at the port SAP says, the B2B ending child's first (contractSql). So Contract Performance and
+ * Shipments agree on which contracts a port holds. A contract whose text has no Master Port is not found through the filter (there is no Blank pick) and is
+ * listed as before while the filter is unused: with no pick this returns no SQL and no parameter.
+ *
+ * `contractIdRef` is the contract NUMBER column of the row set (`base.contract_id`). That row set has no po_number, so the PO the B2B child lookup needs is read
+ * from contracts by number.
+ */
+export function buildContractGrainDischargePortFilter(
+  ports: readonly string[],
+  startIndex: number,
+  contractIdRef: string,
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const f = buildDischargePortFilters(ports, startIndex, {
+    shipmentAlias: 'dps',
+    contractAlias: 'dpc',
+    contractIdRef,
+    contractPoRef: `(SELECT dpo.po_number FROM contracts dpo WHERE dpo.contract_id = ${contractIdRef} LIMIT 1)`,
+  });
+  if (!f.shipmentSql) return { sql: '', params: [], nextIndex: startIndex };
+  const liveShipments = `FROM shipments dps
+        INNER JOIN contracts dpc ON dpc.id = dps.contract_id
+        WHERE dpc.contract_id = ${contractIdRef}
+          AND COALESCE(dps.status, '') <> 'CANCELLED'`;
+  return {
+    sql: `CASE
+      WHEN EXISTS (SELECT 1 ${liveShipments}) THEN EXISTS (SELECT 1 ${liveShipments} AND (${f.shipmentSql}))
+      ELSE ${f.contractSql}
+    END`,
+    params: f.params,
+    nextIndex: f.nextIndex,
+  };
+}
+
 /** The backlog-contract predicate alone, with its own parameter (see buildDischargePortFilters). */
 export function buildContractDischargePortFilter(
   ports: readonly string[],
