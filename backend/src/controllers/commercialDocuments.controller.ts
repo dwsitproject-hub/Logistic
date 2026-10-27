@@ -606,7 +606,10 @@ async function streamCommercialFile(req: AuthRequest, res: Response, disposition
     auditCommercial(req, disposition === 'inline' ? 'VIEW' : 'DOWNLOAD', doc.id, {
       po_number: doc.po_number, contract_ext_no: doc.contract_ext_no, document_type: doc.document_type, file_name: doc.file_name,
     });
-    res.setHeader('Content-Type', doc.mime_type || 'application/pdf');
+    // A stored mime_type that is not a PDF type (octet-stream from an import, a missing value) must not turn a .pdf into a
+    // download in the browser's viewer: the file name decides, the stored type is only used for other files.
+    const isPdfName = /\.pdf$/i.test(String(doc.file_name || ''));
+    res.setHeader('Content-Type', isPdfName ? 'application/pdf' : doc.mime_type || 'application/pdf');
     if (disposition === 'inline') {
       res.setHeader('Content-Disposition', `inline; filename="${doc.file_name}"`);
       return res.sendFile(absPath);

@@ -116,11 +116,25 @@ export function DocumentDrawer({
     let alive = true
     setPreviewLoading(true)
     apiBlob(`/commercial-documents/file/${current.id}/view`)
-      .then(({ blob }) => {
+      .then(async ({ blob }) => {
+        const isImage = blob.type.startsWith('image/')
+        let shown = blob
+        if (!isImage) {
+          // The iframe follows the blob's type, and that is the server's Content-Type (the stored mime_type). Anything but
+          // application/pdf (octet-stream, a missing type) makes Chrome download the file instead of showing it, which left
+          // an empty panel and a "download blocked" notice. So the type is set here, as the KLIP viewer does, after checking
+          // that the file really is a PDF: otherwise an error text would be shown as a blank viewer.
+          const head = new TextDecoder().decode(await blob.slice(0, 5).arrayBuffer())
+          if (!head.startsWith('%PDF')) {
+            if (alive) setPreview({ fileId: current.id, error: 'This file is not a valid PDF and cannot be previewed. You can still download it.' })
+            return
+          }
+          shown = new Blob([blob], { type: 'application/pdf' })
+        }
         if (!alive) return
-        const url = URL.createObjectURL(blob)
+        const url = URL.createObjectURL(shown)
         previewUrl.current = url
-        setPreview({ fileId: current.id, url, isImage: blob.type.startsWith('image/') })
+        setPreview({ fileId: current.id, url, isImage })
       })
       .catch((err) => alive && setPreview({ fileId: current.id, error: errorMessage(err, 'The file could not be opened.') }))
       .finally(() => alive && setPreviewLoading(false))
