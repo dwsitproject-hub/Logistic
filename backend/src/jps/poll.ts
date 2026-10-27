@@ -84,3 +84,54 @@ export async function pollSubmittedInstructions(limit = 50): Promise<JpsPollSumm
 
   return summary;
 }
+
+export type RefreshOutcome =
+  | { kind: 'refreshed'; status: string | null; previousStatus: string | null; changed: boolean }
+  /** JPS asks for at most one poll per instruction per few minutes; the answer says how long until the next one is allowed. */
+  | { kind: 'too_soon'; retryInSeconds: number; status: string | null }
+  | { kind: 'none' }
+  | { kind: 'failed'; message: string };
+
+/**
+ * Ask JPS NOW what it holds for ONE STO's instruction (the Submit to Jetty dialog's Refresh button), instead of waiting for the next sweep.
+ * It reads the same instruction the sweep would and writes it through the same applyJpsInstruction, so a rejection that happened at JPS shows up the
+ * same way whether it arrives here, by the sweep or by webhook. The per-instruction poll interval still applies.
+ */
+export async function refreshInstructionFromJps(stoKey: string): Promise<RefreshOutcome> {
+  const res = await query(
+    `SELECT id, jps_id, external_reference, jps_status, last_polled_at
+       FROM jps_shipping_instructions
+      WHERE sto_key = $1 AND state = 'SUBMITTED'
+      ORDER BY revision DESC
+      LIMIT 1`,
+    [stoKey],
+  );
+  const row = res.rows[0] as Record<string, unknown> | undefined;
+  if (!row) return { kind: 'none' };
+
+  const status = row.jps_status ? String(row.jps_status) : null;
+  const intervalMs = jpsMinPollIntervalMs();
+  const last = row.last_polled_at ? new Date(row.last_polled_at as string).getTime() : 0;
+  const waitMs = last + intervalMs - Date.now();
+  if (last && waitMs > 0) return { kind: 'too_soon', retryInSeconds: Math.ceil(waitMs / 1000), status };
+
+  const jpsId = row.jps_id == null ? null : Number(row.jps_id);
+  const audit = { audit: { stoKey, kind: 'poll' as const } };
+  const answer = jpsId
+    ? await jpsRequest<JpsInstruction>({ method: 'GET', url: `/shipping-instructions/${jpsId}` }, audit)
+    : await jpsRequest<JpsInstruction>(
+        { method: 'GET', url: '/shipping-instructions', params: { external_reference: String(row.external_reference) } },
+        audit,
+      );
+  if (!answer.ok) {
+    await query(`UPDATE jps_shipping_instructions SET last_polled_at = NOW(), last_error = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [
+      row.id,
+      `${answer.code}: ${answer.message}`,
+    ]);
+    return { kind: 'failed', message: `${answer.code}: ${answer.message}` };
+  }
+
+  await applyJpsInstruction(row.id as string, answer.data);
+  const now = answer.data.status ? String(answer.data.status) : null;
+  return { kind: 'refreshed', status: now, previousStatus: status, changed: (status ?? '') !== (now ?? '') };
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { query } from '../database/connection';
-import { checkJpsReadiness, classifyPayloadProblem, resolveStoKeyForShipment } from './readiness';
+import { checkJpsReadiness, classifyPayloadProblem, resolveStoKeyForShipment, samePayloadIgnoringReference } from './readiness';
 
 describe('classifyPayloadProblem: which page fixes what the payload builder holds back', () => {
   it('points at the master page that owns the missing code', () => {
@@ -42,7 +42,9 @@ describe('checkJpsReadiness (read-only, against the database)', () => {
     // a check that fails always says what to do about it
     for (const c of r.checks.filter((x) => !x.ok && x.key !== 'shipment')) expect(c.fix ?? c.value).toBeTruthy();
     // it cannot be submittable while any requirement fails
-    expect(r.canSubmit).toBe(r.checks.every((c) => c.ok) && (r.tracker?.state ?? '') !== 'SUBMITTED');
+    // (an instruction JPS rejected is the one SUBMITTED row that can be sent again, as a new revision)
+    const heldByJps = r.tracker?.state === 'SUBMITTED' && r.tracker.jpsStatus !== 'Rejected';
+    expect(r.canSubmit).toBe(r.checks.every((c) => c.ok) && !heldByJps);
 
     const after = await query(`SELECT COUNT(*)::int AS n FROM jps_shipping_instructions`);
     expect(after.rows[0].n).toBe(before.rows[0].n);
@@ -62,4 +64,23 @@ describe('checkJpsReadiness (read-only, against the database)', () => {
     expect(r.canSubmit).toBe(false);
     expect(r.reason).toBeTruthy();
   }, 120_000);
+});
+
+describe('samePayloadIgnoringReference: does a resubmission repeat what JPS rejected', () => {
+  const base = {
+    external_reference: 'KLIP-1006020269-R1',
+    vessel_hub_code: 'VSL-0179',
+    cargo: [{ contract_no: 'C1', sto_quantity: 1000 }],
+  };
+
+  it('is the same when only the reference (the revision) differs, whatever the key order', () => {
+    const next = { cargo: [{ sto_quantity: 1000, contract_no: 'C1' }], vessel_hub_code: 'VSL-0179', external_reference: 'KLIP-1006020269-R2' };
+    expect(samePayloadIgnoringReference(base, next)).toBe(true);
+  });
+
+  it('is different as soon as anything JPS reads changed', () => {
+    expect(samePayloadIgnoringReference(base, { ...base, vessel_hub_code: 'VSL-0180' })).toBe(false);
+    expect(samePayloadIgnoringReference(base, { ...base, cargo: [{ contract_no: 'C1', sto_quantity: 900 }] })).toBe(false);
+    expect(samePayloadIgnoringReference(base, { ...base, extra: 1 })).toBe(false);
+  });
 });

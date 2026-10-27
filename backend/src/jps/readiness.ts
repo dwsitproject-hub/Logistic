@@ -13,6 +13,7 @@ import { isJpsEnabled, jpsDischargePort, jpsRegionSite } from './config';
 import { companiesForPort, fetchJpsPortCompanies } from './companies';
 import { EFFECTIVE_ATA_SQL, STO_KEY_SQL, findEligibleStos } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
+import { JPS_CURRENT_ROW_ORDER_SQL } from '../utils/shipmentListStoJoinSql';
 
 /** Where the missing thing is fixed: on this shipment, in a KLIP master page, in SAP, or at JPS. */
 export type ReadinessFix = 'shipment' | 'master_port' | 'master_vessel' | 'master_product' | 'master_company' | 'sap' | 'jps' | 'settings';
@@ -34,6 +35,18 @@ export interface JpsTrackerState {
   jpsStatus: string | null;
   lastError: string | null;
   updatedAt: string | null;
+  /** Why the JPS operator rejected it (jps_status Rejected), as JPS wrote it. */
+  rejectionReason: string | null;
+  rejectedAt: string | null;
+}
+
+/** Present when JPS rejected the instruction KLIP sent: the STO can be sent again, as a NEW instruction under the next revision. */
+export interface JpsResubmitInfo {
+  fromRevision: number;
+  rejectionReason: string | null;
+  rejectedAt: string | null;
+  /** True when what KLIP would send now is identical to what JPS rejected (nothing was fixed on KLIP's side); null when that could not be built. */
+  payloadUnchanged: boolean | null;
 }
 
 export interface JpsReadiness {
@@ -43,7 +56,35 @@ export interface JpsReadiness {
   /** Why not, in a sentence, when canSubmit is false. */
   reason: string | null;
   tracker: JpsTrackerState | null;
+  /** Set when the instruction at JPS was rejected, so sending again is a resubmission under a new reference. */
+  resubmit: JpsResubmitInfo | null;
   checks: ReadinessCheck[];
+}
+
+/** Key order must not matter when two payloads are compared. */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * Whether two submit payloads say the same thing to JPS. The external reference differs by design (a resubmission is a new revision), so it is left out.
+ * Used to warn that a resubmission repeats what JPS rejected.
+ */
+export function samePayloadIgnoringReference(a: unknown, b: unknown): boolean {
+  const strip = (p: unknown) => {
+    if (!p || typeof p !== 'object') return p;
+    const { external_reference: _ignored, ...rest } = p as Record<string, unknown>;
+    return rest;
+  };
+  return stableStringify(strip(a)) === stableStringify(strip(b));
 }
 
 const fmtDate = (v: unknown): string => {
@@ -92,10 +133,10 @@ export async function resolveStoKeyForShipment(shipmentId: string): Promise<stri
 
 async function loadTracker(stoKey: string): Promise<JpsTrackerState | null> {
   const r = await query(
-    `SELECT state, revision, jps_status, last_error, updated_at
-       FROM jps_shipping_instructions
-      WHERE sto_key = $1
-      ORDER BY (state = 'SUBMITTED') DESC, revision DESC
+    `SELECT j.state, j.revision, j.jps_status, j.last_error, j.updated_at, j.rejection_reason, j.rejected_at
+       FROM jps_shipping_instructions j
+      WHERE j.sto_key = $1
+      ORDER BY ${JPS_CURRENT_ROW_ORDER_SQL}
       LIMIT 1`,
     [stoKey],
   );
@@ -107,7 +148,15 @@ async function loadTracker(stoKey: string): Promise<JpsTrackerState | null> {
     jpsStatus: row.jps_status ? String(row.jps_status) : null,
     lastError: row.last_error ? String(row.last_error) : null,
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+    rejectionReason: row.rejection_reason ? String(row.rejection_reason) : null,
+    rejectedAt: row.rejected_at ? new Date(row.rejected_at).toISOString() : null,
   };
+}
+
+/** The payload KLIP sent for this revision, to compare with what it would send now. */
+async function loadSentPayload(stoKey: string, revision: number): Promise<unknown> {
+  const r = await query(`SELECT payload FROM jps_shipping_instructions WHERE sto_key = $1 AND revision = $2`, [stoKey, revision]);
+  return r.rows[0]?.payload ?? null;
 }
 
 /** Each condition of the eligibility rule, read on its own across the STO's shipment rows (the rule needs ONE row to pass them all). */
@@ -212,7 +261,7 @@ async function loadEligibilityChecks(stoKey: string, regionSite: string, dischar
 export async function checkJpsReadiness(shipmentId: string): Promise<JpsReadiness> {
   const checks: ReadinessCheck[] = [];
   const stoKey = await resolveStoKeyForShipment(shipmentId);
-  const base: JpsReadiness = { stoKey, canSubmit: false, reason: null, tracker: null, checks };
+  const base: JpsReadiness = { stoKey, canSubmit: false, reason: null, tracker: null, resubmit: null, checks };
 
   const enabled = isJpsEnabled();
   checks.push({
@@ -230,9 +279,15 @@ export async function checkJpsReadiness(shipmentId: string): Promise<JpsReadines
 
   const tracker = await loadTracker(stoKey);
   base.tracker = tracker;
-  if (tracker?.state === 'SUBMITTED') {
+  // An instruction JPS REJECTED is closed there; the way forward JPS documents is a new instruction under a new reference, which is what a revision is.
+  // Any other status is an instruction JPS holds (accepted or still open), and JPS has no way to replace it.
+  const rejected = tracker?.state === 'SUBMITTED' && tracker.jpsStatus === 'Rejected';
+  if (tracker?.state === 'SUBMITTED' && !rejected) {
     base.reason = `Already at JPS (${tracker.jpsStatus ?? 'status pending'}). It cannot be sent again; JPS has no way to replace an accepted instruction.`;
     return base;
+  }
+  if (rejected && tracker) {
+    base.resubmit = { fromRevision: tracker.revision, rejectionReason: tracker.rejectionReason, rejectedAt: tracker.rejectedAt, payloadUnchanged: null };
   }
   if (tracker?.state === 'SKIPPED_PRE_EXISTING') {
     base.reason = 'Marked as already existing at JPS before KLIP went live, so KLIP does not send it.';
@@ -262,6 +317,10 @@ export async function checkJpsReadiness(shipmentId: string): Promise<JpsReadines
       const built = buildJpsSubmitPayload({ ...sto, revision: 1 }, { portCompanies: companiesForPort(catalog, sto.port_hub_code) });
       if (built.problems.length === 0) {
         checks.push({ key: 'master_data', label: 'Master data (port, vessel, product, company, quantities)', ok: true, value: 'complete' });
+        if (base.resubmit && built.payload) {
+          const sent = await loadSentPayload(stoKey, base.resubmit.fromRevision);
+          base.resubmit.payloadUnchanged = sent ? samePayloadIgnoringReference(sent, built.payload) : null;
+        }
       } else {
         for (const [i, problem] of built.problems.entries()) {
           const where = classifyPayloadProblem(problem);

@@ -3,7 +3,7 @@
  */
 
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
-import { SHIPMENT_LIST_JPS_SELECT_SQL } from '../utils/shipmentListStoJoinSql';
+import { JPS_CURRENT_ROW_ORDER_SQL, SHIPMENT_LIST_JPS_SELECT_SQL } from '../utils/shipmentListStoJoinSql';
 import { sqlJpsAtaJsonExpr } from '../jps/scheduleAtaSql';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
@@ -548,7 +548,7 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
        FROM jps_shipping_instructions j
        WHERE j.sto_key = ${shipmentListStoKeyExpr('c', 'l', 's')}
          AND j.state IN ('SUBMITTED', 'FAILED', 'SKIPPED_NO_CARGO')
-       ORDER BY (j.state = 'SUBMITTED') DESC, j.revision DESC
+       ORDER BY ${JPS_CURRENT_ROW_ORDER_SQL}
        LIMIT 1
      ) jps ON TRUE
      WHERE s.id = $1`,

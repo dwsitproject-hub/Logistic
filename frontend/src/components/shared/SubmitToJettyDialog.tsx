@@ -7,8 +7,11 @@ import { Button } from '@/components/ui/button'
 import api from '@/lib/api'
 import {
   JETTY_FIX_PAGE,
+  describeJettyRefresh,
+  describeJettyResubmit,
   describeJettyResult,
   type JettyReadiness,
+  type JettyRefreshResult,
   type JettySubmitResult,
   type JettyTone,
 } from '@/lib/jettySubmit'
@@ -45,6 +48,8 @@ export function SubmitToJettyDialog({
   const [confirming, setConfirming] = useState(false)
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<JettySubmitResult | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshNote, setRefreshNote] = useState<{ tone: JettyTone; text: string } | null>(null)
 
   const check = useCallback(async () => {
     setLoading(true)
@@ -62,6 +67,24 @@ export function SubmitToJettyDialog({
   useEffect(() => {
     void check()
   }, [check])
+
+  /** Ask JPS now what it holds for this STO (instead of waiting for the next check), then show what it said and what can be done next. */
+  const refreshFromJps = async () => {
+    setRefreshing(true)
+    setRefreshNote(null)
+    setError('')
+    try {
+      const res = await api.post(`/shipments/${shipmentId}/jetty/refresh`)
+      const data = res.data?.data as JettyRefreshResult
+      setRefreshNote(describeJettyRefresh(data.refresh))
+      setReadiness(data.readiness ?? null)
+      if (data.refresh.kind === 'refreshed' && data.refresh.changed) onSent()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const send = async () => {
     setSending(true)
@@ -82,6 +105,11 @@ export function SubmitToJettyDialog({
 
   const view = result ? describeJettyResult(result) : null
   const sentNow = Boolean(result?.attempted)
+  const resubmit = readiness?.resubmit ?? null
+  const resubmitView = resubmit ? describeJettyResubmit(resubmit) : null
+  // An instruction JPS holds (not rejected) can still change at JPS, so the user may want to ask what it says now.
+  const canRefresh = readiness?.tracker?.state === 'SUBMITTED'
+  const verb = resubmit ? 'Resubmit' : 'Send'
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Submit to Jetty">
@@ -122,6 +150,29 @@ export function SubmitToJettyDialog({
                   <li key={i}>{line}</li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {resubmitView && !sentNow && (
+            <div role="status" className="rounded border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-800">
+              <div className="flex items-center gap-2 font-semibold">
+                <XCircle className="h-4 w-4" />
+                {resubmitView.title}
+              </div>
+              <ul className="mt-2 space-y-1 text-[0.8125rem]">
+                {resubmitView.lines.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+              {resubmitView.warning && (
+                <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">{resubmitView.warning}</p>
+              )}
+            </div>
+          )}
+
+          {refreshNote && !sentNow && (
+            <div role="status" className={`rounded border px-3 py-2 text-xs ${TONE_CLASS[refreshNote.tone]}`}>
+              {refreshNote.text}
             </div>
           )}
 
@@ -170,12 +221,28 @@ export function SubmitToJettyDialog({
 
         <div className="flex items-center justify-between gap-2 border-t border-gray-200 px-5 py-3">
           <div className="text-xs text-gray-500">
-            {confirming && !sentNow ? 'This creates a real instruction at JPS if accepted, and it cannot be cancelled.' : ''}
+            {confirming && !sentNow
+              ? resubmit
+                ? `This creates a new instruction (revision ${resubmit.fromRevision + 1}) at JPS if accepted, and it cannot be cancelled.`
+                : 'This creates a real instruction at JPS if accepted, and it cannot be cancelled.'
+              : ''}
           </div>
           <div className="flex gap-2">
             {!sentNow && !confirming && (
-              <Button variant="outline" onClick={() => void check()} disabled={loading || sending}>
+              <Button variant="outline" onClick={() => void check()} disabled={loading || sending || refreshing}>
                 Check again
+              </Button>
+            )}
+            {!sentNow && !confirming && canRefresh && (
+              <Button variant="outline" onClick={() => void refreshFromJps()} disabled={loading || sending || refreshing}>
+                {refreshing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Asking JPS…
+                  </>
+                ) : (
+                  'Refresh from JPS'
+                )}
               </Button>
             )}
             <Button variant="outline" onClick={confirming && !sentNow ? () => setConfirming(false) : onClose} disabled={sending}>
@@ -183,7 +250,7 @@ export function SubmitToJettyDialog({
             </Button>
             {!sentNow && readiness?.canSubmit && !confirming && (
               <Button className="h-9 bg-orange-500 text-white hover:bg-orange-600" onClick={() => setConfirming(true)} disabled={loading || sending}>
-                Send to JPS
+                {verb} to JPS
               </Button>
             )}
             {!sentNow && confirming && (
@@ -194,7 +261,7 @@ export function SubmitToJettyDialog({
                     Sending…
                   </>
                 ) : (
-                  'Confirm and send'
+                  `Confirm and ${verb.toLowerCase()}`
                 )}
               </Button>
             )}

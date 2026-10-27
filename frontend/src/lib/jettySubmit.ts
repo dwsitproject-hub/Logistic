@@ -20,6 +20,17 @@ export interface JettyTracker {
   jpsStatus: string | null
   lastError: string | null
   updatedAt: string | null
+  rejectionReason?: string | null
+  rejectedAt?: string | null
+}
+
+/** Present when JPS rejected the instruction KLIP sent: sending again creates a NEW instruction under the next revision. */
+export interface JettyResubmit {
+  fromRevision: number
+  rejectionReason: string | null
+  rejectedAt: string | null
+  /** True when what KLIP would send now is identical to what JPS rejected; null when that could not be worked out. */
+  payloadUnchanged: boolean | null
 }
 
 export interface JettyReadiness {
@@ -27,7 +38,20 @@ export interface JettyReadiness {
   canSubmit: boolean
   reason: string | null
   tracker: JettyTracker | null
+  resubmit?: JettyResubmit | null
   checks: JettyCheck[]
+}
+
+/** What "Refresh from JPS" answered (backend/src/jps/poll.ts refreshInstructionFromJps). */
+export type JettyRefreshOutcome =
+  | { kind: 'refreshed'; status: string | null; previousStatus: string | null; changed: boolean }
+  | { kind: 'too_soon'; retryInSeconds: number; status: string | null }
+  | { kind: 'none' }
+  | { kind: 'failed'; message: string }
+
+export interface JettyRefreshResult {
+  refresh: JettyRefreshOutcome
+  readiness: JettyReadiness
 }
 
 export interface JettyInstruction {
@@ -120,4 +144,38 @@ export function describeJettyResult(result: JettySubmitResult): JettyOutcomeView
 /** The requirements that are not met, in the order they should be fixed. */
 export function unmetChecks(readiness: JettyReadiness | null | undefined): JettyCheck[] {
   return (readiness?.checks ?? []).filter((c) => !c.ok)
+}
+
+/** One line saying what JPS answered to "Refresh from JPS". */
+export function describeJettyRefresh(refresh: JettyRefreshOutcome): { tone: JettyTone; text: string } {
+  switch (refresh.kind) {
+    case 'refreshed':
+      return refresh.changed
+        ? { tone: refresh.status === 'Rejected' ? 'warning' : 'success', text: `JPS now reports this instruction as ${refresh.status ?? 'unknown'} (it was ${refresh.previousStatus ?? 'unknown'} in KLIP).` }
+        : { tone: 'info', text: `JPS still reports ${refresh.status ?? 'no status'}; nothing changed.` }
+    case 'too_soon': {
+      const minutes = Math.ceil(refresh.retryInSeconds / 60)
+      return { tone: 'info', text: `JPS asks for at most one check per instruction every few minutes. KLIP last asked a moment ago (JPS: ${refresh.status ?? 'no status'}); try again in about ${minutes} minute${minutes === 1 ? '' : 's'}.` }
+    }
+    case 'none':
+      return { tone: 'info', text: 'KLIP has no instruction at JPS for this STO to ask about.' }
+    case 'failed':
+      return { tone: 'error', text: `JPS did not answer: ${refresh.message}` }
+  }
+}
+
+/** The explanation shown above the requirements when JPS rejected the instruction: why, what sending again does, and a warning if nothing was fixed. */
+export function describeJettyResubmit(resubmit: JettyResubmit): { title: string; lines: string[]; warning: string | null } {
+  const when = resubmit.rejectedAt ? ` on ${resubmit.rejectedAt.slice(0, 10)}` : ''
+  return {
+    title: `JPS rejected this instruction${when}`,
+    lines: [
+      resubmit.rejectionReason ? `Reason from JPS: ${resubmit.rejectionReason}` : 'JPS gave no reason. Ask the JPS operator, or fix what looks wrong and send again.',
+      `Sending again creates a NEW instruction (revision ${resubmit.fromRevision + 1}) with a new reference. The rejected one stays at JPS as history.`,
+    ],
+    warning:
+      resubmit.payloadUnchanged === true
+        ? 'What KLIP would send now is the same as what JPS rejected. If the cause was data in KLIP, fix it first; if it was on the JPS side (their master data, berth), you can send once that is fixed.'
+        : null,
+  }
 }

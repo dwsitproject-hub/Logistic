@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { JETTY_FIX_PAGE, describeJettyResult, unmetChecks, type JettyReadiness, type JettySubmitResult } from './jettySubmit'
+import {
+  JETTY_FIX_PAGE,
+  describeJettyRefresh,
+  describeJettyResubmit,
+  describeJettyResult,
+  unmetChecks,
+  type JettyReadiness,
+  type JettySubmitResult,
+} from './jettySubmit'
 
 const ready: JettyReadiness = {
   stoKey: '1006020269',
@@ -90,5 +98,58 @@ describe('unmetChecks and the pages that fix them', () => {
     // fixed on the shipment, in SAP or at JPS: no KLIP page to link
     expect(JETTY_FIX_PAGE.shipment).toBeUndefined()
     expect(JETTY_FIX_PAGE.jps).toBeUndefined()
+  })
+})
+
+describe('describeJettyRefresh: what JPS answered to Refresh from JPS', () => {
+  it('a rejection that JPS made is shown as a warning, with what KLIP had before', () => {
+    const v = describeJettyRefresh({ kind: 'refreshed', status: 'Rejected', previousStatus: 'Pending', changed: true })
+    expect(v.tone).toBe('warning')
+    expect(v.text).toContain('Rejected')
+    expect(v.text).toContain('Pending')
+  })
+
+  it('an unchanged answer says nothing changed', () => {
+    const v = describeJettyRefresh({ kind: 'refreshed', status: 'Pending', previousStatus: 'Pending', changed: false })
+    expect(v.tone).toBe('info')
+    expect(v.text).toContain('nothing changed')
+  })
+
+  it('a poll inside JPS\'s interval says how long to wait, never "failed"', () => {
+    const v = describeJettyRefresh({ kind: 'too_soon', retryInSeconds: 130, status: 'Pending' })
+    expect(v.tone).toBe('info')
+    expect(v.text).toContain('3 minutes')
+  })
+
+  it('no instruction, and a failed call, are told apart', () => {
+    expect(describeJettyRefresh({ kind: 'none' }).text).toContain('no instruction')
+    const failed = describeJettyRefresh({ kind: 'failed', message: 'UPSTREAM: unavailable' })
+    expect(failed.tone).toBe('error')
+    expect(failed.text).toContain('UPSTREAM: unavailable')
+  })
+})
+
+describe('describeJettyResubmit: a rejected instruction can be sent again, as a new one', () => {
+  const base = { fromRevision: 1, rejectionReason: 'Berth not available', rejectedAt: '2026-10-27T05:00:00.000Z', payloadUnchanged: false }
+
+  it('gives JPS\'s reason, the date, and says a NEW revision is created and the old one stays as history', () => {
+    const v = describeJettyResubmit(base)
+    expect(v.title).toContain('2026-10-27')
+    expect(v.lines.join('\n')).toContain('Reason from JPS: Berth not available')
+    expect(v.lines.join('\n')).toContain('revision 2')
+    expect(v.lines.join('\n')).toContain('stays at JPS as history')
+    expect(v.warning).toBeNull()
+  })
+
+  it('warns when what would be sent is what JPS rejected, but does not forbid it', () => {
+    const v = describeJettyResubmit({ ...base, payloadUnchanged: true })
+    expect(v.warning).toContain('same as what JPS rejected')
+    expect(describeJettyResubmit({ ...base, payloadUnchanged: null }).warning).toBeNull()
+  })
+
+  it('without a reason it says so instead of showing an empty line', () => {
+    const v = describeJettyResubmit({ ...base, rejectionReason: null, rejectedAt: null })
+    expect(v.lines[0]).toContain('no reason')
+    expect(v.title).toBe('JPS rejected this instruction')
   })
 })

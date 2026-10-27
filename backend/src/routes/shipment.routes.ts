@@ -45,7 +45,7 @@ import {
   suggestShipmentVessel,
 } from '../controllers/shipmentAiPlanner.controller';
 import { createShipmentRemark, getShipmentRemarks } from '../controllers/remarks.controller';
-import { getShipmentJettyReadiness, submitShipmentToJetty } from '../controllers/shipmentJetty.controller';
+import { getShipmentJettyReadiness, refreshShipmentJetty, submitShipmentToJetty } from '../controllers/shipmentJetty.controller';
 
 const router = express.Router();
 
@@ -110,6 +110,8 @@ router.post('/:id/remarks', blockWhenWithdrawn('shipment'), auditLog('CREATE', '
 router.get('/:id/available-purchase-orders', getShipmentAvailablePurchaseOrders);
 // Submit to Jetty (JPS): the readiness check is read-only; sending needs the edit right on Shipment Data and is audited.
 router.get('/:id/jetty/readiness', authorizePermission('data.shipments', 'can_view'), getShipmentJettyReadiness);
+// Reads one instruction from JPS and stores it (the same write the sweep and the webhook do), so it needs no more than viewing; JPS limits how often.
+router.post('/:id/jetty/refresh', authorizePermission('data.shipments', 'can_view'), refreshShipmentJetty);
 router.post(
   '/:id/jetty/submit',
   authorizePermission('data.shipments', 'can_edit'),

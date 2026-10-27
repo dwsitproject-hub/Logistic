@@ -71,6 +71,28 @@ describe('Shipments list: Jetty send state', () => {
       expect(both.jetty_status).toBe('Approved');
       expect(both.jetty_send_state).toBeNull();
 
+      // a rejected instruction does not hold the STO: it is replaced by a new revision, whichever way that went
+      await ins('ZZ-REJ-ALONE', 1, 'SUBMITTED', { status: 'Rejected' });
+      const rejAlone = await jettyRowFor(client, 'ZZ-REJ-ALONE');
+      expect(rejAlone.jetty_status).toBe('Rejected');
+
+      await ins('ZZ-REJ-THEN-FAILED', 1, 'SUBMITTED', { status: 'Rejected' });
+      await ins('ZZ-REJ-THEN-FAILED', 2, 'FAILED', { error: 'VALIDATION_ERROR: resubmission refused' });
+      const rejFailed = await jettyRowFor(client, 'ZZ-REJ-THEN-FAILED');
+      expect(rejFailed.jetty_send_state).toBe('FAILED');
+      expect(rejFailed.jetty_send_error).toContain('resubmission refused');
+
+      await ins('ZZ-REJ-THEN-PENDING', 1, 'SUBMITTED', { status: 'Rejected' });
+      await ins('ZZ-REJ-THEN-PENDING', 2, 'SUBMITTED', { status: 'Pending' });
+      const rejPending = await jettyRowFor(client, 'ZZ-REJ-THEN-PENDING');
+      expect(rejPending.jetty_status).toBe('Pending');
+      expect(rejPending.jetty_send_state).toBeNull();
+
+      // an accepted instruction still beats a newer failed replacement (unchanged)
+      await ins('ZZ-APPROVED-THEN-FAILED', 1, 'SUBMITTED', { status: 'Approved' });
+      await ins('ZZ-APPROVED-THEN-FAILED', 2, 'FAILED', { error: 'VALIDATION_ERROR: nope' });
+      expect((await jettyRowFor(client, 'ZZ-APPROVED-THEN-FAILED')).jetty_status).toBe('Approved');
+
       // among failed rows the newest revision describes the STO
       await ins('ZZ-NEWEST', 1, 'FAILED', { error: 'first error' });
       await ins('ZZ-NEWEST', 2, 'FAILED', { error: 'second error' });
