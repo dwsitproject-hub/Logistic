@@ -197,3 +197,38 @@ describe('three doors: SAP, KLIP and JPS', () => {
     expect(shouldShowJpsReferenceFooter('none', '', null, d)).toBe(false)
   })
 })
+
+describe('resolveKlipSapProvenance with zeroIsEmpty (quality metrics: SAP writes 0 for "nothing")', () => {
+  const q = (over: Record<string, unknown>) =>
+    resolveKlipSapProvenance({ klipValue: 0, sapValue: null, format: 'number', zeroIsEmpty: true, ...over } as never)
+
+  it('an unedited 0 with nothing at SAP carries no badge', () => {
+    expect(q({})).toBe('none')
+    expect(q({ klipValue: '0' })).toBe('none')
+    expect(q({ klipValue: 0.0 })).toBe('none')
+  })
+
+  it('SAP holds a value (not 0) and KLIP shows the same: SAP', () => {
+    expect(q({ klipValue: 0.45, sapValue: 0.45 })).toBe('sap')
+  })
+
+  it('a user edit that KLIP recorded is KLIP, even when the value typed is 0', () => {
+    expect(q({ klipValue: 2.5, sapValue: null, klipEdited: true })).toBe('klip')
+    expect(q({ klipValue: 0, sapValue: null, klipEdited: true })).toBe('klip')
+    expect(q({ klipValue: 3, sapValue: 0.45, klipEdited: true })).toBe('klip')
+  })
+
+  it('a value that differs from SAP stays KLIP, including a 0 over a SAP value', () => {
+    expect(q({ klipValue: 3, sapValue: 0.45 })).toBe('klip')
+    expect(q({ klipValue: 0, sapValue: 0.45 })).toBe('klip')
+  })
+
+  it('a non-zero value with no SAP value and no recorded edit stays KLIP (as before)', () => {
+    expect(q({ klipValue: 2.5, sapValue: null })).toBe('klip')
+  })
+
+  it('empty stays empty; and without the flag a 0 is still KLIP input (every other field unchanged)', () => {
+    expect(q({ klipValue: null })).toBe('none')
+    expect(resolveKlipSapProvenance({ klipValue: 0, sapValue: null, format: 'number' })).toBe('klip')
+  })
+})

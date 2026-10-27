@@ -145,6 +145,10 @@ export type KlipSapRecordedSource = 'sap' | 'klip' | 'jps'
  *
  * `jpsValue` and `source` are optional, so every caller written before JPS existed gets exactly the
  * answer it got before.
+ *
+ * `zeroIsEmpty` is for numbers SAP writes as 0 when it has nothing (the quality metrics, 0.000): a 0 that no user recorded writing, with no SAP value to match,
+ * is "no data", not KLIP input, so it carries no badge. A recorded KLIP edit still wins (a user who typed 0 did write it), and a 0 that DIFFERS from a SAP
+ * value stays KLIP.
  */
 export function resolveKlipSapProvenance({
   klipValue,
@@ -153,6 +157,7 @@ export function resolveKlipSapProvenance({
   klipEdited = false,
   jpsValue,
   source,
+  zeroIsEmpty = false,
 }: {
   klipValue: unknown
   sapValue: unknown
@@ -160,10 +165,12 @@ export function resolveKlipSapProvenance({
   klipEdited?: boolean
   jpsValue?: unknown
   source?: KlipSapRecordedSource | null
+  zeroIsEmpty?: boolean
 }): KlipSapProvenance {
   if (!hasKlipSapValue(klipValue, format)) return 'none'
   if (source === 'sap' || source === 'klip' || source === 'jps') return source
   if (klipEdited) return 'klip'
+  if (zeroIsEmpty && format === 'number' && parseNumber(klipValue) === 0 && !hasKlipSapValue(sapValue, format)) return 'none'
   const sapHas = hasKlipSapValue(sapValue, format)
   const matchesSap = sapHas && klipSapValuesEqual(klipValue, sapValue, format)
   if (

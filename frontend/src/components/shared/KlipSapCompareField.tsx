@@ -160,6 +160,11 @@ type KlipSapCompareFieldProps = {
   source?: KlipSapRecordedSource | null
   hidden?: boolean
   /**
+   * For numbers SAP writes as 0 when it has nothing (the quality metrics): an unedited 0 with no SAP value to match shows no badge, instead of claiming to be
+   * KLIP input. Provenance only; the 0 is still drawn as it is.
+   */
+  zeroIsEmpty?: boolean
+  /**
    * How a TEXT value is DRAWN - the shown KLIP value and the SAP reference - e.g. a discharge port as its Master Port (the raw SAP text is the tooltip of the reference).
    * Display only: provenance and mismatch still compare the raw values, and a field that is edited keeps its own control.
    */
@@ -182,6 +187,7 @@ export function KlipSapCompareField({
   source,
   hidden = false,
   textDisplay,
+  zeroIsEmpty = false,
 }: KlipSapCompareFieldProps) {
   if (hidden) return null
 
@@ -211,6 +217,7 @@ export function KlipSapCompareField({
           klipEdited: klipEdited || (showOverrideBadge && !jpsExplainsDifference),
           jpsValue,
           source,
+          zeroIsEmpty,
         })
   const showFooter = shouldShowKlipSapFooter(provenance, sapValue, format)
   const showJpsFooter = shouldShowJpsReferenceFooter(provenance, klipValue, jpsValue, format)
