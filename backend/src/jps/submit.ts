@@ -3,6 +3,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { jpsRequest } from './client';
 import { companiesForPort, fetchJpsPortCompanies } from './companies';
+import { fetchJpsKnownPorts, type JpsKnownPorts } from './portCatalog';
 import {
   jpsMaxSubmitsPerSweep,
   jpsEnabledPortNames,
@@ -168,11 +169,12 @@ export type SubmitOutcome =
 export async function submitOneSto(
   sto: EligibleSto,
   portCatalog: Awaited<ReturnType<typeof fetchJpsPortCompanies>>,
+  knownPorts: JpsKnownPorts | null = null,
 ): Promise<SubmitOutcome> {
   const revision = await nextRevision(sto.sto_key);
   const built = buildJpsSubmitPayload(
     { ...sto, revision },
-    { portCompanies: companiesForPort(portCatalog, sto.port_hub_code) },
+    { portCompanies: companiesForPort(portCatalog, sto.port_hub_code), knownPortCodes: knownPorts },
   );
 
   if (!built.payload) {
@@ -261,9 +263,11 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
   // v5.6: which companies JPS maps to each port decides whether company_hub_code goes out. Asked only when there is
   // something to send, and cached, so a quiet sweep costs nothing.
   const portCatalog = eligible.length > 0 ? await fetchJpsPortCompanies() : null;
+  // Which ports JPS knows: an STO of any other port is held with the reason instead of being refused (400, FAILED, never retried).
+  const knownPorts = eligible.length > 0 ? await fetchJpsKnownPorts() : null;
 
   for (const sto of eligible) {
-    const outcome = await submitOneSto(sto, portCatalog);
+    const outcome = await submitOneSto(sto, portCatalog, knownPorts);
     if (outcome.kind === 'submitted') summary.submitted += 1;
     else if (outcome.kind === 'recovered') summary.recovered += 1;
     else if (outcome.kind === 'held') {

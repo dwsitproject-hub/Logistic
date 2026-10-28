@@ -9,6 +9,7 @@
  */
 import logger from '../utils/logger';
 import { fetchJpsPortCompanies } from './companies';
+import { fetchJpsKnownPorts } from './portCatalog';
 import { jpsEnabledPortNames } from './config';
 import { findEligibleStos } from './eligibility';
 import { checkJpsReadiness, type JpsReadiness } from './readiness';
@@ -30,7 +31,7 @@ export async function submitShipmentToJps(shipmentId: string): Promise<ManualSub
   if (!sto) return { attempted: false, readiness: { ...readiness, canSubmit: false, reason: 'The shipment data changed while checking. Try again.' }, outcome: null };
 
   const portCatalog = await fetchJpsPortCompanies();
-  const outcome = await submitOneSto(sto, portCatalog);
+  const outcome = await submitOneSto(sto, portCatalog, await fetchJpsKnownPorts());
   logger.info('JPS: Submit to Jetty', { stoKey: readiness.stoKey, shipmentId, outcome: outcome.kind });
 
   // The Shipments list keeps its pages for an hour; what was just sent (or refused) must show now, not later.

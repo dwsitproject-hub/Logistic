@@ -11,6 +11,7 @@
 import { query } from '../database/connection';
 import { isJpsEnabled, jpsEnabledPortNames, jpsPorts } from './config';
 import { companiesForPort, fetchJpsPortCompanies } from './companies';
+import { fetchJpsKnownPorts } from './portCatalog';
 import { EFFECTIVE_ATA_SQL, STO_KEY_SQL, findEligibleStos } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
 import { isJpsClosedStatus } from './types';
@@ -99,6 +100,10 @@ const fmtDate = (v: unknown): string => {
 /** Which master page a payload problem points at, from the wording the payload builder uses. */
 export function classifyPayloadProblem(problem: string): { fixAt: ReadinessFix; fix: string } {
   const p = problem.toLowerCase();
+  // A port JPS does not have is JPS's to add: the Master Port is fine on KLIP's side.
+  if (p.includes('not known to jps')) {
+    return { fixAt: 'jps', fix: "Ask the JPS team to add this port to their master data (GET /catalog/port), or leave the shipment out: JPS refuses a port it does not know." };
+  }
   if (p.includes('master port') || p.includes('discharge port')) {
     return { fixAt: 'master_port', fix: 'Fill the DHM code of this port in Master Port (or sync it from DHM).' };
   }
@@ -326,7 +331,7 @@ export async function checkJpsReadiness(shipmentId: string): Promise<JpsReadines
       });
     } else {
       const catalog = await fetchJpsPortCompanies();
-      const built = buildJpsSubmitPayload({ ...sto, revision: 1 }, { portCompanies: companiesForPort(catalog, sto.port_hub_code) });
+      const built = buildJpsSubmitPayload({ ...sto, revision: 1 }, { portCompanies: companiesForPort(catalog, sto.port_hub_code), knownPortCodes: await fetchJpsKnownPorts() });
       if (built.problems.length === 0) {
         checks.push({ key: 'master_data', label: 'Master data (port, vessel, product, company, quantities)', ok: true, value: 'complete' });
         if (base.resubmit && built.payload) {

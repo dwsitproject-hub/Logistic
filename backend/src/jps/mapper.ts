@@ -172,6 +172,11 @@ export interface BuildJpsPayloadOptions {
    * when it could not be, which leaves `company_hub_code` out and holds nothing for it.
    */
   portCompanies?: string[] | null;
+  /**
+   * The ports JPS knows (portCatalog.ts), upper-cased hub codes. When given, an STO whose port_hub_code is not among them is held with the reason, instead of
+   * sent to be refused with a 400 (recorded FAILED, never retried). Null or absent: the catalog was not read, and nothing is held for it.
+   */
+  knownPortCodes?: Set<string> | null;
 }
 
 /** KLIP stores quantities in kilograms; JPS wants MT. */
@@ -216,6 +221,8 @@ export function buildJpsSubmitPayload(
         ? 'discharge port was deleted in DHM (Master Port)'
         : 'discharge port has no DHM code on Master Port',
     );
+  } else if (options.knownPortCodes && !options.knownPortCodes.has(portHubCode.toUpperCase())) {
+    problems.push(`discharge port ${portHubCode} is not known to JPS (not in its port list); JPS would refuse it`);
   }
 
   const vesselHubCode = String(source.vessel_hub_code ?? '').trim();
