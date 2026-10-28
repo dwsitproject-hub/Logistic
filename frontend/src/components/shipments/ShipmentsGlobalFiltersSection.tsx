@@ -140,7 +140,8 @@ export function ShipmentsGlobalFiltersSection({
           <div className="relative">
             <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <Input
-              placeholder="Contract, PO, STO, vessel"
+              placeholder="Contract, PO, STO, Operation ID, vessel"
+              title="Contract, PO, STO, Operation ID (OP-…) or vessel. Operation ID finds a shipment whose STO SAP left empty."
               value={searchDraft}
               onChange={(e) => onSearchDraftChange(e.target.value)}
               onKeyDown={(e) => {

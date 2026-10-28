@@ -122,6 +122,14 @@ describe('appendShipmentGlobalSearch', () => {
     expect(result.params).toEqual(['%vessel%']);
     expect(result.nextIndex).toBe(3);
   });
+
+  // An STO the SAP export left empty has no STO to search by: its row is the operation, so the Search box must reach it by the Operation ID (OP-<contract>-<n>, OP-SEA-...).
+  // The Search placeholder names it (ShipmentsGlobalFiltersSection); this is what makes the name true.
+  it('finds a row by its Operation ID, whole or in part, whatever the case', () => {
+    const result = appendShipmentGlobalSearch('op-1004028842-79665638', 2);
+    expect(result.sql).toContain("COALESCE(sb.operation_id::text, '') ILIKE $2::text");
+    expect(result.params).toEqual(['%op-1004028842-79665638%']);
+  });
 });
 
 describe('shipmentEffectiveStatusExpr', () => {
