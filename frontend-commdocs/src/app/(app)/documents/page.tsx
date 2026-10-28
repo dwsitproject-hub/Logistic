@@ -1,15 +1,14 @@
 'use client'
 
-import { ArrowDownUp, ArrowDown, ArrowUp, Columns3, Download, Filter, ReceiptText, Search, X } from 'lucide-react'
+import { ArrowDownUp, ArrowDown, ArrowUp, Columns3, Filter, ReceiptText, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { COLUMNS, DEFAULT_VISIBLE } from '@/components/documents/columns'
 import { DocumentDrawer } from '@/components/documents/DocumentDrawer'
 import { TandaTerimaModal } from '@/components/documents/TandaTerimaModal'
 import { ErrorNote, PageSize, Pager, Spinner, usePreference, useToast } from '@/components/ui'
 import { apiData, errorMessage, isAbort, toQuery, type QueryValue } from '@/lib/api'
-import { DOCUMENT_LABELS, DOCUMENT_TYPES, hasType, isDocumentType, type DocumentType } from '@/lib/documentTypes'
+import { DOCUMENT_LABELS, DOCUMENT_TYPES, isDocumentType, type DocumentType } from '@/lib/documentTypes'
 import { pct, plural, presetRange, type DatePreset } from '@/lib/format'
-import { saveCsv } from '@/lib/files'
 import { useSession } from '@/lib/session'
 import type { ContractCounts, DocumentRow, Pagination, SummaryCard } from '@/lib/types'
 
@@ -70,7 +69,6 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
-  const [exporting, setExporting] = useState(false)
 
   // ---- drawer + Tanda Terima ----
   const [open, setOpen] = useState<DocumentRow | null>(null)
@@ -244,27 +242,6 @@ export default function DocumentsPage() {
       return next
     })
 
-  const exportCsv = async () => {
-    if (exporting) return
-    setExporting(true)
-    try {
-      const all: DocumentRow[] = []
-      for (let p = 1; p <= 100; p++) {
-        const d = await apiData<{ rows: DocumentRow[]; pagination: Pagination }>(`/commercial-documents${toQuery(listParams(p, 200))}`)
-        all.push(...(d.rows || []))
-        if (p >= d.pagination.totalPages) break
-      }
-      const header = [...COLUMNS.map((c) => c.label), ...DOCUMENT_TYPES.map((t) => DOCUMENT_LABELS[t])]
-      const body = all.map((r) => [...COLUMNS.map((c) => c.csv(r)), ...DOCUMENT_TYPES.map((t) => (hasType(r, t) ? 'Yes' : 'No'))])
-      saveCsv(`Commercial_Documents_${range.dateFrom || 'all'}_${range.dateTo || ''}.csv`, header, body)
-      toast(`Exported ${plural(all.length, 'PO')}`)
-    } catch (err) {
-      toast(errorMessage(err, 'Export failed. Please try again.'), true)
-    } finally {
-      setExporting(false)
-    }
-  }
-
   const fchips: Array<[string, string, () => void]> = [
     ...(search ? [['q', `Search: ${search}`, () => (setSearchInput(''), setSearch(''))] as [string, string, () => void]] : []),
     ...filters.products.map(
@@ -291,12 +268,6 @@ export default function DocumentsPage() {
         <div>
           <h1>Documents</h1>
           <p>One row per PO from SAP. Click a row to check, upload and view its documents.</p>
-        </div>
-        <div className="actions">
-          <button className="btn" type="button" onClick={() => void exportCsv()} disabled={exporting || !total}>
-            <Download aria-hidden />
-            {exporting ? 'Exporting…' : 'Export'}
-          </button>
         </div>
       </div>
 
