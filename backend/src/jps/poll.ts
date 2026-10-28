@@ -6,6 +6,25 @@ import { applyJpsInstruction } from './applyInstruction';
 import { jpsMinPollIntervalMs } from './config';
 import type { JpsInstruction } from './types';
 
+/**
+ * JPS answers NOT_FOUND ("Shipping instruction 103 not found") for an instruction it no longer holds: an operator deleted it before the Deleted status
+ * existed, or its staging data was cleared. That is JPS's own application answer (a gateway or server problem comes back 5xx and is retryable), and the
+ * instruction was looked up by the id JPS itself gave us. KLIP records it as Deleted, the closed status that already lets the STO be resubmitted
+ * (next revision) and stops it being polled. Before, such an instruction stayed Pending / Approved / Allocated for ever, locked the Submit to Jetty
+ * button, and cost a 404 poll on every sweep.
+ */
+async function markInstructionGone(rowId: string, message: string): Promise<void> {
+  await query(
+    `UPDATE jps_shipping_instructions
+        SET jps_status = 'Deleted',
+            last_polled_at = NOW(),
+            last_error = $2,
+            updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND state = 'SUBMITTED' AND jps_status IS DISTINCT FROM 'Deleted'`,
+    [rowId, `${message} (JPS no longer holds it: marked Deleted by KLIP)`],
+  );
+}
+
 export interface JpsPollSummary {
   polled: number;
   changed: number;
@@ -51,6 +70,13 @@ export async function pollSubmittedInstructions(limit = 50): Promise<JpsPollSumm
         );
 
     summary.polled += 1;
+
+    if (!res.ok && res.code === 'NOT_FOUND' && jpsId) {
+      await markInstructionGone(row.id as string, `${res.code}: ${res.message}`);
+      summary.changed += 1;
+      logger.info('JPS instruction no longer exists at JPS: marked Deleted', { stoKey: row.sto_key, jpsId, from: row.jps_status });
+      continue;
+    }
 
     if (!res.ok) {
       // Stamp last_polled_at even on failure, or a permanently unreachable instruction would be
@@ -123,6 +149,10 @@ export async function refreshInstructionFromJps(stoKey: string): Promise<Refresh
         { method: 'GET', url: '/shipping-instructions', params: { external_reference: String(row.external_reference) } },
         audit,
       );
+  if (!answer.ok && answer.code === 'NOT_FOUND' && jpsId) {
+    await markInstructionGone(row.id as string, `${answer.code}: ${answer.message}`);
+    return { kind: 'refreshed', status: 'Deleted', previousStatus: status, changed: true };
+  }
   if (!answer.ok) {
     await query(`UPDATE jps_shipping_instructions SET last_polled_at = NOW(), last_error = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [
       row.id,
