@@ -314,6 +314,10 @@ tbody tr.picked td { background: #f2f8f8; }
 .icon-btn { width: 2.125rem; height: 2.125rem; border-radius: 0.5rem; border: 0; background: none; display: grid; place-items: center; cursor: pointer; color: var(--ink-2); flex: none; }
 .icon-btn:hover { background: var(--surface-2); }
 .icon-btn svg { width: 1.125rem; height: 1.125rem; }
+/* Report a bug (Hub SDK). Below the drawer, modals and their scrim (40+), so it never covers a drawer's own buttons; under .fbar (35) on a narrow screen. */
+.bug-fab { position: fixed; right: max(1.25rem, env(safe-area-inset-right, 0px)); bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px)); z-index: 30; width: 2.5rem; height: 2.5rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); box-shadow: var(--shadow); display: grid; place-items: center; cursor: pointer; opacity: 0.85; }
+.bug-fab:hover { opacity: 1; background: var(--surface-2); color: var(--ink); }
+.bug-fab svg { width: 1.125rem; height: 1.125rem; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

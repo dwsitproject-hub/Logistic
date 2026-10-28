@@ -137,8 +137,8 @@ export function hubTrack(name: string, properties?: Record<string, string | numb
 }
 
 /**
- * Open the SDK's bug-report dialog from the sidebar button. The SDK's floating button is hidden (data-bug-button="false" in HubSdkScript): it sits
- * bottom-right and would cover the "N POs selected" bar the Documents page shows at the bottom.
+ * Open the SDK's bug-report dialog from this app's own floating button (.bug-fab). The SDK's floating button is hidden (data-bug-button="false" in HubSdkScript): it sits
+ * bottom-right at a z-index above every drawer and modal, so it would cover their buttons; the app's own sits below them.
  */
 export function hubOpenBugReport(): void {
   callHub('openBugReport')

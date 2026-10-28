@@ -96,12 +96,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 {scope ? ` · ${scope}` : ''}
               </span>
             </div>
-            {/* Downstream Hub bug report. Absent unless the Hub SDK is configured at build time. */}
-            {isHubSdkEnabled() ? (
-              <button className="icon-btn" onClick={() => hubOpenBugReport()} title="Report a bug" aria-label="Report a bug">
-                <Bug aria-hidden />
-              </button>
-            ) : null}
             <button className="icon-btn" onClick={() => setPwOpen(true)} title="Change password" aria-label="Change password">
               <KeyRound aria-hidden />
             </button>
@@ -118,6 +112,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         {railOpen ? <div className="scrim" style={{ zIndex: 44 }} onClick={() => setRailOpen(false)} /> : null}
         <main className="main">{children}</main>
       </div>
+      {/* Downstream Hub bug report, a floating button so the name in the sidebar keeps its room. Absent unless the Hub SDK is configured at build time. */}
+      {isHubSdkEnabled() ? (
+        <button className="bug-fab" onClick={() => hubOpenBugReport()} title="Report a bug" aria-label="Report a bug">
+          <Bug aria-hidden />
+        </button>
+      ) : null}
       {pwOpen || user.is_first_login ? (
         <ChangePasswordModal
           firstLogin={user.is_first_login}

@@ -195,10 +195,10 @@ describe('hub SDK — must never break the app', () => {
 })
 
 /**
- * The SDK's floating button is hidden here — it would cover the "N POs selected" bar
- * — and the dialog opens from a sidebar button instead.
+ * The SDK's floating button is hidden here — it sits above every drawer and modal and would cover their buttons
+ * — and the dialog opens from the app's own floating button instead.
  */
-describe('hub SDK — bug report from the sidebar', () => {
+describe('hub SDK — bug report from the floating button', () => {
   it('opens the SDK dialog when configured', () => {
     enable()
     const sdk = { openBugReport: vi.fn() }

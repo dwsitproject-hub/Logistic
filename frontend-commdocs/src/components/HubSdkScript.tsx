@@ -19,7 +19,7 @@ export function HubSdkScript() {
       data-app-key={cfg.appKey}
       data-release={cfg.release}
       data-debug={cfg.debug ? 'true' : undefined}
-      // The dialog opens from the sidebar button instead - see hubOpenBugReport().
+      // The dialog opens from the app's own floating button instead - see hubOpenBugReport().
       data-bug-button="false"
       defer
     />
