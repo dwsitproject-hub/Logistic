@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { accessFor, type Access } from './access'
 import { apiData, apiJson, getToken, setToken, setUnauthorizedHandler } from './api'
+import { hubIdentify, hubReset } from './hubSdk'
 import type { PermissionMap, SessionUser } from './types'
 
 type Status = 'loading' | 'signedIn' | 'signedOut'
@@ -48,6 +49,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setUser(me)
       setPermissions(perms)
       setStatus('signedIn')
+      hubIdentify(me)
     } catch {
       clear()
     }
@@ -74,6 +76,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         /* the local sign-out below is what matters */
       }
       clear()
+      // Only a real sign-out (or an expired session) forgets the user. clear() alone also runs when the page loads with nobody signed in, and a reset
+      // there would restart the Hub session on every visit to the login page.
+      hubReset()
       signingOut.current = false
     },
     [clear],
@@ -97,6 +102,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setUser(data.user)
     setPermissions(perms)
     setStatus('signedIn')
+    hubIdentify(data.user)
     return { requirePasswordChange: Boolean(data.requirePasswordChange) }
   }, [])
 

@@ -13,6 +13,8 @@ export type SessionUser = {
   products: string[]
   is_active: boolean
   is_first_login: boolean
+  /** Downstream Hub user id (OIDC sub); null for an account that never signed in through the Hub. Only the Hub SDK reads it. */
+  hub_user_id?: string | null
 }
 
 export type PermissionFlags = { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean }

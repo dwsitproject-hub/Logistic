@@ -17,6 +17,8 @@
 #   COMMDOCS_PORT            host port mapping, default 127.0.0.1:3002
 #   COMMDOCS_BACKEND_INTERNAL_URL only for option B
 #   COMMDOCS_KLIP_URL             where the "KLIP" link in the sidebar points, e.g. http://172.28.92.56 (empty = no link)
+#   COMMDOCS_HUB_SDK_URL / COMMDOCS_HUB_SDK_KEY   Downstream Hub SDK; off unless BOTH are set. Key from Hub -> Admin -> Applications -> Commercial Documents -> SDK
+#   COMMDOCS_HUB_SDK_DEBUG        true logs [DwsHub] lines in the browser console (staging only)
 #
 # On the BACKEND host set COMMDOCS_URL to this app's public origin (SIT: http://test-commercial-docs.kpndomain.com, production: http://commercial-docs.kpndomain.com), so reset and
 # invitation e-mails requested from this app link back to it.
@@ -33,6 +35,11 @@ services:
       args:
         BACKEND_INTERNAL_URL: ${COMMDOCS_BACKEND_INTERNAL_URL:-}
         NEXT_PUBLIC_KLIP_URL: ${COMMDOCS_KLIP_URL:-}
+        # Downstream Hub SDK: this app is its OWN application in the Hub, with its own key (not KLIP's). COMMDOCS_GIT_SHA is set by deploy-commdocs.sh.
+        NEXT_PUBLIC_HUB_SDK_URL: ${COMMDOCS_HUB_SDK_URL:-}
+        NEXT_PUBLIC_HUB_SDK_KEY: ${COMMDOCS_HUB_SDK_KEY:-}
+        NEXT_PUBLIC_HUB_SDK_DEBUG: ${COMMDOCS_HUB_SDK_DEBUG:-false}
+        NEXT_PUBLIC_GIT_SHA: ${COMMDOCS_GIT_SHA:-}
     container_name: klip-commdocs
     environment:
       NODE_ENV: production

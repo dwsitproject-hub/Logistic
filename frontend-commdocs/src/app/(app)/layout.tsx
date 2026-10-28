@@ -1,6 +1,6 @@
 'use client'
 
-import { BarChart3, ExternalLink, FileText, History, KeyRound, LogOut, Menu, ShieldCheck, Users } from 'lucide-react'
+import { BarChart3, Bug, ExternalLink, FileText, History, KeyRound, LogOut, Menu, ShieldCheck, Users } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -8,6 +8,7 @@ import { ChangePasswordModal } from '@/components/ChangePasswordModal'
 import { Brand, Spinner, useToast } from '@/components/ui'
 import { NAV, homePath, navKeyForPath, type NavKey } from '@/lib/access'
 import { initials } from '@/lib/format'
+import { hubOpenBugReport, isHubSdkEnabled } from '@/lib/hubSdk'
 import { useSession } from '@/lib/session'
 
 const ICONS: Record<NavKey, typeof FileText> = {
@@ -95,6 +96,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 {scope ? ` · ${scope}` : ''}
               </span>
             </div>
+            {/* Downstream Hub bug report. Absent unless the Hub SDK is configured at build time. */}
+            {isHubSdkEnabled() ? (
+              <button className="icon-btn" onClick={() => hubOpenBugReport()} title="Report a bug" aria-label="Report a bug">
+                <Bug aria-hidden />
+              </button>
+            ) : null}
             <button className="icon-btn" onClick={() => setPwOpen(true)} title="Change password" aria-label="Change password">
               <KeyRound aria-hidden />
             </button>

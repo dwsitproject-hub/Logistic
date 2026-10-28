@@ -77,6 +77,13 @@ PORT_MAP="$(env_value COMMDOCS_PORT)"
 printf '  COMMDOCS_PORT            = %s\n' "${PORT_MAP:-127.0.0.1:3002 (default: only Nginx can reach it)}"
 printf '  COMMDOCS_BACKEND_INTERNAL_URL = %s\n' "$(env_value COMMDOCS_BACKEND_INTERNAL_URL || true)"
 printf '  COMMDOCS_KLIP_URL             = %s\n' "$(env_value COMMDOCS_KLIP_URL || true)"
+SDK_URL="$(env_value COMMDOCS_HUB_SDK_URL || true)"
+SDK_KEY="$(env_value COMMDOCS_HUB_SDK_KEY || true)"
+printf '  COMMDOCS_HUB_SDK_URL          = %s\n' "${SDK_URL:-(not set: Hub SDK off)}"
+printf '  COMMDOCS_HUB_SDK_KEY          = %s\n' "$([[ -n "$SDK_KEY" ]] && echo '(set)' || echo '(not set)')"
+if [[ -n "$SDK_URL" && -z "$SDK_KEY" ]] || [[ -z "$SDK_URL" && -n "$SDK_KEY" ]]; then
+  printf '\n  NOTE: only one of COMMDOCS_HUB_SDK_URL / COMMDOCS_HUB_SDK_KEY is set - the Hub SDK stays OFF until both are.\n'
+fi
 if [[ -z "$(env_value COMMDOCS_BACKEND_INTERNAL_URL)" && "${PORT_MAP:-}" != 127.0.0.1:* && -n "${PORT_MAP:-}" ]]; then
   printf '\n  NOTE: the container is published on %s without COMMDOCS_BACKEND_INTERNAL_URL - that only works when Nginx\n' "$PORT_MAP"
   printf '  proxies /api and /auth on that port. Without Nginx, set COMMDOCS_BACKEND_INTERNAL_URL (build-time).\n'
@@ -93,6 +100,12 @@ IMAGE_BEFORE="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null ||
 step "pulling"
 git pull --ff-only origin "$BRANCH"
 [[ -f "$COMPOSE_FILE" ]] || die "$COMPOSE_FILE is missing after the pull - is the app merged into $BRANCH?"
+
+# data-release of the Downstream Hub SDK: Sentinel reads the code at THIS commit, so it has to be the commit the bundle is built from. Set after the pull; a
+# shell value wins over one in .env, so a stale COMMDOCS_GIT_SHA left in .env cannot pin an old release.
+COMMDOCS_GIT_SHA="$(git rev-parse --short HEAD)"
+export COMMDOCS_GIT_SHA
+printf '  SDK release (data-release): %s\n' "$COMMDOCS_GIT_SHA"
 
 # The first SIT deploy (2026-10-26) ran before the rename to CommDocs: its container is klip-commercial-docs, in compose project
 # "klip", and still holds port 3002. Remove it once, or the new container cannot bind the port.

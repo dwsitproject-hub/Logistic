@@ -16,6 +16,18 @@ RUN npm ci
 ARG NEXT_PUBLIC_KLIP_URL=
 ENV NEXT_PUBLIC_KLIP_URL=${NEXT_PUBLIC_KLIP_URL}
 
+# Downstream Hub SDK (usage analytics, JS errors, "Report a bug"). Off unless BOTH the URL and the key are set; then the root layout loads the SDK and the CSP
+# admits its origin. Build-time like every NEXT_PUBLIC_*. Declared after `npm ci` for the same reason: NEXT_PUBLIC_GIT_SHA changes on every commit and would
+# otherwise throw away the dependency layer. .git is outside the build context, so the deploy script passes the SHA in.
+ARG NEXT_PUBLIC_HUB_SDK_URL=
+ARG NEXT_PUBLIC_HUB_SDK_KEY=
+ARG NEXT_PUBLIC_HUB_SDK_DEBUG=false
+ARG NEXT_PUBLIC_GIT_SHA=
+ENV NEXT_PUBLIC_HUB_SDK_URL=${NEXT_PUBLIC_HUB_SDK_URL}
+ENV NEXT_PUBLIC_HUB_SDK_KEY=${NEXT_PUBLIC_HUB_SDK_KEY}
+ENV NEXT_PUBLIC_HUB_SDK_DEBUG=${NEXT_PUBLIC_HUB_SDK_DEBUG}
+ENV NEXT_PUBLIC_GIT_SHA=${NEXT_PUBLIC_GIT_SHA}
+
 COPY . .
 RUN mkdir -p public && npm run build
 
