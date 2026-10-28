@@ -4553,6 +4553,18 @@ function ShipmentsPageContent() {
       },
     },
     {
+      // Hidden until a user switches it on in Columns. A row stands for an STO that can carry several contracts, so this is every distinct buyer, like Supplier.
+      id: 'buyers',
+      label: 'Buyer',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.buyers || s.buyer || '',
+      render: (s) => {
+        const buyer = s.buyers || s.buyer || ''
+        return <OperationalStackedCommaCell value={buyer} title={buyer} truncateLongParts />
+      },
+    },
+    {
       id: 'vessel_name',
       label: 'Vessel',
       defaultVisible: true,
