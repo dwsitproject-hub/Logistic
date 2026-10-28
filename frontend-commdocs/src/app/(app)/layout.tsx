@@ -1,6 +1,6 @@
 'use client'
 
-import { BarChart3, Bug, ExternalLink, FileText, History, KeyRound, LogOut, Menu, ShieldCheck, Users } from 'lucide-react'
+import { BarChart3, ExternalLink, FileText, History, KeyRound, LogOut, Menu, MessageSquareWarning, ShieldCheck, Users } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -114,8 +114,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       </div>
       {/* Downstream Hub bug report, a floating button so the name in the sidebar keeps its room. Absent unless the Hub SDK is configured at build time. */}
       {isHubSdkEnabled() ? (
-        <button className="bug-fab" onClick={() => hubOpenBugReport()} title="Report a bug" aria-label="Report a bug">
-          <Bug aria-hidden />
+        <button
+          className="bug-fab"
+          onClick={() => hubOpenBugReport()}
+          title="Something not working or looking wrong? Tell us and we will look into it."
+          aria-label="Report a problem"
+        >
+          <MessageSquareWarning aria-hidden />
+          <span>Report a problem</span>
         </button>
       ) : null}
       {pwOpen || user.is_first_login ? (

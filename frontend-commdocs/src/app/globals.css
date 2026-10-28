@@ -315,9 +315,10 @@ tbody tr.picked td { background: #f2f8f8; }
 .icon-btn:hover { background: var(--surface-2); }
 .icon-btn svg { width: 1.125rem; height: 1.125rem; }
 /* Report a bug (Hub SDK). Below the drawer, modals and their scrim (40+), so it never covers a drawer's own buttons; under .fbar (35) on a narrow screen. */
-.bug-fab { position: fixed; right: max(1.25rem, env(safe-area-inset-right, 0px)); bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px)); z-index: 30; width: 2.5rem; height: 2.5rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); box-shadow: var(--shadow); display: grid; place-items: center; cursor: pointer; opacity: 0.85; }
-.bug-fab:hover { opacity: 1; background: var(--surface-2); color: var(--ink); }
-.bug-fab svg { width: 1.125rem; height: 1.125rem; }
+.bug-fab { position: fixed; right: max(1.25rem, env(safe-area-inset-right, 0px)); bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px)); z-index: 30; display: inline-flex; align-items: center; gap: 0.5rem; height: 2.5rem; padding: 0 1rem 0 0.8125rem; border-radius: 999px; border: 0; background: var(--accent); color: #fff; font: inherit; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.005em; cursor: pointer; box-shadow: 0 0.125rem 0.25rem rgba(19, 74, 80, 0.2), 0 0.5rem 1.25rem rgba(19, 74, 80, 0.24); transition: background 0.15s, box-shadow 0.15s, transform 0.15s; }
+.bug-fab:hover { background: var(--accent-ink); transform: translateY(-1px); box-shadow: 0 0.25rem 0.5rem rgba(19, 74, 80, 0.24), 0 0.75rem 1.5rem rgba(19, 74, 80, 0.28); }
+.bug-fab:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.bug-fab svg { width: 1.125rem; height: 1.125rem; flex: none; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -333,6 +334,9 @@ tbody tr.picked td { background: #f2f8f8; }
   .split, .roles { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
+  /* The label goes on a phone: a round button, the name stays in aria-label and the tooltip. */
+  .bug-fab { padding: 0; width: 2.5rem; justify-content: center; }
+  .bug-fab span { display: none; }
   .login { grid-template-columns: minmax(0, 1fr); }
   .login-art { display: none; }
   .shell { grid-template-columns: minmax(0, 1fr); }
