@@ -153,15 +153,15 @@ describe('integrationEnv', () => {
   afterEach(() => replaceIntegrationOverrides(new Map()));
 
   it('reads process.env when nothing is saved, so deploying it changes nothing', () => {
-    process.env.JPS_REGION_SITE = 'BONTANG';
-    expect(integrationEnv('JPS_REGION_SITE')).toBe('BONTANG');
-    expect(hasIntegrationOverride('JPS_REGION_SITE')).toBe(false);
+    process.env.JPS_TIMEOUT_MS = '30000';
+    expect(integrationEnv('JPS_TIMEOUT_MS')).toBe('30000');
+    expect(hasIntegrationOverride('JPS_TIMEOUT_MS')).toBe(false);
   });
 
   it('prefers a saved value over process.env', () => {
-    process.env.JPS_REGION_SITE = 'BONTANG';
-    replaceIntegrationOverrides(new Map([['JPS_REGION_SITE', 'KIJING']]));
-    expect(integrationEnv('JPS_REGION_SITE')).toBe('KIJING');
+    process.env.JPS_TIMEOUT_MS = '30000';
+    replaceIntegrationOverrides(new Map([['JPS_TIMEOUT_MS', '5000']]));
+    expect(integrationEnv('JPS_TIMEOUT_MS')).toBe('5000');
   });
 
   it('tells every listener, even when one of them throws', () => {
@@ -222,7 +222,7 @@ describe('saving validates everything before writing anything', () => {
 
   it('will not save and revert the same key at once', async () => {
     const problems = await problemsOf(
-      saveIntegrationSettings('jps', { values: { JPS_REGION_SITE: 'BONTANG' }, revert: ['JPS_REGION_SITE'] }, actor),
+      saveIntegrationSettings('jps', { values: { JPS_TIMEOUT_MS: '5000' }, revert: ['JPS_TIMEOUT_MS'] }, actor),
     );
     expect(problems.some((p) => p.includes('both saved and reverted'))).toBe(true);
   });

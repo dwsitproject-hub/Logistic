@@ -24,7 +24,7 @@ if (!DIST) {
 }
 const load = (m) => require(path.join(DIST, m));
 const connection = load('database/connection');
-const { isJpsEnabled, jpsRegionSite } = load('jps/config');
+const { isJpsEnabled, jpsPorts } = load('jps/config');
 
 const KEYS = process.argv.slice(2).filter(Boolean);
 if (KEYS.length === 0) {
@@ -40,7 +40,7 @@ const yn = (ok) => (ok ? 'YA ' : 'TIDAK');
   console.log(`   JPS_ENABLED        : ${process.env.JPS_ENABLED || '(kosong)'}`);
   console.log(`   JPS_API_BASE_URL   : ${process.env.JPS_API_BASE_URL || '(kosong)'}`);
   console.log(`   JPS_API_KEY        : ${process.env.JPS_API_KEY ? '(terisi)' : '(kosong)'}`);
-  console.log(`   JPS_REGION_SITE    : ${jpsRegionSite()}`);
+  console.log(`   JPS_PORTS          : ${jpsPorts().map((p) => `${p.port} (${p.enabled ? 'aktif' : 'nonaktif'})`).join('; ') || '(tidak ada port)'}`);
   console.log(`   => isJpsEnabled()  : ${isJpsEnabled()}`);
   if (!isJpsEnabled()) {
     console.log('');
@@ -96,9 +96,7 @@ const yn = (ok) => (ok ? 'YA ' : 'TIDAK');
     }
 
     for (const r of res.rows) {
-      const wantRegion = jpsRegionSite();
       const checks = [
-        [`Region/Site = ${wantRegion}`, String(r.region_site || '') === wantRegion, r.region_site || '(kosong)'],
         ['ATC Loading terisi', r.atc_loading != null, r.atc_loading || '(kosong)'],
         ['belum ada ATA discharge', !r.ata_arrival && !r.ata_berthed && !r.ata_start && !r.ata_complete,
           [r.ata_arrival, r.ata_berthed, r.ata_start, r.ata_complete].filter(Boolean).join(', ') || '(semua kosong)'],

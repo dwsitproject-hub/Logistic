@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ApiCallHistory } from '@/components/integrations/ApiCallHistory'
 import { DhmFailedPushButton } from '@/components/integrations/DhmPushPanel'
+import { JpsPortsEditor, JpsPortsSummary } from '@/components/integrations/JpsPortsField'
 import api from '@/lib/api'
 import { AlertTriangle, CheckCircle2, History, Loader2, Plug, RotateCcw, XCircle } from 'lucide-react'
 
@@ -18,7 +19,7 @@ import { AlertTriangle, CheckCircle2, History, Loader2, Plug, RotateCcw, XCircle
  * means "keep the current one".
  */
 
-type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text'
+type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text' | 'ports'
 type SettingSource = 'database' | 'env' | 'unset'
 
 interface SettingView {
@@ -266,11 +267,17 @@ function IntegrationCard({
 
                 <div className="min-w-0 space-y-1">
                   {!editing ? (
-                    <p className="break-all font-mono text-xs text-gray-700">
-                      {s.kind === 'secret' ? s.hint ?? '-' : s.value ?? '-'}
-                    </p>
+                    s.kind === 'ports' ? (
+                      <JpsPortsSummary value={s.value} />
+                    ) : (
+                      <p className="break-all font-mono text-xs text-gray-700">
+                        {s.kind === 'secret' ? s.hint ?? '-' : s.value ?? '-'}
+                      </p>
+                    )
                   ) : reverting ? (
                     <p className="text-xs italic text-gray-500">Akan dikembalikan ke nilai .env saat disimpan.</p>
+                  ) : s.kind === 'ports' ? (
+                    <JpsPortsEditor value={draft[s.key] ?? ''} onChange={(next) => setDraft((d) => ({ ...d, [s.key]: next }))} />
                   ) : s.kind === 'boolean' ? (
                     <select
                       className="h-8 rounded-md border border-gray-300 bg-white px-2 text-xs"

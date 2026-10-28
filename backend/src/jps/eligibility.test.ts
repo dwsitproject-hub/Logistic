@@ -7,13 +7,13 @@ import { findEligibleStos } from './eligibility';
 
 async function sqlOf(): Promise<string> {
   vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 0 } as any);
-  await findEligibleStos('BONTANG', 10);
+  await findEligibleStos(['PORT BONTANG'], 10);
   return String(vi.mocked(query).mock.calls[0]![0]);
 }
 
 async function callOf(): Promise<[string, unknown[]]> {
   vi.mocked(query).mockResolvedValue({ rows: [], rowCount: 0 } as any);
-  await findEligibleStos('BONTANG', 10);
+  await findEligibleStos(['PORT BONTANG'], 10);
   const call = vi.mocked(query).mock.calls[0]!;
   return [String(call[0]), call[1] as unknown[]];
 }
@@ -69,14 +69,23 @@ describe('findEligibleStos: the discharge port of a shipment', () => {
 });
 
 // Only the discharge port the integration is switched on for is submitted: PORT BONTANG for now (Ryan, 2026-10-14).
-describe('findEligibleStos: only the configured discharge Master Port', () => {
+describe('findEligibleStos: only the Master Ports switched on for JPS', () => {
   beforeEach(() => vi.mocked(query).mockReset());
 
-  it('asks for PORT BONTANG by default, as ONE bound parameter after the others, resolved to its Master Port id', async () => {
-    const [sql, params] = await callOf();
-    expect(params).toEqual(['BONTANG', 10, false, 0, 'PORT BONTANG']);
-    expect(sql).toContain('$5::text IS NULL');
-    expect(sql).toContain('= klip_resolve_master_port_id($5::text)');
+  it('the ports are ONE bound array, FIRST, and the shipment must discharge at one of them (resolved to Master Port ids); there is no Region/Site condition', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    await findEligibleStos(['PORT BONTANG', 'PORT DUMAI'], 10);
+    const [sql, params] = vi.mocked(query).mock.calls[0] as [string, unknown[]];
+    expect(params).toEqual([['PORT BONTANG', 'PORT DUMAI'], 10, false, 0]);
+    expect(sql).toContain('IN (SELECT klip_resolve_master_port_id(p) FROM unnest($1::text[]) AS p)');
+    // JPS knows a port and nothing else: the contract's Region/Site decides nothing
+    expect(sql).not.toContain('discharge_destination');
+  });
+
+  it('with no port switched on the list is empty and nothing is eligible (nothing is built into the code)', async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
+    await findEligibleStos([], 10);
+    expect(vi.mocked(query).mock.calls[0][1]).toEqual([[], 10, false, 0]);
   });
 
   it('the port of an eligible shipment is the Master Port its text resolves to: its own id, else its active discharge leg', async () => {
@@ -85,28 +94,14 @@ describe('findEligibleStos: only the configured discharge Master Port', () => {
     expect(eligible).toContain('s.discharge_master_port_id');
     expect(eligible).toContain('v.master_port_id');
     expect(eligible).toContain("COALESCE(v.is_discharge_port, FALSE) IS TRUE");
-    // the region/site rule is still there: the port restriction only narrows it
-    expect(eligible).toContain('UPPER(TRIM(COALESCE(l.discharge_destination');
   });
 
-  it('ALL or an empty value lifts the restriction (the parameter is NULL and the arm is true)', async () => {
+  it('amending by STO key numbers nothing after the three it binds: the ports stay $1', async () => {
     vi.mocked(query).mockResolvedValue({ rows: [] } as never);
-    await findEligibleStos('BONTANG', 10, { dischargePort: 'ALL' });
-    expect(vi.mocked(query).mock.calls[0][1]).toEqual(['BONTANG', 10, false, 0, null]);
-    vi.mocked(query).mockClear();
-    await findEligibleStos('BONTANG', 10, { dischargePort: '  ' });
-    expect(vi.mocked(query).mock.calls[0][1]).toEqual(['BONTANG', 10, false, 0, null]);
-  });
-
-  it('another port can be named; amending by STO key keeps the rule and numbers the port after the three it binds', async () => {
-    vi.mocked(query).mockResolvedValue({ rows: [] } as never);
-    await findEligibleStos('BONTANG', 10, { dischargePort: 'port kijing' });
-    expect(vi.mocked(query).mock.calls[0][1]).toEqual(['BONTANG', 10, false, 0, 'port kijing']);
-    vi.mocked(query).mockClear();
-    await findEligibleStos('BONTANG', 10, { stoKeys: ['1006019385'] });
+    await findEligibleStos(['PORT BONTANG'], 10, { stoKeys: ['1006019385'] });
     const [sql, params] = vi.mocked(query).mock.calls[0] as [string, unknown[]];
-    expect(params).toEqual(['BONTANG', 10, ['1006019385'], 'PORT BONTANG']);
-    expect(sql).toContain('klip_resolve_master_port_id($4::text)');
+    expect(params).toEqual([['PORT BONTANG'], 10, ['1006019385']]);
+    expect(sql).toContain('unnest($1::text[])');
   });
 });
 
@@ -188,7 +183,7 @@ describe('findEligibleStos: the STO number of each cargo line (JPS 5.6 sto_no)',
       ],
       rowCount: 1,
     } as any);
-    const [sto] = await findEligibleStos('BONTANG', 10);
+    const [sto] = await findEligibleStos(['PORT BONTANG'], 10);
     expect(sto!.cargo.map((l) => l.sto_no)).toEqual(['1006020269', null, null]);
   });
 });

@@ -1,11 +1,11 @@
 /**
  * Jetty Planning System integration — outbound only.
  *
- * KLIP submits a Shipping Instruction per STO for vessels discharging at BONTANG, then polls for
+ * KLIP submits a Shipping Instruction per STO for vessels discharging at a port switched on (Integrations > JPS > Ports), then polls for
  * the operator's decision. JPS has no webhook in v1 and no way to cancel an instruction, so the
  * whole conversation is: submit once, poll until it settles.
  */
-export { isJpsEnabled, jpsRegionSite, jpsRetryFailed, jpsSweepCron } from './config';
+export { isJpsEnabled, jpsEnabledPortNames, jpsRetryFailed, jpsSweepCron } from './config';
 export { submitEligibleStos, type JpsSubmitSummary } from './submit';
 export { handleJpsWebhook, type JpsWebhookResult } from './webhookHandler';
 export { pollSubmittedInstructions, type JpsPollSummary } from './poll';

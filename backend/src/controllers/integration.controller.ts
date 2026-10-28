@@ -221,3 +221,35 @@ export const retryDhmPushNow = async (_req: AuthRequest, res: Response): Promise
     res.status(500).json({ success: false, error: { message: 'Failed to retry the DHM pushes.' } });
   }
 };
+
+/**
+ * What the Ports editor (Integrations > JPS) offers to pick from: the Master Ports, with whether each has the DHM code JPS needs (port_hub_code) and how many shipments
+ * discharge there. Read-only, ADMIN only like the rest of the menu.
+ */
+export const getJpsPortOptions = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const ports = await query(
+      `SELECT mp.port,
+              (NULLIF(TRIM(mp.code_dhm), '') IS NOT NULL AND COALESCE(mp.dhm_is_deleted, FALSE) IS NOT TRUE) AS has_dhm_code,
+              mp.code_dhm AS dhm_code,
+              (SELECT COUNT(*)::int FROM shipments s WHERE s.discharge_master_port_id = mp.id) AS shipments
+         FROM master_loading_ports mp
+        WHERE NULLIF(TRIM(mp.port), '') IS NOT NULL
+        ORDER BY mp.port`,
+    );
+    res.json({
+      success: true,
+      data: {
+        ports: (ports.rows as Array<{ port: string; has_dhm_code: boolean; dhm_code: string | null; shipments: number }>).map((r) => ({
+          port: String(r.port).toUpperCase(),
+          hasDhmCode: Boolean(r.has_dhm_code),
+          dhmCode: r.dhm_code ? String(r.dhm_code) : null,
+          shipments: r.shipments,
+        })),
+      },
+    });
+  } catch (error) {
+    logger.error('Load JPS port options error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the port options.' } });
+  }
+};

@@ -7,7 +7,7 @@ import { findEligibleStos } from './eligibility';
  */
 describe('findEligibleStos RUNS with the cargo-line sto_no (real database)', () => {
   it('is valid SQL for a named STO (loaded by key, so no tracker or date conditions) and returns nothing for one that does not exist', async () => {
-    const rows = await findEligibleStos('BONTANG', 1, { stoKeys: ['NO-SUCH-STO-ZZ'], dischargePort: 'ALL' });
+    const rows = await findEligibleStos(['PORT BONTANG'], 1, { stoKeys: ['NO-SUCH-STO-ZZ'] });
     expect(rows).toEqual([]);
   }, 120_000);
 
@@ -16,7 +16,7 @@ describe('findEligibleStos RUNS with the cargo-line sto_no (real database)', () 
     const pick = await query(`SELECT TRIM(sto_number) AS sto FROM contract_stos WHERE NULLIF(TRIM(sto_number), '') IS NOT NULL LIMIT 5`);
     const keys = pick.rows.map((r) => String(r.sto));
     if (keys.length === 0) return;
-    const rows = await findEligibleStos('BONTANG', 5, { stoKeys: keys, dischargePort: 'ALL' });
+    const rows = await findEligibleStos(['PORT BONTANG'], 5, { stoKeys: keys });
     for (const sto of rows) {
       for (const line of sto.cargo) {
         expect(line.sto_no === null || (typeof line.sto_no === 'string' && line.sto_no === line.sto_no.trim() && line.sto_no !== '')).toBe(true);

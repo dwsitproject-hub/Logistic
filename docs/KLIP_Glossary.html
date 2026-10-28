@@ -1687,7 +1687,7 @@
           </thead>
           <tbody>
             <tr><td><code>external_reference</code></td><td><code>KLIP-&lt;sto_key&gt;-R&lt;revisi&gt;</code></td><td>Wajib unik per API key. Lihat <a href="#jps-state">State &amp; revisi</a>.</td></tr>
-            <tr><td><code>port_id</code></td><td><code>JPS_PORT_ID</code> (staging = 1)</td><td>Konfigurasi, bukan konstanta — produksi kemungkinan berbeda.</td></tr>
+            <tr><td><code>port_hub_code</code></td><td>Kode DHM Master Port (<code>master_loading_ports.code_dhm</code>)</td><td>Sejak JPS API v5.3 identitas pelabuhan bongkar adalah kode hub DHM; <code>port_id</code> ditolak (400). Tidak ada id port yang dikonfigurasi di KLIP.</td></tr>
             <tr><td><code>purpose</code></td><td>selalu <code>Unloading</code></td><td>Kapal KLIP singgah di BONTANG untuk bongkar; BONTANG tidak pernah menjadi load port di KLIP.</td></tr>
             <tr><td><code>eta</code></td><td>ETA Discharge Arrival</td><td>Dikirim sebagai <code>YYYY-MM-DDT00:00:00Z</code>. KLIP menyimpan tanggal tanpa jam; jam sandar sebenarnya ditetapkan operator JPS.</td></tr>
             <tr><td><code>etd</code></td><td>ETA Discharge Complete</td><td>Hanya dikirim bila lebih besar dari <code>eta</code> — JPS menolak <code>etd</code> yang tidak setelah <code>eta</code>, dan bongkar satu hari akan melanggarnya.</td></tr>
@@ -1772,8 +1772,7 @@
             <tr><td><code>JPS_ENABLED</code></td><td><code>false</code></td><td>Integrasi menyala hanya bila bernilai <code>true</code> <strong>dan</strong> base URL <strong>dan</strong> API key terisi.</td></tr>
             <tr><td><code>JPS_API_BASE_URL</code></td><td>&mdash;</td><td>Endpoint partner API.</td></tr>
             <tr><td><code>JPS_API_KEY</code></td><td>&mdash;</td><td>Dikirim sebagai header <code>x-api-key</code>. Tidak pernah sampai ke browser.</td></tr>
-            <tr><td><code>JPS_PORT_ID</code></td><td><code>1</code></td><td>Port JPS.</td></tr>
-            <tr><td><code>JPS_REGION_SITE</code></td><td><code>BONTANG</code></td><td>Satu nilai, bukan daftar — jetty kedua memerlukan port id sendiri.</td></tr>
+            <tr><td><code>JPS_PORTS</code></td><td>&mdash; (daftar di Integrations &gt; JPS &gt; Ports)</td><td>Master Port yang dikirim ke JPS, masing-masing dengan saklar aktif. JPS hanya mengenal pelabuhan (kode DHM, <code>port_hub_code</code>), tanpa site atau region, jadi STO dikirim bila pelabuhan bongkarnya aktif di sini. Port harus sudah sinkron dengan DHM sebelum bisa diaktifkan. Tidak ada port yang tertanam di kode: tanpa port aktif tidak ada yang dikirim. Hanya ADMIN yang mengubah.</td></tr>
             <tr><td><code>JPS_SWEEP_CRON</code></td><td><code>*/15 * * * *</code></td><td>Jadwal sapuan.</td></tr>
             <tr><td><code>JPS_MAX_SUBMITS_PER_SWEEP</code></td><td><code>25</code></td><td>Membatasi sapuan pertama (atau setelah gangguan) agar tidak menghabiskan kuota.</td></tr>
             <tr><td><code>JPS_MIN_POLL_INTERVAL_MS</code></td><td><code>300000</code></td><td>Minimum 5 menit per instruction, sesuai permintaan JPS.</td></tr>

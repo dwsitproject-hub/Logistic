@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { query } from '../database/connection';
 import { checkJpsReadiness, classifyPayloadProblem, resolveStoKeyForShipment, samePayloadIgnoringReference } from './readiness';
 
@@ -83,4 +83,70 @@ describe('samePayloadIgnoringReference: does a resubmission repeat what JPS reje
     expect(samePayloadIgnoringReference(base, { ...base, cargo: [{ contract_no: 'C1', sto_quantity: 900 }] })).toBe(false);
     expect(samePayloadIgnoringReference(base, { ...base, extra: 1 })).toBe(false);
   });
+});
+
+describe('checkJpsReadiness over the ports (Integrations > JPS > Ports), against the database', () => {
+  const env = { ...process.env };
+  afterEach(() => {
+    process.env = { ...env };
+  });
+
+  /** A shipment with a discharge Master Port, and that port's name. */
+  async function shipmentWithPort() {
+    const pick = await query(
+      `SELECT s.id, mp.port
+         FROM shipments s JOIN master_loading_ports mp ON mp.id = s.discharge_master_port_id
+        WHERE COALESCE(s.status, '') NOT IN ('CANCELLED')
+        ORDER BY s.created_at DESC LIMIT 1`,
+    );
+    return { id: pick.rows[0]?.id as string | undefined, port: pick.rows[0]?.port as string | undefined };
+  }
+  const settled = (r: Awaited<ReturnType<typeof checkJpsReadiness>>) => r.tracker?.state === 'SUBMITTED' || r.tracker?.state === 'SKIPPED_PRE_EXISTING';
+
+  it('a port that is listed but not switched on says so, names where to switch it on, and cannot be submitted', async () => {
+    const { id, port } = await shipmentWithPort();
+    if (!id || !port) return;
+    process.env.JPS_PORTS = JSON.stringify([{ port: 'PORT SOMEWHERE ELSE', enabled: true }, { port, enabled: false }]);
+    const r = await checkJpsReadiness(id);
+    if (settled(r)) return;
+    const check = r.checks.find((c) => c.key === 'discharge_port');
+    expect(check).toMatchObject({ ok: false, fixAt: 'settings' });
+    expect(check?.fix).toContain('Integrations > JPS > Ports');
+    expect(check?.fix).toContain('switches it on');
+    expect(r.canSubmit).toBe(false);
+  }, 120_000);
+
+  it('a port switched on passes, whatever Region/Site the contracts carry', async () => {
+    const { id, port } = await shipmentWithPort();
+    if (!id || !port) return;
+    process.env.JPS_PORTS = JSON.stringify([{ port, enabled: true }]);
+    const r = await checkJpsReadiness(id);
+    if (settled(r)) return;
+    expect(r.checks.find((c) => c.key === 'discharge_port')).toMatchObject({ ok: true });
+    expect(r.checks.find((c) => c.key === 'region')).toBeUndefined();
+    expect(r.checks.find((c) => c.key === 'port_enabled')).toBeUndefined();
+  }, 120_000);
+
+  it('a port that is not listed at all says an ADMIN adds it, and which ports are on now', async () => {
+    const { id } = await shipmentWithPort();
+    if (!id) return;
+    process.env.JPS_PORTS = JSON.stringify([{ port: 'PORT SOMEWHERE ELSE', enabled: true }]);
+    const r = await checkJpsReadiness(id);
+    if (settled(r)) return;
+    const check = r.checks.find((c) => c.key === 'discharge_port');
+    expect(check).toMatchObject({ ok: false, fixAt: 'settings' });
+    expect(check?.fix).toContain('PORT SOMEWHERE ELSE');
+    expect(check?.fix).toContain('synced with DHM');
+  }, 120_000);
+
+  it('with no port switched on (nothing is built into the code) it says so, and cannot be submitted', async () => {
+    const { id } = await shipmentWithPort();
+    if (!id) return;
+    process.env.JPS_PORTS = '[]';
+    const r = await checkJpsReadiness(id);
+    if (settled(r)) return;
+    expect(r.canSubmit).toBe(false);
+    expect(r.reason).toBe('No port is switched on for JPS.');
+    expect(r.checks.find((c) => c.key === 'port_enabled')).toMatchObject({ ok: false, fixAt: 'settings' });
+  }, 120_000);
 });

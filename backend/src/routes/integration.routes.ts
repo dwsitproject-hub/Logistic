@@ -4,6 +4,7 @@ import {
   getApiCall,
   getDhmPushState,
   getIntegrations,
+  getJpsPortOptions,
   listApiCalls,
   retryDhmPushNow,
   testIntegration,
@@ -23,6 +24,8 @@ router.get('/', getIntegrations);
 // Masters saved in KLIP that did not reach DHM, and a button to push them again. Declared before /:id so 'dhm' is not an id.
 router.get('/dhm/push-state', getDhmPushState);
 router.post('/dhm/push-retry', retryDhmPushNow);
+// What the JPS Ports editor picks from (Master Ports and whether each has a DHM code). Before /:id.
+router.get('/jps/port-options', getJpsPortOptions);
 // What KLIP sent to JPS or DHM and what came back (:id is jps or dhm). Bodies can hold vessel, port and quantities,
 // so ADMIN only like the rest.
 router.get('/:id/calls', listApiCalls);

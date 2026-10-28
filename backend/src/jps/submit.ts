@@ -5,7 +5,7 @@ import { jpsRequest } from './client';
 import { companiesForPort, fetchJpsPortCompanies } from './companies';
 import {
   jpsMaxSubmitsPerSweep,
-  jpsRegionSite,
+  jpsEnabledPortNames,
   jpsRetryFailed,
   jpsRetryFailedAfterMs,
 } from './config';
@@ -251,7 +251,8 @@ export async function submitOneSto(
 /** One submission pass: every STO the rule owes JPS, up to the per-sweep cap. */
 export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
   const summary: JpsSubmitSummary = { considered: 0, submitted: 0, recovered: 0, held: 0, failed: 0, listChanged: 0 };
-  const eligible = await findEligibleStos(jpsRegionSite(), jpsMaxSubmitsPerSweep(), {
+  // One query for every port switched on (Integrations > JPS > Ports), under the one per-sweep cap. With no port switched on it matches nothing.
+  const eligible: EligibleSto[] = await findEligibleStos(jpsEnabledPortNames(), jpsMaxSubmitsPerSweep(), {
     retryFailed: jpsRetryFailed(),
     retryFailedAfterMs: jpsRetryFailedAfterMs(),
   });

@@ -209,6 +209,10 @@ export async function saveIntegrationSettings(
     else effective[def.key] = integrationEnv(def.key);
   }
   problems.push(...validateCrossField(integration.id, effective));
+  if (integration.id === 'jps' && typeof values.JPS_PORTS === 'string') {
+    const { jpsPortSyncProblems } = await import('../jps/portSync');
+    problems.push(...(await jpsPortSyncProblems(values.JPS_PORTS)));
+  }
 
   if (problems.length > 0) throw new IntegrationSettingsError([...new Set(problems)]);
 

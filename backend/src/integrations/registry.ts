@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import { validateJpsPortsValue } from '../jps/ports';
 
 /**
  * Every setting the Integrations menu can change, per integration.
@@ -13,7 +14,7 @@ import cron from 'node-cron';
  */
 export type IntegrationId = 'dhm' | 'jps';
 
-export type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text';
+export type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text' | 'ports';
 
 export interface SettingDef {
   key: string;
@@ -58,7 +59,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   {
     id: 'jps',
     name: 'JPS - Jetty Planning System',
-    description: 'Shipping instructions for BONTANG, and their approval and berthing status.',
+    description: 'Shipping instructions for the ports switched on below, and their approval and berthing status.',
     settings: [
       { key: 'JPS_ENABLED', label: 'Enabled', kind: 'boolean', requiresRestart: true },
       { key: 'JPS_API_BASE_URL', label: 'API base URL', kind: 'url' },
@@ -70,12 +71,11 @@ export const INTEGRATIONS: IntegrationDef[] = [
         prefix: 'whsec_',
         help: 'Shown once by JPS when the webhook endpoint is registered; begins with whsec_. KLIP receives at /api/jps/webhooks.',
       },
-      { key: 'JPS_REGION_SITE', label: 'Region / site', kind: 'text' },
       {
-        key: 'JPS_DISCHARGE_PORT',
-        label: 'Discharge port (Master Port)',
-        kind: 'text',
-        help: 'Only shipments whose discharge port is this Master Port are submitted (default PORT BONTANG). Type ALL to lift the restriction.',
+        key: 'JPS_PORTS',
+        label: 'Ports',
+        kind: 'ports',
+        help: 'The Master Ports shipments are sent to JPS for, each with a switch. JPS knows a port by its DHM code and has no site or region, so a shipment is sent when its discharge port is switched on here. A port must be synced with DHM (it has a DHM code) before it can be switched on, and JPS must have set it up first. No port is built into KLIP: with none switched on, nothing is sent.',
       },
       { key: 'JPS_SWEEP_CRON', label: 'Sweep schedule (cron)', kind: 'cron', requiresRestart: true },
       { key: 'JPS_TIMEOUT_MS', label: 'Request timeout (ms)', kind: 'integer', min: 1000 },
@@ -124,6 +124,8 @@ export function validateSettingValue(def: SettingDef, raw: string): string | nul
       return /^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(value) ? null : `${def.label} must be an http(s) URL.`;
     case 'cron':
       return cron.validate(value) ? null : `${def.label} is not a valid cron expression.`;
+    case 'ports':
+      return validateJpsPortsValue(value);
     case 'secret':
     case 'text':
       if (/\s/.test(value)) return `${def.label} must not contain spaces or line breaks.`;

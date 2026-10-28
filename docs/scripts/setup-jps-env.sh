@@ -83,8 +83,8 @@ set_var() {
 set_var JPS_ENABLED true
 set_var JPS_API_BASE_URL "${JPS_API_BASE_URL:-$JPS_BASE_DEFAULT}"
 set_var JPS_API_KEY "$JPS_KEY"
-set_var JPS_PORT_ID "${JPS_PORT_ID:-1}"
-set_var JPS_REGION_SITE "${JPS_REGION_SITE:-BONTANG}"
+# No JPS port id: since JPS API v5.3 the discharge port is the Master Port's DHM code (port_hub_code); port_id is refused with 400.
+# The ports JPS is sent for are not set here: Integrations > JPS > Ports (setting JPS_PORTS, ADMIN only). No port is built into the code.
 # Testing only: resend submissions JPS rejected outright, once they have gone cold for 5 minutes.
 # Normally a 400 is permanent and retrying it just burns the rate limit - this is for the case the
 # fix is on JPS's side, such as a master vessel value JPS holds wrongly. Switch it back to false afterwards.

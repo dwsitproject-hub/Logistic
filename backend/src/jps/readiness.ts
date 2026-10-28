@@ -9,7 +9,7 @@
  * up in the answer to the real submission.
  */
 import { query } from '../database/connection';
-import { isJpsEnabled, jpsDischargePort, jpsRegionSite } from './config';
+import { isJpsEnabled, jpsEnabledPortNames, jpsPorts } from './config';
 import { companiesForPort, fetchJpsPortCompanies } from './companies';
 import { EFFECTIVE_ATA_SQL, STO_KEY_SQL, findEligibleStos } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
@@ -163,11 +163,10 @@ async function loadSentPayload(stoKey: string, revision: number): Promise<unknow
 }
 
 /** Each condition of the eligibility rule, read on its own across the STO's shipment rows (the rule needs ONE row to pass them all). */
-async function loadEligibilityChecks(stoKey: string, regionSite: string, dischargePort: string | null): Promise<ReadinessCheck[]> {
+async function loadEligibilityChecks(stoKey: string, enabledPorts: string[], listedPorts: string[]): Promise<ReadinessCheck[]> {
   const res = await query(
     `SELECT s.id, s.status, s.eta_discharge_arrival, s.port_of_discharge,
             eff.atc_loading, eff.ata_disch_arrival, eff.ata_disch_berthed, eff.ata_disch_start, eff.ata_disch_complete,
-            UPPER(TRIM(COALESCE(l.discharge_destination, ''))) AS region_site,
             COALESCE(
               s.discharge_master_port_id,
               (SELECT v.master_port_id FROM vessel_loading_ports v
@@ -177,14 +176,15 @@ async function loadEligibilityChecks(stoKey: string, regionSite: string, dischar
                   AND v.master_port_id IS NOT NULL
                 ORDER BY v.port_sequence DESC LIMIT 1)
             ) AS discharge_port_id,
-            CASE WHEN $2::text IS NULL THEN NULL ELSE klip_resolve_master_port_id($2::text) END AS wanted_port_id
+            ARRAY(SELECT klip_resolve_master_port_id(p) FROM unnest($2::text[]) AS p) AS enabled_port_ids,
+            ARRAY(SELECT klip_resolve_master_port_id(p) FROM unnest($3::text[]) AS p) AS listed_port_ids
        FROM shipments s
        LEFT JOIN shipment_ata_overrides sao ON sao.shipment_id = s.id
        INNER JOIN contracts c ON c.id = s.contract_id
        LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
        CROSS JOIN LATERAL (SELECT ${EFFECTIVE_ATA_SQL}) eff
       WHERE ${STO_KEY_SQL} = $1`,
-    [stoKey, dischargePort],
+    [stoKey, enabledPorts, listedPorts],
   );
   const rows = res.rows as Array<Record<string, unknown>>;
   if (rows.length === 0) {
@@ -202,29 +202,27 @@ async function loadEligibilityChecks(stoKey: string, regionSite: string, dischar
 
   const any = (f: (r: Record<string, unknown>) => boolean) => rows.some(f);
   const first = rows[0];
-  const regionOk = any((r) => String(r.region_site ?? '') === regionSite);
   const atcOk = any((r) => r.atc_loading != null);
   const noAtaOk = any((r) => !r.ata_disch_arrival && !r.ata_disch_berthed && !r.ata_disch_start && !r.ata_disch_complete);
   const statusOk = any((r) => !['COMPLETED', 'CANCELLED'].includes(String(r.status ?? '').toUpperCase()));
   const etaOk = any((r) => r.eta_discharge_arrival != null);
-  const portOk = dischargePort == null || any((r) => r.wanted_port_id != null && r.discharge_port_id === r.wanted_port_id);
+  const idIn = (id: unknown, list: unknown) => id != null && Array.isArray(list) && list.map(String).includes(String(id));
+  const portOk = any((r) => idIn(r.discharge_port_id, r.enabled_port_ids));
+  const portListedOff = !portOk && any((r) => idIn(r.discharge_port_id, r.listed_port_ids));
+  const portResolved = any((r) => r.discharge_port_id != null);
 
   const checks: ReadinessCheck[] = [
     {
-      key: 'region',
-      label: `Region/Site is ${regionSite}`,
-      ok: regionOk,
-      value: [...new Set(rows.map((r) => String(r.region_site || '(empty)')))].join(', '),
-      fix: `Only ${regionSite} is sent to JPS for now.`,
-      fixAt: 'sap',
-    },
-    {
       key: 'discharge_port',
-      label: dischargePort ? `Discharge port is ${dischargePort}` : 'Discharge port',
+      label: 'Discharge port is switched on for JPS',
       ok: portOk,
-      value: String(first.port_of_discharge ?? '(empty)'),
-      fix: 'The discharge port must resolve to that Master Port: add its name as a VESSEL PORT (SAP) name in Master Port, or correct the shipment\'s discharge port.',
-      fixAt: 'master_port',
+      value: [...new Set(rows.map((r) => String(r.port_of_discharge ?? '(empty)')))].join(', '),
+      fix: portListedOff
+        ? 'The port is listed but not switched on yet: an ADMIN switches it on in Integrations > JPS > Ports.'
+        : portResolved
+          ? 'JPS is sent only for the ports switched on in Integrations > JPS > Ports (now: ' + (enabledPorts.join(', ') || 'none') + '). An ADMIN adds this port there; it must be synced with DHM.'
+          : "The discharge port is not a Master Port: add its name as a VESSEL PORT (SAP) name in Master Port, or correct the shipment's discharge port.",
+      fixAt: portResolved ? 'settings' : 'master_port',
     },
     {
       key: 'atc_loading',
@@ -297,15 +295,26 @@ export async function checkJpsReadiness(shipmentId: string): Promise<JpsReadines
     return base;
   }
 
-  const regionSite = jpsRegionSite();
-  const wantedPort = String(jpsDischargePort() ?? '').trim();
-  const dischargePort = wantedPort === '' || wantedPort.toUpperCase() === 'ALL' ? null : wantedPort;
-  checks.push(...(await loadEligibilityChecks(stoKey, regionSite, dischargePort)));
+  // Only ports switched on are sent. With none switched on there is nothing to check the shipment against.
+  const enabledPorts = jpsEnabledPortNames();
+  if (enabledPorts.length === 0) {
+    checks.push({
+      key: 'port_enabled',
+      label: 'A port is switched on for JPS',
+      ok: false,
+      value: 'no port is switched on',
+      fix: 'An ADMIN adds a port in Integrations > JPS > Ports and switches it on.',
+      fixAt: 'settings',
+    });
+    base.reason = 'No port is switched on for JPS.';
+    return base;
+  }
+  checks.push(...(await loadEligibilityChecks(stoKey, enabledPorts, jpsPorts().map((p) => p.port))));
 
   // Master data the payload needs, asked of the payload builder itself so this list can never differ from what a real submission would hold back.
   const conditionsOk = checks.every((c) => c.ok);
   if (conditionsOk && enabled) {
-    const [sto] = await findEligibleStos(regionSite, 1, { stoKeys: [stoKey], dischargePort: dischargePort ?? 'ALL' });
+    const [sto] = await findEligibleStos(enabledPorts, 1, { stoKeys: [stoKey] });
     if (!sto) {
       checks.push({
         key: 'eligible',

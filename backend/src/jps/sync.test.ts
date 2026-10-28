@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./config', () => ({
   isJpsEnabled: vi.fn(() => true),
-  jpsRegionSite: vi.fn(),
+  jpsEnabledPortNames: vi.fn(() => []),
   jpsRetryFailed: vi.fn(),
   jpsSweepCron: vi.fn(),
 }));

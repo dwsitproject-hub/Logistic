@@ -33,8 +33,8 @@ import { query } from './../database/connection';
 import logger from '../utils/logger';
 import { jpsRequest } from './client';
 import { companiesForPort, fetchJpsPortCompanies } from './companies';
-import { jpsRegionSite } from './config';
-import { findEligibleStos } from './eligibility';
+import { jpsEnabledPortNames } from './config';
+import { findEligibleStos, type EligibleSto } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
 import type { JpsInstruction, JpsSubmitPayload } from './types';
 
@@ -141,9 +141,7 @@ export async function amendPendingInstructions(limit = 50): Promise<JpsAmendSumm
 
   // One query for all of them rather than one each: the source query carries the whole contract and
   // shipment join, and running it per instruction would multiply that by the Pending count.
-  const sources = await findEligibleStos(jpsRegionSite(), pending.rows.length, {
-    stoKeys: [...byKey.keys()],
-  });
+  const sources: EligibleSto[] = await findEligibleStos(jpsEnabledPortNames(), pending.rows.length, { stoKeys: [...byKey.keys()] });
 
   const portCatalog = sources.length > 0 ? await fetchJpsPortCompanies() : null;
 

@@ -3,10 +3,9 @@
  *
  * The rule, agreed with Ryan on 2026-09-23:
  *
- *   Region/Site = BONTANG
+ *   discharge port = a Master Port switched on for JPS (Integrations > JPS > Ports); no Region/Site: JPS knows only the port
  *     AND ATC Loading filled          (SAP import or a KLIP edit - one expression, both paths)
  *     AND no discharge ATA at all     (arrival, berthed, start, complete)
- *     AND discharge port = the configured Master Port (PORT BONTANG for now; 2026-10-14)
  *     AND status not COMPLETED/CANCELLED
  *     AND ETA discharge arrival filled  (JPS requires `eta`)
  *     AND no row in jps_shipping_instructions
@@ -21,7 +20,7 @@
 import { query } from '../database/connection';
 import { sqlResolveMasterVesselIdFromShipment } from '../utils/masterVesselCanonicalSql';
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
-import { jpsDischargePort, jpsDocumentDownloadUrl } from './config';
+import { jpsDocumentDownloadUrl } from './config';
 import type { JpsCargoSource, JpsShipmentSource } from './mapper';
 
 /**
@@ -77,16 +76,15 @@ export interface FindEligibleOptions {
    * amending it would be pointless anyway.
    */
   stoKeys?: string[];
-  /**
-   * The Master Port a shipment must discharge at. Default: jpsDischargePort() (PORT BONTANG). "ALL" (or an empty value) lifts the restriction. The shipment's port is the
-   * Master Port its discharge port text resolves to (shipments.discharge_master_port_id, else its discharge leg's master_port_id; migration 237), so a plant name such
-   * as EUP EDIBLE OIL BONTANG that is a VESSEL PORT (SAP) name of PORT BONTANG counts, and a text with no Master Port does not.
-   */
-  dischargePort?: string;
 }
 
 export async function findEligibleStos(
-  regionSite: string,
+  /**
+   * The Master Ports a shipment must discharge at: the ports switched on for JPS (Integrations > JPS > Ports). A shipment's port is the Master Port its discharge port text
+   * resolves to (shipments.discharge_master_port_id, else its discharge leg's master_port_id; migration 237), so a plant name such as EUP EDIBLE OIL BONTANG that is a VESSEL
+   * PORT (SAP) name of PORT BONTANG counts, and a text with no Master Port does not. An empty list matches nothing: with no port switched on, nothing is eligible.
+   */
+  ports: string[],
   limit: number,
   options: FindEligibleOptions = {},
 ): Promise<EligibleSto[]> {
@@ -123,11 +121,8 @@ export async function findEligibleStos(
         )
     )`;
   const params: unknown[] = byKeys
-    ? [regionSite, limit, options.stoKeys]
-    : [regionSite, limit, options.retryFailed === true, Math.trunc(options.retryFailedAfterMs ?? 0)];
-  const wantedPort = String(options.dischargePort ?? jpsDischargePort()).trim();
-  params.push(wantedPort === '' || wantedPort.toUpperCase() === 'ALL' ? null : wantedPort);
-  const portParam = `$${params.length}`;
+    ? [ports, limit, options.stoKeys]
+    : [ports, limit, options.retryFailed === true, Math.trunc(options.retryFailedAfterMs ?? 0)];
 
   const result = await query(
     `
@@ -142,8 +137,7 @@ export async function findEligibleStos(
       INNER JOIN contracts c ON c.id = s.contract_id
       INNER JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
       CROSS JOIN LATERAL (SELECT ${EFFECTIVE_ATA_SQL}) eff
-      WHERE UPPER(TRIM(COALESCE(l.discharge_destination, ''))) = UPPER(TRIM($1))
-        AND ${STO_KEY_SQL} IS NOT NULL
+      WHERE ${STO_KEY_SQL} IS NOT NULL
         AND eff.atc_loading IS NOT NULL
         AND eff.ata_disch_arrival IS NULL
         AND eff.ata_disch_berthed IS NULL
@@ -151,20 +145,17 @@ export async function findEligibleStos(
         AND eff.ata_disch_complete IS NULL
         AND COALESCE(s.status, '') NOT IN ('COMPLETED', 'CANCELLED')
         AND s.eta_discharge_arrival IS NOT NULL
-        -- only the configured discharge Master Port: the one the shipment's discharge port text resolves to (its own id, else its active discharge leg's)
-        AND (
-          ${portParam}::text IS NULL
-          OR COALESCE(
-               s.discharge_master_port_id,
-               (SELECT v.master_port_id FROM vessel_loading_ports v
-                 WHERE v.shipment_id = s.id
-                   AND COALESCE(v.is_discharge_port, FALSE) IS TRUE
-                   AND COALESCE(v.is_cancelled, FALSE) IS NOT TRUE
-                   AND v.master_port_id IS NOT NULL
-                 ORDER BY v.port_sequence DESC
-                 LIMIT 1)
-             ) = klip_resolve_master_port_id(${portParam}::text)
-        )
+        -- only a Master Port switched on for JPS ($1): the one the shipment's discharge port text resolves to (its own id, else its active discharge leg's)
+        AND COALESCE(
+              s.discharge_master_port_id,
+              (SELECT v.master_port_id FROM vessel_loading_ports v
+                WHERE v.shipment_id = s.id
+                  AND COALESCE(v.is_discharge_port, FALSE) IS TRUE
+                  AND COALESCE(v.is_cancelled, FALSE) IS NOT TRUE
+                  AND v.master_port_id IS NOT NULL
+                ORDER BY v.port_sequence DESC
+                LIMIT 1)
+            ) IN (SELECT klip_resolve_master_port_id(p) FROM unnest($1::text[]) AS p)
       GROUP BY 1
     ),
     port AS (

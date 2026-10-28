@@ -1,4 +1,5 @@
 import { integrationEnv } from '../integrations/integrationEnv';
+import { parseJpsPorts, type JpsPort } from './ports';
 /** Jetty Planning System client config — the API key stays server-side. */
 
 export function isJpsEnabled(): boolean {
@@ -36,19 +37,22 @@ export function jpsApiKey(): string {
 }
 
 /**
- * The Region/Site KLIP submits for. Only BONTANG is in scope for the first integration; a second
- * jetty would need its own port, so this is a single value rather than a list.
+ * The Master Ports KLIP submits to JPS for, switched on or not: the setting JPS_PORTS (Integrations > JPS > Ports). Nothing is built into the code: with no port switched
+ * on, nothing is sent. JPS knows a port by its DHM code (port_hub_code) and has no site or region, so the port is the only scope there is.
  */
-export function jpsRegionSite(): string {
-  return String(integrationEnv('JPS_REGION_SITE') || 'BONTANG').trim().toUpperCase();
+export function jpsPorts(): JpsPort[] {
+  const parsed = parseJpsPorts(integrationEnv('JPS_PORTS'));
+  return parsed.ok ? parsed.ports : [];
 }
 
-/**
- * The Master Port a shipment must discharge at to be submitted. For now only PORT BONTANG: a second port would need its own DataHub port code and its own go-ahead.
- * "ALL" lifts the restriction. Compared as a Master Port (klip_resolve_master_port_id), so "BONTANG" and "PORT BONTANG" are the same setting.
- */
-export function jpsDischargePort(): string {
-  return String(integrationEnv('JPS_DISCHARGE_PORT') || 'PORT BONTANG').trim().toUpperCase();
+/** The ports a sweep submits for. */
+export function jpsEnabledPorts(): JpsPort[] {
+  return jpsPorts().filter((p) => p.enabled);
+}
+
+/** Their names, as the eligibility rule takes them. */
+export function jpsEnabledPortNames(): string[] {
+  return jpsEnabledPorts().map((p) => p.port);
 }
 
 export function jpsRequestTimeoutMs(): number {

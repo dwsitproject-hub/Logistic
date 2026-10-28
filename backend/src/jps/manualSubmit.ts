@@ -9,7 +9,7 @@
  */
 import logger from '../utils/logger';
 import { fetchJpsPortCompanies } from './companies';
-import { jpsDischargePort, jpsRegionSite } from './config';
+import { jpsEnabledPortNames } from './config';
 import { findEligibleStos } from './eligibility';
 import { checkJpsReadiness, type JpsReadiness } from './readiness';
 import { submitOneSto, type SubmitOutcome } from './submit';
@@ -25,11 +25,7 @@ export async function submitShipmentToJps(shipmentId: string): Promise<ManualSub
   const readiness = await checkJpsReadiness(shipmentId);
   if (!readiness.canSubmit || !readiness.stoKey) return { attempted: false, readiness, outcome: null };
 
-  const wantedPort = String(jpsDischargePort() ?? '').trim();
-  const [sto] = await findEligibleStos(jpsRegionSite(), 1, {
-    stoKeys: [readiness.stoKey],
-    dischargePort: wantedPort === '' ? 'ALL' : wantedPort,
-  });
+  const [sto] = await findEligibleStos(jpsEnabledPortNames(), 1, { stoKeys: [readiness.stoKey] });
   // The readiness check just loaded this same STO, so this only happens if its data changed in between.
   if (!sto) return { attempted: false, readiness: { ...readiness, canSubmit: false, reason: 'The shipment data changed while checking. Try again.' }, outcome: null };
 
