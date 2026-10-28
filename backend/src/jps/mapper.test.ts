@@ -186,6 +186,15 @@ describe('buildJpsSubmitPayload', () => {
     expect(payload?.etd).toBeUndefined();
   });
 
+  it('says a product with no DataHub code ONCE, however many cargo lines of it the STO has', () => {
+    const line = { contract_no: 'C1', po_no: 'P1', product: 'CPO', product_hub_code: null, sto_quantity_kg: 1000, contract_quantity_kg: 1000 };
+    const other = { ...line, contract_no: 'C2', product: 'POME' };
+    const { problems } = buildJpsSubmitPayload(source({ cargo: [line, { ...line, contract_no: 'C2' }, { ...line, contract_no: 'C3' }, other] }));
+    expect(problems.filter((p) => p === 'no DHM code on Master Product for "CPO"')).toHaveLength(1);
+    expect(problems.filter((p) => p === 'no DHM code on Master Product for "POME"')).toHaveLength(1);
+    expect(problems[problems.length - 1]).toBe('no cargo line could be built');
+  });
+
   it('holds the STO rather than guessing a cargo type', () => {
     const { payload, problems } = buildJpsSubmitPayload(
       source({ cargo: [{ contract_no: 'C1', po_no: 'P1', product: 'GULA', sto_quantity_kg: 1000, contract_quantity_kg: 1000 }] })

@@ -277,7 +277,8 @@ export function buildJpsSubmitPayload(
 
   if (cargo.length === 0) problems.push('no cargo line could be built');
 
-  if (problems.length > 0) return { problems };
+  // One line per cargo line says the same thing twice when an STO carries several lines of one product (CPO x4 read "no DHM code on Master Product for "CPO"; ..." four times).
+  if (problems.length > 0) return { problems: [...new Set(problems)] };
 
   const etd = toJpsDateTime(source.eta_discharge_complete);
   const payload: JpsSubmitPayload = {
