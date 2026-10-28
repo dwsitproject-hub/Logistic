@@ -80,6 +80,14 @@ export function DocumentDrawer({
     }
   }, [key, qs])
 
+  // The Retry button of a failed load: the same opening choice as the first load, which a failed first load never made.
+  const retryLoad = () => {
+    setLoading(true)
+    void load().then((f) => {
+      if (f) setType((cur) => cur ?? DOCUMENT_TYPES.find((t) => versionsOf(f, t).length) ?? 'contract')
+    })
+  }
+
   // First load: open on the first type that has a file, else Contract.
   useEffect(() => {
     let alive = true
@@ -292,7 +300,7 @@ export function DocumentDrawer({
                 History{history.length ? ` (${history.length})` : ''}
               </button>
             </div>
-            <ErrorNote>{loadError}</ErrorNote>
+            <ErrorNote onRetry={retryLoad}>{loadError}</ErrorNote>
             {loading ? (
               <Spinner />
             ) : tab === 'checklist' ? (

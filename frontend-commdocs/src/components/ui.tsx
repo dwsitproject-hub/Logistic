@@ -24,12 +24,18 @@ export function Spinner({ label = 'Loading' }: { label?: string }) {
   )
 }
 
-export function ErrorNote({ children }: { children: ReactNode }) {
+/** `onRetry` adds a Retry button: for a load that failed for a reason that may pass (the server restarting), not for one the user has to fix. */
+export function ErrorNote({ children, onRetry }: { children: ReactNode; onRetry?: () => void }) {
   if (!children) return null
   return (
     <div className="alert bad" role="alert">
       <AlertCircle aria-hidden />
       <span>{children}</span>
+      {onRetry ? (
+        <button type="button" className="btn sm" style={{ marginLeft: 'auto' }} onClick={onRetry}>
+          Retry
+        </button>
+      ) : null}
     </div>
   )
 }

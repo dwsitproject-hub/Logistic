@@ -88,6 +88,29 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
   return res
 }
 
+/** A gateway answer from the reverse proxy while the backend restarts. */
+const GATEWAY_STATUSES = new Set([502, 503, 504])
+const RETRY_DELAY_MS = 700
+
+/**
+ * send(), and for a GET only, one more try after a dropped connection (fetch rejects with a TypeError) or a 502 / 503 / 504 from the proxy. A backend restart
+ * during a deploy answered the files and history requests of an open document with an HTML 502 page, and the user saw an error for something a second try would
+ * have fetched (Sentinel, 2026-10-21, on the old KLIP page). Any other answer, including a 4xx or 500, is the application's own and is returned as it is. A POST,
+ * PUT or DELETE is never repeated: it could repeat its side effect.
+ */
+async function sendWithRetry(path: string, options: RequestOptions): Promise<Response> {
+  if ((options.method || 'GET') !== 'GET') return send(path, options)
+  try {
+    const res = await send(path, options)
+    if (!GATEWAY_STATUSES.has(res.status)) return res
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err
+  }
+  await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+  if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+  return send(path, options)
+}
+
 async function errorFrom(res: Response): Promise<ApiError> {
   let message = `Request failed (${res.status})`
   try {
@@ -110,7 +133,7 @@ export async function apiJson<T = unknown>(
   path: string,
   options: RequestOptions = {},
 ): Promise<{ success: boolean; data: T; message?: string }> {
-  const res = await send(path, options)
+  const res = await sendWithRetry(path, options)
   if (!res.ok) throw await errorFrom(res)
   return res.json()
 }
@@ -125,7 +148,7 @@ export async function apiBlob(
   path: string,
   options: RequestOptions = {},
 ): Promise<{ blob: Blob; fileName: string | null }> {
-  const res = await send(path, options)
+  const res = await sendWithRetry(path, options)
   if (!res.ok) throw await errorFrom(res)
   return { blob: await res.blob(), fileName: fileNameFromDisposition(res.headers.get('Content-Disposition')) }
 }

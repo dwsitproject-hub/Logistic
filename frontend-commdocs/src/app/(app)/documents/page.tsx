@@ -484,7 +484,7 @@ export default function DocumentsPage() {
             </div>
           </div>
         </div>
-        <ErrorNote>{error}</ErrorNote>
+        <ErrorNote onRetry={() => setReload((n) => n + 1)}>{error}</ErrorNote>
         <div className="tbl-wrap">
           {loading ? (
             <div className="loading-veil">
