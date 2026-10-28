@@ -28,7 +28,7 @@ describe('the sweep over the ports switched on', () => {
     findMock.mockReset();
     queryMock.mockReset();
     jpsRequestMock.mockReset();
-    queryMock.mockImplementation(async (text: string) => (/MAX\(revision\)/.test(String(text)) ? { rows: [{ highest: 0, highest_failed: 0 }] } : { rows: [] }));
+    queryMock.mockImplementation(async (text: string) => (/MAX\(revision\)/.test(String(text)) ? { rows: [{ highest: 0, highest_unsent: 0 }] } : { rows: [] }));
     jpsRequestMock.mockResolvedValue({ ok: true, data: { id: 1, status: 'Pending', external_reference: 'KLIP-x-R1' } });
     process.env.JPS_PORTS = JSON.stringify([
       { port: 'PORT BONTANG', enabled: true },

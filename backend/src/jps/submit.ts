@@ -55,21 +55,24 @@ async function rowWouldChange(stoKey: string, revision: number, state: string, m
  * Normally one past the highest: an instruction JPS already holds cannot be amended, so a
  * replacement needs a reference JPS has not seen.
  *
- * A FAILED row is the exception, and reusing its revision is the point. FAILED means the POST was
+ * A row that never reached JPS is the exception, and reusing its revision is the point. FAILED means the POST was
  * rejected - a 400, a 401, a 404 - so JPS created nothing and `KLIP-<sto>-R<n>` is still an unused
- * reference. Incrementing would leave a trail of abandoned numbers, and with retries switched on
- * the reference would climb one per sweep while nothing about the payload had changed.
+ * reference. SKIPPED_NO_CARGO means KLIP held the STO back before sending anything (a product, vessel or
+ * port without a DHM code, a company JPS does not map): it is looked at again on EVERY sweep, and counting
+ * one past the highest each time wrote a new row every 15 minutes and climbed the reference (an STO held eight
+ * times went out as R9, with eight held rows behind it). Incrementing would leave a trail of abandoned numbers,
+ * and with retries switched on the reference would climb one per sweep while nothing about the payload had changed.
  */
 async function nextRevision(stoKey: string): Promise<number> {
   const res = await query(
     `SELECT COALESCE(MAX(revision), 0) AS highest,
-            COALESCE(MAX(revision) FILTER (WHERE state = 'FAILED'), 0) AS highest_failed
+            COALESCE(MAX(revision) FILTER (WHERE state IN ('FAILED', 'SKIPPED_NO_CARGO')), 0) AS highest_unsent
        FROM jps_shipping_instructions WHERE sto_key = $1`,
     [stoKey],
   );
   const highest = Number(res.rows[0]?.highest ?? 0);
-  const highestFailed = Number(res.rows[0]?.highest_failed ?? 0);
-  if (highestFailed > 0 && highestFailed === highest) return highestFailed;
+  const highestUnsent = Number(res.rows[0]?.highest_unsent ?? 0);
+  if (highestUnsent > 0 && highestUnsent === highest) return highestUnsent;
   return highest + 1;
 }
 

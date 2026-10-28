@@ -27,7 +27,7 @@ function sto(overrides: Partial<EligibleSto> = {}): EligibleSto {
 /** query() answers: nextRevision (highest 0), rowWouldChange (no row yet), and every write. */
 function dbEmpty() {
   queryMock.mockImplementation(async (text: string) => {
-    if (/MAX\(revision\)/.test(text)) return { rows: [{ highest: 0, highest_failed: 0 }] };
+    if (/MAX\(revision\)/.test(text)) return { rows: [{ highest: 0, highest_unsent: 0 }] };
     if (/SELECT state, last_error/.test(text)) return { rows: [] };
     return { rows: [] };
   });
@@ -94,9 +94,38 @@ describe('submitOneSto: what happened to one STO, and what was recorded', () => 
     expect(jpsRequestMock).toHaveBeenCalledTimes(2);
   });
 
+  it('an STO KLIP holds back is held again at the SAME revision on every sweep: one row, not one per sweep', async () => {
+    queryMock.mockImplementation(async (text: string) => {
+      if (/MAX\(revision\)/.test(text)) return { rows: [{ highest: 4, highest_unsent: 4 }] }; // the last row is a held one
+      return { rows: [] };
+    });
+    const out = await submitOneSto(sto({ vessel_hub_code: null }), null);
+    expect(out).toMatchObject({ kind: 'held', revision: 4 });
+    const insert = queryMock.mock.calls.find((c) => /^\s*INSERT/.test(String(c[0])));
+    expect(insert?.[1]?.[2]).toBe(4);
+  });
+
+  it('once what was missing is fixed, the STO goes out under that same revision (R4, not R9)', async () => {
+    queryMock.mockImplementation(async (text: string) => {
+      if (/MAX\(revision\)/.test(text)) return { rows: [{ highest: 4, highest_unsent: 4 }] };
+      return { rows: [] };
+    });
+    jpsRequestMock.mockResolvedValue({ ok: true, data: { id: 80, status: 'Pending', external_reference: 'KLIP-1006020269-R4' } });
+    expect(await submitOneSto(sto(), null)).toMatchObject({ kind: 'submitted', revision: 4 });
+  });
+
+  it('a revision after an instruction JPS HOLDS (even a rejected or deleted one) is still one past it, not a reuse', async () => {
+    queryMock.mockImplementation(async (text: string) => {
+      if (/MAX\(revision\)/.test(text)) return { rows: [{ highest: 2, highest_unsent: 0 }] }; // R1 failed earlier is below; the highest row, R2, is a submitted one
+      return { rows: [] };
+    });
+    jpsRequestMock.mockResolvedValue({ ok: true, data: { id: 81, status: 'Pending', external_reference: 'KLIP-1006020269-R3' } });
+    expect(await submitOneSto(sto(), null)).toMatchObject({ kind: 'submitted', revision: 3 });
+  });
+
   it('retrying a FAILED STO reuses its revision, so JPS never sees two references', async () => {
     queryMock.mockImplementation(async (text: string) => {
-      if (/MAX\(revision\)/.test(text)) return { rows: [{ highest: 3, highest_failed: 3 }] };
+      if (/MAX\(revision\)/.test(text)) return { rows: [{ highest: 3, highest_unsent: 3 }] };
       return { rows: [] };
     });
     jpsRequestMock.mockResolvedValue({ ok: true, data: { id: 79, status: 'Pending', external_reference: 'KLIP-1006020269-R3' } });
