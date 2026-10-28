@@ -226,10 +226,16 @@ export function externalPartyCatalogExtra(
 }
 
 /** Company payload: SAP code as short name, linked Master Site codes as sites. */
+/**
+ * What a company carries besides its name. DHM keeps the SAP Company Code in company_code_sap and the organisation's own short name in short_name (PMC for SAP code PM), so
+ * when the catalog has company_code_sap the code goes THERE and short_name is left as DHM holds it (`dhmShortName`); only a company DHM has never held sends the code as its
+ * short name too. A catalog without company_code_sap keeps the old way: the code as short_name.
+ */
 export function companyCatalogExtra(
   entity: DhmCatalogShape | null,
   sapCode: string,
   siteCodes: string[],
+  dhmShortName?: string | null,
 ): Record<string, string | string[]> {
   const code = String(sapCode ?? '').trim();
   const sites = siteCodes.map((item) => String(item ?? '').trim()).filter(Boolean);
@@ -249,7 +255,13 @@ export function companyCatalogExtra(
     (key) => key === 'siteids',
     (key) => key.includes('site') && !key.includes('name') && !key.includes('code'),
   ]);
-  if (shortKey && code) extra[shortKey] = code;
+  const sapKey = matchDhmFieldKey(entity, [(key) => key === 'companycodesap']);
+  if (sapKey && code) {
+    extra[sapKey] = code;
+    if (shortKey) extra[shortKey] = String(dhmShortName ?? '').trim() || code;
+  } else if (shortKey && code) {
+    extra[shortKey] = code;
+  }
   if (sitesKey && sites.length) {
     extra[sitesKey] = sitesKey.toLowerCase().endsWith('s') ? sites : sites[0];
   }

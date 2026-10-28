@@ -193,7 +193,9 @@ async function applyShipper(record: DhmRecord): Promise<void> {
 async function applyCompany(record: DhmRecord): Promise<void> {
   const name = dhmDataName(record.data);
   const code = replicaCode(record, null);
-  const sap = commodityText(record.data, 'short_name');
+  // The SAP Company Code: DHM's company_code_sap when the organisation has one (the legal entities, whose short_name is only a short name, e.g. PMC for SAP code PM), else
+  // short_name (the older organisations KLIP created from its own SAP-coded rows, whose short_name IS the SAP code).
+  const sap = commodityText(record.data, 'company_code_sap') || commodityText(record.data, 'short_name');
   const dhmId = asDhmUuid(record.id);
   const existing =
     (dhmId && (await findId(`SELECT id FROM master_companies WHERE dhm_id = $1::uuid LIMIT 1`, [dhmId]))) ||
@@ -221,23 +223,38 @@ async function applyCompany(record: DhmRecord): Promise<void> {
       )));
   let id = existing;
   if (id) {
-    if (name || sap) {
+    // company_code is unique. A code another row holds is NOT taken from it: the current code stays and the conflict is logged. Releasing the holder is a decision
+    // (companyCodeRepair.ts plans it and says what moves), not something a sync does on its own.
+    let codeToSet = sap;
+    if (sap) {
+      const holder = await findId(
+        `SELECT id FROM master_companies WHERE upper(trim(company_code)) = upper(trim($1)) AND id <> $2::uuid LIMIT 1`,
+        [sap, id],
+      );
+      if (holder) {
+        logger.warn('DHM company: its SAP Company Code is held by another Master Company row; the current code was kept', { sap, dhmCode: code, rowId: id, heldBy: holder });
+        codeToSet = null;
+      }
+    }
+    if (name || codeToSet) {
       await query(
         `UPDATE master_companies
          SET company_name = COALESCE($2, company_name),
              company_code = COALESCE($3, company_code),
              updated_at = CURRENT_TIMESTAMP
          WHERE id = $1`,
-        [id, name, sap],
+        [id, name, codeToSet],
       );
     }
     await persistMasterReplica('master_companies', id, record, code);
   } else if (name) {
+    // A new row takes the SAP code unless another row already holds it; then it is filed under its DHM code (unique) and the repair plan sorts out the pair.
+    const held = sap ? await findId(`SELECT id FROM master_companies WHERE upper(trim(company_code)) = upper(trim($1)) LIMIT 1`, [sap]) : null;
     const inserted = await query(
       `INSERT INTO master_companies (company_code, company_name, code_dhm, dhm_id, dhm_version, dhm_updated_at, dhm_is_deleted, dhm_payload)
        VALUES ($1, $2, $3, $4::uuid, $5, $6::timestamptz, $7, $8::jsonb)
        RETURNING id`,
-      [sap || name, name, code, dhmId, record.version || null, record.updatedAt || null, record.isDeleted, JSON.stringify(record.data ?? {})],
+      [held ? code || name : sap || name, name, code, dhmId, record.version || null, record.updatedAt || null, record.isDeleted, JSON.stringify(record.data ?? {})],
     );
     id = inserted.rows[0]?.id ? String(inserted.rows[0].id) : null;
   }

@@ -149,3 +149,21 @@ describe('dhm name mapper', () => {
     expect(matchDhmFieldKey(entity, [(key) => key === 'planttype'])).toBe('Plant_Type');
   });
 });
+
+describe('companyCatalogExtra with company_code_sap (the SAP code is not written over the short name)', () => {
+  const entity = { fields: [{ key: 'code', systemGenerated: true }, { key: 'name', required: true }, { key: 'short_name' }, { key: 'company_code_sap' }, { key: 'sites' }] };
+
+  it('sends the SAP code as company_code_sap and leaves short_name as DHM holds it', () => {
+    expect(companyCatalogExtra(entity, 'PM', ['SITE-1'], 'PMC')).toEqual({ company_code_sap: 'PM', short_name: 'PMC', sites: ['SITE-1'] });
+  });
+
+  it('a company DHM has never held sends the code as its short name too, as before', () => {
+    expect(companyCatalogExtra(entity, 'EU', [], null)).toEqual({ company_code_sap: 'EU', short_name: 'EU' });
+    expect(companyCatalogExtra(entity, 'EU', [])).toEqual({ company_code_sap: 'EU', short_name: 'EU' });
+  });
+
+  it('a catalog without company_code_sap keeps the old way: the code is the short name', () => {
+    const old = { fields: [{ key: 'name', required: true }, { key: 'short_name' }] };
+    expect(companyCatalogExtra(old, 'EU', [], 'IGNORED')).toEqual({ short_name: 'EU' });
+  });
+});

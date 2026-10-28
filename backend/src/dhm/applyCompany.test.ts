@@ -62,3 +62,52 @@ describe('applyDhmMasterRecord(company): a name or code match must not take anot
     expect(persistMasterReplica).toHaveBeenCalledWith('master_companies', 'row-eo', expect.anything(), expect.anything());
   });
 });
+
+describe('applyDhmMasterRecord(company): the SAP Company Code is company_code_sap, and a code another row holds is not taken', () => {
+  const ORG_0006 = '66666666-6666-6666-6666-666666666666';
+  const legal = (data: Record<string, unknown>): DhmRecord => ({ id: ORG_0006, version: 1, isDeleted: false, data: { code: 'ORG-0006', name: 'PT Prima Makmur Cakrawala', ...data }, updatedAt: '2026-10-15T00:00:00.000Z' });
+
+  function run(holder: boolean) {
+    vi.mocked(query).mockReset();
+    vi.mocked(persistMasterReplica).mockClear();
+    vi.mocked(query).mockImplementation(async (sql: string) => {
+      const s = String(sql);
+      if (s.includes('WHERE dhm_id = $1::uuid')) return { rows: [{ id: 'row-pmc' }], rowCount: 1 } as never;
+      if (s.includes('id <> $2::uuid')) return { rows: holder ? [{ id: 'row-legacy-pm' }] : [], rowCount: holder ? 1 : 0 } as never;
+      return { rows: [], rowCount: 0 } as never;
+    });
+  }
+  const updateParams = () => vi.mocked(query).mock.calls.find((c) => String(c[0]).includes('UPDATE master_companies'))?.[1];
+
+  it('takes company_code_sap (PM), not short_name (PMC), when the organisation has one', async () => {
+    run(false);
+    await applyDhmMasterRecord('company', legal({ short_name: 'PMC', company_code_sap: 'PM' }));
+    expect(updateParams()).toEqual(['row-pmc', 'PT Prima Makmur Cakrawala', 'PM']);
+  });
+
+  it('falls back to short_name for an organisation with no company_code_sap (the older ones)', async () => {
+    run(false);
+    await applyDhmMasterRecord('company', legal({ short_name: 'EO' }));
+    expect(updateParams()).toEqual(['row-pmc', 'PT Prima Makmur Cakrawala', 'EO']);
+  });
+
+  it('does not take a code another row holds: the current code stays (the repair plan releases it), the name still follows DHM', async () => {
+    run(true);
+    await applyDhmMasterRecord('company', legal({ short_name: 'PMC', company_code_sap: 'PM' }));
+    expect(updateParams()).toEqual(['row-pmc', 'PT Prima Makmur Cakrawala', null]);
+    expect(persistMasterReplica).toHaveBeenCalledWith('master_companies', 'row-pmc', expect.anything(), 'ORG-0006');
+  });
+
+  it('a NEW row whose SAP code is already held is filed under its DHM code instead of failing on the unique index', async () => {
+    vi.mocked(query).mockReset();
+    vi.mocked(query).mockImplementation(async (sql: string) => {
+      const s = String(sql);
+      if (s.includes('INSERT INTO master_companies')) return { rows: [{ id: 'new-row' }], rowCount: 1 } as never;
+      if (s.includes('WHERE upper(trim(company_code)) = upper(trim($1)) LIMIT 1')) return { rows: [{ id: 'legacy' }], rowCount: 1 } as never;
+      return { rows: [], rowCount: 0 } as never;
+    });
+    await applyDhmMasterRecord('company', legal({ short_name: 'PMC', company_code_sap: 'PM' }));
+    const insert = vi.mocked(query).mock.calls.find((c) => String(c[0]).includes('INSERT INTO master_companies'))!;
+    expect((insert[1] as unknown[])[0]).toBe('ORG-0006');
+  });
+});

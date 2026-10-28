@@ -244,6 +244,9 @@ export async function pushMasterCompanyToDhm(
     }
     const slug = (await resolveDhmSlug('company')) || 'company';
     const entity = await getDhmCatalogEntity(slug);
+    // The short name DHM already holds stays: the SAP code is sent as company_code_sap (companyCatalogExtra), not over it.
+    const held = await query(`SELECT NULLIF(TRIM(dhm_payload->>'short_name'), '') AS short_name FROM master_companies WHERE id = $1::uuid`, [localId]);
+    const dhmShortName = held.rows[0]?.short_name ? String(held.rows[0].short_name) : null;
     return pushNamedMasterToDhm(
       'master_companies',
       localId,
@@ -252,7 +255,7 @@ export async function pushMasterCompanyToDhm(
       String(row.code_dhm || '').trim() || null,
       {
         overwrite: options?.overwrite,
-        extra: companyCatalogExtra(entity, String(row.company_code || ''), siteCodes),
+        extra: companyCatalogExtra(entity, String(row.company_code || ''), siteCodes, dhmShortName),
       },
     );
   } catch (error) {
