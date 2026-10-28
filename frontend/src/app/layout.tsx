@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google'
 import './globals.css'
 import { MetaMaskErrorGuard } from '@/components/MetaMaskErrorGuard'
 import { HubSdkScript } from '@/components/HubSdkScript'
+import { ChunkErrorRecovery } from '@/components/ChunkErrorRecovery'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -29,6 +30,8 @@ export default function RootLayout({
       </head>
       <body className={inter.className}>
         <MetaMaskErrorGuard />
+        {/* One reload when a script chunk fails to load (a tab opened before a deploy). */}
+        <ChunkErrorRecovery />
         {children}
       </body>
     </html>
