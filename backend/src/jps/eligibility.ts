@@ -78,6 +78,21 @@ export interface FindEligibleOptions {
   stoKeys?: string[];
 }
 
+/**
+ * Resolve the SAP Company Code an STO's contracts carry (`x.company_codes[1]`) to ONE Master Company (Internal): the organisation DHM says answers to that SAP code
+ * (dhm_payload.company_code_sap) first, then the one whose KLIP company_code equals it. Their code_dhm is the company_hub_code JPS wants; a deleted row gives no code and
+ * says deleted. Exported so the rule can be run against real rows in a test, not read off a string.
+ */
+export const COMPANY_PICK_LATERAL_SQL = `LEFT JOIN LATERAL (
+        SELECT CASE WHEN COALESCE(mc.dhm_is_deleted, FALSE) THEN NULL ELSE NULLIF(TRIM(mc.code_dhm), '') END AS code,
+               COALESCE(mc.dhm_is_deleted, FALSE) AS deleted
+          FROM master_companies mc
+         WHERE UPPER(TRIM(COALESCE(mc.dhm_payload->>'company_code_sap', ''))) = x.company_codes[1]
+            OR UPPER(TRIM(mc.company_code)) = x.company_codes[1]
+         ORDER BY (UPPER(TRIM(COALESCE(mc.dhm_payload->>'company_code_sap', ''))) = x.company_codes[1]) DESC, mc.company_code
+         LIMIT 1
+      ) pick ON TRUE`;
+
 export async function findEligibleStos(
   /**
    * The Master Ports a shipment must discharge at: the ports switched on for JPS (Integrations > JPS > Ports). A shipment's port is the Master Port its discharge port text
@@ -224,17 +239,16 @@ export async function findEligibleStos(
       -- The operating company (JPS v5.6 company_hub_code): the SAP Company Code the STO's contracts carry, resolved through
       -- Master Company (Internal), whose code_dhm is the DataHub organisation code JPS calls company_hub_code. One
       -- instruction names one company, so when the contracts carry different codes none is chosen (company_codes lists them).
-      -- master_companies.company_code is unique on upper(trim(...)), so a code resolves to at most one master row.
+      --
+      -- DHM records which SAP Company Code an organisation answers to (dhm_payload.company_code_sap), and that wins: a SAP code is matched to the organisation DHM
+      -- says owns it, and only then to master_companies.company_code, KLIP's own short code. They can collide: SAP code "PM" is PT Prima Makmur Cakrawala
+      -- (ORG-0006, company_code_sap PM, mapped to Dumai at JPS), while KLIP's company_code "PM" is PMC GENERAL HO JAKARTA (ORG-0016, a head office JPS does not
+      -- know), which is what the STO resolved to until 2026-10-28. ONE row is picked (the SAP-code match first), and its own deleted flag decides, so a deleted
+      -- head-office row cannot mark the real company deleted.
       SELECT x.sto_key,
              x.company_codes,
-             (SELECT (ARRAY_AGG(mc.code_dhm))[1]
-                FROM master_companies mc
-               WHERE UPPER(TRIM(mc.company_code)) = x.company_codes[1]
-                 AND NULLIF(TRIM(mc.code_dhm), '') IS NOT NULL
-                 AND COALESCE(mc.dhm_is_deleted, FALSE) IS NOT TRUE) AS company_hub_code,
-             COALESCE((SELECT BOOL_OR(COALESCE(mc.dhm_is_deleted, FALSE))
-                         FROM master_companies mc
-                        WHERE UPPER(TRIM(mc.company_code)) = x.company_codes[1]), FALSE) AS company_deleted
+             pick.code AS company_hub_code,
+             COALESCE(pick.deleted, FALSE) AS company_deleted
       FROM (
         SELECT e.sto_key,
                ARRAY_AGG(DISTINCT cc.company_code ORDER BY cc.company_code)
@@ -255,6 +269,7 @@ export async function findEligibleStos(
         WHERE ${STO_KEY_SQL} = e.sto_key
         GROUP BY e.sto_key
       ) x
+      ${COMPANY_PICK_LATERAL_SQL}
     ),
     terms AS (
       -- One instruction carries one trade term, so the STO's contracts have to agree. When they do
