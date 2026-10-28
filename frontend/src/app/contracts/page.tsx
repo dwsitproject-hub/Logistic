@@ -3847,17 +3847,16 @@ function ContractsPageContent() {
         {!isContractPerformance && (
           <div className="flex items-center justify-end">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-medium border border-gray-200 rounded px-2 py-1 bg-gray-50">
-                Cargo Readiness Date
-              </span>
               <Button
                 variant="outline"
                 size="sm"
+                title="Download Cargo Readiness Date template"
+                aria-label="Download Cargo Readiness Date template"
                 onClick={downloadCargoReadinessTemplate}
                 className="border-green-600 text-green-700 hover:bg-green-50"
               >
                 <Download className="h-4 w-4 mr-2" />
-                Download Template
+                Template
               </Button>
               <input
                 id="cargo-readiness-upload"
@@ -3869,13 +3868,15 @@ function ContractsPageContent() {
               <Button
                 variant="outline"
                 size="sm"
+                title="Upload Cargo Readiness Date (Excel)"
+                aria-label="Upload Cargo Readiness Date (Excel)"
                 disabled={csvCargoUploading}
                 onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
               >
                 {csvCargoUploading ? (
                   <><span className="h-4 w-4 mr-2 inline-block border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />Uploading...</>
                 ) : (
-                  <><Upload className="h-4 w-4 mr-2" />Upload Excel</>
+                  <><Upload className="h-4 w-4 mr-2" />Cargo Readiness</>
                 )}
               </Button>
             </div>
@@ -4656,6 +4657,8 @@ function ContractsPageContent() {
                     variant="outline"
                     size="sm"
                     className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                    title="Download Data"
+                    aria-label="Download Data"
                     onClick={downloadContractPerformanceTable}
                     disabled={listFetching || section3TableLoading || downloadingTable || displayTotalContracts === 0}
                   >
@@ -4664,7 +4667,7 @@ function ContractsPageContent() {
                     ) : (
                       <Download className="h-4 w-4 mr-2" />
                     )}
-                    Download Data
+                    Data
                   </Button>
                 )}
                 <div className="relative">

@@ -6526,21 +6526,25 @@ function ShipmentsPageContent() {
               <Button
                 size="sm"
                 variant="outline"
+                title="Download Template"
+                aria-label="Download Template"
                 onClick={downloadTemplate}
                 className="border-green-600 text-green-700 hover:bg-green-50"
               >
                 <Download className="h-4 w-4 mr-2" />
-                Download Template
+                Template
               </Button>
             ) : null}
             {canExportShipments && (
               <Button
                 size="sm"
                 variant="outline"
+                title="Export Data"
+                aria-label="Export Data"
                 onClick={exportFilteredData}
               >
                 <Download className="h-4 w-4 mr-2" />
-                Export Data
+                Export
               </Button>
             )}
             {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
@@ -6556,6 +6560,8 @@ function ShipmentsPageContent() {
               <Button
                 size="sm"
                 variant="outline"
+                title="Upload CSV"
+                aria-label="Upload CSV"
                 onClick={() => document.getElementById('bulk-upload-input')?.click()}
                 disabled={uploading}
               >
@@ -6567,7 +6573,7 @@ function ShipmentsPageContent() {
                 ) : (
                   <>
                     <Upload className="h-4 w-4 mr-2" />
-                    Upload CSV
+                    CSV
                   </>
                 )}
               </Button>
@@ -7382,6 +7388,8 @@ function ShipmentsPageContent() {
                   variant="outline"
                   size="sm"
                   className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                  title="Download Data"
+                  aria-label="Download Data"
                   onClick={() => void downloadShipmentViewTable()}
                   disabled={
                     listFetching ||
@@ -7396,7 +7404,7 @@ function ShipmentsPageContent() {
                   ) : (
                     <Download className="h-4 w-4 mr-2" />
                   )}
-                  Download Data
+                  Data
                 </Button>
                 <input
                   ref={groupingUploadInputRef}
@@ -7413,6 +7421,8 @@ function ShipmentsPageContent() {
                         variant="outline"
                         size="sm"
                         className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                        title={groupingTemplateEnabled ? 'Download Unplanned' : undefined}
+                        aria-label="Download Unplanned"
                         onClick={() => void downloadGroupingTemplate()}
                         disabled={!groupingTemplateEnabled || groupingTemplateDownloading}
                       >
@@ -7421,7 +7431,7 @@ function ShipmentsPageContent() {
                         ) : (
                           <Download className="h-4 w-4 mr-2" />
                         )}
-                        Download Unplanned
+                        Unplan
                       </Button>
                     </span>
                   </TooltipTrigger>
@@ -7436,6 +7446,8 @@ function ShipmentsPageContent() {
                         variant="outline"
                         size="sm"
                         className="border-red-600 text-red-700 hover:bg-red-50 hover:text-red-700 disabled:opacity-50 disabled:pointer-events-none"
+                        title={groupingTemplateEnabled ? 'Upload Planning' : undefined}
+                        aria-label="Upload Planning"
                         onClick={() => groupingUploadInputRef.current?.click()}
                         disabled={!groupingTemplateEnabled || groupingTemplateUploading}
                       >
@@ -7444,7 +7456,7 @@ function ShipmentsPageContent() {
                         ) : (
                           <Upload className="h-4 w-4 mr-2" />
                         )}
-                        Upload Planning
+                        Plan
                       </Button>
                     </span>
                   </TooltipTrigger>
@@ -7456,6 +7468,8 @@ function ShipmentsPageContent() {
                   <Button
                     variant="outline"
                     size="sm"
+                    title="Columns"
+                    aria-label="Columns"
                     onClick={() => setShowColumnsMenu(v => !v)}
                     disabled={listFetching || section3TableLoading}
                   >

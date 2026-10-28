@@ -703,6 +703,7 @@ export default function ClaimSusutPage() {
               onClick={() => document.getElementById('claim-susut-excel-upload-input')?.click()}
               disabled={uploading}
               title="Upload Shortage Claim Excel (.xlsx)"
+              aria-label="Import Shortage Claim Excel"
             >
               {uploading ? (
                 <>
@@ -712,7 +713,7 @@ export default function ClaimSusutPage() {
               ) : (
                 <>
                   <Upload className="h-4 w-4 mr-2" />
-                  Import Shortage Claim Excel
+                  Shortage Claim
                 </>
               )}
             </Button>

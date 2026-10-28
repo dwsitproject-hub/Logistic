@@ -800,10 +800,12 @@ function CommercialDocumentsPageContent() {
                 variant="outline"
                 size="sm"
                 disabled={selectedCount === 0 || fetching || section3TableLoading}
+                title="Download Tanda Terima"
+                aria-label="Download Tanda Terima"
                 onClick={() => setTandaTerimaModalOpen(true)}
               >
                 <FileDown className="h-4 w-4 mr-2" />
-                Download Tanda Terima
+                Tanda Terima
                 {selectedCount > 0 ? ` (${selectedCount})` : ''}
               </Button>
               <div className="relative">

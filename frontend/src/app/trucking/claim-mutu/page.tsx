@@ -563,6 +563,7 @@ export default function ClaimMutuPage() {
                 onClick={() => document.getElementById('claim-mutu-excel-upload-input')?.click()}
                 disabled={uploading}
                 title="Upload Quality Claim Excel (.xlsx) - OS_Claim sheet required, Real_Claim optional"
+                aria-label="Import Quality Claim Excel"
               >
                 {uploading ? (
                   <>
@@ -572,7 +573,7 @@ export default function ClaimMutuPage() {
                 ) : (
                   <>
                     <Upload className="h-4 w-4 mr-2" />
-                    Import Quality Claim Excel
+                    Quality Claim
                   </>
                 )}
               </Button>

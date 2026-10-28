@@ -382,10 +382,12 @@ export default function SupplierPage() {
               size="sm"
               variant="outline"
               className="border-green-600 text-green-700 hover:bg-green-50"
+              title="Download Template"
+              aria-label="Download Template"
               onClick={downloadTemplate}
             >
               <Download className="h-4 w-4 mr-2" />
-              Download Template
+              Template
             </Button>
             <input
               id="supplier-upload"
@@ -398,6 +400,8 @@ export default function SupplierPage() {
             <Button
               variant="outline"
               size="sm"
+              title="Upload CSV"
+              aria-label="Upload CSV"
               onClick={() => document.getElementById('supplier-upload')?.click()}
               disabled={uploading}
             >
@@ -409,7 +413,7 @@ export default function SupplierPage() {
               ) : (
                 <>
                   <Upload className="h-4 w-4 mr-2" />
-                  Upload CSV
+                  CSV
                 </>
               )}
             </Button>

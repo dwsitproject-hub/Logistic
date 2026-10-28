@@ -3871,6 +3871,7 @@ function TruckingPageContent() {
               size="sm"
               variant="outline"
               className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
+              aria-label="Upload WB"
               onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
               disabled={wbUploading || sapImportActive}
               title={
@@ -3887,7 +3888,7 @@ function TruckingPageContent() {
               ) : (
                 <>
                   <Upload className="h-4 w-4 mr-2" />
-                  Upload WB
+                  WB
                 </>
               )}
             </Button>
@@ -3895,6 +3896,7 @@ function TruckingPageContent() {
               size="sm"
               variant="outline"
               className="border-red-600 text-red-700 hover:bg-red-50 disabled:border-red-200 disabled:bg-red-50/40 disabled:text-red-300 disabled:opacity-100 disabled:pointer-events-none"
+              aria-label="Upload Daily Planning"
               onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
               disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
               title={
@@ -3913,7 +3915,7 @@ function TruckingPageContent() {
               ) : (
                 <>
                   <Upload className="h-4 w-4 mr-2" />
-                  Upload Daily Planning
+                  Daily Planning
                 </>
               )}
             </Button>
@@ -3923,13 +3925,15 @@ function TruckingPageContent() {
                   <Button
                     size="sm"
                     variant="outline"
+                    title="Upload CSV"
+                    aria-label="Upload CSV"
                     onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
                     disabled={bulkCreateUploading}
                   >
                     {bulkCreateUploading ? (
                       <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
                     ) : (
-                      <><Upload className="h-4 w-4 mr-2" />Upload CSV</>
+                      <><Upload className="h-4 w-4 mr-2" />CSV</>
                     )}
                   </Button>
                 ) : null}
@@ -4701,6 +4705,8 @@ function TruckingPageContent() {
                   variant="outline"
                   size="sm"
                   className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                  title="Download Data"
+                  aria-label="Download Data"
                   onClick={() => void downloadTruckingViewTable()}
                   disabled={
                     listFetching ||
@@ -4715,7 +4721,7 @@ function TruckingPageContent() {
                   ) : (
                     <Download className="h-4 w-4 mr-2" />
                   )}
-                  Download Data
+                  Data
                 </Button>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -4724,6 +4730,8 @@ function TruckingPageContent() {
                         variant="outline"
                         size="sm"
                         className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                        title={isListActualsTemplateDownloadEnabled ? 'Download Template' : undefined}
+                        aria-label="Download Template"
                         onClick={downloadFilteredActualsTemplate}
                         disabled={
                           !isListActualsTemplateDownloadEnabled || listFetching || templateDownloading
@@ -4734,7 +4742,7 @@ function TruckingPageContent() {
                         ) : (
                           <Download className="h-4 w-4 mr-2" />
                         )}
-                        Download Template
+                        Template
                       </Button>
                     </span>
                   </TooltipTrigger>
@@ -4746,6 +4754,8 @@ function TruckingPageContent() {
                   <Button
                     variant="outline"
                     size="sm"
+                    title="Columns"
+                    aria-label="Columns"
                     onClick={() => setShowColumnsMenu(v => !v)}
                     disabled={listFetching}
                   >
