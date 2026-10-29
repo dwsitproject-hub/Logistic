@@ -26,6 +26,15 @@ export function jpsDocumentDownloadUrl(documentId: string | null | undefined): s
   return `${origin}/api/documents/${encodeURIComponent(id)}/download`;
 }
 
+/**
+ * The link JPS gets for a Contract / SI / BL document: the VIEW route (inline, embeddable from JPS's origin), where jpsDocumentDownloadUrl is the one that saves the file.
+ * JPS shows these documents to its operators (2026-10-29), and an attachment link would be saved instead of shown. A link already sent keeps working: /download is unchanged.
+ */
+export function jpsDocumentViewUrl(documentId: string | null | undefined): string | undefined {
+  const url = jpsDocumentDownloadUrl(documentId);
+  return url ? url.replace(/\/download$/, '/view') : undefined;
+}
+
 export function jpsBaseUrl(): string {
   return String(integrationEnv('JPS_API_BASE_URL') || '')
     .trim()

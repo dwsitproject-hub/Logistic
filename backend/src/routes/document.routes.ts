@@ -2,7 +2,7 @@ import express from 'express';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import multer from 'multer';
-import { downloadDocument, listDocuments, uploadDocumentHandler, ensureUploadDir } from '../controllers/document.controller';
+import { downloadDocument, viewDocument, listDocuments, uploadDocumentHandler, ensureUploadDir } from '../controllers/document.controller';
 import { buildUniqueStoredFilename } from '../utils/fileUpload';
 
 const router = express.Router();
@@ -15,7 +15,7 @@ const router = express.Router();
  * 2026-09-25, on the grounds that KLIP is reachable only from the intranet.
  *
  * Deliberately the narrowest opening that satisfies that:
- *   - only GET /:id/download, so nothing can be listed, uploaded or enumerated without a session
+ *   - only GET /:id/download and GET /:id/view, so nothing can be listed, uploaded or enumerated without a session
  *   - ids are UUIDs, so a document cannot be reached by guessing
  *
  * This holds only while KLIP stays on the intranet. If it is ever published, or the link is ever
@@ -23,6 +23,8 @@ const router = express.Router();
  * a signed, expiring link rather than moving the middleware back, which would break the JPS links.
  */
 router.get('/:id/download', downloadDocument);
+// Open for the same reason: JPS shows the Contract / SI / BL links KLIP sends it. Inline, and its origin may frame it (see viewDocument).
+router.get('/:id/view', viewDocument);
 
 router.use(authenticateToken);
 

@@ -53,6 +53,19 @@ server {
     proxy_send_timeout    300s;
     proxy_connect_timeout 15s;
 
+    # --- Documents JPS shows (the Contract / SI / BL links KLIP sends it) -> backend host ---
+    # The server-level X-Frame-Options above would refuse a frame from the JPS web application, whatever the backend says. A location that has an add_header of its own does
+    # not inherit the server's, so this one sends only nosniff; the backend sets `Content-Security-Policy: frame-ancestors 'self' <JPS origins>` for this route
+    # (JPS_API_BASE_URL and DOCUMENT_VIEW_ORIGINS), so framing stays limited to JPS. Needed only if JPS embeds the document in a frame; a link opened in a tab works without it.
+    location ~ ^/api/documents/[^/]+/view$ {
+        proxy_pass http://172.28.80.51:5001;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
     # --- API -> backend host ---
     location /api/ {
         proxy_pass http://172.28.80.51:5001;

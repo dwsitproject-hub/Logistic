@@ -20,7 +20,7 @@
 import { query } from '../database/connection';
 import { sqlResolveMasterVesselIdFromShipment } from '../utils/masterVesselCanonicalSql';
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
-import { jpsDocumentDownloadUrl } from './config';
+import { jpsDocumentViewUrl } from './config';
 import type { JpsCargoSource, JpsShipmentSource } from './mapper';
 
 /**
@@ -425,9 +425,9 @@ export async function findEligibleStos(
     company_hub_code: companyConflict ? null : (row.company_hub_code as string | null) ?? null,
     company_deleted: !companyConflict && row.company_deleted === true,
     company_conflict: companyConflict ? companyCodes : null,
-    contract_document_url: jpsDocumentDownloadUrl(row.contract_document_id as string | null),
-    shipping_instruction_document_url: jpsDocumentDownloadUrl(row.si_document_id as string | null),
-    bl_document_url: jpsDocumentDownloadUrl(row.bl_document_id as string | null),
+    contract_document_url: jpsDocumentViewUrl(row.contract_document_id as string | null),
+    shipping_instruction_document_url: jpsDocumentViewUrl(row.si_document_id as string | null),
+    bl_document_url: jpsDocumentViewUrl(row.bl_document_id as string | null),
     shipment_ids: (row.shipment_ids as string[]) ?? [],
     cargo: ((row.cargo as JpsCargoSource[]) ?? []).map((line) => ({
       contract_no: line.contract_no ?? null,

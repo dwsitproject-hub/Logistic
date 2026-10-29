@@ -232,6 +232,83 @@ async function applyShipmentNasFilename(
   return { fileName: filename, filePath: toRelativeUploadPath(nextPath) };
 }
 
+/** The type a browser can show inline (PDF, PNG, JPEG): the stored mime type first, then the extension. Anything else is null and is downloaded instead. */
+export function inlineMimeType(fileName: string | null | undefined, mimeType: string | null | undefined): string | null {
+  const mime = String(mimeType ?? '').toLowerCase().split(';')[0].trim();
+  if (mime === 'application/pdf' || mime === 'image/png' || mime === 'image/jpeg') return mime;
+  const name = String(fileName ?? '').toLowerCase();
+  if (name.endsWith('.pdf')) return 'application/pdf';
+  if (name.endsWith('.png')) return 'image/png';
+  if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
+  return null;
+}
+
+/**
+ * The origins allowed to show a document in a frame or to read it from a browser: JPS's own (JPS_API_BASE_URL) and DOCUMENT_VIEW_ORIGINS (comma-separated; the JPS web
+ * application when it is not on the same origin as its API). Empty strings and anything that is not an http(s) origin are dropped.
+ */
+export function documentViewOrigins(env: NodeJS.ProcessEnv = process.env, jpsBase: string = ''): string[] {
+  const out = new Set<string>();
+  for (const raw of [jpsBase, ...String(env.DOCUMENT_VIEW_ORIGINS ?? '').split(',')]) {
+    const t = String(raw ?? '').trim();
+    if (!/^https?:\/\//i.test(t)) continue;
+    try {
+      out.add(new URL(t).origin);
+    } catch {
+      /* not a URL */
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Opens a document to be VIEWED: `Content-Disposition: inline` with its real type, where /download answers `attachment` (the browser saves the file). Open like /download, for
+ * the same reason (JPS operators may have no KLIP account; ids are uuids; see document.routes.ts). JPS shows the three shipment documents (Contract, SI, BL) KLIP sends it
+ * by these links, so this route also lets JPS's own origin embed the file: the response carries `frame-ancestors 'self' <JPS origins>` and no X-Frame-Options (helmet's default
+ * and the nginx block both say SAMEORIGIN, which would refuse a frame from another origin), CORP cross-origin, and CORS for those origins. Only these headers change, and only here.
+ * A type a browser cannot show is sent as a download, as /download does.
+ */
+export const viewDocument = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const result = await query('SELECT * FROM documents WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, error: { message: 'Document not found' } });
+    }
+    const doc = result.rows[0];
+    const absPath = resolveUploadAbsolutePath(doc.file_path);
+    if (!fs.existsSync(absPath)) {
+      return res.status(404).json({ success: false, error: { message: 'File not found on server' } });
+    }
+    const type = inlineMimeType(doc.file_name, doc.mime_type);
+    if (!type) return res.download(absPath, doc.file_name);
+
+    let jpsBase = '';
+    try {
+      jpsBase = (await import('../jps/config')).jpsBaseUrl();
+    } catch {
+      /* JPS not configured: only DOCUMENT_VIEW_ORIGINS counts */
+    }
+    const origins = documentViewOrigins(process.env, jpsBase);
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('Content-Security-Policy', `frame-ancestors 'self'${origins.length ? ' ' + origins.join(' ') : ''}`);
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    const requestOrigin = String(req.headers?.origin ?? '').replace(/\/$/, '');
+    if (requestOrigin && origins.includes(requestOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+      res.setHeader('Vary', 'Origin');
+    }
+    res.setHeader('Content-Type', type);
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(String(doc.file_name ?? 'document'))}`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    // sendFile answers Range requests, which a PDF viewer uses; its own type guess is overridden by the header set above.
+    return res.sendFile(absPath, { headers: { 'Content-Type': type } });
+  } catch (error) {
+    logger.error('View document error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to open document' } });
+  }
+};
+
 export const downloadDocument = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
