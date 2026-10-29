@@ -27,13 +27,22 @@ const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
 const absOf = (stored) => (path.isAbsolute(stored) ? stored : path.resolve(process.cwd(), stored));
 const here = (stored) => fs.existsSync(absOf(stored));
 
-function walk(dir) {
-  const out = [];
+const started = Date.now();
+const secs = () => `${Math.round((Date.now() - started) / 1000)}s`;
+const say = (msg) => console.log(`[${secs()}] ${msg}`);
+
+/**
+ * Every file under dir. On an SMB share a read is slow and the script prints nothing until the walk is over, so `label` turns on a line per folder two levels down
+ * (the year/month folders) and a running count: a walk that is slow is told from one that is stuck.
+ */
+function walk(dir, label, depth = 0, out = []) {
   if (!fs.existsSync(dir)) return out;
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...walk(p));
-    else out.push(p);
+    if (e.isDirectory()) {
+      if (label && depth === 1) say(`${label}: reading ${path.relative(path.dirname(dir), p)} (${out.length} files so far)`);
+      walk(p, label, depth + 1, out);
+    } else out.push(p);
   }
   return out;
 }
@@ -50,21 +59,31 @@ async function rowsOf(table) {
 (async () => {
   const root = getUploadRootDir();
   const { oldDir, newDir } = svc.commercialDocsDirs(root);
-  const oldFiles = walk(oldDir);
-  const clash = oldFiles.filter((f) => fs.existsSync(path.join(newDir, path.relative(oldDir, f))));
+  say(`upload root ${root}; reading ${oldDir} ...`);
+  const oldFiles = walk(oldDir, 'COMMERCIAL DOCS');
+  say(`read ${oldFiles.length} files`);
+  // Only a commercial-docs that exists can hold a name that is taken; without one the folder is renamed whole and nothing can clash.
+  const newExists = fs.existsSync(newDir);
+  const clash = newExists ? oldFiles.filter((f) => fs.existsSync(path.join(newDir, path.relative(oldDir, f)))) : [];
   console.log('');
   console.log(`=== ${APPLY ? 'APPLY' : 'DRY RUN (nothing is changed)'}`);
   console.log(`   upload root          : ${root}`);
   console.log(`   COMMERCIAL DOCS      : ${fs.existsSync(oldDir) ? `exists, ${oldFiles.length} files` : 'does not exist'}`);
-  console.log(`   commercial-docs      : ${fs.existsSync(newDir) ? `exists (${walk(newDir).length} files): the two will be MERGED` : 'does not exist: the folder will be renamed in one step'}`);
+  console.log(`   commercial-docs      : ${newExists ? `exists (${walk(newDir, 'commercial-docs').length} files): the two will be MERGED` : 'does not exist: the folder will be renamed in one step'}`);
   console.log(`   names taken in both  : ${clash.length}${clash.length ? ' (left where they are, listed after)' : ''}`);
 
   const per = {};
   for (const table of svc.COMMERCIAL_DOCS_PATH_TABLES) {
     const rows = await rowsOf(table);
     if (!rows) continue;
+    say(`${table}: ${rows.length} rows with the old path; checking each file ...`);
     const exact = rows.filter((r) => svc.toNewCommercialDocsStoredPath(r.file_path)).length;
-    const present = rows.filter((r) => here(r.file_path)).length;
+    let checked = 0;
+    const present = rows.filter((r) => {
+      checked += 1;
+      if (checked % 1000 === 0) say(`${table}: checked ${checked} of ${rows.length}`);
+      return here(r.file_path);
+    }).length;
     per[table] = { rows_with_old_path: rows.length, rewritable: exact, file_present_at_old_path: present };
   }
   console.table(per);
