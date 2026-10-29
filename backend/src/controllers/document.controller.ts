@@ -17,6 +17,7 @@ import {
   type ShipmentStructuredDocKind,
 } from '../utils/fileUpload';
 import { AuthRequest } from '../middleware/auth';
+import { SELECT_CONTRACT_TRUCKING_FOLDER_SQL, SELECT_SHIPMENT_FOLDER_SQL, SELECT_TRUCKING_FOLDER_SQL } from '../utils/documentFolders';
 
 export { ensureUploadDir };
 
@@ -128,8 +129,8 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
 };
 
 /**
- * Moves an uploaded file into `documents/trucking/<subject>` under the upload root: the operation id (OP-LAND-...) of the trucking operation, else the number of the
- * contract the file was filed on. Returns the new absolute path, or null when the file stays where multer wrote it (no subject found, or the move failed): an upload
+ * Moves an uploaded file into `documents/trucking/<subject>` under the upload root: the PO number of the trucking operation's contract (its operation id when that has
+ * no PO, then the contract number), or, for a contract row with no operation, the contract's PO number (then its number). Returns the new absolute path, or null when the file stays where multer wrote it (no subject found, or the move failed): an upload
  * must not fail because of where its file is filed, and the stored path always says where it really is.
  */
 export async function moveToTruckingFolder(
@@ -141,12 +142,12 @@ export async function moveToTruckingFolder(
     const contractUuid = String(ref.contractId ?? '').trim();
     let subject = '';
     if (operationUuid) {
-      const r = await query('SELECT operation_id FROM trucking_operations WHERE id = $1', [operationUuid]);
-      subject = String(r.rows[0]?.operation_id ?? '').trim();
+      const r = await query(SELECT_TRUCKING_FOLDER_SQL, [operationUuid]);
+      subject = String(r.rows[0]?.subject ?? '').trim();
     }
     if (!subject && contractUuid) {
-      const r = await query('SELECT contract_id FROM contracts WHERE id = $1', [contractUuid]);
-      subject = String(r.rows[0]?.contract_id ?? '').trim();
+      const r = await query(SELECT_CONTRACT_TRUCKING_FOLDER_SQL, [contractUuid]);
+      subject = String(r.rows[0]?.subject ?? '').trim();
     }
     if (!subject) return null;
     const dir = ensureUploadDir(buildTruckingDocumentUploadSubdir(subject));
@@ -202,7 +203,7 @@ async function applyShipmentNasFilename(
     return { fileName: file.originalname, filePath: toRelativeUploadPath(file.path) };
   }
 
-  const found = await query('SELECT operation_id FROM shipments WHERE id = $1', [shipment]);
+  const found = await query(SELECT_SHIPMENT_FOLDER_SQL, [shipment]);
   if (found.rows.length === 0) {
     discardUploadedFile(file.path);
     return { error: 'Shipment not found', status: 404 };
@@ -221,8 +222,10 @@ async function applyShipmentNasFilename(
   });
   // The folder is chosen HERE, from the parsed body, and not left to multer's destination callback: every client appends `file` BEFORE document_type / shipment_id,
   // so at destination time the body was still empty and the file landed in the upload root (found 2026-10-29: six renamed Contract/SI/BL files sitting loose in the
-  // root of the Synology share). The rename below moves it into documents/shipment/<kind>/<shipment id>/ whichever folder multer wrote it to.
-  const dir = ensureUploadDir(buildShipmentDocumentUploadSubdir(shipment, kind as ShipmentStructuredDocKind));
+  // root of the Synology share). The rename below moves it into documents/shipment/<kind>/<STO number, else operation id>/ whichever folder multer wrote it to
+  // (utils/documentFolders.ts); a shipment whose key cannot be read keeps its id as the folder name.
+  const folderSubject = String(found.rows[0]?.folder_subject ?? '').trim() || shipment;
+  const dir = ensureUploadDir(buildShipmentDocumentUploadSubdir(folderSubject, kind as ShipmentStructuredDocKind));
   const filename = allocateShipmentNasFilename(dir, stem, ext);
   const nextPath = path.join(dir, filename);
   fs.renameSync(file.path, nextPath);

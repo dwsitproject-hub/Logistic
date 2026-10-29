@@ -43,7 +43,7 @@ afterEach(() => {
  * Found 2026-10-29: Contract / SI / BL files renamed to OP-...-bl-261026-user were sitting loose in the root of the Synology share. Every client appends `file`
  * BEFORE document_type and shipment_id, so multer's destination callback saw an empty body and wrote to the upload root; the rename then happened in that same folder.
  */
-describe('uploadDocumentHandler: a shipment Contract / SI / BL is filed under documents/shipment/<kind>/<id> even when multer wrote it to the root', () => {
+describe('uploadDocumentHandler: a shipment Contract / SI / BL is filed under documents/shipment/<kind>/<STO number> even when multer wrote it to the root', () => {
   it.each([
     ['BL', 'bl', 'bl'],
     ['SI', 'si', 'si'],
@@ -52,7 +52,7 @@ describe('uploadDocumentHandler: a shipment Contract / SI / BL is filed under do
     const written = path.join(root, 'b1c2_scan.pdf'); // where multer put it: the root
     fs.writeFileSync(written, '%PDF-1.4');
     queryMock
-      .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1004031421-62102574' }] }) // SELECT operation_id FROM shipments
+      .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1004031421-62102574', folder_subject: '1006020421' }] }) // the shipment: operation id and STO key
       .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] })); // INSERT
     const out = res();
     await uploadDocumentHandler(
@@ -64,12 +64,40 @@ describe('uploadDocumentHandler: a shipment Contract / SI / BL is filed under do
       out as never,
     );
     expect(out.statusCode).toBe(200);
-    const dir = path.join(root, 'documents', 'shipment', kind, 'abc-123');
+    const dir = path.join(root, 'documents', 'shipment', kind, '1006020421'); // the STO number, not the shipment id
     const files = fs.readdirSync(dir);
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(new RegExp(`^OP-1004031421-62102574-${token}-\\d{6}-yohan\\.andrian\\.pdf$`));
     expect(fs.existsSync(written)).toBe(false);
-    expect(out.body.data.file_path).toContain(`documents/shipment/${kind}/abc-123/`);
+    expect(out.body.data.file_path).toContain(`documents/shipment/${kind}/1006020421/`);
+  });
+
+  it('a shipment with no STO is filed under its operation id (the STO key falls through to it)', async () => {
+    const written = path.join(root, 'b1c2_si.pdf');
+    fs.writeFileSync(written, '%PDF-1.4');
+    queryMock
+      .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1604000039-54225751', folder_subject: 'OP-1604000039-54225751' }] })
+      .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] }));
+    const out = res();
+    await uploadDocumentHandler(
+      { file: { path: written, originalname: 'si.pdf', size: 8, mimetype: 'application/pdf' }, body: { document_type: 'SI', shipment_id: 'abc-123' }, user: { username: 'a@b.c' } } as never,
+      out as never,
+    );
+    expect(fs.readdirSync(path.join(root, 'documents', 'shipment', 'si', 'OP-1604000039-54225751'))).toHaveLength(1);
+  });
+
+  it('a shipment whose key cannot be read keeps its id as the folder name', async () => {
+    const written = path.join(root, 'b1c2_bl.pdf');
+    fs.writeFileSync(written, '%PDF-1.4');
+    queryMock
+      .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1', folder_subject: null }] })
+      .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] }));
+    const out = res();
+    await uploadDocumentHandler(
+      { file: { path: written, originalname: 'bl.pdf', size: 8, mimetype: 'application/pdf' }, body: { document_type: 'BL', shipment_id: 'abc-123' }, user: { username: 'a@b.c' } } as never,
+      out as never,
+    );
+    expect(fs.readdirSync(path.join(root, 'documents', 'shipment', 'bl', 'abc-123'))).toHaveLength(1);
   });
 
   it('a type that has no structured folder (OTHER) stays where multer wrote it', async () => {
