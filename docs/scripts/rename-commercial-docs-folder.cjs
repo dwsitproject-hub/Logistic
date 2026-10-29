@@ -74,7 +74,8 @@ async function rowsOf(table) {
   console.log(`=== ${APPLY ? 'APPLY' : 'DRY RUN (nothing is changed)'}`);
   console.log(`   upload root          : ${root}`);
   console.log(`   COMMERCIAL DOCS      : ${oldExists ? (newExists ? `exists, ${oldFiles.length} files` : 'exists (files not counted: it is renamed whole, nothing is read)') : 'does not exist'}`);
-  console.log(`   commercial-docs      : ${newExists ? `exists (${walk(newDir, 'commercial-docs').length} files): the two will be MERGED` : 'does not exist: the folder will be renamed in one step'}`);
+  // commercial-docs is not counted: nothing acts on the number, and reading it over SMB is the slow part (~0.2 s per entry).
+  console.log(`   commercial-docs      : ${newExists ? `exists${oldFiles.length > 0 ? ': the two will be MERGED' : '; COMMERCIAL DOCS holds no files, so there is nothing left to move'}` : 'does not exist: the folder will be renamed in one step'}`);
   console.log(`   names taken in both  : ${clash.length}${clash.length ? ' (left where they are, listed after)' : ''}`);
 
   const per = {};
