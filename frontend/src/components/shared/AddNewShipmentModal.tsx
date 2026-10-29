@@ -406,6 +406,8 @@ export type AddNewShipmentModalProps = {
   stacked?: boolean
   /** Refresh Shipments list after Edit modal attaches a PO (without closing modal). */
   onShipmentChanged?: (saved?: { sfalKg: number | null; sfbdKg: number | null }) => void
+  /** Jetty Status the Shipments list showed for the row that opened Edit / View; the modal re-reads the list when the server holds another one. */
+  listJettyLabel?: string | null
   /** When accepting a pre-planned group, link group on shipment create. */
   prePlannedGroupId?: string | null
   /** Vessel fields pre-filled when opening from Vessel Idle row action. */
@@ -430,6 +432,7 @@ export function AddNewShipmentModal({
   readOnly = false,
   stacked = false,
   onShipmentChanged,
+  listJettyLabel = null,
   prePlannedGroupId = null,
   prefilledVessel = null,
 }: AddNewShipmentModalProps) {
@@ -2261,6 +2264,7 @@ export function AddNewShipmentModal({
         editContractNumbers={editContractNumbers}
         onSubmit={onSubmit}
         onShipmentChanged={onShipmentChanged}
+        listJettyLabel={listJettyLabel}
       />
     )
   }
@@ -2281,6 +2285,7 @@ export function AddNewShipmentModal({
         displayStoNumber={displayStoNumber}
         editContractNumbers={editContractNumbers}
         onShipmentChanged={onShipmentChanged}
+        listJettyLabel={listJettyLabel}
       />
     )
   }

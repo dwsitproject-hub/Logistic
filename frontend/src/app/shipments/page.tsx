@@ -1364,6 +1364,8 @@ function ShipmentsPageContent() {
     displayStoNumber: string | null
     editContractNumbers: string
     readOnly?: boolean
+    /** The Jetty Status this row showed when it was opened (see EditShipmentModal listJettyLabel). */
+    listJettyLabel?: string
   } | null>(null)
   const [plotShipmentFromTable, setPlotShipmentFromTable] = useState<{
     shipmentId: string
@@ -2476,6 +2478,7 @@ function ShipmentsPageContent() {
       displayStoNumber: String(shipment.sto_number ?? '').trim() || null,
       editContractNumbers: shipment.contract_numbers ?? '',
       readOnly,
+      listJettyLabel: jettyStatusLabel(shipment as JettyStatusFields),
     })
   }
 
@@ -9982,6 +9985,7 @@ function ShipmentsPageContent() {
         editContractNumbers={
           editShipmentFromTable?.editContractNumbers ?? plotShipmentFromTable?.editContractNumbers ?? null
         }
+        listJettyLabel={editShipmentFromTable?.listJettyLabel ?? null}
         prefilledPOs={addShipmentPrefilledPOs}
         prefilledStoNumber={addShipmentPrefilledSto}
         prefilledContractNumbers={addShipmentPrefilledContractNumbers}

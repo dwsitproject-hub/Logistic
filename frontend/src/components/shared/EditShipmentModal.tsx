@@ -817,6 +817,11 @@ export type EditShipmentModalProps = {
    * them (Oil Loss) can draw the new figure at once instead of waiting for its snapshot to be rebuilt.
    */
   onShipmentChanged?: (saved?: { sfalKg: number | null; sfbdKg: number | null }) => void
+  /**
+   * The Jetty Status the list showed for this row when the modal was opened. The modal reads the status fresh from the server, the list only when it was loaded: when
+   * the two differ (JPS moved on while the table sat open) the list is re-read at once, so the badge behind the modal does not keep an older stage.
+   */
+  listJettyLabel?: string | null
 }
 
 export function EditShipmentModal({
@@ -832,6 +837,7 @@ export function EditShipmentModal({
   enableAtaQualityEditInView = false,
   stacked = false,
   onShipmentChanged,
+  listJettyLabel = null,
 }: EditShipmentModalProps) {
   // the read-only discharge port is drawn as its Master Port when the map has one (display only; loading ports stay as written)
   const portResolver = useDischargePortResolver()
@@ -945,6 +951,10 @@ export function EditShipmentModal({
   const [etaBaseline, setEtaBaseline] = useState<ShipmentEtaBaseline | null>(null)
 
   const initSessionRef = useRef<string | null>(null)
+  // Refs, so the load callback does not change identity (and re-run the open effect) when the page re-renders its list.
+  const listJettyLabelRef = useRef<string | null>(null)
+  const onShipmentChangedRef = useRef(onShipmentChanged)
+  onShipmentChangedRef.current = onShipmentChanged
 
   const isCancelledShipment = normalizeShipmentStatusKey(shipmentStatus) === 'CANCELLED'
   const canModifyCoreSections = canEditShipment && !readOnly
@@ -1413,6 +1423,12 @@ export function EditShipmentModal({
         )
         setLoadingPorts(ports)
         setJettyStatus(payload.jettyStatus ?? null)
+        // Once per opening: the list showed another Jetty Status than the server holds now, so re-read the list.
+        const shownInList = listJettyLabelRef.current
+        listJettyLabelRef.current = null
+        if (JETTY_COLUMNS_ENABLED && shownInList != null && jettyStatusLabel(payload.jettyStatus ?? null) !== shownInList) {
+          onShipmentChangedRef.current?.()
+        }
         setShipmentInfo(info)
         const loadedAta = ataFieldsFromShipmentInfo(info)
         setAtaFields(loadedAta)
@@ -1804,6 +1820,7 @@ export function EditShipmentModal({
     const sessionKey = `${editContractId ?? ''}:${editShipmentIdProp ?? ''}:${editStoNumber ?? ''}:${editContractNumbers ?? ''}`
     if (initSessionRef.current === sessionKey) return
     initSessionRef.current = sessionKey
+    listJettyLabelRef.current = listJettyLabel
     resetState()
     const contractId = editContractId?.trim()
     const directId = editShipmentIdProp?.trim()
@@ -1813,7 +1830,7 @@ export function EditShipmentModal({
     } else if (contractId) {
       void loadShipment(contractId, null, sto)
     }
-  }, [open, editContractId, editShipmentIdProp, editStoNumber, editContractNumbers, loadShipment, resetState])
+  }, [open, editContractId, editShipmentIdProp, editStoNumber, editContractNumbers, listJettyLabel, loadShipment, resetState])
 
   const closePdfPreview = useCallback(() => {
     if (pdfPreviewUrlRef.current) {
