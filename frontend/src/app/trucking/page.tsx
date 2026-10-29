@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
+import { Filter, X, Truck, Save, Loader2, Download, Eye, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
@@ -18,6 +18,7 @@ import {
   LIST_FILTER_FIELDS_ROW_CLASS,
 } from '@/components/shared/ListFilterPanel'
 import api from '@/lib/api'
+import { openDocumentPreview, previewMimeType } from '@/lib/documentView'
 import { describeTruckingSummaryFreshness } from '@/lib/truckingSummaryFreshness'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache, isCacheFresh, peekCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -499,6 +500,8 @@ interface DocumentItem {
   mime_type?: string
   file_size?: number
   trucking_operation_id?: string
+  /** The column the documents table really has; `created_at` is kept for rows that carry it. */
+  upload_date?: string
   created_at?: string
 }
 
@@ -2674,6 +2677,8 @@ function TruckingPageContent() {
       const form = new FormData()
       form.append('file', file)
       form.append('document_type', 'OTHER')
+      // Filed under documents/trucking on the upload root (the Synology share), whichever of the two ids below is sent.
+      form.append('upload_context', 'trucking')
       if (backlogRow) {
         form.append('contract_id', contractId)
       } else {
@@ -5609,17 +5614,29 @@ function TruckingPageContent() {
                     <div>
                       <div className="text-sm font-medium">{doc.file_name}</div>
                       <div className="text-xs text-gray-500">
-                        {(doc.document_type || 'FILE')} • {doc.created_at ? formatDateTimeDMY(doc.created_at) : ''}
+                        {(doc.document_type || 'FILE')} • {doc.upload_date || doc.created_at ? formatDateTimeDMY(String(doc.upload_date || doc.created_at)) : ''}
                       </div>
                     </div>
-                    <Button 
-                      size="sm" 
-                      variant="outline"
-                      onClick={() => handleDownloadDocument(doc.id, doc.file_name)}
-                    >
-                      <Download className="h-4 w-4 mr-1" />
-                      Download
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={previewMimeType(doc.file_name, doc.mime_type) === null}
+                        title={previewMimeType(doc.file_name, doc.mime_type) === null ? 'This file type cannot be previewed. Use Download.' : 'Open in a new tab'}
+                        onClick={() => void openDocumentPreview(doc.id, doc.file_name, doc.mime_type)}
+                      >
+                        <Eye className="h-4 w-4 mr-1" />
+                        View
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleDownloadDocument(doc.id, doc.file_name)}
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Download
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>

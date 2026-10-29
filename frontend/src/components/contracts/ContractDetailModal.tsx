@@ -8,6 +8,7 @@ import { X } from 'lucide-react'
 import { drawnPortLabel } from '@/lib/dischargePortFilter'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import api from '@/lib/api'
+import { openDocumentPreview, previewMimeType } from '@/lib/documentView'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, formatRupiah } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -114,6 +115,8 @@ export interface DocumentItem {
   mime_type?: string
   file_size?: number
   contract_id?: string
+  /** The column the documents table really has; `created_at` is kept for rows that carry it. */
+  upload_date?: string
   created_at?: string
 }
 
@@ -1584,12 +1587,23 @@ export function ContractDetailModal({
                           <div className="text-sm font-medium">{doc.file_name}</div>
                           <div className="text-xs text-gray-500">
                             {(doc.document_type || 'FILE')} •{' '}
-                            {doc.created_at ? new Date(doc.created_at).toLocaleString() : ''}
+                            {doc.upload_date || doc.created_at ? new Date(String(doc.upload_date || doc.created_at)).toLocaleString() : ''}
                           </div>
                         </div>
-                        <Button size="sm" variant="outline" onClick={() => handleDownloadDocument(doc.id, doc.file_name)}>
-                          View
-                        </Button>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={previewMimeType(doc.file_name, doc.mime_type) === null}
+                            title={previewMimeType(doc.file_name, doc.mime_type) === null ? 'This file type cannot be previewed. Use Download.' : 'Open in a new tab'}
+                            onClick={() => void openDocumentPreview(doc.id, doc.file_name, doc.mime_type)}
+                          >
+                            View
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => handleDownloadDocument(doc.id, doc.file_name)}>
+                            Download
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>
