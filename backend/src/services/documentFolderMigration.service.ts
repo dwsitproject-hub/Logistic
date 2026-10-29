@@ -1,7 +1,8 @@
 /**
  * Files documents where they belong, on the upload root (the Synology share in production):
  *
- *   shipment Contract / SI / BL        ->  documents/shipment/<contract|si|bl>/<STO number, else operation id>/
+ *   shipment Contract / SI / BL / SLD / SDD  ->  documents/shipment/<contract|si|bl|sld|sdd>/<STO number, else operation id>/
+ *   (SLD and SDD are no longer uploaded; the rows that are left sat in the upload root and are filed with the rest, 2026-10-29)
  *   documents of a trucking operation  ->  documents/trucking/<PO number, else operation id, else contract number>/
  *
  * The names are those of utils/documentFolders.ts. Two things put a document somewhere else: every client appends `file` before `document_type` / `shipment_id`, so multer's
@@ -55,7 +56,7 @@ export interface MovePlan {
   action: MoveAction;
 }
 
-/** The rows this migration looks at: shipment Contract / SI / BL, and anything filed on a trucking operation. */
+/** The rows this migration looks at: shipment Contract / SI / BL / SLD / SDD, and anything filed on a trucking operation. */
 export const SELECT_DOCUMENTS_TO_FILE_SQL = `
   SELECT d.id::text AS id, d.document_type, d.file_name, d.file_path,
          d.shipment_id::text AS shipment_id, d.trucking_operation_id::text AS trucking_operation_id,
@@ -67,14 +68,14 @@ export const SELECT_DOCUMENTS_TO_FILE_SQL = `
     LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
     LEFT JOIN trucking_operations t ON t.id = d.trucking_operation_id
     LEFT JOIN contracts ct ON ct.id = t.contract_id
-   WHERE (UPPER(COALESCE(d.document_type, '')) IN ('CONTRACT', 'SI', 'BL') AND d.shipment_id IS NOT NULL)
+   WHERE (UPPER(COALESCE(d.document_type, '')) IN ('CONTRACT', 'SI', 'BL', 'SLD', 'SDD') AND d.shipment_id IS NOT NULL)
       OR d.trucking_operation_id IS NOT NULL
    ORDER BY d.upload_date NULLS LAST, d.id`;
 
-/** The folder a row belongs in, relative to the upload root; null when there is no way to tell. SLD / SDD stay where they are (nothing writes to them any more). */
+/** The folder a row belongs in, relative to the upload root; null when there is no way to tell (OTHER on a shipment, an operation with nothing to name it by). */
 export function targetSubdirFor(row: DocumentRow): { kind: 'shipment' | 'trucking'; subdir: string } | null {
   const kind = shipmentStructuredDocKindFromType(String(row.document_type ?? ''));
-  if (row.shipment_id && (kind === 'contract' || kind === 'si' || kind === 'bl')) {
+  if (row.shipment_id && kind) {
     // The shipment row is gone (deleted): its id is the only name left.
     const subject = String(row.shipment_folder ?? '').trim() || row.shipment_id;
     return { kind: 'shipment', subdir: buildShipmentDocumentUploadSubdir(subject, kind) };

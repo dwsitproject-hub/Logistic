@@ -1,7 +1,7 @@
 /**
  * Files documents stored in the wrong folder where they belong, on the upload root (the Synology share in production):
  *
- *   shipment Contract / SI / BL            ->  documents/shipment/<contract|si|bl>/<shipment id>/
+ *   shipment Contract / SI / BL / SLD / SDD  ->  documents/shipment/<contract|si|bl|sld|sdd>/<STO number, else operation id>/
  *   documents of a trucking operation      ->  documents/trucking/<operation id>/
  *
  *   docker cp docs/scripts/migrate-documents-to-folders.cjs klip-backend:/app/

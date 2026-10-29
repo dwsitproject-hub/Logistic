@@ -70,10 +70,15 @@ describe('targetSubdirFor: the folder is named after the STO and the PO, not aft
     });
   });
 
-  it('SLD / SDD (nothing writes them any more), OTHER on a shipment, and an operation with nothing to name it by are left alone', () => {
-    expect(targetSubdirFor(row({ id: '1', file_path: 'x', document_type: 'SLD', shipment_id: 's' }))).toBeNull();
-    expect(targetSubdirFor(row({ id: '1', file_path: 'x', document_type: 'SDD', shipment_id: 's' }))).toBeNull();
+  it('SLD and SDD (nothing writes them any more, but 18 sat in the production root) are filed like the others, under the STO', () => {
+    const r = (type: string) => targetSubdirFor(row({ id: '1', file_path: 'x', document_type: type, shipment_id: 'uuid-1', shipment_folder: '1006020421' }));
+    expect(r('SLD')).toEqual({ kind: 'shipment', subdir: 'documents/shipment/sld/1006020421' });
+    expect(r('sdd')).toEqual({ kind: 'shipment', subdir: 'documents/shipment/sdd/1006020421' });
+  });
+
+  it('OTHER on a shipment, and an operation with nothing to name it by, are left alone', () => {
     expect(targetSubdirFor(row({ id: '1', file_path: 'x', document_type: 'OTHER', shipment_id: 's' }))).toBeNull();
+    expect(targetSubdirFor(row({ id: '1', file_path: 'x', trucking_operation_id: 'u', trucking_folder: null }))).toBeNull();
     expect(targetSubdirFor(row({ id: '1', file_path: 'x', trucking_operation_id: 'u', trucking_folder: null }))).toBeNull();
   });
 });
