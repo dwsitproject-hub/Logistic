@@ -59,16 +59,21 @@ async function rowsOf(table) {
 (async () => {
   const root = getUploadRootDir();
   const { oldDir, newDir } = svc.commercialDocsDirs(root);
-  say(`upload root ${root}; reading ${oldDir} ...`);
-  const oldFiles = walk(oldDir, 'COMMERCIAL DOCS');
-  say(`read ${oldFiles.length} files`);
-  // Only a commercial-docs that exists can hold a name that is taken; without one the folder is renamed whole and nothing can clash.
+  say(`upload root ${root}`);
+  const oldExists = fs.existsSync(oldDir);
   const newExists = fs.existsSync(newDir);
+  /*
+   * Reading the folder tree is only needed to merge into a commercial-docs that already exists (and to see which names are taken). Without one the folder is renamed
+   * whole in a single step that reads nothing, and a walk over an SMB share costs ~0.2 s per entry: 30+ minutes for ~10,000 files, for a number nobody acts on.
+   * The rows check below (is the file at its old path) already says which documents are really there.
+   */
+  const oldFiles = oldExists && newExists ? walk(oldDir, 'COMMERCIAL DOCS') : [];
+  if (oldExists && newExists) say(`read ${oldFiles.length} files`);
   const clash = newExists ? oldFiles.filter((f) => fs.existsSync(path.join(newDir, path.relative(oldDir, f)))) : [];
   console.log('');
   console.log(`=== ${APPLY ? 'APPLY' : 'DRY RUN (nothing is changed)'}`);
   console.log(`   upload root          : ${root}`);
-  console.log(`   COMMERCIAL DOCS      : ${fs.existsSync(oldDir) ? `exists, ${oldFiles.length} files` : 'does not exist'}`);
+  console.log(`   COMMERCIAL DOCS      : ${oldExists ? (newExists ? `exists, ${oldFiles.length} files` : 'exists (files not counted: it is renamed whole, nothing is read)') : 'does not exist'}`);
   console.log(`   commercial-docs      : ${newExists ? `exists (${walk(newDir, 'commercial-docs').length} files): the two will be MERGED` : 'does not exist: the folder will be renamed in one step'}`);
   console.log(`   names taken in both  : ${clash.length}${clash.length ? ' (left where they are, listed after)' : ''}`);
 
