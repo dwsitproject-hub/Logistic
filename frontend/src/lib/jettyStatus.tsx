@@ -94,6 +94,21 @@ export function jettyStatusLabel(row: JettyStatusFields | null | undefined): str
   return 'Not Sent'
 }
 
+/**
+ * What a badge or a sentence SAYS for a status: the stage JPS gave, with what it means on the berth where JPS's own name does not say it. Start Cargo is the hoses
+ * going on, Cargo Done the hoses coming off (and the final checks). Every other status reads as it is. jettyStatusLabel stays the value to compare, sort and colour by:
+ * this is display only.
+ */
+const JETTY_STAGE_MEANING: Record<string, string> = {
+  'Start Cargo': 'Start Cargo (Hose On)',
+  'Cargo Done': 'Cargo Done (Hose Off)',
+}
+
+export function jettyStatusText(row: JettyStatusFields | null | undefined): string {
+  const label = jettyStatusLabel(row)
+  return JETTY_STAGE_MEANING[label] ?? label
+}
+
 /** What the Submit to Jetty button does for the status JPS holds: send (nothing at JPS), resubmit (JPS closed it), or locked (JPS holds a live instruction). */
 export type JettySubmitMode = 'submit' | 'resubmit' | 'locked'
 
@@ -172,7 +187,7 @@ export function JettyStatusBadge({
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${tone} ${className}`}
       title={jettyStatusTooltip(row)}
     >
-      {label}
+      {jettyStatusText(row)}
     </span>
   )
 }

@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { jettyCanRefresh, jettySendStateTooltip, jettyStatusLabel, jettyStatusTooltip, jettySubmitMode } from './jettyStatus'
+import { jettyCanRefresh, jettySendStateTooltip, jettyStatusLabel, jettyStatusText, jettyStatusTooltip, jettySubmitMode } from './jettyStatus'
+
+describe('Jetty Status text: the stage JPS gave, with what it means on the berth', () => {
+  it('Start Cargo reads Hose On and Cargo Done reads Hose Off; the value to compare and sort by stays JPS\'s own', () => {
+    expect(jettyStatusText({ jetty_status: 'Start Cargo' })).toBe('Start Cargo (Hose On)')
+    expect(jettyStatusText({ jetty_status: ' Cargo Done ' })).toBe('Cargo Done (Hose Off)')
+    expect(jettyStatusLabel({ jetty_status: 'Start Cargo' })).toBe('Start Cargo')
+    expect(jettyStatusLabel({ jetty_status: 'Cargo Done' })).toBe('Cargo Done')
+  })
+
+  it('every other status, and the states KLIP itself reports, read as they are', () => {
+    for (const status of ['Pending', 'Approved', 'Allocated', 'Berthed', 'Sailed Off', 'Rejected', 'Deleted', 'Completed (Hose Off)']) {
+      expect(jettyStatusText({ jetty_status: status })).toBe(status)
+    }
+    expect(jettyStatusText({ jetty_status: null, jetty_send_state: 'FAILED' })).toBe('Send Failed')
+    expect(jettyStatusText(null)).toBe('Not Sent')
+  })
+})
 
 describe('Jetty Status label', () => {
   it('shows what the server sends, and Not Sent for none', () => {

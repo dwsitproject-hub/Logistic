@@ -21,6 +21,7 @@ import {
   jettyCanRefresh,
   jettySendStateTooltip,
   jettyStatusLabel,
+  jettyStatusText,
   jettySubmitMode,
   jettySyncDatesTooltip,
   type JettyStatusFields,
@@ -3889,7 +3890,7 @@ export function EditShipmentModal({
                 requiresEditRemark
                   ? 'Save your changes first: the check reads the saved data'
                   : jettySubmitMode(jettyStatus) === 'locked'
-                    ? `JPS already holds this instruction (${jettyStatusLabel(jettyStatus)}). It cannot be sent again; only a rejected or deleted instruction can be resubmitted.`
+                    ? `JPS already holds this instruction (${jettyStatusText(jettyStatus)}). It cannot be sent again; only a rejected or deleted instruction can be resubmitted.`
                     : jettySubmitMode(jettyStatus) === 'resubmit'
                       ? 'JPS closed the last instruction (rejected or deleted): check what JPS needs and send a new one'
                       : 'Check what JPS needs for this STO and send it to the Jetty Planning System'
