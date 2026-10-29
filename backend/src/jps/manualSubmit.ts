@@ -22,7 +22,8 @@ export interface ManualSubmitResult {
   outcome: SubmitOutcome | null;
 }
 
-export async function submitShipmentToJps(shipmentId: string): Promise<ManualSubmitResult> {
+/** `requestedBy` is the email of the user who pressed the button; JPS shows it to its operators as the requester. */
+export async function submitShipmentToJps(shipmentId: string, requestedBy: string | null = null): Promise<ManualSubmitResult> {
   const readiness = await checkJpsReadiness(shipmentId);
   if (!readiness.canSubmit || !readiness.stoKey) return { attempted: false, readiness, outcome: null };
 
@@ -31,7 +32,7 @@ export async function submitShipmentToJps(shipmentId: string): Promise<ManualSub
   if (!sto) return { attempted: false, readiness: { ...readiness, canSubmit: false, reason: 'The shipment data changed while checking. Try again.' }, outcome: null };
 
   const portCatalog = await fetchJpsPortCompanies();
-  const outcome = await submitOneSto(sto, portCatalog, await fetchJpsKnownPorts());
+  const outcome = await submitOneSto(sto, portCatalog, await fetchJpsKnownPorts(), requestedBy);
   logger.info('JPS: Submit to Jetty', { stoKey: readiness.stoKey, shipmentId, outcome: outcome.kind });
 
   // The Shipments list keeps its pages for an hour; what was just sent (or refused) must show now, not later.

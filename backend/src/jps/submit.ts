@@ -11,7 +11,7 @@ import {
   jpsRetryFailedAfterMs,
 } from './config';
 import { findEligibleStos, type EligibleSto } from './eligibility';
-import { buildJpsExternalReference, buildJpsSubmitPayload } from './mapper';
+import { buildJpsExternalReference, buildJpsSubmitPayload, jpsRequester } from './mapper';
 import type { JpsErrorDetail, JpsInstruction, JpsSubmitPayload } from './types';
 
 /**
@@ -173,10 +173,11 @@ export async function submitOneSto(
   sto: EligibleSto,
   portCatalog: Awaited<ReturnType<typeof fetchJpsPortCompanies>>,
   knownPorts: JpsKnownPorts | null = null,
+  requestedBy: string | null = null,
 ): Promise<SubmitOutcome> {
   const revision = await nextRevision(sto.sto_key);
   const built = buildJpsSubmitPayload(
-    { ...sto, revision },
+    { ...sto, revision, requested_by: jpsRequester(requestedBy) },
     { portCompanies: companiesForPort(portCatalog, sto.port_hub_code), knownPortCodes: knownPorts },
   );
 

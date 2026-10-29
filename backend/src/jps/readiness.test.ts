@@ -150,3 +150,12 @@ describe('checkJpsReadiness over the ports (Integrations > JPS > Ports), against
     expect(r.checks.find((c) => c.key === 'port_enabled')).toMatchObject({ ok: false, fixAt: 'settings' });
   }, 120_000);
 });
+
+describe('samePayloadIgnoringReference: who asked is not part of what JPS judges', () => {
+  it('the sweep (sap-data-import) and a user pressing the button (an email) send the same instruction', () => {
+    const a = { external_reference: 'KLIP-1-R1', requested_by: 'sap-data-import', vessel_hub_code: 'VSL-0179' };
+    const b = { external_reference: 'KLIP-1-R2', requested_by: 'budi.santoso@kpn.com', vessel_hub_code: 'VSL-0179' };
+    expect(samePayloadIgnoringReference(a, b)).toBe(true);
+    expect(samePayloadIgnoringReference(a, { ...b, vessel_hub_code: 'VSL-0180' })).toBe(false);
+  });
+});

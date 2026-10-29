@@ -36,7 +36,7 @@ export const submitShipmentToJetty = async (req: AuthRequest, res: Response): Pr
   const id = shipmentIdOf(req, res);
   if (!id) return;
   try {
-    const result = await submitShipmentToJps(id);
+    const result = await submitShipmentToJps(id, req.user?.email ?? null);
     res.json({ success: true, data: { id, ...result } });
   } catch (error) {
     logger.error('Submit to Jetty failed', { shipmentId: id, error: error instanceof Error ? error.message : String(error) });

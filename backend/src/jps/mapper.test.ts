@@ -3,6 +3,8 @@ import { jpsDocumentDownloadUrl } from './config';
 import {
   buildJpsExternalReference,
   buildJpsSubmitPayload,
+  JPS_AUTOMATIC_REQUESTER,
+  jpsRequester,
   mapKlipIncotermToJpsTradeTerm,
   toJpsDateTime,
   type JpsShipmentSource,
@@ -351,5 +353,22 @@ describe('cargo line sto_no (JPS 5.6)', () => {
     );
     expect(payload?.cargo[0].sto_no).toBe('1006020269');
     expect(payload?.cargo[1]).not.toHaveProperty('sto_no');
+  });
+});
+
+describe('requested_by: who JPS shows as the requester', () => {
+  it("is the user's email for a button press, trimmed, and sap-data-import for what the sweep sends on its own", () => {
+    expect(jpsRequester(' budi.santoso@kpn.com ')).toBe('budi.santoso@kpn.com');
+    for (const none of [null, undefined, '', '   ']) expect(jpsRequester(none)).toBe('sap-data-import');
+    expect(JPS_AUTOMATIC_REQUESTER).toBe('sap-data-import');
+  });
+
+  it('stays within the 200 characters JPS accepts', () => {
+    expect(jpsRequester(`${'a'.repeat(250)}@kpn.com`)).toHaveLength(200);
+  });
+
+  it('is in the payload when the source carries it, and absent (not null) when it does not', () => {
+    expect(buildJpsSubmitPayload(source({ requested_by: 'budi.santoso@kpn.com' })).payload?.requested_by).toBe('budi.santoso@kpn.com');
+    expect(buildJpsSubmitPayload(source()).payload).not.toHaveProperty('requested_by');
   });
 });

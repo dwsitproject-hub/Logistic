@@ -79,13 +79,14 @@ function stableStringify(value: unknown): string {
 }
 
 /**
- * Whether two submit payloads say the same thing to JPS. The external reference differs by design (a resubmission is a new revision), so it is left out.
+ * Whether two submit payloads say the same thing to JPS. The external reference differs by design (a resubmission is a new revision), so it is left out;
+ * so is who asked (the sweep sends `sap-data-import`, a button press the user's email), which JPS does not judge the instruction by.
  * Used to warn that a resubmission repeats what JPS rejected.
  */
 export function samePayloadIgnoringReference(a: unknown, b: unknown): boolean {
   const strip = (p: unknown) => {
     if (!p || typeof p !== 'object') return p;
-    const { external_reference: _ignored, ...rest } = p as Record<string, unknown>;
+    const { external_reference: _ignored, requested_by: _requester, ...rest } = p as Record<string, unknown>;
     return rest;
   };
   return stableStringify(strip(a)) === stableStringify(strip(b));

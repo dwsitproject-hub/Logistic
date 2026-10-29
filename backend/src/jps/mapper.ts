@@ -203,6 +203,16 @@ function absoluteDocumentUrl(value: string | null | undefined): string | undefin
  * master ("unknown shipper: ... Create it first via POST /shippers", verified on staging), and the
  * 57 suppliers in BONTANG scope do not match its 25 registered names without a human mapping.
  */
+/** `requested_by` of an instruction nobody pressed a button for: the sweep that follows a SAP import, a schedule, or a shipment edit. */
+export const JPS_AUTOMATIC_REQUESTER = 'sap-data-import';
+
+/**
+ * Who JPS shows as the requester (max 200 characters): the email of the user who pressed Submit to Jetty, and `sap-data-import` for what the sweep sends on its own.
+ */
+export function jpsRequester(userEmail?: string | null): string {
+  return String(userEmail ?? '').trim().slice(0, 200) || JPS_AUTOMATIC_REQUESTER;
+}
+
 export function buildJpsSubmitPayload(
   source: JpsShipmentSource,
   options: BuildJpsPayloadOptions = {},

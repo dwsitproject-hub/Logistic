@@ -187,7 +187,15 @@ export async function amendPendingInstructions(limit = 50): Promise<JpsAmendSumm
         `UPDATE jps_shipping_instructions
          SET payload = $2::jsonb, last_error = NULL, updated_at = CURRENT_TIMESTAMP
          WHERE id = $1`,
-        [row.id, JSON.stringify({ ...built.payload, external_reference: sent?.external_reference ?? built.payload.external_reference })],
+        [
+          row.id,
+          JSON.stringify({
+            ...built.payload,
+            // Who asked is not amendable and is not rebuilt here; keep the requester the instruction was sent with.
+            ...(sent?.requested_by ? { requested_by: sent.requested_by } : {}),
+            external_reference: sent?.external_reference ?? built.payload.external_reference,
+          }),
+        ],
       );
       summary.amended += 1;
       logger.info('JPS instruction amended', { stoKey: source.sto_key, fields: Object.keys(body) });

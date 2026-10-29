@@ -49,6 +49,15 @@ describe('submitOneSto: what happened to one STO, and what was recorded', () => 
     expect(writes().some((t) => t.includes("'SUBMITTED'"))).toBe(true);
   });
 
+  it('sends requested_by: sap-data-import from the sweep, the email of the user who pressed the button', async () => {
+    jpsRequestMock.mockResolvedValue({ ok: true, data: { id: 77, status: 'Pending', external_reference: 'KLIP-1006020269-R1' } });
+    await submitOneSto(sto(), null);
+    expect(jpsRequestMock.mock.calls[0][0].data.requested_by).toBe('sap-data-import');
+    jpsRequestMock.mockClear();
+    await submitOneSto(sto(), null, null, 'budi.santoso@kpn.com');
+    expect(jpsRequestMock.mock.calls[0][0].data.requested_by).toBe('budi.santoso@kpn.com');
+  });
+
   it('JPS refused it: failed, with JPS\'s message AND each detail line, recorded as FAILED', async () => {
     jpsRequestMock.mockResolvedValue({
       ok: false,
