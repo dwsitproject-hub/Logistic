@@ -1,8 +1,10 @@
 # Jetty Planning System — Shipping Instruction API Integration Guide
 
-> **Version:** 5.6 · **Audience:** External full-stack developers building an integration from your system (EOS Export/Import, KLIPS, ERP, TMS, etc.) into the Jetty Planning System (JPS).
+> **Version:** 5.7 · **Audience:** External full-stack developers building an integration from your system (EOS Export/Import, KLIPS, ERP, TMS, etc.) into the Jetty Planning System (JPS).
 >
 > **What you can do:** Sync reference master data, submit Shipping Instructions, update PO/SO while Pending, **name the operating company** (`company_hub_code`), **send HTTP or HTTPS links** to SI / contract / B/L documents, **receive approval and milestone updates via webhooks**, and poll enriched status (including TA, ETB, TB, ETC, TC, **Hose On/Off** (`cargo_ops_start_at` / `cargo_ops_end_at`), cast off, sailed). JPS operators update berthing milestones in the web app — your system receives those changes; you do not write them back via API.
+>
+> **What's new in v5.7 (breaking for status handling):** Partner **`status`** now follows the vessel through five stages after approval: **`Allocated`** (jetty assigned), **`Berthed`** (`schedule.tb` set), **`Start Cargo`** (`schedule.cargo_ops_start_at` set), **`Cargo Done`** (`schedule.cargo_done_at` set), **`Sailed Off`** (vessel cast off). **`Sailed`** is renamed **`Sailed Off`**. New **`schedule.cargo_done_at`**. Each stage change sends **`status.changed`**; `status.changed` is not repeated when the status has not changed. `cargo_ops_start_at` / `cargo_ops_end_at` (Hose On / Hose Off) are unchanged. Clients must accept the new `status` values. Header **`X-JPS-API-Version: 5.7`**.
 >
 > **What's new in v5.6:** **`company_hub_code`** on POST and PATCH (Pending) stores the operating company on the Shipping Instruction (`shipping_instructions.company_id`). This is the DataHub organization, not the cargo-line shipper. Required when the port has more than one mapped company; when the port has exactly one, omit it and JPS stores that company. **201**, GET, and webhook `data` echo **`company_hub_code`** and **`company_name`**. Catalog entity **`company`**. A blank master **LOA**, **GT**, or **draft** is stored null on the plan and no longer returns **400**; a non-positive master value is still **400**. Header **`X-JPS-API-Version: 5.6`**.
 >
@@ -30,23 +32,33 @@
 2. Your system **submits** a Shipping Instruction via `POST`, identifying the vessel by **`vessel_hub_code`** (preferred) or unique **`vessel_name`**. JPS maps this to master vessel data and snapshots name/LOA/GT/draft on the plan. Optionally include `po_no`, `so_no`, `sto_no`, `shipper_name`, `trade_term`, `surveyor_name`.
 3. If PO/SO are not ready at submit time, your system **PATCH**es the instruction while status is **`Pending`**.
 4. JPS creates a real **Shipment Plan** + **Shipping Instruction** with partner status **`Pending`**.
-5. A JPS operator **reviews** in the web app and **Approves** or **Rejects**.
+5. A JPS operator **reviews** in the web app and **Approves**, **Rejects**, or **Deletes** the plan.
 6. Once approved, an operator **allocates** a jetty/berth → status becomes **`Allocated`**.
-7. Operators log **milestones** (TA, ETB, TB, ETC, TC, cast off, sailed) in JPS.
+7. Operators log **milestones** (TA, ETB, TB, ETC, TC, cast off, sailed) in JPS. Status follows them: **`Berthed`** when TB is set, **`Start Cargo`** when the cargo operation window starts, **`Cargo Done`** when cargo and final checks finish.
 8. Your system **registers a webhook** (recommended) and/or **polls** `GET` to track approval status and milestones.
-9. When the vessel **departs**, status becomes **`Sailed`**.
+9. When the vessel **departs**, status becomes **`Sailed Off`**.
 
 ```mermaid
 flowchart LR
     yourSystem[Your system POST] --> pendingState[Pending]
     pendingState -->|JPS operator approves| approvedState[Approved]
     pendingState -->|JPS operator rejects| rejectedState[Rejected]
+    pendingState -->|JPS operator deletes| deletedState[Deleted]
+    rejectedState -->|JPS operator deletes| deletedState
     approvedState -->|Jetty allocated| allocatedState[Allocated]
-    allocatedState -->|Depart| sailedState[Sailed]
+    allocatedState -->|TB set| berthedState[Berthed]
+    berthedState -->|Cargo window starts| startCargoState[Start Cargo]
+    startCargoState -->|Cargo and final checks done| cargoDoneState[Cargo Done]
+    cargoDoneState -->|Depart| sailedState[Sailed Off]
     jpsWebhook[JPS webhook POST] --> yourReceiver[Your webhook URL]
     allocatedState --> jpsWebhook
+    berthedState --> jpsWebhook
+    startCargoState --> jpsWebhook
+    cargoDoneState --> jpsWebhook
     approvedState --> jpsWebhook
     rejectedState --> jpsWebhook
+    deletedState --> jpsWebhook
+    deletedState --> yourPoll
     sailedState --> jpsWebhook
     allocatedState --> yourPoll[Your system GET fallback]
     sailedState --> yourPoll
@@ -358,7 +370,7 @@ curl -sS "http://172.28.92.56:3080/api/v1/integrations/shipping-instructions/10"
     "id": 10,
     "external_reference": "EOS-EXPORT-2026-091",
     "requested_by": "developer@your-company.com",
-    "status": "Allocated",
+    "status": "Cargo Done",
     "plan_reference": "SP-26-09-00010",
     "vessel_name": "MV NUSANTARA",
     "vessel_hub_code": "VSL-0001",
@@ -386,7 +398,8 @@ curl -sS "http://172.28.92.56:3080/api/v1/integrations/shipping-instructions/10"
       "cast_off_at": null,
       "sailed_at": null,
       "cargo_ops_start_at": "2026-09-28T07:45:00.000Z",
-      "cargo_ops_end_at": "2026-09-28T18:00:00.000Z"
+      "cargo_ops_end_at": "2026-09-28T18:00:00.000Z",
+      "cargo_done_at": "2026-09-28T19:10:00.000Z"
     },
     "etr_minutes": 4200,
     "allocation": {
@@ -412,8 +425,9 @@ curl -sS "http://172.28.92.56:3080/api/v1/integrations/shipping-instructions/10"
 | `tc` | Operations completed (sign-off) | Sign-off approval |
 | `cargo_ops_start_at` | Hose On (partner **ATS**) | **Cargo Operations → Operation Window → Start** (`operation_operational_activities.start_at`, `milestone_key = cargo_operations`; earliest across activities on the call). |
 | `cargo_ops_end_at` | Hose Off (partner **ATC**) | **Cargo Operations → Operation Window → End** (`operation_operational_activities.end_at`, same activity; latest across activities on the call). |
+| `cargo_done_at` | Cargo Done (v5.7) | Latest end among Cargo Operations activities, final inspection, and final sounding (the same instant the JPS management dashboard uses). Null while any Cargo Operations segment is still open, and until a final check or cargo end is recorded. |
 | `cast_off_at` | Vessel cast off | Clearance / depart — **not** KLIP Hose Off |
-| `sailed_at` | Sailed | Depart (status `Sailed`) |
+| `sailed_at` | Sailed | Depart (status `Sailed Off`) |
 
 **Partner industry alias (documentation only — use JPS field names in JSON):**
 
@@ -423,9 +437,9 @@ curl -sS "http://172.28.92.56:3080/api/v1/integrations/shipping-instructions/10"
 | ATB | `tb` |
 | ATS (Hose On) | `cargo_ops_start_at` |
 | ATC (Hose Off) | `cargo_ops_end_at` |
-| Vessel sailed | `cast_off_at`, `sailed_at`, and top-level `status` **`Sailed`** |
+| Vessel sailed | `cast_off_at`, `sailed_at`, and top-level `status` **`Sailed Off`** |
 
-- `allocation` is `null` until status is `Allocated` or `Sailed`.
+- `allocation` is `null` until status is `Allocated`. It stays present for `Berthed`, `Start Cargo`, `Cargo Done`, and `Sailed Off`.
 - `rejection_reason` is set only when status is `Rejected`.
 - `etr_minutes` is derived from `etc` minus now (read-only hint; not stored in JPS).
 
@@ -442,7 +456,7 @@ Same response shape as `GET /{id}`. HTTP `404` if not found or not yours.
 
 - **Recommended:** register a webhook (§3.4) for approval and milestone updates.
 - Fallback poll **at most once every 5 minutes** per instruction.
-- Continue polling (or listen for webhooks) through **`Sailed`** if you track departure.
+- Continue polling (or listen for webhooks) through **`Sailed Off`** if you track departure.
 
 ---
 
@@ -539,7 +553,7 @@ The `data` object matches the enriched **`GET /shipping-instructions/{id}`** sha
 
 | Event | When fired |
 |-------|------------|
-| `status.changed` | Plan approved, rejected, allocated, or vessel sailed |
+| `status.changed` | The partner `status` changed: approved, rejected, deleted, allocated, berthed, start cargo, cargo done, or sailed off. Not repeated while the status is unchanged. |
 | `schedule.updated` | Berthing/milestone timestamps updated — including **`ta`**, **`etb`**, **`tb`**, **`etc`**, **`tc`**, **`cargo_ops_start_at`** / **`cargo_ops_end_at`** (Hose On/Off window), **`cast_off_at`**, or **`sailed_at`** |
 
 Delivery is **at-least-once** (retries with backoff). Always dedupe on `X-JPS-Delivery-Id`.
@@ -603,11 +617,11 @@ curl -sS "$JPS_API_BASE_URL/catalog/shipping-instruction" -H "x-api-key: $JPS_AP
 {
   "success": true,
   "data": {
-    "api_version": "5.6",
+    "api_version": "5.7",
     "auth_header": "x-api-key",
     "count": 9,
     "entities": [
-      { "slug": "shipping-instruction", "name": "Shipping instruction", "path": "/shipping-instructions", "methods": ["POST", "GET", "PATCH"], "fieldCount": 18 },
+      { "slug": "shipping-instruction", "name": "Shipping instruction", "path": "/shipping-instructions", "methods": ["POST", "GET", "PATCH"], "fieldCount": 32 },
       { "slug": "webhook", "name": "Webhook endpoint", "path": "/webhooks", "methods": ["POST", "GET", "PATCH", "DELETE"], "fieldCount": 4 },
       { "slug": "term", "name": "Trade term", "path": "/terms", "methods": ["GET"], "fieldCount": 1 },
       { "slug": "agent", "name": "Shipping agent", "path": "/agents", "methods": ["POST", "GET", "PATCH"], "fieldCount": 2 },
@@ -637,14 +651,18 @@ curl -sS "$JPS_API_BASE_URL/catalog/shipping-instruction" -H "x-api-key: $JPS_AP
       { "key": "trade_term", "type": "STRING", "required": false, "patchable": true, "enumValues": ["FOB", "CIF", "CFR", "..."] },
       { "key": "shipping_instruction_document_url", "type": "URL", "required": false, "patchable": true, "maxLength": 2048 },
       { "key": "cargo", "type": "ARRAY", "required": true, "patchable": true, "items": [ { "key": "cargo_hub_code", "type": "STRING", "required": true, "enumValues": ["CMD-0006", "CMD-0010", "..."] } ] },
+      { "key": "status", "type": "STRING", "required": false, "patchable": false, "systemGenerated": true, "enumValues": ["Pending", "Approved", "Rejected", "Deleted", "Allocated", "Berthed", "Start Cargo", "Cargo Done", "Sailed Off"] },
+      { "key": "approval", "type": "OBJECT", "systemGenerated": true, "items": [ { "key": "status", "type": "STRING", "enumValues": ["Submitted", "Approved", "Rejected", "Deleted"] } ] },
+      { "key": "schedule", "type": "OBJECT", "systemGenerated": true, "items": [ { "key": "cargo_ops_start_at", "type": "DATETIME" }, { "key": "cargo_ops_end_at", "type": "DATETIME" }, { "key": "cast_off_at", "type": "DATETIME" } ] },
       { "key": "legacyFieldsRejected", "type": "ARRAY", "description": "POST fields that return 400 in v5.3 — e.g. cargo_type → use cargo_hub_code" }
     ]
   }
 }
 ```
 
-- **Field types:** `STRING`, `NUMBER`, `BOOLEAN`, `DATETIME`, `URL`, `ARRAY`, `ARRAY<STRING>`.
-- **`enumValues`** is only present when the field is constrained to a fixed set, and reflects current master data (trade term codes, surveyor names, **commodity hub codes** on `cargo[].cargo_hub_code`, port hub codes, webhook event types). Use **`GET /catalog/cargo-type`** `referenceRows` to map hub codes to short names.
+- **Field types:** `STRING`, `NUMBER`, `BOOLEAN`, `DATETIME`, `URL`, `ARRAY`, `ARRAY<STRING>`, `OBJECT`. An `OBJECT` field lists its children in **`items`**.
+- **`enumValues`** is only present when the field is constrained to a fixed set, and reflects current master data (trade term codes, surveyor names, **commodity hub codes** on `cargo[].cargo_hub_code`, port hub codes, webhook event types) or a fixed partner lifecycle. Use **`GET /catalog/cargo-type`** `referenceRows` to map hub codes to short names.
+- Fields with **`systemGenerated: true`** are the 201, GET, and webhook contract. Do not send them on POST or PATCH. That includes **`status`**, **`approval`**, **`schedule`** (including Hose On/Off **`cargo_ops_start_at`** / **`cargo_ops_end_at`**), **`allocation`**, **`company_name`**, **`plan_reference`**, **`id`**, **`port_id`**, **`etr_minutes`**, **`received_at`**, **`submitted_at`**, and **`last_updated_at`**. **`approval.status`** is `Submitted`, `Approved`, `Rejected`, or `Deleted` — not `Pending`, `Allocated`, `Berthed`, `Start Cargo`, `Cargo Done`, or `Sailed Off`.
 - **`legacyFieldsRejected`** on **`shipping-instruction`** lists POST fields that v5.3 rejects (including **`cargo_type`** — send **`cargo_hub_code`** instead).
 - **`patchable`** marks fields the `PATCH` endpoint accepts (§3.3, §4.1.1).
 - Unknown `{entity}` returns **404** with `error.code = "NOT_FOUND"`.
@@ -725,8 +743,14 @@ At least one field required. Allowed while status is **`Pending`** only.
 | `Pending` | Received, awaiting operator review. | Poll or wait for `status.changed` webhook. |
 | `Approved` | Operator accepted. Awaiting jetty allocation. | Poll / webhook until `Allocated`. |
 | `Rejected` | Operator declined. See `rejection_reason`. | Fix data; submit **new** instruction with **new** `external_reference`. |
-| `Allocated` | Jetty/berth assigned. See `allocation`. | Watch `schedule.updated` for TA/TB/ETC milestones. |
-| `Sailed` | Vessel departed. See `schedule.sailed_at`. | Terminal state for voyage tracking. |
+| `Deleted` | Operator deleted the shipment plan. `GET` by id or `external_reference` still returns this status, and delete sends `status.changed`. The same `external_reference` stays used. | Submit a **new** instruction whose `external_reference` includes the next revision (`R2`, `R3`, …). |
+| `Allocated` | Jetty/berth assigned. See `allocation`. TB is not set yet. | Watch `status.changed` for `Berthed`. |
+| `Berthed` | TB (`schedule.tb`) is set. | Watch `status.changed` for `Start Cargo`. |
+| `Start Cargo` | Cargo operation window started (`schedule.cargo_ops_start_at` set; Hose On). | Watch `status.changed` for `Cargo Done`. |
+| `Cargo Done` | Cargo operations and final checks finished (`schedule.cargo_done_at` set). Later than Hose Off (`cargo_ops_end_at`) when final checks follow the hoses. | Watch `status.changed` for `Sailed Off`. |
+| `Sailed Off` | Vessel cast off and departed. See `schedule.cast_off_at`, `schedule.sailed_at`. | Terminal state for voyage tracking. |
+
+A stage is derived from the times above, so it can move back if an operator clears the time that set it (for example TB). `schedule.updated` continues to carry every schedule change; `status.changed` is sent once per status change.
 
 ### 4.3 Response envelope
 
@@ -1022,6 +1046,10 @@ API tests alone stop at `Pending`. To see `Approved` / `Allocated`:
 | 5 | You | `GET` → expect `"status": "Approved"` |
 | 6 | JPS operator | **Allocation** → assign jetty |
 | 7 | You | `GET` → expect `"status": "Allocated"` with `allocation.jetty_name` |
+| 8 | JPS operator | Confirm berthing (TB) → `GET` expects `"Berthed"` |
+| 9 | JPS operator | Save the Cargo Operations window start → `GET` expects `"Start Cargo"` and `schedule.cargo_ops_start_at` |
+| 10 | JPS operator | End the cargo window and record final inspection / final sounding → `GET` expects `"Cargo Done"` and `schedule.cargo_done_at` |
+| 11 | JPS operator | Record depart → `GET` expects `"Sailed Off"` |
 
 Coordinate with the JPS team for operator steps, or request a test login if you need to observe the UI yourself.
 
@@ -1147,6 +1175,9 @@ When reporting issues, include:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 5.7 | 2026-10-29 | **Status stages:** `status` adds **`Berthed`**, **`Start Cargo`**, **`Cargo Done`**; **`Sailed`** is renamed **`Sailed Off`**. New **`schedule.cargo_done_at`**. Each stage change sends `status.changed` (not repeated for an unchanged status). `allocation` stays present from `Allocated` onward. Header **`X-JPS-API-Version: 5.7`**. Breaking for clients that match on `Sailed`. |
+| 5.6 | 2026-10-27 | Catalog lists the GET and webhook contract on **`shipping-instruction`**: read-only **`approval`**, **`schedule`** (including Hose On/Off), **`allocation`**, **`company_name`**, **`plan_reference`**, **`id`**, **`port_id`**, **`etr_minutes`**, and the submission timestamps. **`approval.status`** enum is separate from partner **`status`**. Header unchanged. |
+| 5.6 | 2026-10-27 | Partner status **`Deleted`**. Deleting a shipment plan sends `status.changed` with `status` and `approval.status` **`Deleted`**. `GET` by id or `external_reference` returns the same snapshot instead of **404**. **`GET /catalog/shipping-instruction`** lists `status` as read-only with those enum values, including **`Deleted`**. Header unchanged. |
 | 5.6 | 2026-10-27 | Optional cargo-line **`sto_no`** (STO No) on POST and Pending PATCH, same pattern as `po_no` / `so_no`. Blank master **LOA**, **GT**, or **draft** is stored null on the partner plan (no longer **400**). A non-positive master value is still **400**. Header unchanged. |
 | 5.6 | 2026-10-26 | **Operating company:** `company_hub_code` on POST and Pending PATCH. Required when the port has more than one mapped company; one mapped company is stored when omitted. **201**, GET, and webhook `data` echo `company_hub_code` and `company_name`. Catalog entity `company`. Header **`X-JPS-API-Version: 5.6`**. |
 | 5.5 | 2026-10-05 | KLIP **Hose On/Off:** **`cargo_ops_start_at`** / **`cargo_ops_end_at`** = Cargo Operations **operation window** start/end. **`cast_off_at`** documented as vessel cast-off only. Header **`X-JPS-API-Version: 5.5`**. |
@@ -1167,4 +1198,3 @@ When reporting issues, include:
 | 1.0 | 2026-04-23 | Initial draft (HMAC-SHA256). |
 
 Owner: JPS Backend/API Team
-

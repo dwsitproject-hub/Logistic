@@ -402,8 +402,11 @@ The API only submits and reads status. To see `Approved` or `Allocated`, an oper
 | Operator approved | `Approved` | `allocation: null` |
 | Jetty assigned | `Allocated` | `allocation.jetty_name`, `allocation.planned_berthing_time` |
 | Operator rejected | `Rejected` | `rejection_reason` populated |
-| Berthing milestones saved | `Allocated` (typical) | `data.schedule` populated (`ta`, `tb`, `etc`, …); response header **`X-JPS-API-Version: 5.6`** |
-| Cargo Operations window saved | `Allocated` (typical) | `data.schedule.cargo_ops_start_at` / `cargo_ops_end_at` (Hose On/Off); **`schedule.updated`** if registered |
+| Operator deleted the plan | `Deleted` | `status` and `approval.status` are `Deleted`. `status.changed` is sent. Same `external_reference` still returns **409** on POST. |
+| Berthing confirmed (TB set) | `Berthed` | `data.schedule` populated (`ta`, `tb`, `etc`, …); response header **`X-JPS-API-Version: 5.7`**; `status.changed` and `schedule.updated` if registered |
+| Cargo Operations window start saved | `Start Cargo` | `data.schedule.cargo_ops_start_at` (Hose On) |
+| Cargo window end saved, then final inspection / final sounding saved | `Cargo Done` once `schedule.cargo_done_at` is set | `cargo_ops_end_at` (Hose Off) is set first and the status stays `Start Cargo` until the final checks are done |
+| Depart recorded | `Sailed Off` | `schedule.cast_off_at`, `schedule.sailed_at` |
 
 Poll every few minutes in real integrations — operator review is a human process, not instant.
 
@@ -551,4 +554,3 @@ Both columns should show table names, not `null`.
 | 1.2 | 2026-09-23 | v4.1 API: **vessel_hub_code** primary vessel identifier; self-test resolves master vessel from DB |
 | 1.1 | 2026-09-21 | v4.0 API: master data + PATCH tests; automated `run-integration-self-test.ps1`; fixed duplicate §4 numbering; PowerShell file-based JSON guidance; `INVALID_STATE` and shipper prerequisites |
 | 1.0 | 2026-06-12 | Initial test guide: curl, Postman, operator lifecycle, checklist |
-

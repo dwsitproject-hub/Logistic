@@ -60,7 +60,7 @@ describe('Submit to Jetty button: what JPS holds decides what it does', () => {
   })
 
   it('every status JPS holds locks it, including the stage after Hose Off and Sailed', () => {
-    for (const status of ['Pending', 'Approved', 'Allocated', 'Completed (Hose Off)', 'Sailed']) {
+    for (const status of ['Pending', 'Approved', 'Allocated', 'Berthed', 'Start Cargo', 'Cargo Done', 'Completed (Hose Off)', 'Sailed Off', 'Sailed']) {
       expect(jettySubmitMode({ jetty_status: status })).toBe('locked')
     }
   })
@@ -79,13 +79,13 @@ describe('Submit to Jetty button: what JPS holds decides what it does', () => {
 
 describe('Refresh from JPS: only where the status can still move', () => {
   it('offered for the statuses the poller keeps polling', () => {
-    for (const status of ['Pending', 'Approved', 'Allocated', 'Completed (Hose Off)']) {
+    for (const status of ['Pending', 'Approved', 'Allocated', 'Berthed', 'Start Cargo', 'Cargo Done', 'Completed (Hose Off)']) {
       expect(jettyCanRefresh({ jetty_status: status })).toBe(true)
     }
   })
 
   it('not offered for a final status, or when nothing is at JPS', () => {
-    for (const status of ['Sailed', 'Rejected', 'Deleted']) expect(jettyCanRefresh({ jetty_status: status })).toBe(false)
+    for (const status of ['Sailed Off', 'Sailed', 'Rejected', 'Deleted']) expect(jettyCanRefresh({ jetty_status: status })).toBe(false)
     expect(jettyCanRefresh(null)).toBe(false)
     expect(jettyCanRefresh({ jetty_status: null, jetty_send_state: 'FAILED' })).toBe(false)
   })

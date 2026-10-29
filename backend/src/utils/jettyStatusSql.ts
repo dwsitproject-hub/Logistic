@@ -12,7 +12,12 @@
  */
 export const JETTY_STATUS_HOSE_OFF = 'Completed (Hose Off)';
 
-/** Statuses that can still move; the same set the poller keeps polling. */
+/**
+ * The statuses the derived stage applies to: those JPS held BEFORE v5.7, when the status stayed Allocated until the vessel sailed. JPS v5.7 has stages of its own
+ * (`Start Cargo` from Hose On, `Cargo Done` after the final checks), and a Hose Off time is then only ever set while the status is already one of them, so this rule
+ * no longer fires on v5.7 data: the status is shown as JPS gives it. It stays as a bridge for a JPS environment not yet on v5.7, and is deliberately NOT extended to the new
+ * stages. Remove it once both JPS environments are on v5.7. (The poller's set is wider: jps/types.ts JPS_LIVE_STATUSES.)
+ */
 const JETTY_STATUSES_BEFORE_SAILED = `'Pending', 'Approved', 'Allocated'`;
 
 /** SQL for the status shown, over a `jps_shipping_instructions` row (or a subselect carrying these two columns). */

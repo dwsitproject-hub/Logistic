@@ -4,7 +4,7 @@ import logger from '../utils/logger';
 import { jpsRequest } from './client';
 import { applyJpsInstruction } from './applyInstruction';
 import { jpsMinPollIntervalMs } from './config';
-import type { JpsInstruction } from './types';
+import { JPS_LIVE_STATUSES_SQL, type JpsInstruction } from './types';
 
 /**
  * JPS answers NOT_FOUND ("Shipping instruction 103 not found") for an instruction it no longer holds: an operator deleted it before the Deleted status
@@ -34,9 +34,8 @@ export interface JpsPollSummary {
 /**
  * One polling pass.
  *
- * Only instructions that can still move are polled. Under v5.0 that means `Rejected` and `Sailed`
- * are terminal and `Allocated` is not: the berthing milestones - TA, TB, ETC, cast off - arrive
- * after allocation, so stopping there would mean never seeing them.
+ * Only instructions that can still move are polled (JPS_LIVE_STATUSES). `Rejected`, `Deleted` and `Sailed Off` are terminal; `Allocated` and the stages after it (v5.7: `Berthed`,
+ * `Start Cargo`, `Cargo Done`) are not: the berthing milestones - TA, TB, Hose On / Hose Off, cast off - arrive after allocation, so stopping there would mean never seeing them.
  *
  * The partner API asks for at most one poll per instruction per five minutes, which
  * `last_polled_at` enforces. The index backing this is partial on the same predicate.
@@ -48,7 +47,7 @@ export async function pollSubmittedInstructions(limit = 50): Promise<JpsPollSumm
     `SELECT id, sto_key, jps_id, external_reference, jps_status
      FROM jps_shipping_instructions
      WHERE state = 'SUBMITTED'
-       AND COALESCE(jps_status, 'Pending') IN ('Pending', 'Approved', 'Allocated')
+       AND COALESCE(jps_status, 'Pending') IN (${JPS_LIVE_STATUSES_SQL})
        AND (last_polled_at IS NULL OR last_polled_at < NOW() - ($1::bigint || ' milliseconds')::interval)
      ORDER BY last_polled_at NULLS FIRST
      LIMIT $2`,

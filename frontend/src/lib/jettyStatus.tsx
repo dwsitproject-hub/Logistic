@@ -54,9 +54,15 @@ const BADGE_CLASS: Record<string, string> = {
   Pending: 'bg-amber-100 text-amber-800',
   Approved: 'bg-blue-100 text-blue-800',
   Allocated: 'bg-green-100 text-green-800',
-  // Discharge finished, vessel not sailed yet: a stage of its own, so it must not read like Allocated.
+  // JPS v5.7 stages after Allocated, shown as JPS gives them: berthed, hoses on, cargo and final checks done.
+  Berthed: 'bg-emerald-100 text-emerald-800',
+  'Start Cargo': 'bg-cyan-100 text-cyan-800',
+  'Cargo Done': 'bg-teal-100 text-teal-800',
+  // Discharge finished, vessel not sailed yet: a stage of its own, so it must not read like Allocated. Only for a JPS that does not yet report v5.7's own stages
+  // (see jettyStatusSql.ts); on v5.7 the status is shown as JPS gives it.
   'Completed (Hose Off)': 'bg-teal-100 text-teal-800',
-  // Terminal and uneventful: the voyage is done, so it reads quieter than Allocated.
+  // Terminal and uneventful: the voyage is done, so it reads quieter than Allocated. `Sailed` is the name before v5.7 (a row stored then keeps it).
+  'Sailed Off': 'bg-slate-100 text-slate-700',
   Sailed: 'bg-slate-100 text-slate-700',
   Rejected: 'bg-red-100 text-red-800',
   // An operator deleted the instruction at JPS (not in the partner guide): closed like Rejected, but nobody refused it, so it reads quieter.
@@ -94,9 +100,9 @@ export type JettySubmitMode = 'submit' | 'resubmit' | 'locked'
 /**
  * The button follows what JPS says about the instruction KLIP sent:
  * - Rejected or Deleted: JPS closed it; sending again creates a NEW instruction (next revision), so the wording is "Resubmit to Jetty".
- * - Any other status JPS holds (Pending, Approved, Allocated, Completed (Hose Off), Sailed): JPS has no way to replace it, so the button is disabled.
- *   "Hose On" is not a status of its own: it is the ATS time, and the instruction stays Allocated while it happens. An unknown future status locks too,
- *   which is the safe side: the backend refuses it as well.
+ * - Any other status JPS holds (Pending, Approved, Allocated, Berthed, Start Cargo, Cargo Done, Sailed Off, and the older Sailed): JPS has no way to replace it, so the button
+ *   is disabled. From JPS v5.7 "Hose On" is the stage `Start Cargo`; before it, it was only the ATS time while the instruction stayed Allocated. An unknown future status
+ *   locks too, which is the safe side: the backend refuses it as well.
  * - Nothing at JPS (Not Sent, Send Failed, On Hold): the normal Submit to Jetty.
  */
 export function jettySubmitMode(row: JettyStatusFields | null | undefined): JettySubmitMode {
@@ -106,12 +112,12 @@ export function jettySubmitMode(row: JettyStatusFields | null | undefined): Jett
 }
 
 /**
- * Whether asking JPS for the status now can tell us something: the statuses KLIP's own poller keeps polling (an instruction that can still move). A Sailed,
- * Rejected or Deleted instruction is final and is not asked about again.
+ * Whether asking JPS for the status now can tell us something: the statuses KLIP's own poller keeps polling (an instruction that can still move; backend/src/jps/types.ts
+ * JPS_LIVE_STATUSES, plus the derived "Completed (Hose Off)"). A Sailed Off (or older Sailed), Rejected or Deleted instruction is final and is not asked about again.
  */
 export function jettyCanRefresh(row: JettyStatusFields | null | undefined): boolean {
   const status = String(row?.jetty_status ?? '').trim()
-  return ['Pending', 'Approved', 'Allocated', 'Completed (Hose Off)'].includes(status)
+  return ['Pending', 'Approved', 'Allocated', 'Berthed', 'Start Cargo', 'Cargo Done', 'Completed (Hose Off)'].includes(status)
 }
 
 /**

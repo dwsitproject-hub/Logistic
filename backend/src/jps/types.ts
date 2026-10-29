@@ -1,12 +1,33 @@
-/** Wire types for the JPS partner API (Shipping Instruction, up to v5.6). */
+/** Wire types for the JPS partner API (Shipping Instruction, up to v5.7). */
 
 /**
  * Partner status values JPS reports back. Copied verbatim; KLIP does not translate them.
  *
- * `Sailed` arrived with v5.0 and is terminal for a voyage, alongside `Rejected`. `Allocated` is no
- * longer the end of the story: the berthing milestones start arriving after it.
+ * v5.7 (2026-10-29) follows the vessel through five stages after approval: `Allocated` (jetty assigned), `Berthed` (TB set), `Start Cargo` (cargo window started: Hose On),
+ * `Cargo Done` (cargo and final checks finished) and `Sailed Off` (cast off). `Sailed` was renamed `Sailed Off`; a row stored before that keeps the old text. A stage is derived
+ * from times on the JPS side, so it can move BACK when an operator clears one.
  */
-export type JpsPartnerStatus = 'Pending' | 'Approved' | 'Rejected' | 'Allocated' | 'Sailed' | 'Deleted';
+export type JpsPartnerStatus =
+  | 'Pending'
+  | 'Approved'
+  | 'Rejected'
+  | 'Deleted'
+  | 'Allocated'
+  | 'Berthed'
+  | 'Start Cargo'
+  | 'Cargo Done'
+  | 'Sailed Off'
+  | 'Sailed';
+
+/**
+ * The statuses of an instruction that can still move, so the poller keeps asking about it and the schedule it carries (TA, TB, Hose On / Hose Off) keeps arriving. Under v5.7 the
+ * poller used to stop at `Berthed` (it knew only Pending / Approved / Allocated), so the cargo window and the departure would have reached KLIP only by webhook.
+ * The terminal ones are `Rejected`, `Deleted`, `Sailed Off` and the older `Sailed`.
+ */
+export const JPS_LIVE_STATUSES = ['Pending', 'Approved', 'Allocated', 'Berthed', 'Start Cargo', 'Cargo Done'] as const;
+
+/** SQL list of JPS_LIVE_STATUSES for an IN (...); constants only, never user input. */
+export const JPS_LIVE_STATUSES_SQL = JPS_LIVE_STATUSES.map((s) => `'${s}'`).join(', ');
 
 /**
  * Statuses in which JPS has CLOSED the instruction: it will not move again, and the way forward is a NEW instruction under a new reference (the next revision).
