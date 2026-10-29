@@ -6,12 +6,15 @@ import logger from '../utils/logger';
 import { scanFileWithClamdIfConfigured } from '../services/clamScan.service';
 import {
   allocateShipmentNasFilename,
+  buildShipmentDocumentUploadSubdir,
   buildShipmentNasFileStem,
+  buildTruckingDocumentUploadSubdir,
   ensureUploadDir,
   resolveUploadAbsolutePath,
   shipmentNasFileToken,
   shipmentStructuredDocKindFromType,
   toRelativeUploadPath,
+  type ShipmentStructuredDocKind,
 } from '../utils/fileUpload';
 import { AuthRequest } from '../middleware/auth';
 
@@ -23,7 +26,14 @@ export const listDocuments = async (req: Request, res: Response) => {
     let sql = 'SELECT * FROM documents WHERE 1=1';
     const params: any[] = [];
     let idx = 1;
-    if (contractId) { sql += ` AND contract_id = $${idx++}`; params.push(contractId); }
+    // A file uploaded from the Trucking page on an operation row carries trucking_operation_id and no contract_id, so a bare contract_id test never found it: the
+    // Contract Details modal read "No documents uploaded" for a contract whose operation had one. The contract's own documents are those filed on it AND those filed
+    // on its trucking operations (the Trucking page already merges the two the other way round).
+    if (contractId) {
+      sql += ` AND (contract_id = $${idx} OR trucking_operation_id IN (SELECT t.id FROM trucking_operations t WHERE t.contract_id = $${idx}))`;
+      params.push(contractId);
+      idx += 1;
+    }
     if (shipmentId) { sql += ` AND shipment_id = $${idx++}`; params.push(shipmentId); }
     if (truckingOperationId) { sql += ` AND trucking_operation_id = $${idx++}`; params.push(truckingOperationId); }
     sql += ' ORDER BY upload_date DESC';
@@ -72,9 +82,14 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
       });
     }
 
-    const stored = await applyShipmentNasFilename(req, file, document_type, shipment_id);
+    let stored = await applyShipmentNasFilename(req, file, document_type, shipment_id);
     if (stored.error) {
       return res.status(stored.status).json({ success: false, error: { message: stored.error } });
+    }
+    // From the Trucking page: documents/trucking/<operation id or contract number> on the upload root (the Synology share in production).
+    if (!shipment_id && (trucking_operation_id || String(req.body?.upload_context ?? '').trim() === 'trucking')) {
+      const moved = await moveToTruckingFolder(file.path, { truckingOperationId: trucking_operation_id, contractId: contract_id });
+      if (moved) stored = { fileName: stored.fileName as string, filePath: toRelativeUploadPath(moved) };
     }
 
     const insert = await query(
@@ -111,6 +126,46 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, error: { message: 'Failed to upload document' } });
   }
 };
+
+/**
+ * Moves an uploaded file into `documents/trucking/<subject>` under the upload root: the operation id (OP-LAND-...) of the trucking operation, else the number of the
+ * contract the file was filed on. Returns the new absolute path, or null when the file stays where multer wrote it (no subject found, or the move failed): an upload
+ * must not fail because of where its file is filed, and the stored path always says where it really is.
+ */
+export async function moveToTruckingFolder(
+  currentAbsPath: string,
+  ref: { truckingOperationId?: unknown; contractId?: unknown },
+): Promise<string | null> {
+  try {
+    const operationUuid = String(ref.truckingOperationId ?? '').trim();
+    const contractUuid = String(ref.contractId ?? '').trim();
+    let subject = '';
+    if (operationUuid) {
+      const r = await query('SELECT operation_id FROM trucking_operations WHERE id = $1', [operationUuid]);
+      subject = String(r.rows[0]?.operation_id ?? '').trim();
+    }
+    if (!subject && contractUuid) {
+      const r = await query('SELECT contract_id FROM contracts WHERE id = $1', [contractUuid]);
+      subject = String(r.rows[0]?.contract_id ?? '').trim();
+    }
+    if (!subject) return null;
+    const dir = ensureUploadDir(buildTruckingDocumentUploadSubdir(subject));
+    const target = path.join(dir, path.basename(currentAbsPath));
+    if (path.resolve(target) === path.resolve(currentAbsPath)) return target;
+    try {
+      fs.renameSync(currentAbsPath, target);
+    } catch (err) {
+      // A rename cannot cross file systems (EXDEV); copy then remove.
+      if ((err as { code?: string })?.code !== 'EXDEV') throw err;
+      fs.copyFileSync(currentAbsPath, target);
+      fs.unlinkSync(currentAbsPath);
+    }
+    return target;
+  } catch (err) {
+    logger.warn('Trucking document stays in the upload root (could not file it under documents/trucking)', { error: (err as Error)?.message });
+    return null;
+  }
+}
 
 function uploaderLabel(req: Request): string {
   const user = (req as AuthRequest).user;
@@ -164,7 +219,10 @@ async function applyShipmentNasFilename(
     token,
     uploadedBy: uploaderLabel(req),
   });
-  const dir = path.dirname(file.path);
+  // The folder is chosen HERE, from the parsed body, and not left to multer's destination callback: every client appends `file` BEFORE document_type / shipment_id,
+  // so at destination time the body was still empty and the file landed in the upload root (found 2026-10-29: six renamed Contract/SI/BL files sitting loose in the
+  // root of the Synology share). The rename below moves it into documents/shipment/<kind>/<shipment id>/ whichever folder multer wrote it to.
+  const dir = ensureUploadDir(buildShipmentDocumentUploadSubdir(shipment, kind as ShipmentStructuredDocKind));
   const filename = allocateShipmentNasFilename(dir, stem, ext);
   const nextPath = path.join(dir, filename);
   fs.renameSync(file.path, nextPath);

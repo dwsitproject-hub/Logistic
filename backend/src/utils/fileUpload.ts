@@ -180,3 +180,12 @@ export function resolveUploadAbsolutePath(storedPath: string): string {
   }
   return path.resolve(process.cwd(), raw);
 }
+
+/**
+ * The folder a document uploaded from the Trucking page lands in under the upload root: `documents/trucking/<subject>`, where the subject is the operation id
+ * (OP-LAND-...) of the operation it was uploaded on, or the contract number for a contract that has no operation yet. Production mounts the upload root at
+ * the share \\172.30.1.94\APPs\dev\KLIP, so these are documents\trucking\OP-LAND-271020260001\ on Synology, beside documents\shipment\...
+ */
+export function buildTruckingDocumentUploadSubdir(subject: string): string {
+  return path.posix.join('documents', 'trucking', sanitizeNasNamePart(subject, 'unassigned'));
+}
