@@ -18,7 +18,8 @@ import {
   LIST_FILTER_FIELDS_ROW_CLASS,
 } from '@/components/shared/ListFilterPanel'
 import api from '@/lib/api'
-import { openDocumentPreview, previewMimeType } from '@/lib/documentView'
+import { previewMimeType } from '@/lib/documentView'
+import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/shared/DocumentPreviewDialog'
 import { describeTruckingSummaryFreshness } from '@/lib/truckingSummaryFreshness'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache, isCacheFresh, peekCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -2725,6 +2726,8 @@ function TruckingPageContent() {
       alert('Failed to download document. Please try again.')
     }
   }
+
+  const [previewDoc, setPreviewDoc] = useState<PreviewableDocument | null>(null)
 
   const handleViewDocuments = async (operation: TruckingOperation) => {
     setSelectedOperation(operation)
@@ -5622,8 +5625,8 @@ function TruckingPageContent() {
                         size="sm"
                         variant="outline"
                         disabled={previewMimeType(doc.file_name, doc.mime_type) === null}
-                        title={previewMimeType(doc.file_name, doc.mime_type) === null ? 'This file type cannot be previewed. Use Download.' : 'Open in a new tab'}
-                        onClick={() => void openDocumentPreview(doc.id, doc.file_name, doc.mime_type)}
+                        title={previewMimeType(doc.file_name, doc.mime_type) === null ? 'This file type cannot be previewed. Use Download.' : 'View here, without leaving the page'}
+                        onClick={() => setPreviewDoc({ id: doc.id, fileName: doc.file_name, mimeType: doc.mime_type })}
                       >
                         <Eye className="h-4 w-4 mr-1" />
                         View
@@ -5645,6 +5648,8 @@ function TruckingPageContent() {
           </div>
         </div>
       )}
+
+      <DocumentPreviewDialog doc={previewDoc} onClose={() => setPreviewDoc(null)} />
 
       <CreateTruckingOperationModal
         open={showCreateForm || editTruckingFromTable != null || plotTruckingFromTable != null}

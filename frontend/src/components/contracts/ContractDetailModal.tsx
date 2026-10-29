@@ -8,7 +8,8 @@ import { X } from 'lucide-react'
 import { drawnPortLabel } from '@/lib/dischargePortFilter'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import api from '@/lib/api'
-import { openDocumentPreview, previewMimeType } from '@/lib/documentView'
+import { previewMimeType } from '@/lib/documentView'
+import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/shared/DocumentPreviewDialog'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, formatRupiah } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -471,6 +472,8 @@ export function ContractDetailModal({
 
   const [docsLoading, setDocsLoading] = useState(false)
   const [selectedContractDocs, setSelectedContractDocs] = useState<DocumentItem[]>([])
+  /** The document shown in the preview dialog (View in Documents), inside the page. */
+  const [previewDoc, setPreviewDoc] = useState<PreviewableDocument | null>(null)
   const [stoInfoLoading, setStoInfoLoading] = useState(false)
   const [stoInfo, setStoInfo] = useState<StoInfoRow[]>([])
   const [stoQtySummary, setStoQtySummary] = useState<{
@@ -1595,8 +1598,8 @@ export function ContractDetailModal({
                             size="sm"
                             variant="outline"
                             disabled={previewMimeType(doc.file_name, doc.mime_type) === null}
-                            title={previewMimeType(doc.file_name, doc.mime_type) === null ? 'This file type cannot be previewed. Use Download.' : 'Open in a new tab'}
-                            onClick={() => void openDocumentPreview(doc.id, doc.file_name, doc.mime_type)}
+                            title={previewMimeType(doc.file_name, doc.mime_type) === null ? 'This file type cannot be previewed. Use Download.' : 'View here, without leaving the page'}
+                            onClick={() => setPreviewDoc({ id: doc.id, fileName: doc.file_name, mimeType: doc.mime_type })}
                           >
                             View
                           </Button>
@@ -2087,6 +2090,7 @@ export function ContractDetailModal({
           }
         }}
       />
+      <DocumentPreviewDialog doc={previewDoc} onClose={() => setPreviewDoc(null)} />
     </>
   )
 }
