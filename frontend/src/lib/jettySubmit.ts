@@ -56,6 +56,20 @@ export interface JettyRefreshResult {
   readiness: JettyReadiness
 }
 
+/**
+ * Whether the screen is behind KLIP's own record after "Refresh from JPS", so the Jetty Status badge and the list behind the modal must be read again.
+ *
+ * The `status` a "too soon" answer carries is not a fresh answer from JPS: it is the status KLIP already HOLDS (the sweep or the JPS webhook wrote it a moment
+ * ago, which is exactly why JPS is not asked again). A modal opened BEFORE that write still shows the old one, so JPS: Approved sat in the banner beside a Pending
+ * badge, and only a refresh that found a CHANGE re-read the badge. The test is therefore "does what KLIP holds differ from what is shown", whatever the answer was.
+ */
+export function jettyRefreshNeedsReload(refresh: JettyRefreshOutcome, shownStatus: string | null | undefined): boolean {
+  if (refresh.kind === 'refreshed' && refresh.changed) return true
+  if (refresh.kind !== 'refreshed' && refresh.kind !== 'too_soon') return false
+  const held = String(refresh.status ?? '').trim().toLowerCase()
+  return held !== '' && held !== String(shownStatus ?? '').trim().toLowerCase()
+}
+
 export interface JettyInstruction {
   id?: number
   status?: string

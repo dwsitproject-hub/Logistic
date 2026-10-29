@@ -10,6 +10,7 @@ import {
   describeJettyRefresh,
   describeJettyResubmit,
   describeJettyResult,
+  jettyRefreshNeedsReload,
   type JettyReadiness,
   type JettyRefreshResult,
   type JettySubmitResult,
@@ -34,10 +35,13 @@ function errorText(err: unknown): string {
  */
 export function SubmitToJettyDialog({
   shipmentId,
+  shownJettyStatus,
   onClose,
   onSent,
 }: {
   shipmentId: string
+  /** The Jetty Status the caller shows now, so a refresh can tell whether KLIP holds a different one (see jettyRefreshNeedsReload). */
+  shownJettyStatus?: string | null
   onClose: () => void
   /** Called after a request reached JPS (accepted or refused), so the caller can refresh the Jetty Status. */
   onSent: () => void
@@ -78,7 +82,7 @@ export function SubmitToJettyDialog({
       const data = res.data?.data as JettyRefreshResult
       setRefreshNote(describeJettyRefresh(data.refresh))
       setReadiness(data.readiness ?? null)
-      if (data.refresh.kind === 'refreshed' && data.refresh.changed) onSent()
+      if (jettyRefreshNeedsReload(data.refresh, shownJettyStatus)) onSent()
     } catch (err) {
       setError(errorText(err))
     } finally {

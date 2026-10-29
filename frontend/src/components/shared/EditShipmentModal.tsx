@@ -72,7 +72,7 @@ import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import api from '@/lib/api'
 import { JETTY_COLUMNS_ENABLED } from '@/lib/jettyFeature'
 import { SubmitToJettyDialog } from '@/components/shared/SubmitToJettyDialog'
-import { describeJettyRefresh, type JettyRefreshResult } from '@/lib/jettySubmit'
+import { describeJettyRefresh, jettyRefreshNeedsReload, type JettyRefreshResult } from '@/lib/jettySubmit'
 import { drawnPortLabel } from '@/lib/dischargePortFilter'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
@@ -1221,7 +1221,8 @@ export function EditShipmentModal({
       const data = res.data?.data as JettyRefreshResult | undefined
       if (data?.refresh) {
         setJettyRefreshNote(describeJettyRefresh(data.refresh).text)
-        if (data.refresh.kind === 'refreshed' && data.refresh.changed) jettyChanged()
+        // Also when JPS was not asked ("too soon"): KLIP may already hold a newer status than this modal opened with.
+        if (jettyRefreshNeedsReload(data.refresh, jettyStatus?.jetty_status)) jettyChanged()
       }
     } catch (err) {
       const e = err as { response?: { data?: { error?: { message?: string } } }; message?: string }
@@ -3883,6 +3884,7 @@ export function EditShipmentModal({
           {jettyDialogOpen && shipmentId ? (
             <SubmitToJettyDialog
               shipmentId={shipmentId}
+              shownJettyStatus={jettyStatus?.jetty_status}
               onClose={() => setJettyDialogOpen(false)}
               onSent={jettyChanged}
             />

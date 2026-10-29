@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   JETTY_FIX_PAGE,
   describeJettyRefresh,
+  jettyRefreshNeedsReload,
   describeJettyResubmit,
   describeJettyResult,
   unmetChecks,
@@ -98,6 +99,32 @@ describe('unmetChecks and the pages that fix them', () => {
     // fixed on the shipment, in SAP or at JPS: no KLIP page to link
     expect(JETTY_FIX_PAGE.shipment).toBeUndefined()
     expect(JETTY_FIX_PAGE.jps).toBeUndefined()
+  })
+})
+
+describe('jettyRefreshNeedsReload: the badge must follow what KLIP holds', () => {
+  // 2026-10-29, SIT: the banner said "KLIP last asked a moment ago (JPS: Approved)" beside a Pending badge. "Too soon" carries the status KLIP already holds, and only a refresh that
+  // found a change used to re-read the badge.
+  it('too soon, with KLIP holding a status the screen does not show: read again', () => {
+    expect(jettyRefreshNeedsReload({ kind: 'too_soon', retryInSeconds: 120, status: 'Approved' }, 'Pending')).toBe(true)
+  })
+
+  it('too soon, with the screen already right: nothing to read', () => {
+    expect(jettyRefreshNeedsReload({ kind: 'too_soon', retryInSeconds: 120, status: 'Approved' }, 'Approved')).toBe(false)
+    expect(jettyRefreshNeedsReload({ kind: 'too_soon', retryInSeconds: 120, status: 'approved ' }, ' Approved')).toBe(false)
+  })
+
+  it('a refresh that found a change always reads again; one that found none only when the screen is behind', () => {
+    expect(jettyRefreshNeedsReload({ kind: 'refreshed', status: 'Rejected', previousStatus: 'Pending', changed: true }, 'Rejected')).toBe(true)
+    expect(jettyRefreshNeedsReload({ kind: 'refreshed', status: 'Pending', previousStatus: 'Pending', changed: false }, 'Pending')).toBe(false)
+    expect(jettyRefreshNeedsReload({ kind: 'refreshed', status: 'Approved', previousStatus: 'Approved', changed: false }, 'Pending')).toBe(true)
+  })
+
+  it('no instruction, a failed ask, or no status at all: nothing to read, and a caller that shows nothing is behind', () => {
+    expect(jettyRefreshNeedsReload({ kind: 'none' }, 'Pending')).toBe(false)
+    expect(jettyRefreshNeedsReload({ kind: 'failed', message: 'x' }, 'Pending')).toBe(false)
+    expect(jettyRefreshNeedsReload({ kind: 'too_soon', retryInSeconds: 60, status: null }, 'Pending')).toBe(false)
+    expect(jettyRefreshNeedsReload({ kind: 'too_soon', retryInSeconds: 60, status: 'Approved' }, undefined)).toBe(true)
   })
 })
 
