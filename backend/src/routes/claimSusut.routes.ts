@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
-import { ensureUploadDir } from '../utils/fileUpload';
+import { ensureUploadDir, importDataSubdir } from '../utils/fileUpload';
 import {
   uploadClaimSusutExcel,
   listClaimSusutImports,
@@ -20,7 +20,9 @@ const router = express.Router();
 
 router.use(authenticateToken);
 
-const uploadDir = ensureUploadDir('claim-susut');
+// A workbook imported by hand is kept as a backup in IMPORT DATA/claim-susut/manual on the upload root (the Synology share in production). The folder above it is for the
+// scheduled import, which must not meet these. The database keeps only the original file name.
+const uploadDir = ensureUploadDir(importDataSubdir('claim-susut', 'manual'));
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {

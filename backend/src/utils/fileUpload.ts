@@ -175,10 +175,34 @@ export function shipmentStructuredDocKindFromType(
 /** Resolve stored path for filesystem reads (supports legacy absolute rows). */
 export function resolveUploadAbsolutePath(storedPath: string): string {
   const raw = String(storedPath ?? '').trim();
-  if (path.isAbsolute(raw)) {
-    return path.resolve(raw);
+  const primary = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(process.cwd(), raw);
+  if (fs.existsSync(primary)) return primary;
+  // Commercial Documents moved from "COMMERCIAL DOCS" to "commercial-docs" on the share. A path stored under either name finds its file under the other while the folder and
+  // the database are being brought in step (and after a rollback), so nothing reads "File not found" in between.
+  for (const alt of commercialDocsAlternates(primary)) {
+    if (fs.existsSync(alt)) return alt;
   }
-  return path.resolve(process.cwd(), raw);
+  return primary;
+}
+
+/** The Commercial Documents folder on the upload root: the name it has now, and the one it had until 2026-10-29. */
+export const COMMERCIAL_DOCS_FOLDER = 'commercial-docs';
+export const COMMERCIAL_DOCS_LEGACY_FOLDER = 'COMMERCIAL DOCS';
+
+/** The same path with the Commercial Documents folder spelled the other way (both directions); empty when the path does not go through that folder. */
+export function commercialDocsAlternates(absOrStored: string): string[] {
+  const out: string[] = [];
+  for (const [from, to] of [
+    [COMMERCIAL_DOCS_LEGACY_FOLDER, COMMERCIAL_DOCS_FOLDER],
+    [COMMERCIAL_DOCS_FOLDER, COMMERCIAL_DOCS_LEGACY_FOLDER],
+  ]) {
+    for (const sep of ['/', '\\']) {
+      const needle = `${sep}${from}${sep}`;
+      const at = absOrStored.indexOf(needle);
+      if (at >= 0) out.push(absOrStored.slice(0, at) + sep + to + sep + absOrStored.slice(at + needle.length));
+    }
+  }
+  return out;
 }
 
 /**
@@ -188,4 +212,18 @@ export function resolveUploadAbsolutePath(storedPath: string): string {
  */
 export function buildTruckingDocumentUploadSubdir(subject: string): string {
   return path.posix.join('documents', 'trucking', sanitizeNasNamePart(subject, 'unassigned'));
+}
+
+/**
+ * Folder of the upload root that holds what is imported into KLIP from files: on the Synology share, `IMPORT DATA` beside `documents` (Ryan, 2026-10-29). SAP's own export
+ * folders live in the same `IMPORT DATA`, separate mounts that this does not touch.
+ *
+ * Quality Claim and Shortage Claim: the folder itself, `IMPORT DATA/claim-mutu` and `IMPORT DATA/claim-susut`, is where a scheduled import will pick workbooks up (not built
+ * yet); a workbook a user imports by hand in the application is kept as a backup in its `manual` subfolder, so a scan of the folder never meets it and imports it twice.
+ */
+export const IMPORT_DATA_FOLDER = 'IMPORT DATA';
+
+/** `IMPORT DATA/<part>/<part>...`; each part is cleaned like a file-name part, so none can climb out. */
+export function importDataSubdir(...parts: string[]): string {
+  return path.posix.join(IMPORT_DATA_FOLDER, ...parts.map((p) => sanitizeNasNamePart(p, 'unassigned')));
 }

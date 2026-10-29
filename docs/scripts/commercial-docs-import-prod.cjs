@@ -22,7 +22,7 @@
  *  - Held back and reported, never guessed: a PO that production does not have, an uploader whose email has no production
  *    account, a file whose checksum does not match the manifest.
  *  - The original upload time is kept. The file lands in the folder production would have used at that time
- *    (COMMERCIAL DOCS/<YYYY>/<MM>/<PO> on the NAS layout). Each migrated file gets one history row (ADD, or EDIT when it is a
+ *    (commercial-docs/<YYYY>/<MM>/<PO> on the NAS layout). Each migrated file gets one history row (ADD, or EDIT when it is a
  *    next version) whose user name ends in " [migrasi dari SIT]", so the page shows where it came from.
  *  - --apply copies the files, then writes all rows in ONE transaction. If the transaction fails, the copied files are removed.
  *    A log of every id and path written is saved to /tmp/commercial-docs-import-<stamp>.json; --rollback=<log> undoes it.

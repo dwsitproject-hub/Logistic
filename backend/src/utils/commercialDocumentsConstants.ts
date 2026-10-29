@@ -1,3 +1,5 @@
+import { COMMERCIAL_DOCS_FOLDER } from './fileUpload';
+
 export const COMMERCIAL_DOCUMENT_TYPES = [
   'draft_contract',
   'contract',
@@ -191,14 +193,14 @@ export function buildLegacyCommercialDocumentStoredName(poNumber: string, origin
   return `${base}.${ext}`;
 }
 
-/** Synology share folder under the production KLIP upload root (`dev/KLIP`). */
-export const COMMERCIAL_DOCS_SHARE_FOLDER = 'COMMERCIAL DOCS';
+/** Synology share folder under the production KLIP upload root (`dev/KLIP`): `commercial-docs` (it was `COMMERCIAL DOCS` until 2026-10-29; see fileUpload.ts). */
+export const COMMERCIAL_DOCS_SHARE_FOLDER = COMMERCIAL_DOCS_FOLDER;
 
 /** Local/SIT Docker-volume folder — not the production NAS share. */
 export const COMMERCIAL_DOCS_LOCAL_FOLDER = 'commercial-documents';
 
 /**
- * Production-only layout: `COMMERCIAL DOCS/{YYYY}/{MM}/{PO}` on
+ * Production-only layout: `commercial-docs/{YYYY}/{MM}/{PO}` on
  * `\\172.30.1.94\APPs\dev\KLIP`.
  * Enable with KLIP_COMMERCIAL_DOCS_SHARE=1 or KLIP_ENV=prod. SIT/local stay off.
  */
@@ -223,7 +225,7 @@ export function commercialDocumentUploadCalendar(now: Date = new Date()): { year
 
 /**
  * Relative dir under uploads root.
- * Production NAS: `COMMERCIAL DOCS/{YYYY}/{MM}/{PO}` (tahun/bulan berjalan Asia/Jakarta).
+ * Production NAS: `commercial-docs/{YYYY}/{MM}/{PO}` (tahun/bulan berjalan Asia/Jakarta).
  * SIT/local: `commercial-documents/{PO}` on the Docker volume.
  */
 export function commercialDocumentUploadRelativeDir(poNumber: string, now: Date = new Date()): string {

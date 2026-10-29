@@ -2,7 +2,7 @@
 
 ## Fallback while Synology is unreachable (current default)
 
-`\\172.30.1.94\APPs\dev\KLIP\COMMERCIAL DOCS\{YYYY}\{MM}` is **production only** (bulan berjalan). SIT must keep Docker volume `backend_uploads` and must **not** bind `dev/KLIP`.
+`\\172.30.1.94\APPs\dev\KLIP\commercial-docs\{YYYY}\{MM}` is **production only** (bulan berjalan). SIT must keep Docker volume `backend_uploads` and must **not** bind `dev/KLIP`.
 
 If the backend server **cannot ping** `172.30.1.94` (cloud ↔ on-prem routing not ready), use the default compose stack — uploads go to Docker volume **`backend_uploads`**:
 
@@ -33,7 +33,7 @@ When Synology is reachable, **persistent** KLIP uploads on SIT/staging should us
 APPs/
   dev/
     KLIP/                          ← production commercial-docs root (`KLIP_UPLOAD_MOUNT`)
-      COMMERCIAL DOCS/
+      commercial-docs/
         {YYYY}/                    ← tahun berjalan (Asia/Jakarta), e.g. 2026 then 2027
           {MM}/                    ← 01–12
             {PO}/
@@ -55,10 +55,10 @@ APPs/
 
 | Module | Path under `dev/klip/` |
 |--------|-------------------------|
-| Commercial Documents (PDF) | Production NAS only: `dev/KLIP/COMMERCIAL DOCS/{YYYY}/{MM}/{PO}`. SIT: Docker volume `commercial-documents/{PO}` |
+| Commercial Documents (PDF) | Production NAS only: `dev/KLIP/commercial-docs/{YYYY}/{MM}/{PO}`. SIT: Docker volume `commercial-documents/{PO}` |
 | Documents (contract/shipment/trucking) | root of upload folder |
-| Claim Mutu import | `claim-mutu/` |
-| Claim Susut import | `claim-susut/` |
+| Claim Mutu import (a manual upload, kept as a backup) | `IMPORT DATA/claim-mutu/manual/` |
+| Claim Susut import (a manual upload, kept as a backup) | `IMPORT DATA/claim-susut/manual/` |
 | Supplier import | `suppliers/` |
 | SAP MASTER v2 auto-import | `<SAP_AUTO_IMPORT_ROOT>/ORIGINAL/` (input, never moved), `Success/`, `Failed/` — see the note below |
 
@@ -178,8 +178,8 @@ ls -la /mnt/synology-apps/dev/klip
 # Writable from container (runs as uid 1001)
 docker compose -f docker-compose.backend.yml exec backend sh -c 'touch /app/uploads/.write-test && rm /app/uploads/.write-test && echo OK'
 
-# Production only — COMMERCIAL DOCS/{YYYY}/{MM} (bulan berjalan). Do not expect this on SIT.
-# ls -la "/mnt/synology/dev/KLIP/COMMERCIAL DOCS/$(date +%Y)/$(date +%m)/"
+# Production only — commercial-docs/{YYYY}/{MM} (bulan berjalan). Do not expect this on SIT.
+# ls -la "/mnt/synology/dev/KLIP/commercial-docs/$(date +%Y)/$(date +%m)/"
 
 # SAP drop folders (scheduler reads Original/)
 ls -la /mnt/synology-apps/dev/klip/SAP\ Data/Original /mnt/synology-apps/dev/klip/SAP\ Data/Success /mnt/synology-apps/dev/klip/SAP\ Data/Failed

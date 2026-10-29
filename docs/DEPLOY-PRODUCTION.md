@@ -451,7 +451,7 @@ User Hub yang emailnya tidak ada di tabel `users` ditolak ke `/login?error=sso_n
 
 Upload Commercial Documents di **production saja** menulis ke:
 
-`\\172.30.1.94\APPs\dev\KLIP\COMMERCIAL DOCS\{YYYY}\{MM}\{PO}`
+`\\172.30.1.94\APPs\dev\KLIP\commercial-docs\{YYYY}\{MM}\{PO}`
 
 `{YYYY}/{MM}` adalah **bulan berjalan** (Asia/Jakarta), bukan tanggal kontrak. Oktober 2026 → `2026/10`. SIT dan local **tidak** memakai folder ini (volume Docker `commercial-documents/{PO}`).
 

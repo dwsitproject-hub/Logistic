@@ -92,7 +92,7 @@ else
 fi
 KLIP_COMMERCIAL_DOCS_SHARE="$(env_value "${ROOT_ENV}" KLIP_COMMERCIAL_DOCS_SHARE)"
 if [[ "${KLIP_COMMERCIAL_DOCS_SHARE}" != "1" ]]; then
-  echo "WARN: set KLIP_ENV=prod and KLIP_COMMERCIAL_DOCS_SHARE=1 in ${ROOT_ENV} so uploads use COMMERCIAL DOCS/{YYYY}/{MM}"
+  echo "WARN: set KLIP_ENV=prod and KLIP_COMMERCIAL_DOCS_SHARE=1 in ${ROOT_ENV} so uploads use commercial-docs/{YYYY}/{MM}"
 fi
 echo "==> Rebuild backend with Apsara overlay (will not start klip-postgres)"
 docker compose "${COMPOSE_ARGS[@]}" up -d --build backend

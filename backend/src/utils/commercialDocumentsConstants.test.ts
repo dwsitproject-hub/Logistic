@@ -170,14 +170,14 @@ describe('commercialDocumentsConstants', () => {
     });
   });
 
-  it('production NAS layout uses current Jakarta year/month under COMMERCIAL DOCS', () => {
+  it('production NAS layout uses current Jakarta year/month under commercial-docs', () => {
     withNasLayoutEnv(true, () => {
       expect(useCommercialDocsNasLayout()).toBe(true);
       const dir = commercialDocumentUploadRelativeDir(
         '1381002868',
         new Date('2026-09-18T03:00:00.000Z'),
       );
-      expect(dir).toBe('COMMERCIAL DOCS/2026/09/1381002868');
+      expect(dir).toBe('commercial-docs/2026/09/1381002868');
     });
   });
 
@@ -187,7 +187,7 @@ describe('commercialDocumentsConstants', () => {
         '1381002868',
         new Date('2026-12-31T17:30:00.000Z'),
       );
-      expect(dir).toBe('COMMERCIAL DOCS/2027/01/1381002868');
+      expect(dir).toBe('commercial-docs/2027/01/1381002868');
     });
   });
 });
