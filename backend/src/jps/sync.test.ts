@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./config', () => ({
   isJpsEnabled: vi.fn(() => true),
+  jpsAutoSubmit: vi.fn(() => true),
   jpsEnabledPortNames: vi.fn(() => []),
   jpsRetryFailed: vi.fn(),
   jpsSweepCron: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock('../services/shipmentList.service', () => ({ invalidateShipmentsListCach
 vi.mock('../utils/logger', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 import { amendPendingInstructions } from './amend';
+import { jpsAutoSubmit } from './config';
 import { pollSubmittedInstructions } from './poll';
 import { submitEligibleStos } from './submit';
 import { invalidateShipmentsListCache } from '../services/shipmentList.service';
@@ -77,5 +79,38 @@ describe('runJpsSync and the Shipments list cache', () => {
     sweep({});
     await runJpsSync('cron');
     expect(invalidateShipmentsListCache).not.toHaveBeenCalled();
+  });
+});
+
+// From 2026-10-30 nothing is sent to JPS on its own unless Integrations > JPS > Send automatically is true: a user presses Submit to Jetty.
+describe('runJpsSync with Send automatically off', () => {
+  beforeEach(() => {
+    vi.mocked(submitEligibleStos).mockClear();
+    vi.mocked(amendPendingInstructions).mockClear();
+    vi.mocked(pollSubmittedInstructions).mockClear();
+    vi.mocked(invalidateShipmentsListCache).mockClear();
+  });
+
+  it('sends nothing, for any reason (SAP import, shipment edit, schedule), but still amends and polls what JPS already holds', async () => {
+    vi.mocked(jpsAutoSubmit).mockReturnValue(false);
+    sweep({});
+    for (const reason of ['sap-import', 'shipment-edit', 'ata-override', 'cron']) await runJpsSync(reason);
+    expect(submitEligibleStos).not.toHaveBeenCalled();
+    expect(amendPendingInstructions).toHaveBeenCalledTimes(4);
+    expect(pollSubmittedInstructions).toHaveBeenCalledTimes(4);
+  });
+
+  it('a status JPS changed still clears the list cache', async () => {
+    vi.mocked(jpsAutoSubmit).mockReturnValue(false);
+    sweep({ changed: 1 });
+    await runJpsSync('cron');
+    expect(invalidateShipmentsListCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('with it on, the sweep sends as before', async () => {
+    vi.mocked(jpsAutoSubmit).mockReturnValue(true);
+    sweep({ submitted: 1 });
+    await runJpsSync('cron');
+    expect(submitEligibleStos).toHaveBeenCalledTimes(1);
   });
 });

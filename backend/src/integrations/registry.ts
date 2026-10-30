@@ -86,6 +86,12 @@ export const INTEGRATIONS: IntegrationDef[] = [
         min: 60_000,
         help: 'JPS allows at most one status poll per instruction every 5 minutes.',
       },
+      {
+        key: 'JPS_AUTO_SUBMIT',
+        label: 'Send automatically',
+        kind: 'boolean',
+        help: 'Off unless set to true. When off, nothing is sent to JPS on its own (not after a SAP import, a shipment edit or on the schedule): a user presses Submit to Jetty on the shipment. Instructions already at JPS are still polled for their status and amended while Pending. Takes effect at once.',
+      },
       { key: 'JPS_MAX_SUBMITS_PER_SWEEP', label: 'Max submits per sweep', kind: 'integer', min: 1 },
       {
         key: 'JPS_RETRY_FAILED',

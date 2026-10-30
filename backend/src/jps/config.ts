@@ -109,6 +109,15 @@ export function jpsWebhookSecret(): string {
   return String(integrationEnv('JPS_WEBHOOK_SECRET') || '').trim();
 }
 
+/**
+ * Whether the sweep (after a SAP import, after a shipment edit, and on the schedule) sends newly eligible STOs to JPS by itself. Off unless JPS_AUTO_SUBMIT is true
+ * (Integrations > JPS > Send automatically): from 2026-10-30 a user presses Submit to Jetty. Read on every sweep, so a change in the menu applies at once, without a restart.
+ * It governs only that automatic SENDING: the Submit to Jetty button does not look at it, and instructions already at JPS are still polled and amended.
+ */
+export function jpsAutoSubmit(): boolean {
+  return String(integrationEnv('JPS_AUTO_SUBMIT') || '').toLowerCase() === 'true';
+}
+
 export function jpsSweepCron(): string {
   return integrationEnv('JPS_SWEEP_CRON') || '*/15 * * * *';
 }

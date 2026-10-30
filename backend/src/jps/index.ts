@@ -5,7 +5,7 @@
  * the operator's decision. JPS has no webhook in v1 and no way to cancel an instruction, so the
  * whole conversation is: submit once, poll until it settles.
  */
-export { isJpsEnabled, jpsEnabledPortNames, jpsRetryFailed, jpsSweepCron } from './config';
+export { isJpsEnabled, jpsAutoSubmit, jpsEnabledPortNames, jpsRetryFailed, jpsSweepCron } from './config';
 export { submitEligibleStos, type JpsSubmitSummary } from './submit';
 export { handleJpsWebhook, type JpsWebhookResult } from './webhookHandler';
 export { pollSubmittedInstructions, type JpsPollSummary } from './poll';
@@ -21,9 +21,12 @@ export type { JpsInstruction, JpsPartnerStatus, JpsSubmitPayload } from './types
 
 import logger from '../utils/logger';
 import { amendPendingInstructions } from './amend';
-import { isJpsEnabled } from './config';
+import { isJpsEnabled, jpsAutoSubmit } from './config';
 import { pollSubmittedInstructions } from './poll';
-import { submitEligibleStos } from './submit';
+import { submitEligibleStos, type JpsSubmitSummary } from './submit';
+
+/** What a sweep that sent nothing reports, for the sweep that is not allowed to send (Send automatically is off). */
+const NOTHING_SENT: JpsSubmitSummary = { considered: 0, submitted: 0, recovered: 0, held: 0, failed: 0, listChanged: 0 };
 
 /**
  * Jetty Status is a column of the Shipments list, and the list keeps its pages (and the summary cards) in memory for
@@ -52,7 +55,8 @@ async function refreshShipmentsListIfJettyChanged(sent: number, statusChanges: n
 export async function runJpsSync(reason: string): Promise<void> {
   if (!isJpsEnabled()) return;
   try {
-    const submitted = await submitEligibleStos();
+    // Sending is the user's step while Send automatically is off: only the work on instructions JPS already holds (amend, poll) runs.
+    const submitted = jpsAutoSubmit() ? await submitEligibleStos() : NOTHING_SENT;
     // Amend before polling: an instruction the operator decides on mid-sweep comes back
     // INVALID_STATE, and the poll that follows records the decision either way.
     const amended = await amendPendingInstructions();

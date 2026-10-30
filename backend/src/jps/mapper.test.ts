@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { jpsDocumentDownloadUrl } from './config';
+import { jpsAutoSubmit, jpsDocumentDownloadUrl } from './config';
 import {
   buildJpsExternalReference,
   buildJpsSubmitPayload,
@@ -370,5 +370,26 @@ describe('requested_by: who JPS shows as the requester', () => {
   it('is in the payload when the source carries it, and absent (not null) when it does not', () => {
     expect(buildJpsSubmitPayload(source({ requested_by: 'budi.santoso@kpn.com' })).payload?.requested_by).toBe('budi.santoso@kpn.com');
     expect(buildJpsSubmitPayload(source()).payload).not.toHaveProperty('requested_by');
+  });
+});
+
+describe('jpsAutoSubmit: Send automatically', () => {
+  const previous = process.env.JPS_AUTO_SUBMIT;
+  afterEach(() => {
+    if (previous === undefined) delete process.env.JPS_AUTO_SUBMIT;
+    else process.env.JPS_AUTO_SUBMIT = previous;
+  });
+
+  it('is off unless the setting says true (an unset setting, and anything else, is off)', () => {
+    delete process.env.JPS_AUTO_SUBMIT;
+    expect(jpsAutoSubmit()).toBe(false);
+    for (const v of ['false', '', '1', 'yes']) {
+      process.env.JPS_AUTO_SUBMIT = v;
+      expect(jpsAutoSubmit()).toBe(false);
+    }
+    process.env.JPS_AUTO_SUBMIT = 'true';
+    expect(jpsAutoSubmit()).toBe(true);
+    process.env.JPS_AUTO_SUBMIT = 'TRUE';
+    expect(jpsAutoSubmit()).toBe(true);
   });
 });

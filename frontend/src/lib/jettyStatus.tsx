@@ -167,7 +167,7 @@ export function jettySendStateTooltip(row: JettyStatusFields | null | undefined)
       : [
           'KLIP is holding this STO back and has not sent it to JPS yet.',
           error ? `Reason: ${error}` : null,
-          'It is sent on its own once the data is fixed.',
+          'Once the data is fixed it can be sent: press Submit to Jetty on the shipment (or, when Send automatically is on in Integrations > JPS, it is sent on its own).',
         ]
   if (row?.jetty_send_at) lines.push(`Last attempt: ${new Date(row.jetty_send_at).toLocaleString('en-GB')}`)
   return lines.filter(Boolean).join('\n')
