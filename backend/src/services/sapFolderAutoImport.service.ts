@@ -556,14 +556,15 @@ async function runSapFolderAutoImportCore(
     }));
 
     if (toProcess.length === 0) {
-      const emailSent = notify ? await sendRunEmail('no_new_files', [], skipped.length) : false;
+      // No email for a quiet run (it used to send "no new files" on every tick of the 06:00-10:00 schedule, 2026-11-02): the run is still recorded in the SAP Data run history,
+      // and a share that cannot be read (source_missing) or a failed file still sends its own email.
       return {
         ran: true,
         filesScanned: stated.length,
         filesProcessed: 0,
         filesSkippedChecksum: skipped.length,
         files: skippedResults,
-        emailSent,
+        emailSent: false,
       };
     }
 

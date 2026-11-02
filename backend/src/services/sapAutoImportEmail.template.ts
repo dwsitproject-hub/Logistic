@@ -20,7 +20,7 @@ export interface SapAutoImportEmailFile {
   errorLogSnippet?: string[];
 }
 
-export type SapAutoImportEmailKind = 'skipped_in_flight' | 'no_new_files' | 'run_summary' | 'source_missing';
+export type SapAutoImportEmailKind = 'skipped_in_flight' | 'run_summary' | 'source_missing';
 
 export interface SapAutoImportEmailInput {
   kind: SapAutoImportEmailKind;
@@ -35,11 +35,8 @@ export function buildSapAutoImportEmailSubject(input: SapAutoImportEmailInput): 
   if (input.kind === 'skipped_in_flight') {
     return 'KLIP SAP Auto Import: skipped (import already running)';
   }
-  if (input.kind === 'no_new_files') {
-    return 'KLIP SAP Auto Import: no new files';
-  }
   if (input.kind === 'source_missing') {
-    // Not "no new files": nothing was looked at. The two used to read the same, which hid a dead share for half a day.
+    // Not a quiet morning: nothing was looked at. The two used to read the same ("no new files"), which hid a dead share for half a day.
     return 'KLIP SAP Auto Import: the SAP share cannot be read - nothing was imported';
   }
   const files = input.files ?? [];
@@ -112,15 +109,6 @@ export function buildSapAutoImportEmailHtml(input: SapAutoImportEmailInput): str
         <p>The scheduler ran, but the source folder${input.sourcePath ? ` <code>${escapeHtml(input.sourcePath)}</code>` : ''} is not readable inside the backend container, so <strong>no file was looked at and nothing was imported</strong>. This is not a quiet morning.</p>
         <p>Likely causes: the route from the server to the Synology is broken (for example a Docker network took the office LAN subnet 172.30.0.0/16), or the share mount on the host is dead. On the backend host: <code>ip route get 172.30.1.94</code> should not go through a <code>br-</code> device, and <code>ls /mnt/synology-apps</code> should list the share.</p>
         <p>Once the share is readable, open SAP Data and press <strong>Sync</strong> to import the newest file without waiting for the next schedule.</p>
-        <p><a href="${escapeHtml(`${frontendUrl}/sap-imports`)}">Open SAP Data → Import History</a></p>
-      </div>`;
-  }
-
-  if (input.kind === 'no_new_files') {
-    return `
-      <div style="font-family:Arial,sans-serif;color:#111827;max-width:640px;">
-        <h2 style="margin:0 0 12px;">SAP auto-import — no new files</h2>
-        <p>The scheduler ran at 07:00 Asia/Jakarta. There were no new Excel files in <code>Klip/SAP Data/Original</code> (or every file was already processed by checksum).</p>
         <p><a href="${escapeHtml(`${frontendUrl}/sap-imports`)}">Open SAP Data → Import History</a></p>
       </div>`;
   }

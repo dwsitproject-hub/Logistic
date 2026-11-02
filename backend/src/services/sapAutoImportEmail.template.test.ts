@@ -23,21 +23,6 @@ describe('sapAutoImportEmail.template: unreadable share', () => {
 });
 
 describe('sapAutoImportEmail.template', () => {
-  it('uses a short subject when no new files were found', () => {
-    expect(
-      buildSapAutoImportEmailSubject({
-        kind: 'no_new_files',
-        frontendUrl: 'http://localhost:3001',
-      }),
-    ).toBe('KLIP SAP Auto Import: no new files');
-    const html = buildSapAutoImportEmailHtml({
-      kind: 'no_new_files',
-      frontendUrl: 'http://localhost:3001',
-    });
-    expect(html).toContain('no new files');
-    expect(html).toContain('http://localhost:3001/sap-imports');
-  });
-
   it('explains skipped-in-flight', () => {
     expect(
       buildSapAutoImportEmailSubject({
