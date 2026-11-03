@@ -50,8 +50,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: klip-backend
-    # See postgres note: cap memory on the shared staging host. Normal usage ~180M.
-    mem_limit: 768m
+    # See postgres note: cap memory on the shared staging host. Normal usage ~120-340M.
+    # BACKEND_MEM_LIMIT overrides it per host (set in /opt/klip/.env). Production sets 1536m: a SAP import of ~14,000 rows climbs past 768M and the kernel killed the
+    # node process twice in two days (2026-11-01 and 2026-11-02, "Memory cgroup out of memory", anon-rss ~765M), the second time in the middle of the 10:00 import.
+    # Pair it with SAP_IMPORT_PARALLELISM=3 and NODE_OPTIONS=--max-old-space-size=1100 in backend/.env (read through env_file below).
+    mem_limit: ${BACKEND_MEM_LIMIT:-768m}
     env_file:
       - ./backend/.env
     environment:
