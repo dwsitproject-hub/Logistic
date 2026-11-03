@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CHUNK_RELOAD_WINDOW_MS, isChunkLoadError, mayReloadForChunkError } from './chunkReload'
+import { CHUNK_RELOAD_WINDOW_MS, isChunkLoadError, isWebpackVersionSkewError, mayReloadForChunkError } from './chunkReload'
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const data = { ...initial }
@@ -64,5 +64,49 @@ describe('mayReloadForChunkError: one reload, never a loop', () => {
       },
     }
     expect(mayReloadForChunkError(broken)).toBe(false)
+  })
+})
+
+describe('isWebpackVersionSkewError: the old runtime meets a module it does not have', () => {
+  const withStack = (message: string, stack: string) => Object.assign(new TypeError(message), { stack })
+
+  it("Chrome: 'reading call' with the failing frame in the webpack runtime", () => {
+    const err = withStack(
+      "Cannot read properties of undefined (reading 'call')",
+      "TypeError: Cannot read properties of undefined (reading 'call')\n    at t (https://klip.example/_next/static/chunks/webpack-8a2c1f9d1b2e3f40.js:1:143)\n    at https://klip.example/_next/static/chunks/app/shipments/page-abc.js:1:900",
+    )
+    expect(isWebpackVersionSkewError(err)).toBe(true)
+    const named = withStack("Cannot read properties of undefined (reading 'call')", "TypeError: x\n    at __webpack_require__ (https://klip.example/x.js:1:1)")
+    expect(isWebpackVersionSkewError(named)).toBe(true)
+  })
+
+  it("Firefox and Safari wording, also from the webpack runtime", () => {
+    expect(
+      isWebpackVersionSkewError(
+        withStack('can\'t access property "call", modules[moduleId] is undefined', 'o@https://klip.example/_next/static/chunks/webpack-8a2c.js:1:143\nrun@https://klip.example/y.js:1:2'),
+      ),
+    ).toBe(true)
+    expect(
+      isWebpackVersionSkewError(
+        withStack("undefined is not an object (evaluating 'e[t].call')", 'o@https://klip.example/_next/static/chunks/webpack-8a2c.js:1:143'),
+      ),
+    ).toBe(true)
+  })
+
+  it('the same words thrown by application code are left alone (the app lives under /_next/static/ too, so only the webpack runtime counts)', () => {
+    const app = withStack(
+      "Cannot read properties of undefined (reading 'call')",
+      "TypeError: Cannot read properties of undefined (reading 'call')\n    at onClick (https://klip.example/_next/static/chunks/app/shipments/page-abc.js:1:900)\n    at https://klip.example/_next/static/chunks/main-app-1.js:1:5",
+    )
+    expect(isWebpackVersionSkewError(app)).toBe(false)
+  })
+
+  it('other errors, no stack, and non-errors are left alone', () => {
+    expect(isWebpackVersionSkewError(new Error('Request failed with status code 502'))).toBe(false)
+    expect(isWebpackVersionSkewError(withStack("Cannot read properties of undefined (reading 'map')", 'at t (https://klip.example/_next/static/chunks/webpack-8a2c.js:1:1)'))).toBe(false)
+    expect(isWebpackVersionSkewError({ message: "Cannot read properties of undefined (reading 'call')" })).toBe(false)
+    expect(isWebpackVersionSkewError("Cannot read properties of undefined (reading 'call')")).toBe(false)
+    expect(isWebpackVersionSkewError(null)).toBe(false)
+    expect(isWebpackVersionSkewError(undefined)).toBe(false)
   })
 })

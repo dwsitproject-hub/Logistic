@@ -18,6 +18,31 @@ export function isChunkLoadError(reason: unknown): boolean {
   return /loading (css )?chunk [\w-]+ failed/i.test(text)
 }
 
+/**
+ * The other face of the same version skew (Sentinel, 2026-11-03: 8 reports from 4 users after the deploys of 28-29 Oct and 2 Nov): a tab that was open before a deploy navigates
+ * to a page whose NEW chunk lists a module the OLD webpack runtime does not have, and the runtime's own `modules[moduleId].call(...)` throws
+ * "Cannot read properties of undefined (reading 'call')". No chunk fails to load, so isChunkLoadError does not see it.
+ *
+ * The message alone is too common to act on - application code can throw the same words - so the failing frame must also be inside the webpack runtime
+ * (`__webpack_require__`, `webpack-<hash>.js`): the first frames of the stack are read, not the whole of it, since every frame of the app sits under /_next/static/ too.
+ * Chrome says "reading 'call'", Firefox "can't access property "call", modules[moduleId] is undefined", Safari "undefined is not an object (evaluating '...call')".
+ */
+const SKEW_MESSAGE =
+  /reading 'call'|can't access property "call"|undefined is not an object \(evaluating '[^']*\.call'\)|modules\[moduleId\] is undefined/i
+
+export function isWebpackVersionSkewError(reason: unknown): boolean {
+  if (!reason || typeof reason !== 'object') return false
+  const r = reason as { message?: unknown; stack?: unknown }
+  if (typeof r.message !== 'string' || !SKEW_MESSAGE.test(r.message)) return false
+  if (typeof r.stack !== 'string') return false
+  const frames = r.stack
+    .split('\n')
+    .filter((line) => /^\s*at\s|@/.test(line))
+    .slice(0, 2)
+    .join(' ')
+  return /webpack/i.test(frames)
+}
+
 /** Whether a reload may go ahead now; records it when it may. */
 export function mayReloadForChunkError(
   storage: Pick<Storage, 'getItem' | 'setItem'> | null | undefined,
