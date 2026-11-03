@@ -20,6 +20,7 @@ describe('Claim Susut view helpers', () => {
       'crno',
       'cr_date',
       'claim_status',
+      'b2b_status',
       'group_of_transport',
       'vendor_name',
       'commodity',

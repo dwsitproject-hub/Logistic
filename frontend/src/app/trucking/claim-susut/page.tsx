@@ -1,12 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Layout from '@/components/Layout'
 import { StitchFields } from '@/components/shared/stitchField'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Upload, Loader2, History, SlidersHorizontal, GripVertical, X } from 'lucide-react'
+import { Loader2, SlidersHorizontal, GripVertical, X } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
@@ -44,13 +44,9 @@ import {
   type ClaimSusutVendorBreakdownRow,
 } from '@/components/claim-susut/ClaimSusutSection1Dashboard'
 import {
-  ClaimSusutUploadResultDialog,
-  type ClaimSusutUploadResult,
-} from '@/components/claim-susut/ClaimSusutUploadResultDialog'
-import { ClaimSusutImportHistoryModal } from '@/components/claim-susut/ClaimSusutImportHistoryModal'
-import {
   appendClaimSusutFilterParams,
   buildClaimSusutPeriodOptions,
+  CLAIM_B2B_FILTER_OPTIONS,
   CLAIM_SUSUT_COLUMN_ORDER_KEY,
   CLAIM_SUSUT_DEFAULT_PERIOD,
   CLAIM_SUSUT_COLUMNS,
@@ -59,6 +55,7 @@ import {
   CLAIM_SUSUT_VIEW_PREF_KEY,
   claimSusutAgingBucket,
   EMPTY_CLAIM_SUSUT_DRILLDOWN,
+  formatClaimB2bStatus,
   formatClaimSusutIdr,
   looksLikeLegacyAllVisibleClaimSusutColumns,
   resolveClaimSusutPeriodRange,
@@ -92,6 +89,7 @@ type ClaimSusutRow = {
   cr_date?: string
   cm_date?: string | null
   claim_status?: 'Claimed' | 'Not Claimed'
+  b2b_status?: string
   os_days?: number
   group_of_transport?: string
   payment_method?: string
@@ -144,7 +142,7 @@ function apiErrorMessage(e: unknown, fallback: string): string {
 }
 
 export default function ClaimSusutPage() {
-  const [imports, setImports] = useState<ClaimSusutImport[]>([])
+  const [, setImports] = useState<ClaimSusutImport[]>([])
   const [selectedImportId, setSelectedImportId] = useState<string>('')
   const [rows, setRows] = useState<ClaimSusutRow[]>([])
   const [totalCount, setTotalCount] = useState(0)
@@ -155,11 +153,7 @@ export default function ClaimSusutPage() {
   const [groupTransportLoading, setGroupTransportLoading] = useState(false)
   const [vendorRows, setVendorRows] = useState<ClaimSusutVendorBreakdownRow[]>([])
   const [vendorLoading, setVendorLoading] = useState(false)
-  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [uploadSummary, setUploadSummary] = useState<ClaimSusutUploadResult | null>(null)
-  const [uploadResultOpen, setUploadResultOpen] = useState(false)
-  const [historyOpen, setHistoryOpen] = useState(false)
 
   const [period, setPeriod] = useState<ClaimSusutPeriodKey>(CLAIM_SUSUT_DEFAULT_PERIOD)
   const [dateFrom, setDateFrom] = useState(() => resolveClaimSusutPeriodRange(CLAIM_SUSUT_DEFAULT_PERIOD).dateFrom)
@@ -168,6 +162,7 @@ export default function ClaimSusutPage() {
   const [selectedProducts, setSelectedProducts] = useState<string[]>([])
   const [selectedVendors, setSelectedVendors] = useState<string[]>([])
   const [selectedClaimStatuses, setSelectedClaimStatuses] = useState<string[]>([])
+  const [selectedB2b, setSelectedB2b] = useState<string[]>([])
   const [selectedGroupsOfTransport, setSelectedGroupsOfTransport] = useState<string[]>([])
   const [plantOptions, setPlantOptions] = useState<string[]>([])
   const [productOptions, setProductOptions] = useState<string[]>([])
@@ -213,6 +208,7 @@ export default function ClaimSusutPage() {
       products: selectedProducts,
       vendors: selectedVendors,
       claimStatuses: selectedClaimStatuses,
+      b2bStatuses: selectedB2b,
       groupsOfTransport: selectedGroupsOfTransport,
       drilldown: EMPTY_CLAIM_SUSUT_DRILLDOWN,
     }),
@@ -224,6 +220,7 @@ export default function ClaimSusutPage() {
       selectedProducts,
       selectedVendors,
       selectedClaimStatuses,
+      selectedB2b,
       selectedGroupsOfTransport,
     ],
   )
@@ -388,7 +385,7 @@ export default function ClaimSusutPage() {
   }, [])
 
   /** The REAL_CLAIM half of Section 1: one list per import, not narrowed by the page filters. */
-  const loadRealized = useCallback(async (importId: string, from: string, to: string) => {
+  const loadRealized = useCallback(async (importId: string, from: string, to: string, b2b: string[]) => {
     if (!importId) {
       setRealized(null)
       return
@@ -398,6 +395,7 @@ export default function ClaimSusutPage() {
       const params = new URLSearchParams({ importId })
       if (from) params.set('dateFrom', from)
       if (to) params.set('dateTo', to)
+      for (const v of b2b) params.append('b2b', v)
       const res = await api.get(`/claim-susut/realized?${params.toString()}`)
       setRealized((res.data?.data ?? null) as ClaimSusutRealized | null)
     } finally {
@@ -489,15 +487,15 @@ export default function ClaimSusutPage() {
   }, [selectedImportId])
 
   useEffect(() => {
-    loadRealized(selectedImportId, dateFrom, dateTo).catch((e) =>
+    loadRealized(selectedImportId, dateFrom, dateTo, selectedB2b).catch((e) =>
       setError(apiErrorMessage(e, 'Failed to load Shortage Claim realisation')),
     )
-  }, [selectedImportId, dateFrom, dateTo, loadRealized])
+  }, [selectedImportId, dateFrom, dateTo, selectedB2b, loadRealized])
 
   useEffect(() => {
     if (!selectedImportId) return
     setPage(1)
-  }, [dateFrom, dateTo, selectedPlants, selectedProducts, selectedVendors, selectedClaimStatuses, selectedGroupsOfTransport, sortKey, sortDir])
+  }, [dateFrom, dateTo, selectedPlants, selectedProducts, selectedVendors, selectedClaimStatuses, selectedB2b, selectedGroupsOfTransport, sortKey, sortDir])
 
   useEffect(() => {
     if (!selectedImportId) return
@@ -592,56 +590,9 @@ export default function ClaimSusutPage() {
     loading ||
     summaryLoading ||
     realizedLoading ||
-    uploading ||
     groupTransportLoading ||
     vendorLoading
   usePageHeaderBusy(busy)
-
-  const onUploadFile = async (uploadFile: File) => {
-    setUploading(true)
-    setError(null)
-    setUploadSummary(null)
-    try {
-      const fd = new FormData()
-      fd.append('file', uploadFile)
-      const res = await api.post('/claim-susut/upload', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      const importId = res.data?.data?.importId
-      const totalRows = Number(res.data?.data?.totalRows) || 0
-      const insertedRows = Number(res.data?.data?.insertedRows) || 0
-      const d = res.data?.data ?? {}
-      const errors = (d.errors || []) as { rowIndex: number; message: string; sheet?: string }[]
-      const failedRows = Number(d.failedRows) || Math.max(0, totalRows - insertedRows)
-      setUploadSummary({
-        totalRows,
-        insertedRows,
-        failedRows,
-        errors,
-        sheetName: d.sheetName ?? null,
-        periodLabel: d.periodLabel ?? null,
-        realSheetName: d.realSheetName ?? null,
-        realPeriodLabel: d.realPeriodLabel ?? null,
-        realTotalRows: Number(d.realTotalRows) || 0,
-        realInsertedRows: Number(d.realInsertedRows) || 0,
-        realWarning: d.realWarning ?? null,
-      })
-      setUploadResultOpen(true)
-      await loadImports()
-      if (importId) setSelectedImportId(importId)
-    } catch (e) {
-      setError(apiErrorMessage(e, 'Upload failed'))
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  const handleClaimSusutFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const uploadFile = e.target.files?.[0]
-    e.target.value = ''
-    if (!uploadFile) return
-    void onUploadFile(uploadFile)
-  }
 
   const toggleSort = (key: string) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -660,6 +611,7 @@ export default function ClaimSusutPage() {
     setSelectedProducts([])
     setSelectedVendors([])
     setSelectedClaimStatuses([])
+    setSelectedB2b([])
     setSelectedGroupsOfTransport([])
     setPage(1)
   }
@@ -677,49 +629,6 @@ export default function ClaimSusutPage() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <div className="flex items-center justify-end gap-4">
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              className="hidden"
-              id="claim-susut-excel-upload-input"
-              onChange={handleClaimSusutFileChange}
-              disabled={uploading}
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setHistoryOpen(true)}
-              disabled={uploading}
-            >
-              <History className="h-4 w-4 mr-2" />
-              Import History
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
-              onClick={() => document.getElementById('claim-susut-excel-upload-input')?.click()}
-              disabled={uploading}
-              title="Upload Shortage Claim Excel (.xlsx)"
-              aria-label="Import Shortage Claim Excel"
-            >
-              {uploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  Shortage Claim
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
-
         {error && (
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
             {error}
@@ -762,6 +671,7 @@ export default function ClaimSusutPage() {
             selectedProducts.length > 0 ||
             selectedVendors.length > 0 ||
             selectedClaimStatuses.length > 0 ||
+            selectedB2b.length > 0 ||
             selectedGroupsOfTransport.length > 0
           }
           chips={[
@@ -790,6 +700,7 @@ export default function ClaimSusutPage() {
             ...selectionChips('Product', selectedProducts, setSelectedProducts),
             ...selectionChips('Vendor Name', selectedVendors, setSelectedVendors),
             ...selectionChips('Claim Status', selectedClaimStatuses, setSelectedClaimStatuses),
+            ...selectionChips('B2B', selectedB2b, setSelectedB2b),
             ...selectionChips('Transport', selectedGroupsOfTransport, setSelectedGroupsOfTransport),
           ]}
         >
@@ -827,6 +738,17 @@ export default function ClaimSusutPage() {
               onChange={setSelectedClaimStatuses}
               placeholder="All"
               emptyMessage="No statuses"
+              pinSelectedToTop
+            />
+            <SearchableMultiSelect
+              label="B2B"
+              className="min-w-[7.5rem] flex-1"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+              options={CLAIM_B2B_FILTER_OPTIONS}
+              selected={selectedB2b}
+              onChange={setSelectedB2b}
+              placeholder="All"
+              emptyMessage="No values"
               pinSelectedToTop
             />
             <SearchableMultiSelect
@@ -887,6 +809,7 @@ export default function ClaimSusutPage() {
                     selectedProducts.length > 0 ||
                     selectedVendors.length > 0 ||
                     selectedClaimStatuses.length > 0 ||
+                    selectedB2b.length > 0 ||
                     selectedGroupsOfTransport.length > 0
                       ? 'Global · Filtered'
                       : 'Global · All'}
@@ -1141,6 +1064,21 @@ export default function ClaimSusutPage() {
                                 return formatDate(r.cr_date)
                               case 'cm_date':
                                 return r.cm_date ? formatDate(r.cm_date) : '-'
+                              case 'b2b_status':
+                                return (
+                                  <span
+                                    className={cn(
+                                      'rounded px-1.5 py-0.5 text-xs font-medium',
+                                      String(r.b2b_status).toUpperCase() === 'B2B'
+                                        ? 'bg-indigo-50 text-indigo-700'
+                                        : String(r.b2b_status).toUpperCase() === 'DIRECT'
+                                          ? 'bg-gray-100 text-gray-700'
+                                          : 'bg-amber-50 text-amber-700',
+                                    )}
+                                  >
+                                    {formatClaimB2bStatus(r.b2b_status)}
+                                  </span>
+                                )
                               case 'claim_status':
                                 return r.claim_status ? (
                                   <span
@@ -1210,20 +1148,6 @@ export default function ClaimSusutPage() {
             </div>
           </CardContent>
         </Card>
-        <ClaimSusutUploadResultDialog
-          open={uploadResultOpen}
-          onOpenChange={setUploadResultOpen}
-          result={uploadSummary}
-        />
-        <ClaimSusutImportHistoryModal
-          open={historyOpen}
-          onOpenChange={setHistoryOpen}
-          imports={imports}
-          onSelectImport={(id) => {
-            setSelectedImportId(id)
-            setPage(1)
-          }}
-        />
       </div>
       </StitchFields>
     </Layout>

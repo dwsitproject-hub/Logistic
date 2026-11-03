@@ -267,7 +267,7 @@ const SapImportDashboard: React.FC = () => {
       const status = (error as { response?: { status?: number } })?.response?.status;
       setImportsError(
         status === 403
-          ? 'You do not have permission to view SAP import history. Ask an administrator to grant SAP Data view access for your role and level.'
+          ? 'You do not have permission to view SAP import history. Ask an administrator to grant Logistics Data view access for your role and level.'
           : 'Could not load import history. Please retry, and tell IT if it keeps happening.',
       );
     } finally {
@@ -490,7 +490,7 @@ const SapImportDashboard: React.FC = () => {
         <CardHeader>
           <div className="flex justify-between items-center">
             <div>
-              <CardTitle>SAP Data Imports</CardTitle>
+              <CardTitle>Logistics Data Imports</CardTitle>
               <CardDescription>
                 Monitor and manage SAP MASTER v2 data imports
               </CardDescription>
@@ -507,7 +507,7 @@ const SapImportDashboard: React.FC = () => {
                 ) : (
                   <>
                     <Upload className="h-4 w-4 mr-2" />
-                    Import SAP Data
+                    Import Logistics Data
                   </>
                 )}
               </Button>
@@ -764,7 +764,7 @@ const SapImportDashboard: React.FC = () => {
       <BulkUploadStatusModal
         open={!!bulkUploadResult}
         onOpenChange={(open) => { if (!open) setBulkUploadResult(null) }}
-        title="SAP Data upload result"
+        title="Logistics Data upload result"
         result={bulkUploadResult}
         createdLabel="Processed"
         updatedLabel="Skipped"

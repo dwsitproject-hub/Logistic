@@ -1,10 +1,6 @@
 import express from 'express';
-import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
-import { auditLog } from '../middleware/audit';
-import { ensureUploadDir, importDataSubdir } from '../utils/fileUpload';
 import {
-  uploadClaimMutuExcel,
   listClaimMutuImports,
   getClaimMutuImportById,
   listClaimMutuRows,
@@ -17,33 +13,13 @@ const router = express.Router();
 
 router.use(authenticateToken);
 
-// A workbook imported by hand is kept as a backup in IMPORT DATA/claim-mutu/manual on the upload root (the Synology share in production). The folder above it is for the
-// scheduled import, which must not meet these. The database keeps only the original file name.
-const uploadDir = ensureUploadDir(importDataSubdir('claim-mutu', 'manual'));
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    const unique = Date.now() + '_' + Math.round(Math.random() * 1e9);
-    cb(null, unique + '_' + file.originalname.replace(/\s+/g, '_'));
-  },
+// The per-page workbook upload was replaced by Claim Data (/api/claim-data, ADMIN only).
+router.post('/upload', (_req, res) => {
+  res.status(410).json({
+    success: false,
+    error: { message: 'Uploading here is retired. Import OSCLAIM / REALCLAIM from the Claim Data page.' },
+  });
 });
-
-const ALLOWED_MIMES = new Set([
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel',
-]);
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 25 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (ALLOWED_MIMES.has(file.mimetype)) cb(null, true);
-    else cb(new Error(`Unsupported file type: ${file.mimetype}`));
-  },
-});
-
-// Upload + import Claim Mutu excel
-router.post('/upload', upload.single('file'), auditLog('CREATE', 'CLAIM_MUTU_IMPORT'), uploadClaimMutuExcel);
 
 // List imports
 router.get('/imports', listClaimMutuImports);

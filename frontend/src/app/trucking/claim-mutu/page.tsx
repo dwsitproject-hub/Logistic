@@ -1,12 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Layout from '@/components/Layout'
 import { StitchFields } from '@/components/shared/stitchField'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Upload, Loader2, History, SlidersHorizontal, GripVertical, X } from 'lucide-react'
+import { Loader2, SlidersHorizontal, GripVertical, X } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
@@ -43,19 +43,12 @@ import {
   ClaimMutuSection1Dashboard,
   sortUnitOptions,
   type ClaimMutuDashboard,
-  type ClaimMutuTrend,
 } from '@/components/claim-mutu/ClaimMutuSection1Dashboard'
 import {
-  ClaimMutuUploadResultDialog,
-  type ClaimMutuUploadResult,
-} from '@/components/claim-mutu/ClaimMutuUploadResultDialog'
-import {
-  ClaimSusutImportHistoryModal,
-  type ClaimSusutImportListItem,
-} from '@/components/claim-susut/ClaimSusutImportHistoryModal'
-import {
   buildClaimSusutPeriodOptions,
+  CLAIM_B2B_FILTER_OPTIONS,
   claimSusutAgingBucket,
+  formatClaimB2bStatus,
   resolveClaimSusutPeriodRange,
   type ClaimSusutPeriodKey,
 } from '@/lib/claimSusutView'
@@ -74,7 +67,10 @@ import {
   type ClaimMutuB2bScope,
 } from '@/lib/claimMutuView'
 
-type ClaimMutuRow = Record<string, unknown> & { id: string; is_b2b?: boolean }
+type ClaimMutuRow = Record<string, unknown> & { id: string; is_b2b?: boolean; b2b_status?: string }
+
+/** The imports list only picks the active import; its file name is shown in the table header. */
+type ClaimMutuImportItem = { id: string; file_name?: string | null }
 
 const columns = CLAIM_MUTU_COLUMNS
 const pageSize = 20
@@ -96,7 +92,7 @@ function formatCell(kind: string | undefined, v: unknown): string {
     case 'number':
       return Number.isFinite(Number(v)) ? Number(v).toLocaleString('id-ID', { maximumFractionDigits: 3 }) : String(v)
     case 'b2b':
-      return v ? 'B2B' : '-'
+      return v ? formatClaimB2bStatus(String(v)) : '-'
     default:
       return formatSapDisplayValue(v)
   }
@@ -110,10 +106,20 @@ const CLAIM_MUTU_DEFAULT_PERIOD: ClaimSusutPeriodKey = 'YTD'
 function renderCell(c: { id: string; kind?: string }, r: ClaimMutuRow) {
   const kind = c.kind
   if (kind === 'b2b') {
-    return r.is_b2b ? (
-      <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-medium text-indigo-700">B2B</span>
-    ) : (
-      '-'
+    const status = String(r.b2b_status ?? (r.is_b2b ? 'B2B' : '')).toUpperCase()
+    return (
+      <span
+        className={cn(
+          'rounded px-1.5 py-0.5 text-xs font-medium',
+          status === 'B2B'
+            ? 'bg-indigo-50 text-indigo-700'
+            : status === 'DIRECT'
+              ? 'bg-gray-100 text-gray-700'
+              : 'bg-amber-50 text-amber-700',
+        )}
+      >
+        {formatClaimB2bStatus(status)}
+      </span>
     )
   }
   if (kind === 'status') {
@@ -162,20 +168,14 @@ function hoverTitle(kind: string | undefined, v: unknown): string | undefined {
 }
 
 export default function ClaimMutuPage() {
-  const [imports, setImports] = useState<ClaimSusutImportListItem[]>([])
+  const [imports, setImports] = useState<ClaimMutuImportItem[]>([])
   const [selectedImportId, setSelectedImportId] = useState<string>('')
   const [rows, setRows] = useState<ClaimMutuRow[]>([])
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [dashboard, setDashboard] = useState<ClaimMutuDashboard | null>(null)
   const [dashboardLoading, setDashboardLoading] = useState(false)
-  const [trend, setTrend] = useState<ClaimMutuTrend | null>(null)
-  const [trendLoading, setTrendLoading] = useState(false)
-  const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [uploadSummary, setUploadSummary] = useState<ClaimMutuUploadResult | null>(null)
-  const [uploadResultOpen, setUploadResultOpen] = useState(false)
-  const [historyOpen, setHistoryOpen] = useState(false)
 
   const [b2b, setB2b] = useState<ClaimMutuB2bScope>(CLAIM_MUTU_DEFAULT_B2B)
   const [period, setPeriod] = useState<ClaimSusutPeriodKey>(CLAIM_MUTU_DEFAULT_PERIOD)
@@ -187,6 +187,7 @@ export default function ClaimMutuPage() {
   const [selectedGroups, setSelectedGroups] = useState<string[]>([])
   const [selectedMetodes, setSelectedMetodes] = useState<string[]>([])
   const [selectedClaimStatuses, setSelectedClaimStatuses] = useState<string[]>([])
+  const [selectedB2bStatuses, setSelectedB2bStatuses] = useState<string[]>([])
   const [claimedCount, setClaimedCount] = useState(0)
   const [commodityOptions, setCommodityOptions] = useState<string[]>([])
   const [unitOptions, setUnitOptions] = useState<string[]>([])
@@ -231,6 +232,7 @@ export default function ClaimMutuPage() {
       claimGroups: selectedGroups,
       metodePayments: selectedMetodes,
       claimStatuses: selectedClaimStatuses,
+      b2bStatuses: selectedB2bStatuses,
     }),
     [
       selectedImportId,
@@ -243,6 +245,7 @@ export default function ClaimMutuPage() {
       selectedGroups,
       selectedMetodes,
       selectedClaimStatuses,
+      selectedB2bStatuses,
     ],
   )
 
@@ -366,18 +369,6 @@ export default function ClaimMutuPage() {
     }
   }, [])
 
-  /** Spans every monthly import, so it takes neither the import nor the CR date period. */
-  const loadTrend = useCallback(async (filters: ClaimMutuApiFilters) => {
-    setTrendLoading(true)
-    try {
-      const params = appendClaimMutuFilterParams(new URLSearchParams(), { ...filters, dateFrom: '', dateTo: '' }, { omitImport: true })
-      const res = await api.get(`/claim-mutu/trend?${params}`)
-      setTrend((res.data?.data ?? null) as ClaimMutuTrend | null)
-    } finally {
-      setTrendLoading(false)
-    }
-  }, [])
-
   // Only the latest rows request may fill the table: requests are not cancelled, so a slower,
   // older one (the filter before the user changed it) could otherwise land last and show the
   // wrong rows - which reads as "the filter does nothing".
@@ -425,12 +416,6 @@ export default function ClaimMutuPage() {
 
   useEffect(() => {
     if (!selectedImportId) return
-    loadTrend(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Summary Per Unit')))
-    // The trend ignores the import and the period; `imports` reloads it after an upload.
-  }, [selectedImportId, loadTrend, scopeFilters, imports])
-
-  useEffect(() => {
-    if (!selectedImportId) return
     loadRows(scopeFilters, { page, sortKey, sortDir }).catch((e) =>
       setError(apiErrorMessage(e, 'Failed to load Quality Claim rows')),
     )
@@ -445,51 +430,7 @@ export default function ClaimMutuPage() {
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [columnsOpen])
 
-  usePageHeaderBusy(loading || dashboardLoading || trendLoading || uploading)
-
-  const onUploadFile = async (uploadFile: File) => {
-    setUploading(true)
-    setError(null)
-    setUploadSummary(null)
-    try {
-      const fd = new FormData()
-      fd.append('file', uploadFile)
-      const res = await api.post('/claim-mutu/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
-      const d = res.data?.data ?? {}
-      const totalRows = Number(d.totalRows) || 0
-      const insertedRows = Number(d.insertedRows) || 0
-      setUploadSummary({
-        totalRows,
-        insertedRows,
-        failedRows: Number(d.failedRows) || Math.max(0, totalRows - insertedRows),
-        b2bRows: Number(d.b2bRows) || 0,
-        errors: (d.errors || []) as ClaimMutuUploadResult['errors'],
-        sheetName: d.sheetName ?? null,
-        periodLabel: d.periodLabel ?? null,
-        b2bSource: d.b2bSource ?? null,
-        realSheetName: d.realSheetName ?? null,
-        realPeriodLabel: d.realPeriodLabel ?? null,
-        realTotalRows: Number(d.realTotalRows) || 0,
-        realInsertedRows: Number(d.realInsertedRows) || 0,
-        realB2bRows: Number(d.realB2bRows) || 0,
-        warnings: Array.isArray(d.warnings) ? d.warnings.map(String) : [],
-      })
-      setUploadResultOpen(true)
-      await loadImports()
-      if (d.importId) setSelectedImportId(String(d.importId))
-    } catch (e) {
-      setError(apiErrorMessage(e, 'Upload failed'))
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const uploadFile = e.target.files?.[0]
-    e.target.value = ''
-    if (!uploadFile) return
-    void onUploadFile(uploadFile)
-  }
+  usePageHeaderBusy(loading || dashboardLoading)
 
   const toggleSort = (key: string) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -510,6 +451,7 @@ export default function ClaimMutuPage() {
     selectedVendorTypes.length > 0 ||
     selectedGroups.length > 0 ||
     selectedMetodes.length > 0 ||
+    selectedB2bStatuses.length > 0 ||
     selectedClaimStatuses.length > 0
   const anyFilter = periodFiltered || otherFilters
 
@@ -525,6 +467,7 @@ export default function ClaimMutuPage() {
     setSelectedGroups([])
     setSelectedMetodes([])
     setSelectedClaimStatuses([])
+    setSelectedB2bStatuses([])
     setPage(1)
   }
 
@@ -542,44 +485,6 @@ export default function ClaimMutuPage() {
     <Layout>
       <StitchFields>
         <div className="space-y-6">
-          <div className="flex items-center justify-end gap-4">
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <input
-                type="file"
-                accept=".xlsx,.xls"
-                className="hidden"
-                id="claim-mutu-excel-upload-input"
-                onChange={handleFileChange}
-                disabled={uploading}
-              />
-              <Button size="sm" variant="outline" onClick={() => setHistoryOpen(true)} disabled={uploading}>
-                <History className="h-4 w-4 mr-2" />
-                Import History
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
-                onClick={() => document.getElementById('claim-mutu-excel-upload-input')?.click()}
-                disabled={uploading}
-                title="Upload Quality Claim Excel (.xlsx) - OS_Claim sheet required, Real_Claim optional"
-                aria-label="Import Quality Claim Excel"
-              >
-                {uploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    Quality Claim
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-
           {error && (
             <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
               {error}
@@ -652,6 +557,7 @@ export default function ClaimMutuPage() {
               ...selectionChips('Vendor Type', selectedVendorTypes, setSelectedVendorTypes),
               ...selectionChips('Group', selectedGroups, setSelectedGroups),
               ...selectionChips('Payment Method', selectedMetodes, setSelectedMetodes),
+              ...selectionChips('B2B Status', selectedB2bStatuses, setSelectedB2bStatuses),
               ...selectionChips('Claim Status', selectedClaimStatuses, setSelectedClaimStatuses),
             ]}
           >
@@ -669,6 +575,17 @@ export default function ClaimMutuPage() {
                   className="w-full min-w-0"
                 />
               </div>
+              <SearchableMultiSelect
+                label="B2B Status"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+                options={CLAIM_B2B_FILTER_OPTIONS}
+                selected={selectedB2bStatuses}
+                onChange={setSelectedB2bStatuses}
+                placeholder="Scope above"
+                emptyMessage="No values"
+                pinSelectedToTop
+              />
               <SearchableMultiSelect
                 label="Product"
                 className="min-w-[7.5rem] flex-1"
@@ -705,18 +622,21 @@ export default function ClaimMutuPage() {
                 uppercaseOptionLabels
                 pinSelectedToTop
               />
-              <SearchableMultiSelect
-                label="Payment Method (OS only)"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={metodeOptions}
-                selected={selectedMetodes}
-                onChange={setSelectedMetodes}
-                placeholder="All"
-                emptyMessage="No payment methods"
-                uppercaseOptionLabels
-                pinSelectedToTop
-              />
+              {/* The new export has no METODE PAYMENT column: offer the filter only when a value exists. */}
+              {metodeOptions.some((o) => o !== '(Blank)') ? (
+                <SearchableMultiSelect
+                  label="Payment Method (OS only)"
+                  className="min-w-[7.5rem] flex-1"
+                  labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+                  options={metodeOptions}
+                  selected={selectedMetodes}
+                  onChange={setSelectedMetodes}
+                  placeholder="All"
+                  emptyMessage="No payment methods"
+                  uppercaseOptionLabels
+                  pinSelectedToTop
+                />
+              ) : null}
               <SearchableMultiSelect
                 label="Claim Status"
                 className="min-w-[8rem] flex-1"
@@ -735,8 +655,8 @@ export default function ClaimMutuPage() {
             crDateLabel={crDateLabel}
             dashboard={dashboard}
             loading={dashboardLoading}
-            trend={trend}
-            trendLoading={trendLoading}
+            trend={null}
+            trendLoading={false}
             b2b={b2b}
             hasImport={Boolean(selectedImportId)}
             osOnlyFilterActive={selectedGroups.length > 0 || selectedMetodes.length > 0}
@@ -763,7 +683,7 @@ export default function ClaimMutuPage() {
                     </span>
                     <span className="text-gray-400" aria-hidden>·</span>
                     <span className="whitespace-nowrap font-medium text-gray-600">
-                      {b2b === 'include' ? 'Include B2B' : 'Exclude B2B'} · {anyFilter ? 'Filtered' : 'All'}
+                      {selectedB2bStatuses.length > 0 ? `B2B: ${selectedB2bStatuses.join(', ')}` : b2b === 'include' ? 'Include B2B' : 'Exclude B2B'} · {anyFilter ? 'Filtered' : 'All'}
                     </span>
                     {selectedImport?.file_name ? (
                       <>
@@ -973,7 +893,7 @@ export default function ClaimMutuPage() {
                       ) : rows.length === 0 ? (
                         <tr className="bg-white">
                           <td colSpan={Math.max(visibleColumns.length, 1)} className="px-4 py-10 text-center text-gray-500">
-                            {selectedImportId ? 'No rows' : 'Upload a Quality Claim file to start.'}
+                            {selectedImportId ? 'No rows' : 'Import claim data to start.'}
                           </td>
                         </tr>
                       ) : (
@@ -1007,18 +927,6 @@ export default function ClaimMutuPage() {
               </div>
             </CardContent>
           </Card>
-          <ClaimMutuUploadResultDialog open={uploadResultOpen} onOpenChange={setUploadResultOpen} result={uploadSummary} />
-          <ClaimSusutImportHistoryModal
-            open={historyOpen}
-            onOpenChange={setHistoryOpen}
-            imports={imports}
-            apiBase="/claim-mutu"
-            kindLabel="Quality Claim"
-            onSelectImport={(id) => {
-              setSelectedImportId(id)
-              setPage(1)
-            }}
-          />
         </div>
       </StitchFields>
     </Layout>

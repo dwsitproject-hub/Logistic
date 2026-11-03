@@ -404,7 +404,8 @@ export const getClaimMutuDashboard = async (req: AuthRequest, res: Response) => 
 
     const [imp, osTotals, aging, osByCu, osByLoc, osByVendor, realTotals, realByCu, realByLoc] = await Promise.all([
       query(
-        `SELECT id, os_period_label, real_period_label, period_month::text, b2b_source, real_sheet_name, warnings
+        `SELECT id, os_period_label, real_period_label, period_month::text, b2b_source, real_sheet_name, warnings,
+                data_as_of::text AS data_as_of
            FROM claim_mutu_imports
           WHERE ($1::uuid IS NULL OR id = $1::uuid)
           ORDER BY CASE WHEN $1::uuid IS NOT NULL THEN 0 ELSE 1 END, uploaded_at DESC NULLS LAST
@@ -446,6 +447,7 @@ export const getClaimMutuDashboard = async (req: AuthRequest, res: Response) => 
         periodLabel: active?.os_period_label ?? null,
         realPeriodLabel: active?.real_period_label ?? null,
         periodMonth: active?.period_month ?? null,
+        dataAsOf: active?.data_as_of ?? null,
         b2bSource: active?.b2b_source ?? null,
         realAvailable: Boolean(active?.real_sheet_name),
         warnings: active?.warnings ?? [],
@@ -505,7 +507,7 @@ const ROW_SORT_COLUMNS = [
   'keterangan', 'type_of_comp', 'traders', 'created_by', 'sta', 'contract_ext_no', 'comm',
   'material_description', 'company_code', 'claim_type', 'uom', 'amount_before_tax_idr', 'tax',
   'mutu_kontrak_ffa', 'mutu_kontrak_mi', 'mutu_kontrak_dns', 'mutu_kontrak_dobi',
-  'mutu_klaim_ffa', 'mutu_klaim_mi', 'mutu_klaim_dns', 'mutu_klaim_dobi',
+  'mutu_klaim_ffa', 'mutu_klaim_mi', 'mutu_klaim_dns', 'mutu_klaim_dobi', 'b2b_status',
 ];
 const ROW_SORT: Record<string, string> = Object.fromEntries(ROW_SORT_COLUMNS.map((c) => [c, c]));
 
@@ -542,7 +544,7 @@ export const listClaimMutuRows = async (req: AuthRequest, res: Response) => {
     const combined = `
       SELECT * FROM (
         WITH ${os.sql}
-        SELECT id, is_b2b, 'Not Claimed'::text AS claim_status,
+        SELECT id, is_b2b, COALESCE(NULLIF(TRIM(b2b_status), ''), 'UNMATCHED') AS b2b_status, 'Not Claimed'::text AS claim_status,
                vendor_code, vendor_name, group_of_vendor, vendor_type, cargo_source, keterangan,
                metode_payment, claim_group, type_of_comp, traders, created_by, sta, crno, cr_date::text AS cr_date,
                NULL::text AS cm_no, NULL::text AS cm_date, NULL::text AS kebun, os_days,
@@ -558,7 +560,7 @@ export const listClaimMutuRows = async (req: AuthRequest, res: Response) => {
       UNION ALL
       SELECT * FROM (
         WITH ${real.sql}
-        SELECT id, is_b2b, 'Claimed'::text AS claim_status,
+        SELECT id, is_b2b, COALESCE(NULLIF(TRIM(b2b_status), ''), 'UNMATCHED') AS b2b_status, 'Claimed'::text AS claim_status,
                vendor_code, vendor_name, group_key AS group_of_vendor, vendor_type, cargo_source, NULL::text AS keterangan,
                NULL::text AS metode_payment, NULL::text AS claim_group, NULL::text AS type_of_comp, traders,
                NULL::text AS created_by, status_claim AS sta, cr_no AS crno, claim_date::text AS cr_date,

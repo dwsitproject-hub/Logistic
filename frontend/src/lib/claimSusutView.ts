@@ -115,6 +115,7 @@ export const CLAIM_SUSUT_COLUMNS: ClaimSusutColumnDef[] = [
   { id: 'crno', label: 'CR NO', sortKey: 'crno' },
   { id: 'cr_date', label: 'CR Date', sortKey: 'cr_date' },
   { id: 'claim_status', label: 'Status Claim', sortKey: 'claim_status' },
+  { id: 'b2b_status', label: 'B2B', sortKey: 'b2b_status' },
   { id: 'group_of_transport', label: 'Group Of Transport', sortKey: 'group_of_transport' },
   { id: 'vendor_name', label: 'Vendor', sortKey: 'vendor_name' },
   { id: 'commodity', label: 'Product', sortKey: 'commodity' },
@@ -140,6 +141,7 @@ export const CLAIM_SUSUT_DEFAULT_VISIBLE_IDS: readonly string[] = [
   'crno',
   'cr_date',
   'claim_status',
+  'b2b_status',
   'group_of_transport',
   'vendor_name',
   'commodity',
@@ -149,6 +151,17 @@ export const CLAIM_SUSUT_DEFAULT_VISIBLE_IDS: readonly string[] = [
   'amount_after_tax_idr',
   'os_days',
 ]
+
+/** The B2B filter's values; the API reads them case-insensitively. */
+export const CLAIM_B2B_FILTER_OPTIONS = ['B2B', 'Direct', 'Unmatched']
+
+/** "DIRECT" -> "Direct": how a stored B2B status reads in the table. */
+export function formatClaimB2bStatus(status: string | null | undefined): string {
+  const s = String(status ?? '').trim().toUpperCase()
+  if (s === 'B2B') return 'B2B'
+  if (s === 'DIRECT') return 'Direct'
+  return 'Unmatched'
+}
 
 export const CLAIM_SUSUT_NUMERIC_SORT_KEYS = new Set(['os_days', 'qty_claim', 'amount_before_tax_idr', 'amount_after_tax_idr'])
 
@@ -232,6 +245,8 @@ export type ClaimSusutApiFilters = {
   vendors?: string[]
   /** View table only: Claimed (REAL_CLAIM) / Not Claimed (OS_CLAIM). */
   claimStatuses?: string[]
+  /** B2B / Direct / Unmatched, from the Logistics Report. Applies to both halves. */
+  b2bStatuses?: string[]
   groupsOfTransport?: string[]
   drilldown?: ClaimSusutDrilldownFilters
 }
@@ -252,6 +267,7 @@ export function appendClaimSusutFilterParams(
   for (const v of filters.products ?? []) params.append('product', v)
   for (const v of filters.vendors ?? []) params.append('vendor', v)
   for (const v of filters.claimStatuses ?? []) params.append('claimStatus', v)
+  for (const v of filters.b2bStatuses ?? []) params.append('b2b', v)
   if (includeGroup) {
     for (const v of filters.groupsOfTransport ?? []) params.append('groupOfTransport', v)
   }

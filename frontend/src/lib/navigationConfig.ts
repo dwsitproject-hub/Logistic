@@ -8,6 +8,7 @@ import {
   Plug,
   Ship,
   BarChart3,
+  FileSpreadsheet,
 } from 'lucide-react'
 import { StitchNavIcons } from '@/components/shared/stitchIcons'
 import { withoutMovedPages } from '@/lib/commdocsApp'
@@ -102,7 +103,8 @@ export const ALL_NAV_ITEMS: NavItem[] = [
     group: 'master',
   },
   { name: 'Master Company (External)', href: '/master-company-ext', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers', group: 'master' },
-  { name: 'SAP Data', href: '/sap-imports', icon: StitchNavIcons.sapData, roles: ['ALL'], permissionKey: 'page.sap', group: 'system' },
+  { name: 'Logistics Data', href: '/sap-imports', icon: StitchNavIcons.sapData, roles: ['ALL'], permissionKey: 'page.sap', group: 'system' },
+  { name: 'Claim Data', href: '/claim-data', icon: FileSpreadsheet, roles: ['ADMIN'], permissionKey: 'page.claim_data', group: 'system' },
   { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360', group: 'system' },
   {
     name: 'Customer 360',

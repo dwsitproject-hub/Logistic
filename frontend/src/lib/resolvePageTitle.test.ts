@@ -4,7 +4,7 @@ import { resolvePageTitle } from '@/lib/resolvePageTitle'
 describe('resolvePageTitle', () => {
   it('uses exact nav names', () => {
     expect(resolvePageTitle('/contracts')).toBe('Contracts')
-    expect(resolvePageTitle('/sap-imports')).toBe('SAP Data')
+    expect(resolvePageTitle('/sap-imports')).toBe('Logistics Data')
     expect(resolvePageTitle('/contract-performance')).toBe('Contract Performance')
   })
 
@@ -14,6 +14,6 @@ describe('resolvePageTitle', () => {
   })
 
   it('falls back to longest nav prefix', () => {
-    expect(resolvePageTitle('/sap-imports/abc')).toBe('SAP Data')
+    expect(resolvePageTitle('/sap-imports/abc')).toBe('Logistics Data')
   })
 })

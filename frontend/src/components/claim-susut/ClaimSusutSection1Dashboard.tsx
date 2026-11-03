@@ -7,10 +7,11 @@ import { PerformanceSection1CardShell } from '@/components/performance/Performan
 import { RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
 import { formatProductList, topGroupVendorRollups } from '@/lib/claimGroupVendorRollup'
 import { CLAIM_SUSUT_BLANK, formatClaimSusutIdr } from '@/lib/claimSusutView'
+import { formatDateDMY } from '@/lib/dateFormat'
 
 /**
- * Section 1 of Shortage Claim: three cards, then ONE summary card whose tabs are the two summaries
- * the SAP workbook carries as its PIVOT and REAL_CLAIM sheets, recomputed from what KLIP imported -
+ * Section 1 of Shortage Claim: two cards (Outstanding and Realised, each Qty and Amount), then ONE summary card whose tabs are the
+ * summaries recomputed from the SAP Claim Data (OSCLAIM and REALCLAIM) KLIP imported -
  * the same one-card layout as Quality Claim, so the section fits on a screen. Unlike Quality Claim,
  * amounts are shown in full IDR rather than shortened to B / M.
  *
@@ -71,6 +72,8 @@ export type ClaimSusutRealized = {
   available: boolean
   periodLabel?: string | null
   osPeriodLabel?: string | null
+  /** The "data as of" date stated when the OSCLAIM file was imported (YYYY-MM-DD). */
+  dataAsOf?: string | null
   totals?: { claims: number; qty: number; amount: number }
   byTransport?: Array<{ transport_group: string; claims: number; qty: number; amount: number }>
   byVendor?: ClaimSusutRealizedVendor[]
@@ -160,8 +163,6 @@ export function ClaimSusutSection1Dashboard({
   const total = (key: keyof ClaimSusutAgingGroupRow) =>
     groups.reduce((s, g) => s + (Number(g[key]) || 0), 0)
   const agingTotal = total('grand_total')
-  const over90 = total('a_gt_90')
-  const over90Share = agingTotal > 0 ? over90 / agingTotal : 0
   const realizedAvailable = Boolean(realized?.available)
   const vendors = realized?.byVendor ?? []
   const realTotalAmount = realized?.totals?.amount ?? 0
@@ -173,7 +174,7 @@ export function ClaimSusutSection1Dashboard({
 
   const note =
     tab === 'aging'
-      ? `Amount after tax (IDR) per group · CR date ${crDateLabel}${realized?.osPeriodLabel ? ` · outstanding as of ${realized.osPeriodLabel}` : ''} · follows the filters. Click a group to filter the table below.`
+      ? `Amount after tax (IDR) per group · CR date ${crDateLabel}${realized?.dataAsOf ? ` · outstanding as of ${formatDateDMY(realized.dataAsOf)}` : realized?.osPeriodLabel ? ` · outstanding as of ${realized.osPeriodLabel}` : ''} · follows the filters. Click a group to filter the table below.`
       : tab === 'vendor'
         ? `Outstanding claims · CR date ${crDateLabel}. Top 5 Group Vendors by amount after tax. Open a group to see its vendors. Unmatched POs show -. Follows the filters.`
         : `Approved claims with a CR date in ${crDateLabel}. Product, vendor and transport filters do not apply.`
@@ -183,7 +184,7 @@ export function ClaimSusutSection1Dashboard({
   return (
     <div className="space-y-4">
       <div
-        className={`grid grid-cols-1 gap-4 sm:grid-cols-3 transition-opacity duration-200 ${
+        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 transition-opacity duration-200 ${
           summaryLoading || groupLoading ? 'opacity-65' : 'opacity-100'
         }`}
       >
@@ -199,18 +200,7 @@ export function ClaimSusutSection1Dashboard({
           </div>
         </PerformanceSection1CardShell>
 
-        <PerformanceSection1CardShell variant="ongoing" title="Outstanding > 90 Days" selected onClick={() => undefined}>
-          <div className="mb-1 text-sm text-gray-500">Amount (IDR)</div>
-          <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimSusutIdr(over90)}</div>
-          <div className="text-xs text-gray-500">
-            <span className="font-semibold tabular-nums text-gray-900">
-              {(over90Share * 100).toLocaleString('en-US', { maximumFractionDigits: 1 })}%
-            </span>{' '}
-            of total outstanding
-          </div>
-        </PerformanceSection1CardShell>
-
-        <PerformanceSection1CardShell variant="completed" title="Realised Claims" selected onClick={() => undefined}>
+        <PerformanceSection1CardShell variant="completed" title="Realised Shortage Claim" selected onClick={() => undefined}>
           {realizedAvailable ? (
             <>
               <div className="mb-1 text-sm text-gray-500">Approved Qty (Kg)</div>
@@ -231,8 +221,8 @@ export function ClaimSusutSection1Dashboard({
               {realizedLoading
                 ? 'Loading…'
                 : hasImport
-                  ? 'This import has no REAL_CLAIM sheet.'
-                  : 'Upload a file to see realised claims.'}
+                  ? 'No realised claims imported yet.'
+                  : 'Import claim data to see realised claims.'}
             </div>
           )}
         </PerformanceSection1CardShell>
@@ -252,7 +242,7 @@ export function ClaimSusutSection1Dashboard({
         <CardContent className="pt-2">
           {tab === 'aging' ? (
             groups.length === 0 ? (
-              empty(hasImport ? 'No data for these filters.' : 'Upload a file to see the summary.')
+              empty(hasImport ? 'No data for these filters.' : 'Import claim data to see the summary.')
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[640px] text-sm">
@@ -315,7 +305,7 @@ export function ClaimSusutSection1Dashboard({
             )
           ) : tab === 'vendor' ? (
             vendorGroups.length === 0 ? (
-              empty(hasImport ? 'No data for these filters.' : 'Upload a file to see the summary.')
+              empty(hasImport ? 'No data for these filters.' : 'Import claim data to see the summary.')
             ) : (
               <>
                 <div className="mb-2 flex justify-end">
@@ -409,8 +399,8 @@ export function ClaimSusutSection1Dashboard({
                 : realizedAvailable
                   ? 'No realised claims with a CR date in this range.'
                   : hasImport
-                    ? 'This import has no REAL_CLAIM sheet.'
-                    : 'Upload a file to see realised claims.',
+                    ? 'No realised claims imported yet.'
+                    : 'Import claim data to see realised claims.',
             )
           ) : (
             <>
@@ -462,18 +452,24 @@ export function ClaimSusutSection1Dashboard({
                   </tfoot>
                 </table>
               </div>
-              {realized?.byTransport && realized.byTransport.length > 0 ? (
-                <p className="mt-3 text-xs text-gray-500">
-                  By transport:{' '}
-                  {realized.byTransport.map((t, i) => (
-                    <span key={t.transport_group}>
-                      {i > 0 ? ' · ' : ''}
-                      <span className="font-medium text-gray-700">{t.transport_group}</span> {t.claims} claims,{' '}
-                      <Idr v={t.amount} />
-                    </span>
-                  ))}
-                </p>
-              ) : null}
+              {(() => {
+                // REALCLAIM carries no KETERANGAN, so realised claims have no transport group: show "-".
+                const known = (realized?.byTransport ?? []).filter((x) => x.transport_group !== CLAIM_SUSUT_BLANK)
+                return (
+                  <p className="mt-3 text-xs text-gray-500">
+                    By transport:{' '}
+                    {known.length === 0
+                      ? '-'
+                      : known.map((t, i) => (
+                          <span key={t.transport_group}>
+                            {i > 0 ? ' · ' : ''}
+                            <span className="font-medium text-gray-700">{t.transport_group}</span> {t.claims} claims,{' '}
+                            <Idr v={t.amount} />
+                          </span>
+                        ))}
+                  </p>
+                )
+              })()}
             </>
           )}
         </CardContent>

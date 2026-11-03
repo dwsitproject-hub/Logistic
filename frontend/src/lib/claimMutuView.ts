@@ -30,6 +30,8 @@ export type ClaimMutuApiFilters = {
   metodePayments?: string[]
   /** View table only: Claimed (Real_Claim) / Not Claimed (Os_Claim). */
   claimStatuses?: string[]
+  /** B2B / Direct / Unmatched, from the Logistics Report. When set it replaces the Include / Exclude B2B scope. */
+  b2bStatuses?: string[]
 }
 
 export function appendClaimMutuFilterParams(
@@ -39,6 +41,7 @@ export function appendClaimMutuFilterParams(
 ): URLSearchParams {
   if (f.importId && !opts?.omitImport) params.set('importId', f.importId)
   params.set('b2b', f.b2b)
+  for (const v of f.b2bStatuses ?? []) params.append('b2bStatuses', v)
   if (f.dateFrom) params.set('dateFrom', f.dateFrom)
   if (f.dateTo) params.set('dateTo', f.dateTo)
   const list = (key: string, values?: string[]) => {
@@ -214,7 +217,7 @@ export const CLAIM_MUTU_COLUMNS: ClaimMutuColumnDef[] = [
   { id: 'amount_after_tax_idr', label: 'Amount After Tax (IDR)', sortKey: 'amount_after_tax_idr', align: 'right', kind: 'idr' },
   { id: 'os_days', label: 'Aging (Days)', sortKey: 'os_days', align: 'right', kind: 'aging' },
   { id: 'metode_payment', label: 'Payment Method', sortKey: 'metode_payment' },
-  { id: 'is_b2b', label: 'B2B', sortKey: 'is_b2b', kind: 'b2b' },
+  { id: 'is_b2b', label: 'B2B', sortKey: 'b2b_status', kind: 'b2b' },
   { id: 'cm_no', label: 'CM No', sortKey: 'cm_no' },
   { id: 'cm_date', label: 'CM Date', sortKey: 'cm_date', kind: 'date' },
   { id: 'kebun', label: 'Kebun', sortKey: 'kebun' },

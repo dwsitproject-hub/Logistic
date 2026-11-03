@@ -19,6 +19,8 @@ export interface ClaimSusutQueryFilters {
   /** Vendor Name (the page's former Company): the OS_CLAIM vendor, never SAP. */
   vendors: string[];
   groupsOfTransport: string[];
+  /** B2B / DIRECT / UNMATCHED, from the Logistics Report (stored on each claim row). */
+  b2bStatuses: string[];
   ddProduct: string | null;
   ddPlant: string | null;
   ddIncoterm: string | null;
@@ -64,6 +66,15 @@ function firstQueryString(raw: unknown): string | null {
   return s || null;
 }
 
+export const CLAIM_B2B_STATUSES = ['B2B', 'DIRECT', 'UNMATCHED'] as const;
+
+/** Keeps only the three known B2B statuses, upper-cased; anything else is ignored. */
+export function parseB2bStatuses(raw: unknown): string[] {
+  return parseMultiQueryParam(raw)
+    .map((s) => String(s).trim().toUpperCase())
+    .filter((s) => (CLAIM_B2B_STATUSES as readonly string[]).includes(s));
+}
+
 export function parseClaimSusutQueryFilters(query: Record<string, unknown>): ClaimSusutQueryFilters {
   return {
     importId: parseOptionalUuid(query.importId),
@@ -75,6 +86,7 @@ export function parseClaimSusutQueryFilters(query: Record<string, unknown>): Cla
     products: parseMultiQueryParam(query.product ?? query.products),
     vendors: parseMultiQueryParam(query.vendor ?? query.vendors),
     groupsOfTransport: parseMultiQueryParam(query.groupOfTransport ?? query.groupsOfTransport),
+    b2bStatuses: parseB2bStatuses(query.b2b ?? query.b2bStatuses),
     ddProduct: firstQueryString(query.ddProduct),
     ddPlant: firstQueryString(query.ddPlant),
     ddIncoterm: firstQueryString(query.ddIncoterm),
@@ -144,6 +156,7 @@ export function buildClaimSusutFilteredCte(
     where += appendUpperInFilter('e.incoterm', filters.incoterms, params);
     where += appendUpperInFilter('e.product', filters.products, params);
     where += appendUpperInFilter('e.company', filters.vendors, params);
+    where += appendUpperInFilter('e.b2b_status', (filters.b2bStatuses ?? []), params);
   }
 
   if (shouldApplyDrilldown(scope)) {
@@ -237,6 +250,7 @@ enriched AS (
     r.tax,
     r.amount_after_tax_idr,
     r.created_at,
+    COALESCE(NULLIF(TRIM(r.b2b_status), ''), 'UNMATCHED') AS b2b_status,
     COALESCE(NULLIF(TRIM(r.vendor_name), ''), '${CLAIM_SUSUT_BLANK}') AS company,
     COALESCE(NULLIF(TRIM(r.commodity), ''), '${CLAIM_SUSUT_BLANK}') AS product,
     COALESCE(NULLIF(TRIM(r.vendor_type), ''), '${CLAIM_SUSUT_BLANK}') AS source,
@@ -290,6 +304,13 @@ filtered AS (
  * upload), cut to the page's CR date range on CLAIM DATE. Region/plant is DEST normalised as the
  * OS side does; the Source / Incoterm filters have no REAL_CLAIM counterpart and so exclude it.
  */
+/**
+ * Realised rows of the Claim Data import only, once one exists: the monthly workbooks it replaced
+ * stay in the tables as an archive but are no longer read. (`i` is claim_susut_imports.)
+ */
+export const CLAIM_SUSUT_CLAIM_DATA_ONLY_SQL = `(i.source_kind = 'claim_data'
+    OR NOT EXISTS (SELECT 1 FROM claim_susut_imports c WHERE c.source_kind = 'claim_data'))`;
+
 export function buildClaimSusutRealViewCte(filters: ClaimSusutQueryFilters, params: unknown[]): string {
   const destNormalized = sqlNormalizeDischargeDestination(`NULLIF(TRIM(r.dest), '')`);
   let where = 'WHERE uploaded_at IS NOT DISTINCT FROM latest';
@@ -304,6 +325,7 @@ export function buildClaimSusutRealViewCte(filters: ClaimSusutQueryFilters, para
   where += appendUpperInFilter('region_plant', filters.plants, params);
   where += appendUpperInFilter('product', filters.products, params);
   where += appendUpperInFilter('company', filters.vendors, params);
+  where += appendUpperInFilter('b2b_status', (filters.b2bStatuses ?? []), params);
   where += appendUpperInFilter('group_of_transport', filters.groupsOfTransport, params);
   if (filters.sources.length > 0 || filters.incoterms.length > 0) where += ' AND FALSE';
   return `
@@ -342,10 +364,12 @@ real_ranked AS (
     r.tax,
     r.amount_after_tax_idr,
     r.created_at,
+    COALESCE(NULLIF(TRIM(r.b2b_status), ''), 'UNMATCHED') AS b2b_status,
     i.uploaded_at,
     MAX(i.uploaded_at) OVER (PARTITION BY r.cr_no, r.po_number, r.cm_date, r.amount_after_tax_idr) AS latest
   FROM claim_susut_real_rows r
   JOIN claim_susut_imports i ON i.id = r.import_id
+  WHERE ${CLAIM_SUSUT_CLAIM_DATA_ONLY_SQL}
 ),
 real_view AS (
   SELECT * FROM real_ranked
@@ -359,7 +383,7 @@ export const CLAIM_SUSUT_VIEW_COLUMNS = `
   sta, crno, cr_date, cm_date, os_days, group_of_transport, payment_method,
   dest, region_plant, incoterm, po_number, contract_ext_no,
   comm, commodity, product, uom, currency, company_code, remarks, type,
-  qty_claim, amount_before_tax_idr, tax, amount_after_tax_idr, created_at`;
+  qty_claim, amount_before_tax_idr, tax, amount_after_tax_idr, created_at, b2b_status`;
 
 export const CLAIM_SUSUT_AGING_SUM_SQL = `
   COALESCE(SUM(CASE WHEN os_days IS NOT NULL AND os_days >= 0 AND os_days <= 30 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END), 0)::numeric AS a_0_30,
@@ -400,7 +424,7 @@ function sortTreeNodes(nodes: ClaimSusutTreeNode[]): ClaimSusutTreeNode[] {
 }
 
 /**
- * Nest grouped Excel rows into Product → Region/Plant → Incoterm → Company.
+ * Nest grouped Excel rows into Product ? Region/Plant ? Incoterm ? Company.
  */
 export function nestClaimSusutTree(rows: ClaimSusutTreeLeaf[]): ClaimSusutTreeNode[] {
   type Acc = { qty: number; amount: number; children: Map<string, Acc> };

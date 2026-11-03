@@ -8,6 +8,8 @@
  * two filters narrow the outstanding side and leave the realised side whole. The page says so.
  */
 
+import { parseB2bStatuses } from './claimSusutQuerySql';
+
 export const CLAIM_MUTU_BLANK = '(Blank)';
 
 export type ClaimMutuB2bScope = 'exclude' | 'include';
@@ -15,6 +17,11 @@ export type ClaimMutuB2bScope = 'exclude' | 'include';
 export interface ClaimMutuFilters {
   importId: string | null;
   b2b: ClaimMutuB2bScope;
+  /**
+   * B2B / DIRECT / UNMATCHED picked explicitly (from the Logistics Report). When set it decides on
+   * its own and the Include / Exclude B2B scope above is not applied.
+   */
+  b2bStatuses: string[];
   dateFrom: string | null;
   dateTo: string | null;
   commodities: string[];
@@ -39,6 +46,7 @@ export function parseClaimMutuFilters(q: Record<string, unknown>): ClaimMutuFilt
   return {
     importId: UUID_RE.test(importId) ? importId : null,
     b2b: String(q.b2b ?? '').trim().toLowerCase() === 'include' ? 'include' : 'exclude',
+    b2bStatuses: parseB2bStatuses(q.b2bStatuses),
     dateFrom: ISO_DATE_RE.test(dateFrom) ? dateFrom : null,
     dateTo: ISO_DATE_RE.test(dateTo) ? dateTo : null,
     commodities: list(q.commodities),
@@ -95,7 +103,9 @@ export function buildClaimMutuSideCte(
   const qty = side === 'os' ? 'r.qty_claim_kg' : 'r.qty_kg';
   const commodity = side === 'os' ? 'r.product' : 'r.commodity';
   const where: string[] = [];
-  if (f.b2b === 'exclude') where.push('NOT r.is_b2b');
+  if ((f.b2bStatuses?.length ?? 0) > 0 && opts.omit !== 'b2bStatuses') {
+    where.push(`UPPER(COALESCE(NULLIF(TRIM(r.b2b_status), ''), 'UNMATCHED')) = ANY(${p(f.b2bStatuses)}::text[])`);
+  } else if (f.b2b === 'exclude') where.push('NOT r.is_b2b');
   if (!monthly && f.dateFrom && opts.omit !== 'dateFrom') where.push(`(${dateCol} IS NULL OR ${dateCol} >= ${p(f.dateFrom)}::date)`);
   if (!monthly && f.dateTo && opts.omit !== 'dateTo') where.push(`(${dateCol} IS NULL OR ${dateCol} <= ${p(f.dateTo)}::date)`);
   const inList = (key: keyof ClaimMutuFilters, expr: string) => {
@@ -117,6 +127,7 @@ active_import AS (
   SELECT DISTINCT ON (period_month) id, period_month
   FROM claim_mutu_imports
   WHERE period_month IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM claim_mutu_imports c WHERE c.source_kind = 'claim_data')
   ORDER BY period_month, uploaded_at DESC NULLS LAST
 )`
     : `
@@ -139,6 +150,8 @@ ${name}_all AS (
          MAX(i.uploaded_at) OVER (PARTITION BY x.cr_no, x.cm_no, x.po_number, x.amount_after_tax_idr) AS latest
   FROM ${table} x
   JOIN claim_mutu_imports i ON i.id = x.import_id
+  WHERE (i.source_kind = 'claim_data'
+         OR NOT EXISTS (SELECT 1 FROM claim_mutu_imports c WHERE c.source_kind = 'claim_data'))
 ),
 ${name} AS (
   SELECT r.*,

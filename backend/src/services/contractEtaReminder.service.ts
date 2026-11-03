@@ -30,17 +30,42 @@ export interface ContractEtaReminderRecipient {
   full_name: string | null;
 }
 
-/** Active LOGISTICS users above Staff level (Dept Head / Section Head / Admin level). */
+export interface EtaReminderUser {
+  email: string | null;
+  full_name: string | null;
+  role: string | null;
+  level: string | null;
+}
+
+const normalizeUserTag = (value: unknown): string => String(value ?? '').trim().toUpperCase();
+
+/**
+ * Who gets the daily Contract ETA reminder (2026-11-03): Admin, and the Section Heads and Dept Heads of LOGISTICS.
+ *
+ * - Admin: level Admin, or role ADMIN, whatever the department. They get it as the people who watch the whole system.
+ * - Section Head and Dept Head ("head"): only role LOGISTICS. The same levels in another role (Commercial, Finance, ...) are not in this chain: the reminder asks for ETAs
+ *   that only Logistics fills in.
+ * - Staff, and a user with no level, never get it (a Logistics user with no level used to be left out as well).
+ */
+export function isEtaReminderRecipient(user: Pick<EtaReminderUser, 'role' | 'level'>): boolean {
+  const role = normalizeUserTag(user.role);
+  const level = normalizeUserTag(user.level);
+  if (level === 'ADMIN' || role === 'ADMIN') return true;
+  return role === 'LOGISTICS' && (level === 'SECTION HEAD' || level === 'DEPT HEAD');
+}
+
+/** Active users who match {@link isEtaReminderRecipient}, with an email address. */
 export async function findEtaReminderRecipients(): Promise<ContractEtaReminderRecipient[]> {
   const result = await query(
-    `SELECT email, full_name
+    `SELECT email, full_name, role, level
      FROM users
      WHERE is_active = true
-       AND UPPER(TRIM(role)) = 'LOGISTICS'
-       AND level IS NOT NULL
-       AND UPPER(TRIM(level)) <> 'STAFF'`,
+       AND email IS NOT NULL
+       AND TRIM(email) <> ''`,
   );
-  return result.rows as ContractEtaReminderRecipient[];
+  return (result.rows as EtaReminderUser[])
+    .filter(isEtaReminderRecipient)
+    .map((user) => ({ email: String(user.email).trim(), full_name: user.full_name }));
 }
 
 /**

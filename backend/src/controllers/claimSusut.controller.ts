@@ -12,6 +12,8 @@ import {
   CLAIM_SUSUT_AGING_SUM_SQL,
   CLAIM_SUSUT_ROW_AGING_SQL,
   nestClaimSusutTree,
+  parseB2bStatuses,
+  CLAIM_SUSUT_CLAIM_DATA_ONLY_SQL,
   parseClaimSusutQueryFilters,
   parseClaimSusutStoredErrors,
   parseOptionalIsoDate,
@@ -369,7 +371,7 @@ export const getClaimSusutRealized = async (req: AuthRequest, res: Response) => 
   try {
     const importId = parseOptionalUuid((req.query as Record<string, unknown>)?.importId);
     const imp = await query(
-      `SELECT id, real_sheet_name, real_period_label, os_period_label
+      `SELECT id, real_sheet_name, real_period_label, os_period_label, data_as_of::text AS data_as_of
          FROM claim_susut_imports
         WHERE ($1::uuid IS NULL OR id = $1::uuid)
         ORDER BY CASE WHEN $1::uuid IS NOT NULL THEN 0 ELSE 1 END, uploaded_at DESC NULLS LAST
@@ -383,12 +385,14 @@ export const getClaimSusutRealized = async (req: AuthRequest, res: Response) => 
     const q = req.query as Record<string, unknown>;
     const dateFrom = parseOptionalIsoDate(q.dateFrom);
     const dateTo = parseOptionalIsoDate(q.dateTo);
+    const b2bStatuses = parseB2bStatuses(q.b2b ?? q.b2bStatuses);
     const rowsRes = await query(
       `WITH ranked AS (
          SELECT r.*, i.uploaded_at, i.file_name, i.real_period_label,
                 MAX(i.uploaded_at) OVER (PARTITION BY r.cr_no, r.po_number, r.cm_date, r.amount_after_tax_idr) AS latest
            FROM claim_susut_real_rows r
            JOIN claim_susut_imports i ON i.id = r.import_id
+          WHERE ${CLAIM_SUSUT_CLAIM_DATA_ONLY_SQL}
        )
        SELECT import_id, file_name, real_period_label,
               vendor_code, vendor_name, cargo_source, cr_no,
@@ -402,8 +406,9 @@ export const getClaimSusutRealized = async (req: AuthRequest, res: Response) => 
         WHERE uploaded_at IS NOT DISTINCT FROM latest
           AND ($1::date IS NULL OR claim_date IS NULL OR claim_date >= $1::date)
           AND ($2::date IS NULL OR claim_date IS NULL OR claim_date <= $2::date)
+          AND ($3::text[] IS NULL OR COALESCE(NULLIF(TRIM(b2b_status), ''), 'UNMATCHED') = ANY($3::text[]))
         ORDER BY vendor_name NULLS LAST, cm_date NULLS LAST, cr_no`,
-      [dateFrom, dateTo],
+      [dateFrom, dateTo, b2bStatuses.length > 0 ? b2bStatuses : null],
     );
     const anyRealRes = await query(`SELECT EXISTS (SELECT 1 FROM claim_susut_real_rows) AS any`);
     const rows = rowsRes.rows as Array<Record<string, any>>;
@@ -440,6 +445,7 @@ export const getClaimSusutRealized = async (req: AuthRequest, res: Response) => 
         sheetName: active.real_sheet_name,
         periodLabel: active.real_period_label,
         osPeriodLabel: active.os_period_label,
+        dataAsOf: active.data_as_of ?? null,
         dateFrom,
         dateTo,
         sources: [...sourceMap.values()],
@@ -515,6 +521,7 @@ export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
       group_of_transport: `group_of_transport`,
       payment_method: `payment_method`,
       claim_status: `claim_status`,
+      b2b_status: `b2b_status`,
       cm_date: `cm_date`,
       dest: `dest`,
       region_plant: `region_plant`,

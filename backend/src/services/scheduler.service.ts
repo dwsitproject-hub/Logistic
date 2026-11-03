@@ -43,7 +43,7 @@ export class SchedulerService {
   }
 
   /**
-   * Daily email to Logistics users (above Staff level) listing open contracts missing ETA
+   * Daily email to Admins and to the Section Heads / Dept Heads of Logistics (see isEtaReminderRecipient) listing open contracts missing ETA
    * near their Cargo Readiness Date. Configurable via CONTRACT_ETA_REMINDER_ENABLED /
    * CONTRACT_ETA_REMINDER_CRON; defaults to 07:00 Asia/Jakarta.
    */

@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import { RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
+import { formatDateDMY } from '@/lib/dateFormat'
 import { formatProductList, topGroupVendorRollups } from '@/lib/claimGroupVendorRollup'
 import {
   CLAIM_MUTU_BLANK,
@@ -26,9 +27,10 @@ import {
 } from '@/lib/claimMutuView'
 
 /**
- * Section 1 of Claim Mutu: three cards, then ONE recap card whose tabs are the four summary sheets
- * of the claim team's workbook - Pivot (aging), Rekap Klaim Per Lokasi, Summary Per Komoditi and
- * Summary Per Unit - recomputed from the imported OS_Claim / Real_Claim rows. One card instead of
+ * Section 1 of Claim Mutu: two cards (Outstanding and Realised, each Qty and Amount), then ONE recap card whose tabs are the
+ * summaries of the claim team's workbook - Pivot (aging), Rekap Klaim Per Lokasi and Summary Per Komoditi -
+ * recomputed from the imported Claim Data (OSCLAIM / REALCLAIM) rows. Summary Per Unit, a month-by-month trend, needs the
+ * old monthly workbooks and is hidden. One card instead of
  * four stacked tables keeps the section to a single screen; numbers are short (34,46 M) with the
  * full figure in each cell's tooltip. Everything follows the page filters and the B2B choice.
  */
@@ -59,6 +61,8 @@ export type ClaimMutuDashboard = {
   periodLabel: string | null
   realPeriodLabel: string | null
   periodMonth: string | null
+  /** The "data as of" date stated when the OSCLAIM file was imported (YYYY-MM-DD). */
+  dataAsOf?: string | null
   b2bSource: string | null
   realAvailable: boolean
   warnings: string[]
@@ -80,7 +84,6 @@ const TABS: Array<{ id: RecapTab; label: string }> = [
   { id: 'vendor', label: 'Group Vendor' },
   { id: 'lokasi', label: 'Location' },
   { id: 'komoditi', label: 'Commodity' },
-  { id: 'unit', label: 'Unit' },
 ]
 
 const AGING_COLUMNS: Array<{ key: keyof ClaimMutuAgingGroupRow; label: string }> = [
@@ -144,7 +147,7 @@ function Sparkline({ values }: { values: number[] }) {
 function Empty({ hasImport }: { hasImport: boolean }) {
   return (
     <div className="py-8 text-center text-sm text-gray-500">
-      {hasImport ? 'No data for these filters.' : 'Upload a file to see the summary.'}
+      {hasImport ? 'No data for these filters.' : 'Import claim data to see the summary.'}
     </div>
   )
 }
@@ -230,7 +233,13 @@ export function ClaimMutuSection1Dashboard({
 
   const os = dashboard?.os ?? { claims: 0, qty: 0, amount: 0, over90: 0 }
   const real = dashboard?.real ?? { claims: 0, qty: 0, amount: 0 }
-  const period = `CR date ${crDateLabel}${dashboard?.periodLabel ? ` · outstanding as of ${dashboard.periodLabel}` : ''}`
+  const period = `CR date ${crDateLabel}${
+    dashboard?.dataAsOf
+      ? ` · outstanding as of ${formatDateDMY(dashboard.dataAsOf)}`
+      : dashboard?.periodLabel
+        ? ` · outstanding as of ${dashboard.periodLabel}`
+        : ''
+  }`
   const scope = scopeLabel(b2b)
 
   const tabNote: Record<RecapTab, string> = {
@@ -251,7 +260,7 @@ export function ClaimMutuSection1Dashboard({
   return (
     <div className="space-y-4">
       <div
-        className={`grid grid-cols-1 gap-4 sm:grid-cols-3 transition-opacity duration-200 ${
+        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 transition-opacity duration-200 ${
           loading ? 'opacity-65' : 'opacity-100'
         }`}
       >
@@ -267,16 +276,7 @@ export function ClaimMutuSection1Dashboard({
           </div>
         </PerformanceSection1CardShell>
 
-        <PerformanceSection1CardShell variant="ongoing" title="Outstanding > 90 Days" selected onClick={() => undefined}>
-          <div className="mb-1 text-sm text-gray-500">Claim Value (IDR)</div>
-          <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimMutuIdr(os.over90)}</div>
-          <div className="text-xs text-gray-500">
-            <span className="font-semibold tabular-nums text-gray-900">{formatShare(os.over90, os.amount)}</span> of total
-            outstanding
-          </div>
-        </PerformanceSection1CardShell>
-
-        <PerformanceSection1CardShell variant="completed" title="Realised Claims" selected onClick={() => undefined}>
+        <PerformanceSection1CardShell variant="completed" title="Realised Quality Claim" selected onClick={() => undefined}>
           {dashboard?.realAvailable ? (
             <>
               <div className="mb-1 text-sm text-gray-500">Claim Value (IDR)</div>
@@ -297,8 +297,8 @@ export function ClaimMutuSection1Dashboard({
               {loading
                 ? 'Loading…'
                 : hasImport
-                  ? 'This import has no Real_Claim sheet.'
-                  : 'Upload a file to see realised claims.'}
+                  ? 'No realised claims imported yet.'
+                  : 'Import claim data to see realised claims.'}
             </div>
           )}
         </PerformanceSection1CardShell>
