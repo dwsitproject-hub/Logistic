@@ -2481,10 +2481,15 @@ export class SapDataDistributionService {
   }
 
   /** SAP figure quantities are stored in Kg (same unit as Quantity Delivery / Receive). */
+  /**
+   * A SFAL / SFBD quantity from SAP, in kg. Zero (and below) is "no figure": the Phase 3 template sends 0 on rows that have none (3,332 of 3,458 SFAL cells in the test
+   * pull), and the sheet is read formatted, so that 0 arrives as the text "0.000", which parseNumber turns into 0. The shipment write is `COALESCE(new, old)`, so a 0
+   * here would replace a figure a user entered in KLIP. A vessel never loads 0 kg, so nothing real is lost.
+   */
   private static parseSapFigureQtyKg(...values: unknown[]): number | null {
     for (const value of values) {
       const kg = this.parseNumber(value);
-      if (kg !== null) return kg;
+      if (kg !== null && kg > 0) return kg;
     }
     return null;
   }

@@ -190,7 +190,13 @@ export class SapMasterV2ImportService {
     'product': 'product',
     'material desc': 'product',
     'material': 'product',
-    
+    // The Phase 3 template (2026-11) adds Material Code / Material Description / Material Group next to Product. Without these exact keys the partial match above sent
+    // all three to `product`, the same field as the Product column. They are the material of the line, not its commercial product, and `material_code` is the key other
+    // applications (DHM) use for it.
+    'material code': 'material_code',
+    'material description': 'material_description',
+    'material group': 'material_group',
+
     // CRITICAL: Contract No and PO No are DIFFERENT fields!
     'contract no. (no contract) ini nomer kontrak auto generate': 'contract_no',
     'contract no.': 'contract_no',
