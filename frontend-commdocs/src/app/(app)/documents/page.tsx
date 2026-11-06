@@ -72,6 +72,7 @@ export default function DocumentsPage() {
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
   const [exporting, setExporting] = useState(false)
+  const [plantsWithData, setPlantsWithData] = useState<string[] | null>(null)
 
   // ---- drawer + Tanda Terima ----
   const [open, setOpen] = useState<DocumentRow | null>(null)
@@ -82,6 +83,11 @@ export default function DocumentsPage() {
   const cols = useMemo(() => ({ ...DEFAULT_VISIBLE, ...savedCols }), [savedCols])
   const visible = COLUMNS.filter((c) => c.fixed || cols[c.id])
   const selectedRows = Object.values(selected)
+  // Plants with data; the chosen plant stays in the list even if the date range moved away from it, so the select never shows a blank.
+  const plantChoices = useMemo(() => {
+    const list = plantsWithData ?? options.plants
+    return filters.plant && !list.includes(filters.plant) ? [...list, filters.plant].sort((a, b) => a.localeCompare(b)) : list
+  }, [plantsWithData, options.plants, filters.plant])
 
   // Search waits for a pause in typing.
   useEffect(() => {
@@ -188,6 +194,23 @@ export default function DocumentsPage() {
     )
     return () => ctrl.abort()
   }, [])
+
+  // Region/Plant choices: only the ones that have POs in the selected date range (the same list the Dashboard counts by plant), so the
+  // list is not 40 names with nothing behind them. It follows the date range only - not the other filters - so choosing one filter never
+  // empties another's list. The master list stays as the fallback if this cannot be loaded.
+  useEffect(() => {
+    if (filters.preset === 'custom' && (!filters.from || !filters.to)) return
+    const ctrl = new AbortController()
+    apiData<{ plants: Array<{ plant: string }> }>(`/commercial-documents/completeness-by-plant${toQuery({ dateFrom: range.dateFrom, dateTo: range.dateTo })}`, {
+      signal: ctrl.signal,
+    })
+      .then((d) => {
+        const names = (d.plants || []).map((p) => p.plant).filter((p) => p && p !== 'Unassigned')
+        setPlantsWithData(Array.from(new Set(names)).sort((a, b) => a.localeCompare(b)))
+      })
+      .catch(() => setPlantsWithData(null))
+    return () => ctrl.abort()
+  }, [range.dateFrom, range.dateTo, filters.preset, filters.from, filters.to])
 
   // The table.
   useEffect(() => {
@@ -353,7 +376,7 @@ export default function DocumentsPage() {
           ) : null}
           <select className="select" aria-label="Region/Plant" value={filters.plant} onChange={(e) => setF({ plant: e.target.value })}>
             <option value="">Region/Plant: All</option>
-            {options.plants.map((p) => (
+            {plantChoices.map((p) => (
               <option key={p} value={p}>
                 {p}
               </option>
@@ -493,18 +516,24 @@ export default function DocumentsPage() {
             Tick the boxes on the right to download one Tanda Terima for several POs
           </span>
           <div className="actions">
-            {gate.ok ? null : (
-              <span id="export-hint" className="hint export-hint">
-                {gate.hint}
-              </span>
-            )}
-            <button className="btn sm" type="button" onClick={() => void exportExcel()} disabled={exporting || loading || !pagination?.total || !gate.ok}
-              aria-describedby={gate.ok ? undefined : 'export-hint'}
-              title={gate.ok ? 'Download the filtered list as Excel' : gate.hint}
-            >
-              <Download aria-hidden />
-              {exporting ? 'Exporting…' : 'Export Excel'}
-            </button>
+            {/* The hint for a disabled Export shows only while the pointer is over the button (a disabled button gets no hover of its own, so the wrapper carries it). */}
+            <span className="export-wrap">
+              <button
+                className="btn sm"
+                type="button"
+                onClick={() => void exportExcel()}
+                disabled={exporting || loading || !pagination?.total || !gate.ok}
+                aria-describedby={gate.ok ? undefined : 'export-hint'}
+              >
+                <Download aria-hidden />
+                {exporting ? 'Exporting…' : 'Export Excel'}
+              </button>
+              {gate.ok ? null : (
+                <span id="export-hint" role="tooltip" className="export-tip">
+                  {gate.hint}
+                </span>
+              )}
+            </span>
             <div className="colpick" ref={colsRef}>
               <button className="btn sm" type="button" onClick={() => setColsOpen((v) => !v)} aria-expanded={colsOpen} aria-haspopup="true">
                 <Columns3 aria-hidden />
