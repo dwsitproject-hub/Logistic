@@ -8,6 +8,7 @@ import { AuthRequest } from '../middleware/auth';
 import { applyContractFilterAlias } from '../utils/contractFilterParam';
 import logger from '../utils/logger';
 import {
+  SHIPMENT_CHANGED_ONLY_PROVENANCE_COLUMNS,
   SHIPMENT_PROVENANCE_COLUMNS,
   buildKlipEditedFieldsChangedSetSql,
   buildKlipEditedFieldsSetSql,
@@ -3241,14 +3242,18 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    // SFAL / SFBD are marked as the user's only when this save CHANGES them (see SHIPMENT_CHANGED_ONLY_PROVENANCE_COLUMNS): the modal submits both on every save.
+    const changedOnlyPairs: Array<{ column: string; placeholder: string }> = [];
     if (updateData.sfal_qty !== undefined) {
       updateFields.push(`sfal_qty = $${paramIndex}::numeric`);
+      changedOnlyPairs.push({ column: 'sfal_qty', placeholder: `$${paramIndex}::numeric` });
       updateValues.push(updateData.sfal_qty);
       paramIndex++;
     }
 
     if (updateData.sfbd_qty !== undefined) {
       updateFields.push(`sfbd_qty = $${paramIndex}::numeric`);
+      changedOnlyPairs.push({ column: 'sfbd_qty', placeholder: `$${paramIndex}::numeric` });
       updateValues.push(updateData.sfbd_qty);
       paramIndex++;
     }
@@ -3391,9 +3396,13 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     const writtenColumns = updateFields
       .map((clause) => clause.split('=')[0]?.trim() ?? '')
       .filter(Boolean);
-    const provenanceColumns = klipEditedFieldsToRecord(writtenColumns, SHIPMENT_PROVENANCE_COLUMNS);
-    if (provenanceColumns.length > 0) {
-      updateFields.push(buildKlipEditedFieldsSetSql(`$${paramIndex}`));
+    const changedOnlyColumns = new Set<string>(SHIPMENT_CHANGED_ONLY_PROVENANCE_COLUMNS);
+    const provenanceColumns = klipEditedFieldsToRecord(
+      writtenColumns.filter((column) => !changedOnlyColumns.has(column)),
+      SHIPMENT_PROVENANCE_COLUMNS,
+    );
+    if (provenanceColumns.length > 0 || changedOnlyPairs.length > 0) {
+      updateFields.push(buildKlipEditedFieldsSetSql(`$${paramIndex}`, changedOnlyPairs));
       updateValues.push(provenanceColumns);
       paramIndex++;
     }

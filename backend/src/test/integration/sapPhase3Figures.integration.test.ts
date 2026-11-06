@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { query } from '../../database/connection';
 import { SapMasterV2ImportService } from '../../services/sapMasterV2Import.service';
 import { SapDataDistributionService } from '../../services/sapDataDistribution.service';
+import { buildKlipEditedFieldsSetSql } from '../../utils/klipEditedFields';
 
 /**
  * The SAP Phase 3 template (2026-11) through the real import pipeline against a real Postgres:
@@ -239,4 +240,57 @@ describe('Integration: migration 255 backfill', () => {
       await query(`DELETE FROM contracts WHERE contract_id LIKE $1`, [`${PFX}-%`]);
     }
   }, 60000);
+});
+
+describe('Integration: a user save marks SFAL / SFBD only when it changes them', () => {
+  // The Edit Shipment modal submits sfal_qty / sfbd_qty on EVERY save. Marking whatever was submitted would make a figure SAP filled the user's the first time
+  // anyone saved an unrelated edit, and SAP would never fill it again. The statement is the one the update controller builds.
+  const PFX = 'ITEST-PH3-SV';
+
+  const save = async (shipmentId: string, sfal: number | null, sfbd: number | null, provided: string[] = []) => {
+    const pairs = [
+      { column: 'sfal_qty', placeholder: '$1::numeric' },
+      { column: 'sfbd_qty', placeholder: '$2::numeric' },
+    ];
+    await query(
+      `UPDATE shipments SET sfal_qty = $1::numeric, sfbd_qty = $2::numeric, ${buildKlipEditedFieldsSetSql('$3', pairs)} WHERE id = $4`,
+      [sfal, sfbd, provided, shipmentId],
+    );
+    const r = await query(`SELECT sfal_qty, sfbd_qty, klip_edited_fields FROM shipments WHERE id = $1`, [shipmentId]);
+    return { sfal: num(r.rows[0].sfal_qty), sfbd: num(r.rows[0].sfbd_qty), marked: r.rows[0].klip_edited_fields as string[] };
+  };
+
+  it('same figures: no marker; a changed figure: marked; a cleared one: marked; the markers already there are kept', async () => {
+    await query(`DELETE FROM shipments WHERE contract_id IN (SELECT id FROM contracts WHERE contract_id LIKE $1)`, [`${PFX}-%`]);
+    await query(`DELETE FROM contracts WHERE contract_id LIKE $1`, [`${PFX}-%`]);
+    try {
+      const c = await query(
+        `INSERT INTO contracts (contract_id, supplier, buyer, product, quantity_ordered, unit, status, created_by)
+         VALUES ($1, 'S', 'B', 'CPO', 1000, 'KG', 'Open', (SELECT id FROM users LIMIT 1)) RETURNING id`,
+        [`${PFX}-C1`],
+      );
+      // a figure SAP filled (no marker) and one the user already owns
+      const a = (
+        await query(
+          `INSERT INTO shipments (shipment_id, contract_id, status, sfal_qty, sfbd_qty, klip_edited_fields) VALUES ($1, $2, 'PLANNED', 497100, 290000, '{}') RETURNING id`,
+          [`${PFX}-A`, c.rows[0].id],
+        )
+      ).rows[0].id as string;
+
+      expect(await save(a, 497100, 290000)).toEqual({ sfal: 497100, sfbd: 290000, marked: [] }); // an unrelated save sends the same figures
+      expect(await save(a, 497100, 290000, ['ata_arrival'])).toEqual({ sfal: 497100, sfbd: 290000, marked: ['ata_arrival'] }); // other columns still recorded, the figures not
+      expect(await save(a, 520000, 290000)).toEqual({ sfal: 520000, sfbd: 290000, marked: ['ata_arrival', 'sfal_qty'] }); // changed
+      expect(await save(a, 520000, null)).toEqual({ sfal: 520000, sfbd: null, marked: ['ata_arrival', 'sfal_qty', 'sfbd_qty'] }); // cleared (NULL differs from a value)
+      expect(await save(a, 520000, null)).toEqual({ sfal: 520000, sfbd: null, marked: ['ata_arrival', 'sfal_qty', 'sfbd_qty'] }); // and saving again changes nothing
+    } finally {
+      await query(`DELETE FROM shipments WHERE contract_id IN (SELECT id FROM contracts WHERE contract_id LIKE $1)`, [`${PFX}-%`]);
+      await query(`DELETE FROM contracts WHERE contract_id LIKE $1`, [`${PFX}-%`]);
+    }
+  }, 60000);
+
+  it('the builder without pairs is byte for byte what it was before (every other caller)', () => {
+    expect(buildKlipEditedFieldsSetSql('$7')).toBe(
+      `klip_edited_fields = (\n    SELECT COALESCE(ARRAY(SELECT DISTINCT unnest(COALESCE(klip_edited_fields, '{}') || $7::text[]) ORDER BY 1), '{}')\n  )`,
+    );
+  });
 });

@@ -147,6 +147,7 @@ import {
   type ShipmentQualityFields,
 } from '@/lib/shipmentQualityFields'
 import { isKlipEditedField } from '@/lib/klipProvenance'
+import { sapFigureView } from '@/lib/sapFigure'
 import { describeKlipFieldEdit, type KlipFieldEditInfo } from '@/lib/klipFieldHistory'
 import {
   describePortProvenance,
@@ -586,6 +587,47 @@ function formatMetricReadOnly(value: number | null, unit?: string): string | nul
   return unit ? `${formatNumber(value)} ${unit}` : formatNumber(value)
 }
 
+/**
+ * SFAL / SFBD with the SAP / KLIP badge (lib/sapFigure.ts for the rules). The figure is KLIP input and, since the SAP Phase 3 template, SAP's too: the badge says which
+ * wrote the number on screen and, when a user's differs from SAP's, SAP's is shown underneath. On a multi-PO STO the working figure is empty while SAP's is not (the backend
+ * keeps SAP's as a reference only there): no badge, but SAP's number still appears.
+ */
+function SapFigureField({
+  label,
+  klipKg,
+  sapKg,
+  klipEdited,
+  editing,
+  onChangeKg,
+}: {
+  label: string
+  klipKg: number | null
+  sapKg: number | null
+  klipEdited: boolean
+  editing: boolean
+  onChangeKg: (kg: number | null) => void
+}) {
+  const view = sapFigureView(klipKg, sapKg)
+  return (
+    <div>
+      <KlipSapCompareField
+        label={label}
+        klipValue={view.klipMt}
+        sapValue={view.sapMt}
+        format="number"
+        klipEdited={klipEdited}
+        zeroIsEmpty
+        editing={editing}
+        editControl={
+          <MetricDecimalInput value={view.klipMt} onChange={(mt) => onChangeKg(mt === null ? null : mt * 1000)} />
+        }
+      />
+      {editing ? <p className="mt-1 text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT}</p> : null}
+      {view.referenceOnly ? <KlipSapReferenceFooter sapValue={view.sapMt} format="number" /> : null}
+    </div>
+  )
+}
+
 type ShipmentDetailRow = {
   rowKey: string
   /** False for a PO with no live shipment in this STO / operation group: its quantities cannot be saved (see klipQtyEditableFromApi). */
@@ -874,6 +916,10 @@ export function EditShipmentModal({
   const [sfbdQty, setSfbdQty] = useState<number | null>(null)
   const [originalSfalQty, setOriginalSfalQty] = useState<number | null>(null)
   const [originalSfbdQty, setOriginalSfbdQty] = useState<number | null>(null)
+  // SAP's own SFAL / SFBD for this row (reference beside the working figure) and the columns a user wrote on this shipment (klip_edited_fields), for the SAP / KLIP badge.
+  const [sapSfalQty, setSapSfalQty] = useState<number | null>(null)
+  const [sapSfbdQty, setSapSfbdQty] = useState<number | null>(null)
+  const [shipmentKlipEdited, setShipmentKlipEdited] = useState<string[]>([])
   // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
   const [fuelConsumption, setFuelConsumption] = useState<number | null>(null)
   const [freight, setFreight] = useState<number | null>(null)
@@ -1265,6 +1311,9 @@ export function EditShipmentModal({
     setQtyEdits({})
     setSfalQty(null)
     setSfbdQty(null)
+    setSapSfalQty(null)
+    setSapSfbdQty(null)
+    setShipmentKlipEdited([])
     setFuelConsumption(null)
     setFreight(null)
     setPumpRate(null)
@@ -1584,6 +1633,9 @@ export function EditShipmentModal({
         setSfbdQty(sfbd)
         setOriginalSfalQty(sfal)
         setOriginalSfbdQty(sfbd)
+        setSapSfalQty(parseApiNumber(info.sap_sfal_qty))
+        setSapSfbdQty(parseApiNumber(info.sap_sfbd_qty))
+        setShipmentKlipEdited(Array.isArray(info.klip_edited_fields) ? (info.klip_edited_fields as unknown[]).map((c) => String(c)) : [])
 
         const fuelConsumptionVal = parseApiNumber(info.fuel_consumption ?? row.fuel_consumption)
         const freightVal = parseApiNumber(info.freight ?? row.freight)
@@ -2985,37 +3037,22 @@ export function EditShipmentModal({
                 )}
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {canEditAtaQuality ? (
-                    <>
-                      <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">SFAL Qty (MT)</label>
-                        <MetricDecimalInput
-                          value={sfalQty === null ? null : sfalQty / 1000}
-                          onChange={(mt) => setSfalQty(mt === null ? null : mt * 1000)}
-                        />
-                        <p className="mt-1 text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT}</p>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">SFBD Qty (MT)</label>
-                        <MetricDecimalInput
-                          value={sfbdQty === null ? null : sfbdQty / 1000}
-                          onChange={(mt) => setSfbdQty(mt === null ? null : mt * 1000)}
-                        />
-                        <p className="mt-1 text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT}</p>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <ReadOnlyInfoField
-                        label="SFAL Qty (MT)"
-                        value={formatMetricReadOnly(sfalQty === null ? 0 : sfalQty / 1000)}
-                      />
-                      <ReadOnlyInfoField
-                        label="SFBD Qty (MT)"
-                        value={formatMetricReadOnly(sfbdQty === null ? 0 : sfbdQty / 1000)}
-                      />
-                    </>
-                  )}
+                  <SapFigureField
+                    label="SFAL Qty (MT)"
+                    klipKg={sfalQty}
+                    sapKg={sapSfalQty}
+                    klipEdited={isKlipEditedField(shipmentKlipEdited, 'sfal_qty')}
+                    editing={canEditAtaQuality}
+                    onChangeKg={setSfalQty}
+                  />
+                  <SapFigureField
+                    label="SFBD Qty (MT)"
+                    klipKg={sfbdQty}
+                    sapKg={sapSfbdQty}
+                    klipEdited={isKlipEditedField(shipmentKlipEdited, 'sfbd_qty')}
+                    editing={canEditAtaQuality}
+                    onChangeKg={setSfbdQty}
+                  />
                 </div>
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">

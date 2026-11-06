@@ -336,6 +336,9 @@ async function loadPortsAndInfo(
       s.actual_vessel_qty_receive,
       s.sfal_qty,
       s.sfbd_qty,
+      -- SAP's own figure for this PO x STO row (reference beside the working figure; migration 255)
+      s.sap_sfal_qty,
+      s.sap_sfbd_qty,
       s.vessel_oa_actual,
       s.vessel_oa_budget,
       s.bl_quantity,
