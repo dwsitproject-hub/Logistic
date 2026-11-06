@@ -503,6 +503,7 @@ export function DocumentDrawer({
                 Keep it
               </button>
               <button className="btn danger-fill" type="button" onClick={() => void remove()} disabled={deleting}>
+                <Trash2 aria-hidden />
                 {deleting ? 'Deleting…' : 'Delete version'}
               </button>
             </>

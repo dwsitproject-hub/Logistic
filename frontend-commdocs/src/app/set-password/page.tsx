@@ -1,5 +1,6 @@
 'use client'
 
+import { LogIn, Save, Send } from 'lucide-react'
 import Link from 'next/link'
 import { useEffect, useState, type FormEvent } from 'react'
 import { AuthFrame } from '@/components/AuthFrame'
@@ -78,6 +79,7 @@ export default function SetPasswordPage() {
         </div>
         <ErrorNote>{error}</ErrorNote>
         <Link className="btn primary wide" href="/forgot-password">
+          <Send aria-hidden />
           Send me a new link
         </Link>
       </AuthFrame>
@@ -99,6 +101,7 @@ export default function SetPasswordPage() {
             Your password has been saved. You can sign in now.
           </div>
           <Link className="btn primary wide" href="/login">
+            <LogIn aria-hidden />
             Go to sign in
           </Link>
         </>
@@ -131,6 +134,7 @@ export default function SetPasswordPage() {
           </div>
           <ErrorNote>{error}</ErrorNote>
           <button className="btn primary wide" type="submit" disabled={busy}>
+            <Save aria-hidden />
             {busy ? 'Saving…' : 'Save password'}
           </button>
         </form>

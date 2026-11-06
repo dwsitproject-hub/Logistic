@@ -1,6 +1,6 @@
 'use client'
 
-import { Plus, Search } from 'lucide-react'
+import { KeyRound, Pencil, Plus, Save, Search, Send, UserCheck, UserPlus, UserX } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ErrorNote, Modal, PageSize, Pager, Spinner, usePreference, useToast } from '@/components/ui'
 import { apiData, apiJson, errorMessage } from '@/lib/api'
@@ -190,19 +190,23 @@ export default function UsersPage() {
                     <td className="hint">{longDate(u.created_at)}</td>
                     <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
                       <button className="btn sm ghost" type="button" onClick={() => setEditing(u)}>
+                        <Pencil aria-hidden />
                         Edit
                       </button>
                       {u.is_active ? (
                         <button className="btn sm ghost" type="button" onClick={() => setConfirm({ user: u, kind: 'link' })}>
+                          {u.is_first_login ? <Send aria-hidden /> : <KeyRound aria-hidden />}
                           {u.is_first_login ? 'Resend invitation' : 'Reset password'}
                         </button>
                       ) : null}
                       {u.id === me?.id ? null : u.is_active ? (
                         <button className="btn sm ghost danger" type="button" onClick={() => setConfirm({ user: u, kind: 'deactivate' })}>
+                          <UserX aria-hidden />
                           Deactivate
                         </button>
                       ) : (
                         <button className="btn sm ghost" type="button" disabled={busy} onClick={() => void setActive(u, true)}>
+                          <UserCheck aria-hidden />
                           Reactivate
                         </button>
                       )}
@@ -264,10 +268,12 @@ export default function UsersPage() {
               </button>
               {confirm.kind === 'deactivate' ? (
                 <button className="btn danger-fill" type="button" disabled={busy} onClick={() => void setActive(confirm.user, false)}>
+                  <UserX aria-hidden />
                   Deactivate
                 </button>
               ) : (
                 <button className="btn primary" type="button" disabled={busy} onClick={() => void sendLink(confirm.user)}>
+                  <Send aria-hidden />
                   Send link
                 </button>
               )}
@@ -383,6 +389,7 @@ function UserModal({
             Cancel
           </button>
           <button className="btn primary" type="button" onClick={() => void save()} disabled={busy}>
+            {user ? <Save aria-hidden /> : <UserPlus aria-hidden />}
             {busy ? 'Saving…' : user ? 'Save' : 'Add user'}
           </button>
         </>

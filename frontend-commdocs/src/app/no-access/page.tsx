@@ -1,5 +1,6 @@
 'use client'
 
+import { ExternalLink, LogOut } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 import { AuthFrame } from '@/components/AuthFrame'
@@ -28,10 +29,12 @@ export default function NoAccessPage() {
       </div>
       {klipUrl ? (
         <a className="btn primary wide" href={klipUrl}>
+          <ExternalLink aria-hidden />
           Open KLIP
         </a>
       ) : null}
       <button className="btn wide" type="button" onClick={() => void signOut().then(() => router.replace('/login'))}>
+        <LogOut aria-hidden />
         Sign out
       </button>
     </AuthFrame>

@@ -1,6 +1,6 @@
 'use client'
 
-import { Mail } from 'lucide-react'
+import { Mail, Send } from 'lucide-react'
 import Link from 'next/link'
 import { useState, type FormEvent } from 'react'
 import { AuthFrame } from '@/components/AuthFrame'
@@ -64,6 +64,7 @@ export default function ForgotPasswordPage() {
           </div>
           <ErrorNote>{error}</ErrorNote>
           <button className="btn primary wide" type="submit" disabled={busy}>
+            <Send aria-hidden />
             {busy ? 'Sending…' : 'Send reset link'}
           </button>
         </form>

@@ -1,5 +1,6 @@
 'use client'
 
+import { Save } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { apiJson, errorMessage } from '@/lib/api'
 import { ErrorNote, Modal } from './ui'
@@ -61,6 +62,7 @@ export function ChangePasswordModal({
             </button>
           )}
           <button className="btn primary" type="button" onClick={() => void submit()} disabled={busy}>
+            <Save aria-hidden />
             {busy ? 'Saving…' : 'Save password'}
           </button>
         </>

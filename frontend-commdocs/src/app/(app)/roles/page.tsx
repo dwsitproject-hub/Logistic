@@ -1,6 +1,6 @@
 'use client'
 
-import { Plus } from 'lucide-react'
+import { Plus, Save } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ErrorNote, Modal, Spinner, useToast } from '@/components/ui'
 import { apiData, apiJson, errorMessage, toQuery } from '@/lib/api'
@@ -145,6 +145,7 @@ export default function RolesPage() {
             New role
           </button>
           <button className="btn primary" type="button" onClick={() => void save()} disabled={!dirty || saving}>
+            <Save aria-hidden />
             {saving ? 'Saving…' : 'Save changes'}
           </button>
         </div>
@@ -325,6 +326,7 @@ function NewRoleModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
             Cancel
           </button>
           <button className="btn primary" type="button" onClick={() => void create()} disabled={busy}>
+            <Plus aria-hidden />
             Create role
           </button>
         </>

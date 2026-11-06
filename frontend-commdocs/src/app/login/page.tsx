@@ -1,6 +1,6 @@
 'use client'
 
-import { Lock, Mail } from 'lucide-react'
+import { Lock, LogIn, Mail } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, type FormEvent } from 'react'
@@ -98,6 +98,7 @@ export default function LoginPage() {
         </div>
         <ErrorNote>{error}</ErrorNote>
         <button className="btn primary wide" type="submit" disabled={busy}>
+          <LogIn aria-hidden />
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
