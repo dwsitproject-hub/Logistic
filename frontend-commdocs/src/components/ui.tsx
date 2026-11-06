@@ -51,6 +51,7 @@ export function Modal({
   children,
   footer,
   narrow,
+  wide,
   busy,
 }: {
   title: string
@@ -59,6 +60,8 @@ export function Modal({
   children: ReactNode
   footer?: ReactNode
   narrow?: boolean
+  /** A large dialog for reading something (the user guide). */
+  wide?: boolean
   busy?: boolean
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
@@ -76,7 +79,7 @@ export function Modal({
   return (
     <div className="modal">
       <div className="scrim" onClick={() => !busy && onClose()} />
-      <div className={`box${narrow ? ' narrow' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={boxRef}>
+      <div className={`box${narrow ? ' narrow' : ''}${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={boxRef}>
         <div className="mh">
           <div>
             <h3>{title}</h3>

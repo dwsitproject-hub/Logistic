@@ -5,11 +5,12 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState, type ReactNode } from 'react'
 import { ChangePasswordModal } from '@/components/ChangePasswordModal'
-import { GUIDE_FILE_NAME, GUIDE_URL, GuidePrompt } from '@/components/GuidePrompt'
+import { GuidePrompt, GuideViewer } from '@/components/GuidePrompt'
 import { Brand, Spinner, useToast } from '@/components/ui'
 import { apiJson } from '@/lib/api'
 import { NAV, homePath, navKeyForPath, type NavKey } from '@/lib/access'
 import { initials } from '@/lib/format'
+import { GUIDE_SEEN_KEY, GUIDE_URL, GUIDE_VERSION } from '@/lib/guide'
 import { hubOpenBugReport, isHubSdkEnabled } from '@/lib/hubSdk'
 import { useSession } from '@/lib/session'
 
@@ -29,6 +30,25 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [railOpen, setRailOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
   const [guideClosed, setGuideClosed] = useState(false)
+  const [guideOpen, setGuideOpen] = useState(false)
+  // The "New" mark on User guide: shown until this browser has opened (or downloaded) the current guide version.
+  // 'loading' until localStorage is read, so the mark does not flash for someone who has already seen it.
+  const [guideSeen, setGuideSeen] = useState<string>('loading')
+  useEffect(() => {
+    try {
+      setGuideSeen(localStorage.getItem(GUIDE_SEEN_KEY) || '')
+    } catch {
+      setGuideSeen('')
+    }
+  }, [])
+  const markGuideSeen = () => {
+    setGuideSeen(GUIDE_VERSION)
+    try {
+      localStorage.setItem(GUIDE_SEEN_KEY, GUIDE_VERSION)
+    } catch {
+      /* ignore */
+    }
+  }
   const klipUrl = process.env.NEXT_PUBLIC_KLIP_URL
 
   const key = navKeyForPath(pathname)
@@ -88,9 +108,19 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             {admin.length ? <div className="grp">Administration</div> : null}
             {admin.map(item)}
             <div className="grp">Help</div>
-            <a href={GUIDE_URL} download={GUIDE_FILE_NAME}>
+            {/* Opens the guide inside the app; a middle-click or "open in new tab" still gets the PDF itself. */}
+            <a
+              href={GUIDE_URL}
+              onClick={(e) => {
+                e.preventDefault()
+                setGuideOpen(true)
+                markGuideSeen()
+                setRailOpen(false)
+              }}
+            >
               <BookOpen aria-hidden />
-              User guide
+              User guide <span className="hint">{GUIDE_VERSION}</span>
+              {guideSeen !== 'loading' && guideSeen !== GUIDE_VERSION ? <span className="new-tag">New</span> : null}
             </a>
             {klipUrl ? (
               <>
@@ -139,7 +169,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <span>Report a problem</span>
         </button>
       ) : null}
-      {showGuide ? <GuidePrompt onClose={() => setGuideClosed(true)} /> : null}
+      {guideOpen ? <GuideViewer onClose={() => setGuideOpen(false)} /> : null}
+      {showGuide ? <GuidePrompt onClose={() => setGuideClosed(true)} onDownload={markGuideSeen} /> : null}
       {pwOpen || user.is_first_login ? (
         <ChangePasswordModal
           firstLogin={user.is_first_login}
