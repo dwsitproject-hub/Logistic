@@ -9,6 +9,7 @@ import { ErrorNote, PageSize, Pager, Spinner, usePreference, useToast } from '@/
 import { apiData, errorMessage, isAbort, toQuery, type QueryValue } from '@/lib/api'
 import { DOCUMENT_LABELS, DOCUMENT_TYPES, isDocumentType, type DocumentType } from '@/lib/documentTypes'
 import { saveDocumentsExcel } from '@/lib/documentsExcel'
+import { exportGate } from '@/lib/exportGate'
 import { isoDate, pct, plural, presetRange, type DatePreset } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import type { ContractCounts, DocumentRow, Pagination, SummaryCard } from '@/lib/types'
@@ -124,6 +125,23 @@ export default function DocumentsPage() {
           : {}),
     }),
     [scope, sort, docFilter],
+  )
+
+  // The export needs a narrowed list: a date range plus at least one other filter (see lib/exportGate.ts).
+  const gate = useMemo(
+    () =>
+      exportGate({
+        dateSet: filters.preset === 'custom' ? Boolean(filters.from && filters.to) : filters.preset !== 'all',
+        others: [
+          filters.plant && 'Region/Plant',
+          filters.incoterm && 'Incoterm',
+          filters.products.length && 'Product',
+          filters.suppliers.length && 'Supplier',
+          search && 'Search',
+          docFilter && 'Document card',
+        ].filter((x): x is string => typeof x === 'string' && x !== ''),
+      }),
+    [filters, search, docFilter],
   )
 
   // Excel export: every row the current filters, search, card and sort give (not only this page), with every column.
@@ -475,7 +493,15 @@ export default function DocumentsPage() {
             Tick the boxes on the right to download one Tanda Terima for several POs
           </span>
           <div className="actions">
-            <button className="btn sm" type="button" onClick={() => void exportExcel()} disabled={exporting || loading || !pagination?.total}>
+            {gate.ok ? null : (
+              <span id="export-hint" className="hint export-hint">
+                {gate.hint}
+              </span>
+            )}
+            <button className="btn sm" type="button" onClick={() => void exportExcel()} disabled={exporting || loading || !pagination?.total || !gate.ok}
+              aria-describedby={gate.ok ? undefined : 'export-hint'}
+              title={gate.ok ? 'Download the filtered list as Excel' : gate.hint}
+            >
               <Download aria-hidden />
               {exporting ? 'Exporting…' : 'Export Excel'}
             </button>
