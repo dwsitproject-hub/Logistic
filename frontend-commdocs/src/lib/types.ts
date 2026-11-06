@@ -13,6 +13,8 @@ export type SessionUser = {
   products: string[]
   is_active: boolean
   is_first_login: boolean
+  /** False until the user has been shown the COD user guide once (then the prompt never returns). Absent on an older backend. */
+  commdocs_guide_seen?: boolean
   /** Downstream Hub user id (OIDC sub); null for an account that never signed in through the Hub. Only the Hub SDK reads it. */
   hub_user_id?: string | null
 }

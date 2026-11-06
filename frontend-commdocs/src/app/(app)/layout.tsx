@@ -1,11 +1,13 @@
 'use client'
 
-import { BarChart3, ExternalLink, FileText, History, KeyRound, LogOut, Menu, MessageSquareWarning, ShieldCheck, Users } from 'lucide-react'
+import { BarChart3, BookOpen, ExternalLink, FileText, History, KeyRound, LogOut, Menu, MessageSquareWarning, ShieldCheck, Users } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState, type ReactNode } from 'react'
 import { ChangePasswordModal } from '@/components/ChangePasswordModal'
+import { GUIDE_FILE_NAME, GUIDE_URL, GuidePrompt } from '@/components/GuidePrompt'
 import { Brand, Spinner, useToast } from '@/components/ui'
+import { apiJson } from '@/lib/api'
 import { NAV, homePath, navKeyForPath, type NavKey } from '@/lib/access'
 import { initials } from '@/lib/format'
 import { hubOpenBugReport, isHubSdkEnabled } from '@/lib/hubSdk'
@@ -26,6 +28,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const router = useRouter()
   const [railOpen, setRailOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
+  const [guideClosed, setGuideClosed] = useState(false)
   const klipUrl = process.env.NEXT_PUBLIC_KLIP_URL
 
   const key = navKeyForPath(pathname)
@@ -37,6 +40,13 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   }, [status, allowed, access, router])
 
   useEffect(() => setRailOpen(false), [pathname])
+
+  // The user guide prompt: once, at the first sign-in. It waits for the forced password change, and the server is told as soon as it
+  // is shown, so a later sign-in (on any device) does not show it again. `=== false`: an older backend that does not send the flag never prompts.
+  const showGuide = status === 'signedIn' && user?.commdocs_guide_seen === false && !user.is_first_login && !pwOpen && !guideClosed
+  useEffect(() => {
+    if (showGuide) void apiJson('/auth/commdocs-guide-seen', { method: 'POST' }).catch(() => undefined)
+  }, [showGuide])
 
   if (status !== 'signedIn' || !user || !allowed) {
     return (
@@ -77,6 +87,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             {main.map(item)}
             {admin.length ? <div className="grp">Administration</div> : null}
             {admin.map(item)}
+            <div className="grp">Help</div>
+            <a href={GUIDE_URL} download={GUIDE_FILE_NAME}>
+              <BookOpen aria-hidden />
+              User guide
+            </a>
             {klipUrl ? (
               <>
                 <div className="grp">Other apps</div>
@@ -124,6 +139,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <span>Report a problem</span>
         </button>
       ) : null}
+      {showGuide ? <GuidePrompt onClose={() => setGuideClosed(true)} /> : null}
       {pwOpen || user.is_first_login ? (
         <ChangePasswordModal
           firstLogin={user.is_first_login}

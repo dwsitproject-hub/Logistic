@@ -17,6 +17,8 @@ export interface SessionUserPayload {
   products: string[];
   is_active: boolean;
   is_first_login: boolean;
+  /** COD: true once the user has been pointed to the user guide (users.commdocs_guide_seen_at is set). */
+  commdocs_guide_seen: boolean;
   /**
    * Downstream Hub user id: the OIDC `sub` claim, stored as users.hub_oidc_sub at SSO sign-in.
    * The Hub SDK identifies the user by this, not by KLIP's own id. Null for users who have never
@@ -45,6 +47,7 @@ export async function buildSessionUserPayload(userRow: Record<string, unknown>):
     products: scope.products,
     is_active: Boolean(userRow.is_active),
     is_first_login: Boolean(userRow.is_first_login),
+    commdocs_guide_seen: Boolean(userRow.commdocs_guide_seen_at),
     hub_user_id: userRow.hub_oidc_sub ? String(userRow.hub_oidc_sub) : null,
   };
 }

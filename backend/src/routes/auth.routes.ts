@@ -7,6 +7,7 @@ import {
   getLoginOptions,
   getProfile,
   getMe,
+  markCommdocsGuideSeen,
   logout,
   updateProfile,
 } from '../controllers/auth.controller';
@@ -129,6 +130,8 @@ router.post(
 router.get('/profile', authenticateToken, getProfile);
 
 router.get('/me', authenticateToken, getMe);
+
+router.post('/commdocs-guide-seen', authenticateToken, markCommdocsGuideSeen);
 
 router.post('/logout', logout);
 

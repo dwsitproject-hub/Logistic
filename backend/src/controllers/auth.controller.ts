@@ -148,6 +148,24 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
 /** GET /api/auth/me — current session user (cookie or Bearer). */
 export const getMe = getProfile;
 
+/** POST /api/auth/commdocs-guide-seen — the COD app calls this once the user has been shown the user guide. Idempotent: the first time stays. */
+export const markCommdocsGuideSeen = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user?.id) {
+      res.status(401).json({ success: false, error: { message: 'Not signed in' } });
+      return;
+    }
+    await query(
+      'UPDATE users SET commdocs_guide_seen_at = COALESCE(commdocs_guide_seen_at, CURRENT_TIMESTAMP) WHERE id = $1::uuid',
+      [req.user.id],
+    );
+    res.json({ success: true, data: { commdocs_guide_seen: true } });
+  } catch (error) {
+    logger.error('Mark commdocs guide seen error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to save' } });
+  }
+};
+
 export const logout = (req: Request, res: Response): void => {
   req.session?.destroy((err) => {
     if (err) {
