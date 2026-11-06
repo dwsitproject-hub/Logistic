@@ -187,6 +187,8 @@ export function buildCommercialDocumentsBaseCte(): string {
         ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
         ${sqlDocFlag(documentTypesForCategory('berita_acara'))} AS doc_berita_acara,
         ${sqlDocFlag(documentTypesForCategory('bea_cukai'))} AS doc_bea_cukai,
+        ${sqlDocFlag(documentTypesForCategory('sppb'))} AS doc_sppb,
+        ${sqlDocFlag(documentTypesForCategory('sppd'))} AS doc_sppd,
         ${sqlDocFlag(documentTypesForCategory('delivery_order'))} AS doc_delivery_order,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_dp'))} AS doc_invoice_fp_dp,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_payoff'))} AS doc_invoice_fp_payoff,
@@ -204,6 +206,8 @@ export function buildCommercialDocumentsBaseCte(): string {
         ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
         ${sqlDocFlag(documentTypesForCategory('berita_acara'))} AS doc_berita_acara,
         ${sqlDocFlag(documentTypesForCategory('bea_cukai'))} AS doc_bea_cukai,
+        ${sqlDocFlag(documentTypesForCategory('sppb'))} AS doc_sppb,
+        ${sqlDocFlag(documentTypesForCategory('sppd'))} AS doc_sppd,
         ${sqlDocFlag(documentTypesForCategory('delivery_order'))} AS doc_delivery_order,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_dp'))} AS doc_invoice_fp_dp,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_payoff'))} AS doc_invoice_fp_payoff,
@@ -221,6 +225,8 @@ export function buildCommercialDocumentsBaseCte(): string {
         COALESCE(df.doc_addendum_contract, ldf.doc_addendum_contract, false) AS doc_addendum_contract,
         COALESCE(df.doc_berita_acara, ldf.doc_berita_acara, false) AS doc_berita_acara,
         COALESCE(df.doc_bea_cukai, ldf.doc_bea_cukai, false) AS doc_bea_cukai,
+        COALESCE(df.doc_sppb, ldf.doc_sppb, false) AS doc_sppb,
+        COALESCE(df.doc_sppd, ldf.doc_sppd, false) AS doc_sppd,
         COALESCE(df.doc_delivery_order, ldf.doc_delivery_order, false) AS doc_delivery_order,
         COALESCE(df.doc_invoice_fp_dp, ldf.doc_invoice_fp_dp, false) AS doc_invoice_fp_dp,
         COALESCE(df.doc_invoice_fp_payoff, ldf.doc_invoice_fp_payoff, false) AS doc_invoice_fp_payoff,
@@ -242,6 +248,8 @@ function docTypeCheckedColumn(documentType: string): string | null {
     addendum_contract: 'doc_addendum_contract',
     berita_acara: 'doc_berita_acara',
     bea_cukai: 'doc_bea_cukai',
+    sppb: 'doc_sppb',
+    sppd: 'doc_sppd',
     delivery_order: 'doc_delivery_order',
     invoice_fp_dp: 'doc_invoice_fp_dp',
     invoice_fp_payoff: 'doc_invoice_fp_payoff',
@@ -264,7 +272,7 @@ function valueList(value: string | string[] | null | undefined): string[] {
   return (Array.isArray(value) ? value : value ? [value] : []).map((v) => String(v).trim()).filter(Boolean);
 }
 
-/** How many of the nine checklist types a contract has (0-9). */
+/** How many of the eleven checklist types a contract has (0-11). */
 function uploadedTypesExpr(): string {
   return COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.map((flag) => `(CASE WHEN e.${flag} THEN 1 ELSE 0 END)`).join(' + ');
 }
@@ -364,13 +372,15 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
   return { sql, countSql, values };
 }
 
-/** Checklist flags counted once per contract. Matches the nine Commercial Documents types. */
+/** Checklist flags counted once per contract. Matches the eleven Commercial Documents types. */
 export const COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS = [
   'doc_draft_contract',
   'doc_contract',
   'doc_addendum_contract',
   'doc_berita_acara',
   'doc_bea_cukai',
+  'doc_sppb',
+  'doc_sppd',
   'doc_delivery_order',
   'doc_invoice_fp_dp',
   'doc_invoice_fp_payoff',
@@ -386,7 +396,7 @@ export function commercialCompletenessPct(uploaded: number, total: number): numb
 
 /**
  * Document completeness by Region/Plant. Uploaded is the count of checklist slots that have a file.
- * Total is contracts × the nine document types. Blank plant is labeled Unassigned.
+ * Total is contracts × the eleven document types. Blank plant is labeled Unassigned.
  */
 export function buildCommercialDocumentsCompletenessByPlantQuery(
   params: CommercialDocumentsScopeParams,
@@ -436,6 +446,8 @@ export function buildCommercialDocumentsSummaryQuery(params: CommercialDocuments
       ${count('doc_addendum_contract')} AS uploaded_addendum_contract,
       ${count('doc_berita_acara')} AS uploaded_berita_acara,
       ${count('doc_bea_cukai')} AS uploaded_bea_cukai,
+      ${count('doc_sppb')} AS uploaded_sppb,
+      ${count('doc_sppd')} AS uploaded_sppd,
       ${count('doc_delivery_order')} AS uploaded_delivery_order,
       ${count('doc_invoice_fp_dp')} AS uploaded_invoice_fp_dp,
       ${count('doc_invoice_fp_payoff')} AS uploaded_invoice_fp_payoff,

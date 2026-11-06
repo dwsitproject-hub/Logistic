@@ -20,7 +20,7 @@ export default function NoAccessPage() {
   return (
     <AuthFrame>
       <div>
-        <h1>No access to Commercial Documents</h1>
+        <h1>No access to COD</h1>
         <p className="hint" style={{ margin: '4px 0 0' }}>
           {user ? `Signed in as ${user.email} (${user.role}). ` : ''}Your role has no page in this app. Ask an administrator to
           grant Documents or Dashboard in Roles &amp; access.

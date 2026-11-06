@@ -276,7 +276,7 @@ export default function UsersPage() {
         >
           <p style={{ margin: 0, color: 'var(--ink-2)' }}>
             {confirm.kind === 'deactivate'
-              ? 'They can no longer sign in to Commercial Documents or KLIP. Their uploads and history stay. You can reactivate them later.'
+              ? 'They can no longer sign in to COD or KLIP. Their uploads and history stay. You can reactivate them later.'
               : confirm.user.is_first_login
                 ? `A new invitation goes to ${confirm.user.email}; the earlier link stops working.`
                 : `A link to choose a new password goes to ${confirm.user.email}. Their current password keeps working until they use it.`}

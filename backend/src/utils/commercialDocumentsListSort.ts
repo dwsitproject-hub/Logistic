@@ -38,6 +38,8 @@ export const COMMERCIAL_DOCS_SQL_SORT_COLUMNS: Record<string, string> = {
   doc_addendum_contract: 'e.doc_addendum_contract',
   doc_berita_acara: 'e.doc_berita_acara',
   doc_bea_cukai: 'e.doc_bea_cukai',
+  doc_sppb: 'e.doc_sppb',
+  doc_sppd: 'e.doc_sppd',
   doc_delivery_order: 'e.doc_delivery_order',
   doc_invoice_fp_dp: 'e.doc_invoice_fp_dp',
   doc_invoice_fp_payoff: 'e.doc_invoice_fp_payoff',

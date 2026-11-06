@@ -21,7 +21,7 @@ const PERIODS: Array<[DatePreset, string]> = [
 
 /**
  * Completeness by plant (GET /api/commercial-documents/completeness-by-plant). "Completeness" is KLIP's measure: uploaded
- * checklist slots out of POs x 9. The bars split each plant's POs into all nine / some / none.
+ * checklist slots out of POs x 11. The bars split each plant's POs into all eleven / some / none.
  */
 export default function DashboardPage() {
   const { access } = useSession()
@@ -107,7 +107,7 @@ export default function DashboardPage() {
           <small>from the SAP import</small>
         </div>
         <div className="panel kpi">
-          <span>With all 9 documents</span>
+          <span>With all 11 documents</span>
           <b>{t ? t.completeCount.toLocaleString('en-US') : '…'}</b>
           <small>{t ? `${pct(t.completeCount, t.contractCount)}% of POs` : ''}</small>
         </div>
@@ -116,7 +116,7 @@ export default function DashboardPage() {
           <b style={{ color: t ? (t.completenessPct >= 80 ? 'var(--ok)' : t.completenessPct >= 50 ? 'var(--warn)' : 'var(--bad)') : undefined }}>
             {t ? `${t.completenessPct.toFixed(1)}%` : '…'}
           </b>
-          <small>{t ? `${t.uploadedSlots.toLocaleString('en-US')} of ${t.totalSlots.toLocaleString('en-US')} slots (9 per PO)` : ''}</small>
+          <small>{t ? `${t.uploadedSlots.toLocaleString('en-US')} of ${t.totalSlots.toLocaleString('en-US')} slots (11 per PO)` : ''}</small>
         </div>
         <div className="panel kpi">
           <span>POs with nothing yet</span>
@@ -151,7 +151,7 @@ export default function DashboardPage() {
                     <span className="nm">{p.plant}</span>
                     <div
                       className="track"
-                      title={`${p.plant}: ${p.completeCount} with all 9, ${some} with some, ${p.emptyCount} with none`}
+                      title={`${p.plant}: ${p.completeCount} with all 11, ${some} with some, ${p.emptyCount} with none`}
                     >
                       <i className="a" style={{ width: w(p.completeCount) }} />
                       <i className="b" style={{ width: w(some) }} />
@@ -168,7 +168,7 @@ export default function DashboardPage() {
           <div className="legend">
             <span>
               <i style={{ background: 'var(--accent)' }} />
-              All 9 documents
+              All 11 documents
             </span>
             <span>
               <i style={{ background: '#8FC1C6' }} />

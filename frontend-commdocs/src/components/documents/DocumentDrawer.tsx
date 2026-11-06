@@ -25,7 +25,7 @@ type Preview = { fileId: string; url: string; isImage: boolean } | { fileId: str
 
 const ACTION_TEXT: Record<HistoryEntry['action_type'], string> = { ADD: 'Uploaded', EDIT: 'Uploaded a new version of', DELETE: 'Deleted' }
 
-/** Right-hand drawer for one PO: the nine-type checklist, upload, versions, preview, delete and history. */
+/** Right-hand drawer for one PO: the eleven-type checklist, upload, versions, preview, delete and history. */
 export function DocumentDrawer({
   row,
   access,
@@ -249,7 +249,7 @@ export function DocumentDrawer({
               <span className="mono" style={{ fontSize: 16 }}>
                 PO {po}
               </span>
-              <span className={`pill ${done === 9 ? 'ok' : done ? 'warn' : 'bad'}`}>{done} of 9 documents</span>
+              <span className={`pill ${done === DOCUMENT_TYPES.length ? 'ok' : done ? 'warn' : 'bad'}`}>{done} of {DOCUMENT_TYPES.length} documents</span>
             </h2>
             <div className="meta">
               <span>

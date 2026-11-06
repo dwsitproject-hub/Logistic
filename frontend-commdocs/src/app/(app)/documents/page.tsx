@@ -7,12 +7,12 @@ import { DocumentDrawer } from '@/components/documents/DocumentDrawer'
 import { TandaTerimaModal } from '@/components/documents/TandaTerimaModal'
 import { ErrorNote, PageSize, Pager, Spinner, usePreference, useToast } from '@/components/ui'
 import { apiData, errorMessage, isAbort, toQuery, type QueryValue } from '@/lib/api'
-import { DOCUMENT_LABELS, DOCUMENT_TYPES, isDocumentType, type DocumentType } from '@/lib/documentTypes'
+import { DOCUMENT_LABELS, DOCUMENT_SHORT_LABELS, DOCUMENT_TYPES, isDocumentType, type DocumentType } from '@/lib/documentTypes'
 import { pct, plural, presetRange, type DatePreset } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import type { ContractCounts, DocumentRow, Pagination, SummaryCard } from '@/lib/types'
 
-/** null = all POs; 'incomplete' = short of all nine; a type = POs that have that type uploaded (a summary card). */
+/** null = all POs; 'incomplete' = short of all eleven; a type = POs that have that type uploaded (a summary card). */
 type DocFilter = null | 'incomplete' | DocumentType
 
 type Filters = {
@@ -417,12 +417,12 @@ export default function DocumentsPage() {
               <button
                 key={t}
                 type="button"
-                className="sumcard"
+                className={`sumcard${c && c.uploadedCount === 0 ? ' empty' : ''}`}
                 aria-pressed={docFilter === t}
-                title={`Show contracts with ${DOCUMENT_LABELS[t]} uploaded`}
+                title={`${DOCUMENT_LABELS[t]}: show contracts with it uploaded`}
                 onClick={() => setDocFilter(docFilter === t ? null : t)}
               >
-                <span className="sc-l">{DOCUMENT_LABELS[t]}</span>
+                <span className="sc-l">{DOCUMENT_SHORT_LABELS[t]}</span>
                 <span className="sc-k">Contract</span>
                 <span className="sc-n num">
                   {c ? `${c.uploadedCount.toLocaleString('en-US')}/${c.totalCount.toLocaleString('en-US')}` : '…'}

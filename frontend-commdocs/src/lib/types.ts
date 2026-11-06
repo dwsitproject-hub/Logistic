@@ -50,6 +50,8 @@ export type DocumentRow = {
   doc_addendum_contract: boolean
   doc_berita_acara: boolean
   doc_bea_cukai: boolean
+  doc_sppb: boolean
+  doc_sppd: boolean
   doc_delivery_order: boolean
   doc_invoice_fp_dp: boolean
   doc_invoice_fp_payoff: boolean

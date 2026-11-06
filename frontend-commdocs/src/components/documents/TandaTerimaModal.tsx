@@ -3,7 +3,7 @@
 import { Download, X } from 'lucide-react'
 import { useState } from 'react'
 import { apiBlob, errorMessage } from '@/lib/api'
-import { typesDone } from '@/lib/documentTypes'
+import { DOCUMENT_TYPES, typesDone } from '@/lib/documentTypes'
 import { ddmmyyyy, isoDate, parseDdMmYyyy } from '@/lib/format'
 import { saveBlob } from '@/lib/files'
 import type { DocumentRow } from '@/lib/types'
@@ -77,7 +77,7 @@ export function TandaTerimaModal({
               <span className="hint ellipsis" title={r.supplier || undefined}>
                 {r.supplier || '-'}
               </span>
-              <span className="hint num">{typesDone(r)}/9 docs</span>
+              <span className="hint num">{typesDone(r)}/{DOCUMENT_TYPES.length} docs</span>
               {removable ? (
                 <button
                   className="icon-btn"

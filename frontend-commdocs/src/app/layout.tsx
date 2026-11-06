@@ -11,7 +11,7 @@ import { HubSdkScript } from '@/components/HubSdkScript'
 import { Providers } from './providers'
 
 export const metadata: Metadata = {
-  title: 'Commercial Documents',
+  title: 'COD | KPN Downstream Commercial Documents',
   description: 'Contracts, BA, Bea Cukai, DO and invoices filed per PO.',
 }
 

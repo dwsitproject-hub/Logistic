@@ -123,6 +123,8 @@ function mapRow(row: Record<string, unknown>) {
     doc_addendum_contract: row.doc_addendum_contract,
     doc_berita_acara: row.doc_berita_acara,
     doc_bea_cukai: row.doc_bea_cukai,
+    doc_sppb: row.doc_sppb,
+    doc_sppd: row.doc_sppd,
     doc_delivery_order: row.doc_delivery_order,
     doc_invoice_fp_dp: row.doc_invoice_fp_dp,
     doc_invoice_fp_payoff: row.doc_invoice_fp_payoff,
@@ -227,12 +229,14 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
           addendum_contract: card('uploaded_addendum_contract'),
           berita_acara: card('uploaded_berita_acara'),
           bea_cukai: card('uploaded_bea_cukai'),
+          sppb: card('uploaded_sppb'),
+          sppd: card('uploaded_sppd'),
           delivery_order: card('uploaded_delivery_order'),
           invoice_fp_dp: card('uploaded_invoice_fp_dp'),
           invoice_fp_payoff: card('uploaded_invoice_fp_payoff'),
           invoice_fp_full: card('uploaded_invoice_fp_full'),
         },
-        // All nine / none / anything short of nine - the list's completeness filter returns the same rows.
+        // All eleven / none / anything short of eleven - the list's completeness filter returns the same rows.
         contracts: {
           totalCount,
           completeCount: Number(row.complete_contract_count ?? 0),

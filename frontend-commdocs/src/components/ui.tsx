@@ -10,7 +10,10 @@ export function Brand({ size = 18 }: { size?: number }) {
       <span className="mark">
         <FolderOpen width={size} height={size} aria-hidden />
       </span>
-      Commercial Documents
+      <span className="brand-text">
+        <b>COD</b>
+        <small>KPN Downstream Commercial Documents</small>
+      </span>
     </span>
   )
 }

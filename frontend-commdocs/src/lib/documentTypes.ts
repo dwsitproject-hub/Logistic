@@ -1,12 +1,14 @@
 import type { DocumentFile, DocumentRow } from './types'
 
-/** The nine checklist types, in checklist order. Same keys and labels as the backend (utils/commercialDocumentsConstants.ts). */
+/** The eleven checklist types, in checklist order. Same keys and labels as the backend (utils/commercialDocumentsConstants.ts). */
 export const DOCUMENT_TYPES = [
   'draft_contract',
   'contract',
   'addendum_contract',
   'berita_acara',
   'bea_cukai',
+  'sppb',
+  'sppd',
   'delivery_order',
   'invoice_fp_dp',
   'invoice_fp_payoff',
@@ -21,10 +23,27 @@ export const DOCUMENT_LABELS: Record<DocumentType, string> = {
   addendum_contract: 'Addendum Contract',
   berita_acara: 'Berita Acara (BA)',
   bea_cukai: 'Bea Cukai',
+  sppb: 'SPPB',
+  sppd: 'SPPD',
   delivery_order: 'DO',
   invoice_fp_dp: 'Invoice + FP Down Payment (DP)',
   invoice_fp_payoff: 'Invoice + FP Payoff (PO)',
   invoice_fp_full: 'Invoice + FP (Full Receive)',
+}
+
+/** Short names for the summary cards, where space is tight. The full label stays in DOCUMENT_LABELS (shown as the card's hover text). */
+export const DOCUMENT_SHORT_LABELS: Record<DocumentType, string> = {
+  draft_contract: 'Draft Ctr',
+  contract: 'Contract',
+  addendum_contract: 'Add Ctr',
+  berita_acara: 'BA',
+  bea_cukai: 'BC',
+  sppb: 'SPPB',
+  sppd: 'SPPD',
+  delivery_order: 'DO',
+  invoice_fp_dp: 'Inv + FP DP',
+  invoice_fp_payoff: 'Inv + FP PO',
+  invoice_fp_full: 'Inv + FP FR',
 }
 
 /** Older stored document_type values and the checklist type they now count as. */

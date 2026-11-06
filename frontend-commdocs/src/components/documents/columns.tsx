@@ -137,11 +137,11 @@ export const COLUMNS: Column[] = [
           ))}
         </div>
         <span className="num" style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>
-          {typesDone(r)}/9
+          {typesDone(r)}/{DOCUMENT_TYPES.length}
         </span>
       </div>
     ),
-    csv: (r) => `${typesDone(r)}/9`,
+    csv: (r) => `${typesDone(r)}/${DOCUMENT_TYPES.length}`,
   },
   {
     id: 'status',
