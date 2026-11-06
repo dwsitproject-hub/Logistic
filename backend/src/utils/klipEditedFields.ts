@@ -15,10 +15,14 @@ export const SHIPMENT_PROVENANCE_COLUMNS = [
   'quantity_delivered',
   'actual_vessel_qty_receive',
   /*
-   * sfal_qty / sfbd_qty are deliberately absent. The SAP upsert does assign them - and worse,
-   * overwrites rather than gap-fills - but SAP never sends the values: 0 occurrences of any SF key
-   * across 27,003 sap_processed_data rows. They are KLIP input and prove themselves.
+   * sfal_qty / sfbd_qty were absent until the SAP Phase 3 template (2026-11): SAP never sent the values (0 occurrences of any SF key across 27,003
+   * sap_processed_data rows), so a figure on a row proved itself as KLIP input. The template now carries SFAL / SFBD per PO line, so a figure can come from
+   * either door and the marker is needed. The import writes SAP's figure to sap_sfal_qty / sap_sfbd_qty and fills sfal_qty / sfbd_qty only where no user wrote it
+   * (SapDataDistributionService.fillSapFigures). Migration 255 marks the figures that exist before the first template import as the user's: the one backfill
+   * this list has, justified by that evidence (re-checked on production 2026-11-06: 97 SFAL and 59 SFBD on 2,692 shipments, no SAP row has ever mentioned SFAL).
    */
+  'sfal_qty',
+  'sfbd_qty',
   'ata_arrival',
   'ata_berthed',
   'ata_loading_start',

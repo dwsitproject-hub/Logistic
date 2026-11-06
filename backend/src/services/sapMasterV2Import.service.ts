@@ -1765,6 +1765,9 @@ export class SapMasterV2ImportService {
 
       importWasCancelled = importWasCancelled || this.isCancelRequested(importId);
 
+      // SAP's SFAL / SFBD went to the shipments' reference columns row by row; fill the working figure from them now that every row is in (utils/sapFigureFill.ts).
+      if (!importWasCancelled) await SapDataDistributionService.fillSapFigures(pool);
+
       // Final bookkeeping pass, once, after every chunk has committed (or rolled back) its own
       // transaction - same status-update + absence/presence logic as before (7/7b below), just
       // no longer sharing a single connection with the per-row work.
@@ -2205,6 +2208,8 @@ export class SapMasterV2ImportService {
       'b2b flag', 'contract type', 'contract reff po', 'contract reff po ini', 'contract reff so ini',
       'contract ref po', 'contract ref po initial', 'contract ref so initial',
       'contract ext no', 'company code', 'plant code', 'vendor group',
+      // Phase 3 template: the material of the PO line, stored on the contract beside the commercial product.
+      'material code', 'material description', 'material group',
     ];
     return contractFields.some(cf => lower.includes(cf));
   }
