@@ -1,14 +1,15 @@
 'use client'
 
-import { ArrowDownUp, ArrowDown, ArrowUp, Columns3, Filter, ReceiptText, Search, X } from 'lucide-react'
+import { ArrowDownUp, ArrowDown, ArrowUp, Columns3, Download, Filter, ReceiptText, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { COLUMNS, DEFAULT_VISIBLE } from '@/components/documents/columns'
 import { DocumentDrawer } from '@/components/documents/DocumentDrawer'
 import { TandaTerimaModal } from '@/components/documents/TandaTerimaModal'
 import { ErrorNote, PageSize, Pager, Spinner, usePreference, useToast } from '@/components/ui'
 import { apiData, errorMessage, isAbort, toQuery, type QueryValue } from '@/lib/api'
-import { DOCUMENT_LABELS, DOCUMENT_SHORT_LABELS, DOCUMENT_TYPES, isDocumentType, type DocumentType } from '@/lib/documentTypes'
-import { pct, plural, presetRange, type DatePreset } from '@/lib/format'
+import { DOCUMENT_LABELS, DOCUMENT_TYPES, isDocumentType, type DocumentType } from '@/lib/documentTypes'
+import { saveDocumentsExcel } from '@/lib/documentsExcel'
+import { isoDate, pct, plural, presetRange, type DatePreset } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import type { ContractCounts, DocumentRow, Pagination, SummaryCard } from '@/lib/types'
 
@@ -69,6 +70,7 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
+  const [exporting, setExporting] = useState(false)
 
   // ---- drawer + Tanda Terima ----
   const [open, setOpen] = useState<DocumentRow | null>(null)
@@ -123,6 +125,31 @@ export default function DocumentsPage() {
     }),
     [scope, sort, docFilter],
   )
+
+  // Excel export: every row the current filters, search, card and sort give (not only this page), with every column.
+  const exportExcel = async () => {
+    setExporting(true)
+    try {
+      const first = await apiData<{ rows: DocumentRow[]; pagination: Pagination }>(`/commercial-documents${toQuery(listParams(1, 200))}`)
+      const pages: DocumentRow[][] = [first.rows || []]
+      const totalPages = first.pagination?.totalPages ?? 1
+      for (let p = 2; p <= totalPages; p += 3) {
+        const batch = await Promise.all(
+          [p, p + 1, p + 2]
+            .filter((n) => n <= totalPages)
+            .map((n) => apiData<{ rows: DocumentRow[] }>(`/commercial-documents${toQuery(listParams(n, 200))}`).then((d) => d.rows || [])),
+        )
+        pages.push(...batch)
+      }
+      const all = pages.flat()
+      await saveDocumentsExcel(`COD_Documents_${isoDate(new Date())}.xlsx`, all)
+      toast(`Exported ${plural(all.length, 'PO')} to Excel`)
+    } catch (err) {
+      toast(errorMessage(err, 'Export failed. Please try again.'), true)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // Filter choices, once.
   useEffect(() => {
@@ -419,10 +446,10 @@ export default function DocumentsPage() {
                 type="button"
                 className={`sumcard${c && c.uploadedCount === 0 ? ' empty' : ''}`}
                 aria-pressed={docFilter === t}
-                title={`${DOCUMENT_LABELS[t]}: show contracts with it uploaded`}
+                title={`Show contracts with ${DOCUMENT_LABELS[t]} uploaded`}
                 onClick={() => setDocFilter(docFilter === t ? null : t)}
               >
-                <span className="sc-l">{DOCUMENT_SHORT_LABELS[t]}</span>
+                <span className="sc-l">{DOCUMENT_LABELS[t]}</span>
                 <span className="sc-k">Contract</span>
                 <span className="sc-n num">
                   {c ? `${c.uploadedCount.toLocaleString('en-US')}/${c.totalCount.toLocaleString('en-US')}` : '…'}
@@ -448,6 +475,10 @@ export default function DocumentsPage() {
             Tick the boxes on the right to download one Tanda Terima for several POs
           </span>
           <div className="actions">
+            <button className="btn sm" type="button" onClick={() => void exportExcel()} disabled={exporting || loading || !pagination?.total}>
+              <Download aria-hidden />
+              {exporting ? 'Exporting…' : 'Export Excel'}
+            </button>
             <div className="colpick" ref={colsRef}>
               <button className="btn sm" type="button" onClick={() => setColsOpen((v) => !v)} aria-expanded={colsOpen} aria-haspopup="true">
                 <Columns3 aria-hidden />

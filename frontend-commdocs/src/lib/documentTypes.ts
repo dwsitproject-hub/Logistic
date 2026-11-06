@@ -31,21 +31,6 @@ export const DOCUMENT_LABELS: Record<DocumentType, string> = {
   invoice_fp_full: 'Invoice + FP (Full Receive)',
 }
 
-/** Short names for the summary cards, where space is tight. The full label stays in DOCUMENT_LABELS (shown as the card's hover text). */
-export const DOCUMENT_SHORT_LABELS: Record<DocumentType, string> = {
-  draft_contract: 'Draft Ctr',
-  contract: 'Contract',
-  addendum_contract: 'Add Ctr',
-  berita_acara: 'BA',
-  bea_cukai: 'BC',
-  sppb: 'SPPB',
-  sppd: 'SPPD',
-  delivery_order: 'DO',
-  invoice_fp_dp: 'Inv + FP DP',
-  invoice_fp_payoff: 'Inv + FP PO',
-  invoice_fp_full: 'Inv + FP FR',
-}
-
 /** Older stored document_type values and the checklist type they now count as. */
 const LEGACY: Record<string, DocumentType> = {
   dp: 'invoice_fp_dp',
