@@ -36,10 +36,21 @@ import {
 
 const NULL_CONTRACT_DATE = `DATE '1970-01-01'`;
 
-function buildShipmentDailyBaseCteSql(): string {
+export interface ShipmentDailyBaseOptions {
+  /**
+   * Add the `*_own_sto` milestone columns (buildShipmentListAtaSelectSql with the group key), which is what the Shipments PAGE reads for its stage
+   * (shipmentPageEffectiveStatusExpr). The pipeline summary leaves it off and reads the group-wide MAX, so its output is unchanged.
+   */
+  ownSto?: boolean;
+  /** Extra aggregate columns for shipment_base_core, each ending in a comma-free expression list item with its own alias. Used by the KMAPS partner snapshot. */
+  extraCoreSelect?: string;
+}
+
+/** The WITH chain the pipeline summary builds its rows from: one row per STO key in `shipment_base`. Exported for the KMAPS partner snapshot (partner/recordSql.ts). */
+export function buildShipmentDailyBaseCteSql(options: ShipmentDailyBaseOptions = {}): string {
   const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
   const seaRowScopeCond = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
-  const ataSelect = buildShipmentListAtaSelectSql();
+  const ataSelect = buildShipmentListAtaSelectSql(options.ownSto ? listStoKeySql : undefined);
   const plantSite = groupPlantExpr('c.plant_code', GROUP_PLANT_CONTRACT_C);
 
   const vlpCtes = `
@@ -114,6 +125,7 @@ function buildShipmentDailyBaseCteSql(): string {
           ${sqlShipmentListPrimaryFieldAgg('s.vessel_code', listStoKeySql, 'c', 'l', 's', 'cs_sto')} AS vessel_code,
           ${sqlShipmentListPrimaryFieldAgg('s.master_vessel_id::text', listStoKeySql, 'c', 'l', 's', 'cs_sto')}::uuid AS master_vessel_id,
           MAX(s.created_at) AS created_at,
+          ${options.extraCoreSelect ? `${options.extraCoreSelect},` : ''}
           MAX(${plantSite}) AS plant_site,
           MAX(s.eta_arrival) AS eta_arrival,
           MAX(s.eta_berthed) AS eta_berthed,

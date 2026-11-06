@@ -4,8 +4,10 @@ import {
   getApiCall,
   getDhmPushState,
   getIntegrations,
+  getKmapsDeliveries,
   getJpsPortOptions,
   listApiCalls,
+  resendKmapsDeliveries,
   retryDhmPushNow,
   testIntegration,
   updateIntegration,
@@ -26,6 +28,9 @@ router.get('/dhm/push-state', getDhmPushState);
 router.post('/dhm/push-retry', retryDhmPushNow);
 // What the JPS Ports editor picks from (Master Ports and whether each has a DHM code). Before /:id.
 router.get('/jps/port-options', getJpsPortOptions);
+// Bells KLIP rings for KMAPS, and a way to send the failed ones again. Declared before /:id so 'kmaps' is not an id.
+router.get('/kmaps/webhook-deliveries', getKmapsDeliveries);
+router.post('/kmaps/webhook-deliveries/resend', resendKmapsDeliveries);
 // What KLIP sent to JPS or DHM and what came back (:id is jps or dhm). Bodies can hold vessel, port and quantities,
 // so ADMIN only like the rest.
 router.get('/:id/calls', listApiCalls);

@@ -14,6 +14,7 @@ import {
 } from './registry';
 import { integrationEnv, replaceIntegrationOverrides } from './integrationEnv';
 import { isSecretBoxConfigured, openSecret, sealSecret } from './secretBox';
+import { hashSecret } from './secretHash';
 
 type Row = {
   integration: string;
@@ -247,7 +248,8 @@ export async function saveIntegrationSettings(
           key,
           isSecret,
           isSecret ? null : value,
-          isSecret ? sealSecret(value, contextFor(integration.id, key)) : null,
+          // A hash-on-store secret (the key a partner presents to KLIP) is sealed as its scrypt hash; the hint still comes from what was typed.
+          isSecret ? sealSecret(def.hashOnStore ? hashSecret(value) : value, contextFor(integration.id, key)) : null,
           isSecret ? secretHint(def, value) : null,
           actor.id,
         ],

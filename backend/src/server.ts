@@ -75,6 +75,8 @@ import userActivityLogRoutes from './routes/userActivityLog.routes';
 import prePlannedRoutes from './routes/prePlanned.routes';
 import integrationRoutes from './routes/integration.routes';
 import dhmRoutes from './routes/dhm.routes';
+import { createPartnerRouter } from './partner/routes';
+import { startPartnerRefreshLoop } from './partner/loop';
 import { loadIntegrationSettings } from './integrations/settingsStore';
 import { ssoHubHandler } from './controllers/sso.controller';
 import { oidcLoginHandler, oidcCallbackHandler } from './controllers/oidc.controller';
@@ -162,6 +164,9 @@ app.post(
     res.status(200).json({ success: true, duplicate: Boolean(result.duplicate), ignored: result.ignored ?? null });
   },
 );
+// KMAPS partner API (read-only, its own token, its own error shape). Mounted before the app-wide express.json so a malformed body is answered in the
+// contract's JSON error shape; the router parses its own small JSON bodies.
+app.use('/api/partner/v1', createPartnerRouter());
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 const swaggerOptions = {
@@ -295,6 +300,9 @@ if (process.env.NODE_ENV !== 'test') {
     } catch (error) {
       logger.error('Failed to initialize scheduler service:', error);
     }
+
+    // KMAPS partner records: rebuilt in the background while the integration is on (partner/loop.ts).
+    startPartnerRefreshLoop();
 
     void import('./services/prePlannedGroup.service')
       .then(({ schedulePrePlannedRebuildIfEnabled }) => schedulePrePlannedRebuildIfEnabled('startup'))

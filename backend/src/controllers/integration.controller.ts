@@ -11,6 +11,7 @@ import { verifyDhmCredentials } from '../dhm/client';
 import { jpsRequest } from '../jps/client';
 import { JPS_CALL_KINDS } from '../jps/callLog';
 import { DHM_CALL_KINDS } from '../dhm/callLog';
+import { partnerReadiness } from '../partner/config';
 import { API_CALL_TABLES, isApiCallIntegration, type ApiCallIntegration } from '../integrations/apiCallLog';
 import { query } from '../database/connection';
 
@@ -76,6 +77,9 @@ export const testIntegration = async (req: AuthRequest, res: Response): Promise<
   let result: { ok: boolean; message: string };
   if (integration.id === 'dhm') {
     result = await verifyDhmCredentials();
+  } else if (integration.id === 'kmaps') {
+    // KMAPS calls KLIP, so there is nothing to call out to: the test reports whether KLIP could authenticate KMAPS right now.
+    result = partnerReadiness();
   } else {
     const r = await jpsRequest<unknown>(
       { method: 'GET', url: '/terms' },
@@ -91,6 +95,7 @@ export const testIntegration = async (req: AuthRequest, res: Response): Promise<
 const KINDS_BY_INTEGRATION: Record<ApiCallIntegration, readonly string[]> = {
   jps: JPS_CALL_KINDS,
   dhm: DHM_CALL_KINDS,
+  kmaps: ['auth', 'read', 'webhook', 'other'],
 };
 
 /** The integration named in the path, or a 404: only jps and dhm have a history, and the name goes into SQL. */
@@ -251,5 +256,43 @@ export const getJpsPortOptions = async (_req: AuthRequest, res: Response): Promi
   } catch (error) {
     logger.error('Load JPS port options error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to load the port options.' } });
+  }
+};
+
+/**
+ * Integrations > KMAPS: the bells KLIP rings (kmaps_webhook_deliveries) and how current the records KMAPS reads are. `status` is FAILED (default), PENDING or ALL.
+ * Nothing here carries a key, a secret or a price: a bell holds ids, a version and a vessel code.
+ */
+export const getKmapsDeliveries = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const raw = String(req.query.status ?? 'FAILED').toUpperCase();
+    const status = raw === 'PENDING' || raw === 'ALL' ? raw : 'FAILED';
+    const { listDeliveries } = await import('../partner/deliveries');
+    const list = await listDeliveries(status, Number(req.query.limit) || 100);
+    const snapshot = await query(
+      `SELECT refreshed_at::text AS refreshed_at, duration_ms, record_count, last_error, last_error_at::text AS last_error_at FROM partner_snapshot_state WHERE id = 1`,
+    );
+    res.json({ success: true, data: { ...list, snapshot: snapshot.rows[0] ?? null } });
+  } catch (error) {
+    logger.error('List KMAPS deliveries error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the webhook deliveries.' } });
+  }
+};
+
+/** Resend one delivery (`deliveryId`) or, without it, every failed one. They go out at the next sweep (within seconds) with their original delivery id. */
+export const resendKmapsDeliveries = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const raw = req.body?.deliveryId;
+    const deliveryId = typeof raw === 'string' && raw !== '' ? raw : null;
+    if (deliveryId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deliveryId)) {
+      res.status(400).json({ success: false, error: { message: 'deliveryId is not valid.' } });
+      return;
+    }
+    const { resendDeliveries } = await import('../partner/deliveries');
+    const queued = await resendDeliveries(deliveryId);
+    res.json({ success: true, data: { queued } });
+  } catch (error) {
+    logger.error('Resend KMAPS deliveries error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to queue the resend.' } });
   }
 };

@@ -27,6 +27,17 @@ function readMasterKey(): Buffer | null {
   return buf.length === 32 ? buf : null;
 }
 
+/**
+ * A 32-byte key for one named purpose, derived (HKDF-SHA256) from the master key. Different purposes give unrelated keys, and none of them is the master
+ * key. Null when the master key is not configured. Used to sign the KMAPS partner tokens with a key that is neither JWT_SECRET (which would open every user
+ * route) nor a new environment variable on both hosts.
+ */
+export function deriveSubKey(purpose: string): Buffer | null {
+  const key = readMasterKey();
+  if (!key) return null;
+  return Buffer.from(crypto.hkdfSync('sha256', key, Buffer.from('klip-integrations', 'utf8'), Buffer.from(purpose, 'utf8'), 32));
+}
+
 /** True when a usable 32-byte master key is configured. Saving a secret requires it. */
 export function isSecretBoxConfigured(): boolean {
   return readMasterKey() !== null;
