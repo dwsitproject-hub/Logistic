@@ -3,7 +3,9 @@
 import { Plus, Save } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ErrorNote, Modal, Spinner, useToast } from '@/components/ui'
+import { NewRoleModal } from '@/components/NewRoleModal'
 import { apiData, apiJson, errorMessage, toQuery } from '@/lib/api'
+import { roleLabel } from '@/lib/roles'
 import { UPLOAD_PERMISSION_PREFIX } from '@/lib/access'
 import { DOCUMENT_LABELS, DOCUMENT_TYPES } from '@/lib/documentTypes'
 import type { ManagedUser, Role, RolePermissionRow } from '@/lib/types'
@@ -108,7 +110,7 @@ export default function RolesPage() {
         },
       })
       setSaved(JSON.stringify(perms))
-      toast(`Access saved for ${role?.display_name || role?.role_name} · ${level}`)
+      toast(`Access saved for ${role ? roleLabel(role) : ''} · ${level}`)
     } catch (err) {
       toast(errorMessage(err), true)
     } finally {
@@ -142,7 +144,7 @@ export default function RolesPage() {
         <div className="actions">
           <button className="btn" type="button" onClick={() => setCreating(true)}>
             <Plus aria-hidden />
-            New role
+            Add role
           </button>
           <button className="btn primary" type="button" onClick={() => void save()} disabled={!dirty || saving}>
             <Save aria-hidden />
@@ -155,7 +157,7 @@ export default function RolesPage() {
           {roles.map((r) => (
             <button key={r.id} type="button" aria-current={r.id === roleId} onClick={() => pickRole(r.id)}>
               <span style={{ color: 'inherit' }}>
-                {r.display_name || r.role_name}
+                {roleLabel(r)}
                 {r.is_active ? '' : ' (inactive)'}
               </span>
               <span>{(userCounts[r.role_name] || 0).toLocaleString('en-US')} users</span>
@@ -212,7 +214,7 @@ export default function RolesPage() {
             <table className="matrix compact">
               <thead>
                 <tr>
-                  <th>{role ? role.display_name || role.role_name : ''}</th>
+                  <th>{role ? roleLabel(role) : ''}</th>
                   <th>View</th>
                   <th>Create</th>
                   <th>Edit</th>
@@ -288,63 +290,3 @@ export default function RolesPage() {
   )
 }
 
-function NewRoleModal({ onClose, onCreated }: { onClose: () => void; onCreated: (r: Role) => void }) {
-  const [name, setName] = useState('')
-  const [display, setDisplay] = useState('')
-  const [regional, setRegional] = useState(true)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-
-  const create = async () => {
-    const roleName = name.trim().toUpperCase()
-    if (!/^[A-Z_]+$/.test(roleName)) return setError('Code: capital letters and underscores only, e.g. AR_UPSTREAM.')
-    if (!display.trim()) return setError('Name is required.')
-    setBusy(true)
-    setError('')
-    try {
-      const res = await apiJson<Role>('/roles', {
-        method: 'POST',
-        body: { role_name: roleName, display_name: display.trim(), uses_region_scope: regional },
-      })
-      onCreated(res.data)
-    } catch (err) {
-      setError(errorMessage(err))
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Modal
-      title="New role"
-      subtitle="The role is also available in KLIP."
-      onClose={onClose}
-      busy={busy}
-      narrow
-      footer={
-        <>
-          <button className="btn" type="button" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button className="btn primary" type="button" onClick={() => void create()} disabled={busy}>
-            <Plus aria-hidden />
-            Create role
-          </button>
-        </>
-      }
-    >
-      <div className="field">
-        <label htmlFor="r-name">Code</label>
-        <input className="input mono" id="r-name" value={name} onChange={(e) => setName(e.target.value.toUpperCase())} placeholder="AR_UPSTREAM" />
-      </div>
-      <div className="field">
-        <label htmlFor="r-display">Name</label>
-        <input className="input" id="r-display" value={display} onChange={(e) => setDisplay(e.target.value)} placeholder="AR Upstream" />
-      </div>
-      <label className="check">
-        <input type="checkbox" checked={regional} onChange={(e) => setRegional(e.target.checked)} /> Users of this role get a default
-        Region/Plant
-      </label>
-      <ErrorNote>{error}</ErrorNote>
-    </Modal>
-  )
-}
