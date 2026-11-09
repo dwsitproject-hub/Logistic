@@ -1,10 +1,13 @@
 'use client'
 
-import { KeyRound, Pencil, Plus, Save, Search, Send, UserCheck, UserPlus, UserX } from 'lucide-react'
+import { KeyRound, Pencil, Plus, Save, Search, Send, Upload, UserCheck, UserPlus, UserX } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ErrorNote, Modal, PageSize, Pager, Spinner, usePreference, useToast } from '@/components/ui'
+import { BulkUsersModal } from '@/components/BulkUsersModal'
+import { NewRoleModal } from '@/components/NewRoleModal'
 import { apiData, apiJson, errorMessage } from '@/lib/api'
 import { initials, longDate, plural } from '@/lib/format'
+import { roleLabel } from '@/lib/roles'
 import { useSession } from '@/lib/session'
 import type { ManagedUser, Role } from '@/lib/types'
 
@@ -39,6 +42,7 @@ export default function UsersPage() {
   const [editing, setEditing] = useState<ManagedUser | 'new' | null>(null)
   const [confirm, setConfirm] = useState<{ user: ManagedUser; kind: 'deactivate' | 'link' } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -62,7 +66,10 @@ export default function UsersPage() {
 
   useEffect(() => setPage(1), [q, roleFilter, statusFilter, pageSize])
 
-  const roleName = (name: string) => roles.find((r) => r.role_name === name)?.display_name || name
+  const roleName = (name: string) => {
+    const r = roles.find((x) => x.role_name === name)
+    return r ? roleLabel(r) : name.toUpperCase()
+  }
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase()
     return users.filter(
@@ -113,6 +120,10 @@ export default function UsersPage() {
           <p>The same accounts as KLIP. Changes here apply to both apps.</p>
         </div>
         <div className="actions">
+          <button className="btn" type="button" onClick={() => setBulkOpen(true)}>
+            <Upload aria-hidden />
+            Bulk upload
+          </button>
           <button className="btn primary" type="button" onClick={() => setEditing('new')}>
             <Plus aria-hidden />
             Add user
@@ -129,7 +140,7 @@ export default function UsersPage() {
             <option value="">Role: All</option>
             {roles.map((r) => (
               <option key={r.id} value={r.role_name}>
-                {r.display_name || r.role_name}
+                {roleLabel(r)}
               </option>
             ))}
           </select>
@@ -235,11 +246,22 @@ export default function UsersPage() {
         </div>
       </div>
 
+      {bulkOpen ? (
+        <BulkUsersModal
+          roles={roles.filter((r) => r.is_active)}
+          plants={plants}
+          existingEmails={users.map((u) => u.email)}
+          onClose={() => setBulkOpen(false)}
+          onChanged={() => void load()}
+        />
+      ) : null}
+
       {editing ? (
         <UserModal
           user={editing === 'new' ? null : editing}
           roles={roles.filter((r) => r.is_active || (editing !== 'new' && r.role_name === editing.role))}
           plants={plants}
+          onRoleCreated={(r) => setRoles((cur) => (cur.some((x) => x.id === r.id) ? cur : [...cur, r]))}
           onClose={() => setEditing(null)}
           onSaved={(msg, bad) => {
             setEditing(null)
@@ -297,12 +319,15 @@ function UserModal({
   user,
   roles,
   plants,
+  onRoleCreated,
   onClose,
   onSaved,
 }: {
   user: ManagedUser | null
   roles: Role[]
   plants: string[]
+  /** A role was added from this form: the page adds it to its list, and it is selected here. */
+  onRoleCreated: (r: Role) => void
   onClose: () => void
   onSaved: (message: string, bad?: boolean) => void
 }) {
@@ -315,6 +340,7 @@ function UserModal({
   const [userPlants, setUserPlants] = useState<string[]>(user?.plants || [])
   const [plantQuery, setPlantQuery] = useState('')
   const [busy, setBusy] = useState(false)
+  const [addingRole, setAddingRole] = useState(false)
   const [error, setError] = useState('')
 
   const roleRow = roles.find((r) => r.role_name === role)
@@ -378,11 +404,12 @@ function UserModal({
   }
 
   return (
+    <>
     <Modal
       title={user ? 'Edit user' : 'Add user'}
       subtitle={user ? undefined : 'They get an e-mail with a link to choose their own password.'}
       onClose={onClose}
-      busy={busy}
+      busy={busy || addingRole}
       footer={
         <>
           <button className="btn" type="button" onClick={onClose} disabled={busy}>
@@ -418,10 +445,14 @@ function UserModal({
           <select className="select" id="u-role" value={role} onChange={(e) => setRole(e.target.value)}>
             {roles.map((r) => (
               <option key={r.id} value={r.role_name}>
-                {r.display_name || r.role_name}
+                {roleLabel(r)}
               </option>
             ))}
           </select>
+          <button className="btn sm ghost" type="button" onClick={() => setAddingRole(true)} style={{ justifySelf: 'start' }}>
+            <Plus aria-hidden />
+            Add role
+          </button>
         </div>
         <div className="field">
           <label htmlFor="u-level">Level</label>
@@ -477,5 +508,17 @@ function UserModal({
       ) : null}
       <ErrorNote>{error}</ErrorNote>
     </Modal>
+    {/* Adding a role from here: it joins the list and is chosen for this user. Esc and the backdrop leave the user form alone while it is open. */}
+    {addingRole ? (
+      <NewRoleModal
+        onClose={() => setAddingRole(false)}
+        onCreated={(r) => {
+          setAddingRole(false)
+          onRoleCreated(r)
+          setRole(r.role_name)
+        }}
+      />
+    ) : null}
+    </>
   )
 }

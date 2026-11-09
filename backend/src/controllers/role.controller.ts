@@ -325,7 +325,8 @@ export const createRole = async (req: AuthRequest, res: Response): Promise<void>
       `INSERT INTO roles (role_name, display_name, description, uses_region_scope)
        VALUES ($1, $2, $3, $4)
        RETURNING id, role_name, display_name, description, is_active, uses_region_scope, created_at`,
-      [role_name, String(display_name).trim(), description, usesRegionScope]
+      // Role names are uppercase everywhere (the code already must be; the display name is made uppercase here).
+      [role_name, String(display_name).trim().toUpperCase(), description, usesRegionScope]
     );
 
     logger.info(`Role created by ${req.user?.username}: ${role_name}`);
@@ -371,7 +372,7 @@ export const updateRole = async (req: AuthRequest, res: Response): Promise<void>
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $4
        RETURNING id, role_name, display_name, description, is_active, uses_region_scope, updated_at`,
-      [display_name, description, is_active, id, usesRegionScope]
+      [typeof display_name === 'string' && display_name.trim() ? display_name.trim().toUpperCase() : null, description, is_active, id, usesRegionScope]
     );
 
     logger.info(`Role updated by ${req.user?.username}: ${existingRole.rows[0].role_name}`);
