@@ -6,7 +6,7 @@
 #                  -f docker-compose.backend.sap-share.yml up -d --build backend
 #
 # Requires in /opt/klip/.env:
-#   KLIP_SAP_IMPORT_MOUNT=/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT
+#   KLIP_SAP_IMPORT_MOUNT=/mnt/synology-apps/dev/KLIP/import-data/logistics-report
 #   SAP_AUTO_IMPORT_ROOT=/mnt/sap-import
 #   SAP_AUTO_IMPORT_RESULTS_ROOT=/app/uploads/SAP Data
 #
@@ -28,4 +28,4 @@
 services:
   backend:
     volumes:
-      - "${KLIP_SAP_IMPORT_MOUNT:-/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT}:/mnt/sap-import:ro"
+      - "${KLIP_SAP_IMPORT_MOUNT:-/mnt/synology-apps/dev/KLIP/import-data/logistics-report}:/mnt/sap-import:ro"

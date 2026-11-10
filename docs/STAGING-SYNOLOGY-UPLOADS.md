@@ -103,11 +103,13 @@ In `/opt/klip/.env` (and align `backend/.env`):
 KLIP_UPLOAD_MOUNT=/mnt/synology-apps/dev/klip
 UPLOAD_DIR=/app/uploads
 SAP_AUTO_IMPORT_ENABLED=true
-SAP_AUTO_IMPORT_ROOT=/app/uploads/IMPORT DATA/LOGISTICS REPORT
+SAP_AUTO_IMPORT_ROOT=/app/uploads/import-data/logistics-report
 ```
 
-**The path moved on 2026-09-13.** IT now publishes to
-`\\172.30.1.94\APPs\dev\KLIP\IMPORT DATA\LOGISTICS REPORT\ORIGINAL`. Two things follow.
+**The path moved on 2026-09-13, and again on 2026-11-04.** IT now publishes to
+`\\172.30.1.94\APPs\dev\KLIP\import-data\logistics-report\original` (until 2026-11-04 it was
+`IMPORT DATA\LOGISTICS REPORT\ORIGINAL`: a host still configured with the old path reads a folder that
+nobody writes to any more, and the daily import quietly finds nothing new). Two things follow.
 
 The UNC path is not the value to configure - the backend is a Linux container and cannot resolve
 it. `//172.30.1.94/APPs` is mounted at `/mnt/synology-apps`, and `dev/klip` is bind-mounted to
@@ -140,7 +142,7 @@ docker compose -f docker-compose.backend.yml                -f docker-compose.ba
 With this in `/opt/klip/.env`:
 
 ```env
-KLIP_SAP_IMPORT_MOUNT=/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT
+KLIP_SAP_IMPORT_MOUNT=/mnt/synology-apps/dev/KLIP/import-data/logistics-report
 SAP_AUTO_IMPORT_ROOT=/mnt/sap-import
 SAP_AUTO_IMPORT_RESULTS_ROOT=/app/uploads/SAP Data
 ```

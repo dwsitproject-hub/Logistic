@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   clearSapAutoImportPathCache,
   ensureSapAutoImportFolders,
+  isSapAutoImportDailyExport,
   isSapAutoImportExcelFile,
   jakartaDateYmd,
   resolveSafeFailedWorkbookPath,
@@ -17,6 +18,48 @@ import {
 } from './sapAutoImportPaths';
 
 const originalRoot = process.env.SAP_AUTO_IMPORT_ROOT;
+
+/**
+ * The folder IT moved to on 2026-11-04 (`import-data/logistics-report/original`) holds more than the daily export. These are the names
+ * found there on 2026-11-10 (listing taken from the share), and the importer must take only the first kind.
+ */
+describe('isSapAutoImportDailyExport: only the daily ZMMLOG_RPT export is imported', () => {
+  afterEach(() => {
+    delete process.env.SAP_AUTO_IMPORT_FILE_PATTERN;
+  });
+
+  it('accepts the daily export under both spellings IT has used (one space or two after ZMMLOG_RPT)', () => {
+    expect(isSapAutoImportDailyExport('ZMMLOG_RPT from 01 Jan 2026 to 10 Nov 2026.xlsx')).toBe(true);
+    expect(isSapAutoImportDailyExport('ZMMLOG_RPT  from 01 Jan 2026 to 04 Nov 2026.xlsx')).toBe(true);
+    expect(isSapAutoImportDailyExport('zmmlog_rpt from 01 Jan 2026 to 10 Nov 2026.XLSX')).toBe(true);
+  });
+
+  it('refuses the ME2N workbook, which was the NEWEST file on 2026-11-09 and 2026-11-10 (it is written after the export)', () => {
+    expect(isSapAutoImportDailyExport('ME2N from 01 Jan 2026 to 10 Nov 2026.xlsx')).toBe(false);
+    expect(isSapAutoImportDailyExport('Part 1ME2N from 260101 to 260630.xlsx')).toBe(false);
+    expect(isSapAutoImportDailyExport('Part 2ME2N from 260701 to 261110.xlsx')).toBe(false);
+  });
+
+  it('refuses the two halves the daily file is built from', () => {
+    expect(isSapAutoImportDailyExport('Part 1ZMMLOG_RPT from 260101 to 260630.xlsx')).toBe(false);
+    expect(isSapAutoImportDailyExport('Part 2ZMMLOG_RPT from 260701 to 261110.xlsx')).toBe(false);
+  });
+
+  it('refuses Excel lock files, other extensions and other names', () => {
+    expect(isSapAutoImportDailyExport('~$ZMMLOG_RPT from 01 Jan 2026 to 10 Nov 2026.xlsx')).toBe(false);
+    expect(isSapAutoImportDailyExport('ZMMLOG_RPT from 01 Jan 2026 to 10 Nov 2026.csv')).toBe(false);
+    expect(isSapAutoImportDailyExport('Tarikan ZMMLOG_RPT (Phase 3).XLSX')).toBe(false);
+    expect(isSapAutoImportDailyExport('sample.xlsx')).toBe(false);
+  });
+
+  it('SAP_AUTO_IMPORT_FILE_PATTERN replaces the rule, and a broken expression falls back to the default', () => {
+    process.env.SAP_AUTO_IMPORT_FILE_PATTERN = '^LOGISTICS_';
+    expect(isSapAutoImportDailyExport('LOGISTICS_2026-11-10.xlsx')).toBe(true);
+    expect(isSapAutoImportDailyExport('ZMMLOG_RPT from 01 Jan 2026 to 10 Nov 2026.xlsx')).toBe(false);
+    process.env.SAP_AUTO_IMPORT_FILE_PATTERN = '([unclosed';
+    expect(isSapAutoImportDailyExport('ZMMLOG_RPT from 01 Jan 2026 to 10 Nov 2026.xlsx')).toBe(true);
+  });
+});
 
 describe('sapAutoImportPaths', () => {
   afterEach(() => {

@@ -16,8 +16,10 @@ import {
 import { type SapAutoImportIdentityRow } from '../utils/sapAutoImportIdentity';
 import {
   ensureSapAutoImportFolders,
+  isSapAutoImportDailyExport,
   isSapAutoImportExcelFile,
   resolveSafeFailedWorkbookPath,
+  sapAutoImportDailyExportPattern,
   sapAutoImportFailedDir,
   sapAutoImportResultFileName,
   sapAutoImportShareFailedPath,
@@ -69,6 +71,8 @@ export interface SapAutoImportRunTrace {
   newestFile?: string;
   newestFileMtimeMs?: number;
   sourceMissing?: boolean;
+  /** Excel files in the folder that are not the daily export (ME2N, Part 1 / Part 2 halves, ...). */
+  otherExcelFiles?: number;
 }
 
 let runLock = false;
@@ -121,6 +125,13 @@ export function classifySapAutoImportRun(
   }
   if (failed) {
     return { outcome: 'failed', detail: `${failed.fileName}: ${failed.errorMessage ?? 'import failed'}` };
+  }
+  if (result.filesScanned === 0 && (trace.otherExcelFiles ?? 0) > 0) {
+    // Files are there, none of them is the daily export. Not "no new file": a renamed report would otherwise look like a quiet morning for good.
+    return {
+      outcome: 'failed',
+      detail: `The folder holds ${trace.otherExcelFiles} Excel file(s) but none is named like the daily export (${sapAutoImportDailyExportPattern().source}), so nothing was imported.`,
+    };
   }
   if (result.filesScanned === 0) {
     return { outcome: 'no_new_file', detail: 'The Original folder holds no Excel files.' };
@@ -331,13 +342,18 @@ async function sapImportInFlight(): Promise<boolean> {
   return (result.rowCount ?? 0) > 0;
 }
 
-function listOriginalExcelFiles(originalDir: string): string[] {
-  if (!fs.existsSync(originalDir)) return [];
-  return fs
+/**
+ * The Excel files of Original, split into the daily export (what is imported) and everything else. The folder is IT's and holds more
+ * than the daily file (ME2N workbooks, the Part 1 / Part 2 halves): see isSapAutoImportDailyExport.
+ */
+export function listOriginalExcelFiles(originalDir: string): { daily: string[]; other: string[] } {
+  if (!fs.existsSync(originalDir)) return { daily: [], other: [] };
+  const names = fs
     .readdirSync(originalDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && isSapAutoImportExcelFile(entry.name))
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  return { daily: names.filter(isSapAutoImportDailyExport), other: names.filter((n) => !isSapAutoImportDailyExport(n)) };
 }
 
 /**
@@ -481,7 +497,24 @@ async function runSapFolderAutoImportCore(
         emailSent,
       };
     }
-    const fileNames = listOriginalExcelFiles(folders.original);
+    const listing = listOriginalExcelFiles(folders.original);
+    const fileNames = listing.daily;
+    trace.otherExcelFiles = listing.other.length;
+    if (listing.other.length > 0) {
+      logger.info('SAP folder auto-import ignoring Excel files that are not the daily export', {
+        pattern: sapAutoImportDailyExportPattern().source,
+        ignored: listing.other.length,
+        newestIgnored: listing.other.slice(-3),
+      });
+    }
+    if (fileNames.length === 0 && listing.other.length > 0) {
+      logger.error('SAP folder auto-import: the folder holds Excel files but none is named like the daily export', {
+        originalDir: folders.original,
+        pattern: sapAutoImportDailyExportPattern().source,
+        examples: listing.other.slice(0, 5),
+        hint: 'IT may have renamed the report: set SAP_AUTO_IMPORT_FILE_PATTERN',
+      });
+    }
     /*
      * The folder it actually scanned, every run. Without this a path that has moved reports
      * `filesScanned: 0` and nothing else - identical to a morning with no new files, which is
