@@ -124,10 +124,13 @@ export async function checkRevertPurchaseOrder(args: { anchorShipmentUuid: strin
   const poSap = await query(`SELECT 1 FROM contracts c WHERE c.id = $1::uuid AND ${poLineHasSapStoSql('c')} LIMIT 1`, [contractRowId]);
   if (poSap.rows.length > 0) return fail(403, sapMessage, REVERT_PO_CODES.SAP) as Extract<RevertPoResult, { ok: false }>;
 
-  // The operation has finished discharging.
-  const completedStatus = members.some((m) => String(m.status ?? '').trim().toUpperCase() === 'COMPLETED');
-  const atc = await groupDischargeCompleteAta(members.map((m) => m.id));
-  if (completedStatus || atc) {
+  // The operation has finished discharging. The Shipments page's rule for an operation: Completed only when EVERY active PO has finished, so one finished PO
+  // does not make it so (operation OP-1004030473-15277540: the first PO finished on 15 Sep, four POs were added on 2 Oct and are still waiting - the table reads
+  // Unloading, and those four are exactly what this feature is for).
+  const finished = await Promise.all(
+    members.map(async (m) => String(m.status ?? '').trim().toUpperCase() === 'COMPLETED' || Boolean(await groupDischargeCompleteAta([m.id]))),
+  );
+  if (finished.length > 0 && finished.every(Boolean)) {
     return fail(409, 'This operation has already finished discharging; a PO can no longer be reverted from it', REVERT_PO_CODES.COMPLETED) as Extract<
       RevertPoResult,
       { ok: false }

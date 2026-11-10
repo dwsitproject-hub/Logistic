@@ -178,20 +178,35 @@ describe('Revert PO', () => {
     expect(res).toMatchObject({ ok: false, status: 403, code: REVERT_PO_CODES.SAP });
   });
 
-  it('is refused once the operation has finished discharging, by ATC or by status', async () => {
+  it('is refused once EVERY PO of the operation has finished discharging, by ATC or by status', async () => {
     const o = await operation('G', ['ONE', 'TWO']);
-    await query(`UPDATE shipments SET ata_discharge_complete = '2026-11-01' WHERE id = $1`, [o.ships.ONE]);
+    await query(`UPDATE shipments SET ata_discharge_complete = '2026-11-01' WHERE id = ANY($1::uuid[])`, [[o.ships.ONE, o.ships.TWO]]);
     expect(await revertPurchaseOrderFromShipment({ anchorShipmentUuid: o.ships.ONE, contractRowId: o.contracts.TWO, userId: actorId })).toMatchObject({
       ok: false,
       code: REVERT_PO_CODES.COMPLETED,
     });
-    await query(`UPDATE shipments SET ata_discharge_complete = NULL WHERE id = $1`, [o.ships.ONE]);
-    await query(`UPDATE shipments SET status = 'COMPLETED' WHERE id = $1`, [o.ships.ONE]);
+    await query(`UPDATE shipments SET ata_discharge_complete = NULL WHERE id = ANY($1::uuid[])`, [[o.ships.ONE, o.ships.TWO]]);
+    await query(`UPDATE shipments SET status = 'COMPLETED' WHERE id = ANY($1::uuid[])`, [[o.ships.ONE, o.ships.TWO]]);
     expect(await revertPurchaseOrderFromShipment({ anchorShipmentUuid: o.ships.TWO, contractRowId: o.contracts.TWO, userId: actorId })).toMatchObject({
       ok: false,
       code: REVERT_PO_CODES.COMPLETED,
     });
     expect(await shipmentExists(o.ships.TWO)).toBe(true);
+  });
+
+  it('is ALLOWED when only some POs have finished: the late-added POs of a finished voyage can be reverted (the operation is not Completed on the page)', async () => {
+    // OP-1004030473-15277540: the first PO finished (manual ATC), four POs added later have no ATC.
+    const o = await operation('K', ['FIRST', 'LATE1', 'LATE2']);
+    await query(`INSERT INTO shipment_ata_overrides (shipment_id, ata_discharge_complete) VALUES ($1, '2026-09-15')`, [o.ships.FIRST]);
+    const res = await revertPurchaseOrderFromShipment({ anchorShipmentUuid: o.ships.LATE1, contractRowId: o.contracts.LATE1, userId: actorId });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    expect(await shipmentExists(o.ships.LATE1)).toBe(false);
+    expect(await shipmentExists(o.ships.FIRST)).toBe(true);
+    expect(await shipmentExists(o.ships.LATE2)).toBe(true);
+    // and the finished PO itself, which holds the ATC, can leave as well: its override moves to a remaining row
+    const second = await revertPurchaseOrderFromShipment({ anchorShipmentUuid: o.ships.LATE2, contractRowId: o.contracts.FIRST, userId: actorId });
+    expect(second.ok, JSON.stringify(second)).toBe(true);
+    expect(await countOf('shipment_ata_overrides', o.ships.LATE2)).toBe(1);
   });
 
   it('is refused once the operation was sent to JPS', async () => {

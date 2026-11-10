@@ -7,8 +7,9 @@ import { JPS_CURRENT_ROW_ORDER_SQL, SHIPMENT_LIST_JPS_SELECT_SQL } from '../util
 import { sqlJpsAtaJsonExpr } from '../jps/scheduleAtaSql';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
-import { getContractImportStatusForShipment } from '../utils/contractDeliveryStatus';
-import { deriveShipmentStatus, isFutureDate, pickDisplayedShipmentStatus } from '../utils/shipmentStatus';
+import { getContractImportStatusForShipment, isContractDeliveryClosed } from '../utils/contractDeliveryStatus';
+import { applyOperationCompletionRule, deriveShipmentStatus, isFutureDate, pickDisplayedShipmentStatus } from '../utils/shipmentStatus';
+import { groupDischargeCompleteAta } from './shipmentPoAssignment.service';
 import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
@@ -500,6 +501,43 @@ export async function resolveShipmentEditPayload(
   );
 }
 
+/**
+ * A Completed the opened row reads is held back to what the Shipments table shows while another PO of the same operation has not finished
+ * (see applyOperationCompletionRule). A PO is finished when its shipment is stored Completed, it has a discharge ATC (JPS / manual override / stored / discharge
+ * port row, read the way the list reads it), or its contract is closed in SAP. Failing to look it up leaves the row's own status, as before.
+ */
+async function operationAwareStatus(args: {
+  shipmentUuid: string;
+  lookupKey: string;
+  rowStatus: ReturnType<typeof pickDisplayedShipmentStatus>;
+  ladderWithoutCompletion: ReturnType<typeof deriveShipmentStatus>;
+}): Promise<ReturnType<typeof pickDisplayedShipmentStatus>> {
+  const key = String(args.lookupKey ?? '').trim();
+  if (!key || /^\d+$/.test(key)) return args.rowStatus;
+  try {
+    const memberIds = await resolveStoGroupShipmentIds(args.shipmentUuid);
+    if (memberIds.length < 2) return args.rowStatus;
+    const statuses = await query(`SELECT id::text AS id, status FROM shipments WHERE id = ANY($1::uuid[])`, [memberIds]);
+    const statusById = new Map((statuses.rows as Array<{ id: string; status: string | null }>).map((r) => [r.id, String(r.status ?? '').trim().toUpperCase()]));
+    const memberFinished = await Promise.all(
+      memberIds.map(async (id) => {
+        if (statusById.get(id) === 'COMPLETED') return true;
+        if (await groupDischargeCompleteAta([id])) return true;
+        return isContractDeliveryClosed(await getContractImportStatusForShipment(id));
+      }),
+    );
+    return applyOperationCompletionRule({
+      effective: args.rowStatus,
+      ladderWithoutCompletion: args.ladderWithoutCompletion,
+      operationKeyed: true,
+      memberFinished,
+    });
+  } catch (err) {
+    logger.warn('Edit Shipment: could not apply the operation completion rule', { err, shipmentUuid: args.shipmentUuid });
+    return args.rowStatus;
+  }
+}
+
 async function resolveShipmentEditPayloadUncached(
   shipmentUuid: string,
   preferredSto?: string | null,
@@ -625,6 +663,30 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
     contract_import_status: await getContractImportStatusForShipment(shipmentId),
   });
 
+  const rowStatus = pickDisplayedShipmentStatus(shipment.status ?? info.status, derivedStatus, {
+    futureAtc: isFutureDate(info.ata_vessel_complete_discharge),
+  });
+  const effectiveStatus =
+    rowStatus === 'COMPLETED'
+      ? await operationAwareStatus({
+          shipmentUuid,
+          lookupKey,
+          rowStatus,
+          ladderWithoutCompletion: deriveShipmentStatus({
+            ata_arrival_at_loading_port: info.ata_vessel_arrival_at_loading_port,
+            ata_berthed_at_loading_port: info.ata_vessel_berthed_at_loading_port,
+            ata_start_loading: info.ata_vessel_start_loading,
+            ata_completed_loading: info.ata_vessel_completed_loading,
+            ata_sailed_from_loading_port: info.ata_vessel_sailed_from_loading_port,
+            ata_arrive_at_discharge_port: info.ata_vessel_arrive_at_discharge_port,
+            ata_berthed_at_discharge_port: info.ata_vessel_berthed_at_discharge_port,
+            ata_start_discharging: info.ata_vessel_start_discharging,
+            ata_complete_discharge: null,
+            contract_import_status: null,
+          }),
+        })
+      : rowStatus;
+
   return {
     fieldHistory,
     shipment,
@@ -633,8 +695,6 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
     shipmentInfo: portsBundle.shipmentInfo,
     contractDetails,
     jettyStatus: await loadJettyStatusForShipment(shipmentId),
-    effectiveStatus: pickDisplayedShipmentStatus(shipment.status ?? info.status, derivedStatus, {
-      futureAtc: isFutureDate(info.ata_vessel_complete_discharge),
-    }),
+    effectiveStatus,
   };
 }
