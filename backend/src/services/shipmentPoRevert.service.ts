@@ -3,6 +3,8 @@ import { getClient, query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { isSapSourcedShipmentId } from '../utils/klipLogisticsActivity';
 import { buildManualPrePlannedEligibleContractsByIdsQuery } from '../utils/prePlannedManualEligibilitySql';
+import { sqlIsContractSapInactiveForShipmentBacklogExpr } from '../utils/contractDeliveryStatus';
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from '../utils/qtyZeroTolerance';
 import { sqlShipmentListPrimaryOrderBy } from '../utils/shipmentListPrimaryShipmentSql';
 import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 import logger from '../utils/logger';
@@ -41,6 +43,8 @@ export const REVERT_PO_CODES = {
   NOT_ON_SHIPMENT: 'PO_NOT_ON_SHIPMENT',
   AMBIGUOUS: 'PO_ON_SEVERAL_ROWS',
   NOWHERE_TO_GO: 'PO_WOULD_NOT_RETURN_TO_UNPLANNED',
+  SAP_CLOSED: 'PO_CLOSED_IN_SAP',
+  OS_EMPTY: 'OS_QTY_EMPTY',
 } as const;
 
 export type RevertPoResult =
@@ -158,6 +162,113 @@ export async function checkRevertPurchaseOrder(args: { anchorShipmentUuid: strin
   }
 
   return { ok: true, lookupKey, members, target, remaining };
+}
+
+/** Why the Revert PO button of one PO is disabled, in the few words the tooltip shows. */
+export interface RevertBlock {
+  code: string;
+  message: string;
+}
+
+const blockOf = (code: string, message: string): RevertBlock => ({ code, message });
+
+/**
+ * For the Edit Shipment modal: which POs of the operation can be reverted, and for each one that cannot, the short reason. Computed when the modal opens so the
+ * button can be disabled with its reason on hover, instead of the user pressing it to read a refusal.
+ *
+ * It is the quick, read-only version of the same rules the DELETE enforces (checkRevertPurchaseOrder and the post-delete test); the server stays the authority, so a PO
+ * this leaves enabled can still be refused when pressed. The reasons, in the order they are shown:
+ *   - the PO's row came from SAP, or the operation is keyed by an SAP STO
+ *   - the operation was already submitted to Jetty (JPS)
+ *   - the operation has finished discharging (every PO)
+ *   - it is the only PO on the shipment
+ *   - the PO is closed or cancelled in SAP, or its OS Qty is empty - unless it has a live shipment of its own elsewhere, in which case it can leave anyway
+ * `rows` are the modal's PO rows; the OS Qty is theirs (kilograms), the one the table shows. A row without a shipment row in this operation gets no entry.
+ */
+export async function computeRevertBlocks(args: {
+  anchorShipmentUuid: string;
+  lookupKey: string;
+  rows: Array<{ contract_row_id?: unknown; outstanding_qty_actual?: unknown; outstanding_qty?: unknown }>;
+}): Promise<Map<string, RevertBlock | null>> {
+  const result = new Map<string, RevertBlock | null>();
+  const lookupKey = String(args.lookupKey ?? '').trim();
+  const contractIds = args.rows.map((r) => String(r.contract_row_id ?? '').trim()).filter((id) => UUID_RE.test(id));
+  if (!lookupKey || contractIds.length === 0) return result;
+
+  const memberIds = await resolveStoGroupShipmentIds(args.anchorShipmentUuid);
+  const membersRes = await query(
+    `SELECT s.id::text AS id, s.shipment_id, s.operation_id, s.operation_id_source, s.status, s.contract_id::text AS contract_uuid
+       FROM shipments s WHERE s.id = ANY($1::uuid[])`,
+    [memberIds],
+  );
+  const members = membersRes.rows as Array<{ id: string; shipment_id: string | null; operation_id: string | null; operation_id_source: string | null; status: string | null; contract_uuid: string }>;
+  const rowByContract = new Map(members.map((m) => [m.contract_uuid, m]));
+  const distinctContracts = new Set(members.map((m) => m.contract_uuid)).size;
+
+  // Whole-operation reasons, the same for every PO.
+  let operationBlock: RevertBlock | null = null;
+  if (!isKlipOnlyShipmentGroupEligible(lookupKey) || (await sapStoExistsInSpd(lookupKey))) {
+    operationBlock = blockOf(REVERT_PO_CODES.SAP, 'Planned from SAP (STO), cannot be reverted');
+  } else {
+    const keys = [...new Set([lookupKey, ...members.map((m) => String(m.operation_id ?? '').trim())].filter(Boolean))];
+    const jps = await query(
+      `SELECT 1 FROM jps_shipping_instructions WHERE sto_key = ANY($1::text[]) AND (jps_id IS NOT NULL OR submitted_at IS NOT NULL) LIMIT 1`,
+      [keys],
+    );
+    if (jps.rows.length > 0) {
+      operationBlock = blockOf(REVERT_PO_CODES.SENT_TO_JPS, 'Already submitted to Jetty (JPS)');
+    } else {
+      const finished = await Promise.all(
+        members.map(async (m) => String(m.status ?? '').trim().toUpperCase() === 'COMPLETED' || Boolean(await groupDischargeCompleteAta([m.id]))),
+      );
+      if (finished.length > 0 && finished.every(Boolean)) {
+        operationBlock = blockOf(REVERT_PO_CODES.COMPLETED, 'The shipment has finished discharging');
+      } else if (distinctContracts < 2) {
+        operationBlock = blockOf(REVERT_PO_CODES.ONLY_PO, 'Only PO on this shipment, use Cancel instead');
+      }
+    }
+  }
+
+  // Per-PO reasons: closed or cancelled in SAP, and a live shipment of its own elsewhere.
+  const inactiveRes = await query(
+    `SELECT c.id::text AS id, (${sqlIsContractSapInactiveForShipmentBacklogExpr('c')}) AS inactive FROM contracts c WHERE c.id = ANY($1::uuid[])`,
+    [contractIds],
+  );
+  const inactive = new Map((inactiveRes.rows as Array<{ id: string; inactive: boolean }>).map((r) => [r.id, r.inactive === true]));
+  const otherLiveRes = await query(
+    `SELECT DISTINCT s.contract_id::text AS id FROM shipments s
+      WHERE s.contract_id = ANY($1::uuid[]) AND s.id <> ALL($2::uuid[])
+        AND UPPER(TRIM(COALESCE(s.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'UNPLANNED')`,
+    [contractIds, memberIds],
+  );
+  const hasOtherLive = new Set((otherLiveRes.rows as Array<{ id: string }>).map((r) => r.id));
+
+  for (const row of args.rows) {
+    const id = String(row.contract_row_id ?? '').trim();
+    const member = rowByContract.get(id);
+    if (!id || !member) continue;
+    if (isSapSourcedShipmentId(member.shipment_id) || String(member.operation_id_source ?? '').toUpperCase() === 'SAP_IMPORT') {
+      result.set(id, blockOf(REVERT_PO_CODES.SAP, 'Planned from SAP (STO), cannot be reverted'));
+      continue;
+    }
+    if (operationBlock) {
+      result.set(id, operationBlock);
+      continue;
+    }
+    if (!hasOtherLive.has(id)) {
+      if (inactive.get(id)) {
+        result.set(id, blockOf(REVERT_PO_CODES.SAP_CLOSED, 'PO is closed or cancelled in SAP'));
+        continue;
+      }
+      const osKg = Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0);
+      if (Number.isFinite(osKg) && osKg <= OUTSTANDING_QTY_ZERO_TOLERANCE_KG) {
+        result.set(id, blockOf(REVERT_PO_CODES.OS_EMPTY, 'OS Qty is empty'));
+        continue;
+      }
+    }
+    result.set(id, null);
+  }
+  return result;
 }
 
 /** The remaining member the Shipments list will use as the operation's row: the SAME ranking, so the data moved to it is what the modal opens. */

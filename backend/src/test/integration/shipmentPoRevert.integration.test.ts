@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { query } from '../../database/connection';
 import { createManualPrePlannedGroup } from '../../services/prePlannedGroup.service';
-import { revertPurchaseOrderFromShipment, REVERT_PO_CODES } from '../../services/shipmentPoRevert.service';
+import { computeRevertBlocks, revertPurchaseOrderFromShipment, REVERT_PO_CODES } from '../../services/shipmentPoRevert.service';
 
 /**
  * Edit Shipment > Revert PO, against a real Postgres: one PO leaves an operation of several, the operation keeps everything it had, and the PO is Unplanned again.
@@ -261,5 +261,73 @@ describe('Revert PO', () => {
     const stranger = await operation('J', ['X', 'Y']);
     expect(await revertPurchaseOrderFromShipment({ anchorShipmentUuid: o.ships.ONE, contractRowId: stranger.contracts.X })).toMatchObject({ ok: false, status: 404 });
     expect(await revertPurchaseOrderFromShipment({ anchorShipmentUuid: 'nope', contractRowId: o.contracts.ONE })).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe('why the Revert PO button is disabled (computeRevertBlocks)', () => {
+  const rows = (o: { contracts: Record<string, string> }, osKg: Record<string, number> = {}) =>
+    Object.entries(o.contracts).map(([key, id]) => ({ contract_row_id: id, outstanding_qty_actual: osKg[key] ?? 600_000 }));
+
+  it('a normal PO of an operation of several is enabled', async () => {
+    const o = await operation('BA', ['ONE', 'TWO']);
+    const blocks = await computeRevertBlocks({ anchorShipmentUuid: o.ships.ONE, lookupKey: o.op, rows: rows(o) });
+    expect(blocks.get(o.contracts.ONE)).toBeNull();
+    expect(blocks.get(o.contracts.TWO)).toBeNull();
+  });
+
+  it('OS Qty empty disables it, and says so', async () => {
+    const o = await operation('BB', ['ONE', 'TWO']);
+    const blocks = await computeRevertBlocks({ anchorShipmentUuid: o.ships.ONE, lookupKey: o.op, rows: rows(o, { TWO: 100 }) });
+    expect(blocks.get(o.contracts.ONE)).toBeNull();
+    expect(blocks.get(o.contracts.TWO)).toMatchObject({ code: REVERT_PO_CODES.OS_EMPTY, message: 'OS Qty is empty' });
+  });
+
+  it('closed (or cancelled) in SAP disables it, and says so', async () => {
+    const o = await operation('BC', ['ONE', 'TWO']);
+    await query(`UPDATE contracts SET status = 'Close' WHERE id = $1`, [o.contracts.TWO]);
+    const blocks = await computeRevertBlocks({ anchorShipmentUuid: o.ships.ONE, lookupKey: o.op, rows: rows(o) });
+    expect(blocks.get(o.contracts.TWO)).toMatchObject({ code: REVERT_PO_CODES.SAP_CLOSED, message: 'PO is closed or cancelled in SAP' });
+    expect(blocks.get(o.contracts.ONE)).toBeNull();
+  });
+
+  it('already submitted to Jetty disables every PO of the operation', async () => {
+    const o = await operation('BD', ['ONE', 'TWO']);
+    await query(
+      `INSERT INTO jps_shipping_instructions (sto_key, external_reference, state, jps_id, jps_status, submitted_at) VALUES ($1, $2, 'SUBMITTED', 4712, 'Pending', now())`,
+      [o.op, `${P}-EXT-BD`],
+    );
+    const blocks = await computeRevertBlocks({ anchorShipmentUuid: o.ships.ONE, lookupKey: o.op, rows: rows(o) });
+    for (const id of Object.values(o.contracts)) expect(blocks.get(id)).toMatchObject({ code: REVERT_PO_CODES.SENT_TO_JPS, message: 'Already submitted to Jetty (JPS)' });
+  });
+
+  it('every PO finished, and the only PO, disable it', async () => {
+    const done = await operation('BE', ['ONE', 'TWO']);
+    await query(`UPDATE shipments SET ata_discharge_complete = '2026-11-01' WHERE id = ANY($1::uuid[])`, [Object.values(done.ships)]);
+    const a = await computeRevertBlocks({ anchorShipmentUuid: done.ships.ONE, lookupKey: done.op, rows: rows(done) });
+    expect(a.get(done.contracts.ONE)).toMatchObject({ code: REVERT_PO_CODES.COMPLETED });
+
+    const solo = await operation('BF', ['SOLO']);
+    const b = await computeRevertBlocks({ anchorShipmentUuid: solo.ships.SOLO, lookupKey: solo.op, rows: rows(solo) });
+    expect(b.get(solo.contracts.SOLO)).toMatchObject({ code: REVERT_PO_CODES.ONLY_PO });
+  });
+
+  it('OS empty or closed in SAP does NOT disable it when the PO has a live shipment of its own elsewhere', async () => {
+    const o = await operation('BG', ['ONE', 'TWO']);
+    await query(`UPDATE contracts SET status = 'Close' WHERE id = $1`, [o.contracts.TWO]);
+    await query(`INSERT INTO shipments (shipment_id, operation_id, contract_id, vessel_name, status) VALUES ($1, $2, $3, 'IT RPO OTHER', 'SAILED')`, [
+      `MNL-${P}-BG-OTHER`,
+      `OP-${P}-BG-OTHER`,
+      o.contracts.TWO,
+    ]);
+    const blocks = await computeRevertBlocks({ anchorShipmentUuid: o.ships.ONE, lookupKey: o.op, rows: rows(o, { TWO: 0 }) });
+    expect(blocks.get(o.contracts.TWO)).toBeNull();
+  });
+
+  it('a row that came from SAP is disabled', async () => {
+    const o = await operation('BH', ['ONE', 'TWO']);
+    await query(`UPDATE shipments SET operation_id_source = 'SAP_IMPORT' WHERE id = $1`, [o.ships.TWO]);
+    const blocks = await computeRevertBlocks({ anchorShipmentUuid: o.ships.ONE, lookupKey: o.op, rows: rows(o) });
+    expect(blocks.get(o.contracts.TWO)).toMatchObject({ code: REVERT_PO_CODES.SAP });
+    expect(blocks.get(o.contracts.ONE)).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import logger from '../utils/logger';
 import { getContractImportStatusForShipment, isContractDeliveryClosed } from '../utils/contractDeliveryStatus';
 import { applyOperationCompletionRule, deriveShipmentStatus, isFutureDate, pickDisplayedShipmentStatus } from '../utils/shipmentStatus';
 import { groupDischargeCompleteAta } from './shipmentPoAssignment.service';
+import { computeRevertBlocks } from './shipmentPoRevert.service';
 import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
@@ -624,6 +625,22 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
       }
     } catch (err) {
       logger.warn('Edit Shipment: could not check which PO rows have a live shipment', { err, shipmentUuid });
+    }
+  }
+
+  /*
+   * Which POs of the operation the Revert PO button can act on, and why it is disabled for the others (OS Qty empty, closed or cancelled in SAP, already submitted to
+   * Jetty, ...). Left unset when the lookup fails, which the modal reads as "enabled": the server still decides when the button is pressed.
+   */
+  if (lookupKey && contractDetails.length > 1) {
+    try {
+      const blocks = await computeRevertBlocks({ anchorShipmentUuid: shipmentUuid, lookupKey, rows: contractDetails });
+      for (const d of contractDetails) {
+        const id = String(d.contract_row_id ?? '').trim();
+        if (blocks.has(id)) d.revert_block = blocks.get(id);
+      }
+    } catch (err) {
+      logger.warn('Edit Shipment: could not work out which POs can be reverted', { err, shipmentUuid });
     }
   }
 

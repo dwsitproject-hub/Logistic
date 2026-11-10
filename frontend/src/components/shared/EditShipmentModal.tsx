@@ -658,6 +658,8 @@ type ShipmentDetailRow = {
   po_sto_count: number
   /** Contract row id, to list the PO's STOs next to the OS Qty. Null for a SAP-only contract. */
   contract_row_id: string | null
+  /** Why Revert PO is disabled for this PO, in a few words (OS Qty empty, closed or cancelled in SAP, already submitted to Jetty, ...). Null: it can be tried. */
+  revert_block: string | null
   incoterm: string
 }
 
@@ -717,6 +719,7 @@ function contractDetailRowFromApi(
     vessel_oa_budget_sap: parseApiNumber(d.vessel_oa_budget_sap),
     po_sto_count: Math.max(1, Math.trunc(parseApiNumber(d.po_sto_count) ?? 1)),
     contract_row_id: String(d.contract_row_id ?? '').trim() || null,
+    revert_block: String((d.revert_block as { message?: unknown } | null | undefined)?.message ?? '').trim() || null,
     incoterm: String(d.incoterm ?? '').trim(),
   }
 }
@@ -772,6 +775,7 @@ async function buildContractDetailRows(
         vessel_oa_budget_sap: null,
         po_sto_count: 1,
         contract_row_id: null,
+        revert_block: null,
         incoterm: '',
       }
     })
@@ -3010,22 +3014,27 @@ export function EditShipmentModal({
                                 '—'
                               )}
                               {canModifyCoreSections && detailRows.length > 1 && row.contract_row_id && !qtyLocked ? (
-                                <button
-                                  type="button"
-                                  className="mt-0.5 flex items-center gap-1 text-[0.625rem] font-normal text-gray-500 hover:text-amber-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-                                  title="Take this PO out of the operation and return it to Unplanned"
-                                  disabled={revertingPo}
-                                  onClick={() => {
-                                    setRevertPoError(null)
-                                    setRevertPoTarget({
-                                      contractRowId: String(row.contract_row_id),
-                                      label: String(row.po_number || row.contract_number || '').trim(),
-                                    })
-                                  }}
+                                // The title sits on a wrapper: a disabled button does not always show its own tooltip.
+                                <span
+                                  className="mt-0.5 inline-block"
+                                  title={row.revert_block ? `Cannot revert: ${row.revert_block}` : 'Take this PO out of the operation and return it to Unplanned'}
                                 >
-                                  <Undo2 className="h-3 w-3" />
-                                  Revert PO
-                                </button>
+                                  <button
+                                    type="button"
+                                    className="flex items-center gap-1 text-[0.625rem] font-normal text-gray-500 hover:text-amber-700 hover:underline disabled:cursor-not-allowed disabled:text-gray-300 disabled:no-underline"
+                                    disabled={revertingPo || Boolean(row.revert_block)}
+                                    onClick={() => {
+                                      setRevertPoError(null)
+                                      setRevertPoTarget({
+                                        contractRowId: String(row.contract_row_id),
+                                        label: String(row.po_number || row.contract_number || '').trim(),
+                                      })
+                                    }}
+                                  >
+                                    <Undo2 className="h-3 w-3" />
+                                    Revert PO
+                                  </button>
+                                </span>
                               ) : null}
                               {qtyLocked ? (
                                 <span
