@@ -110,7 +110,7 @@ export async function hasKlipShipmentActivity(
 
   const docRes = await runQuery(
     db,
-    `SELECT 1 FROM documents WHERE shipment_id = $1::uuid LIMIT 1`,
+    `SELECT 1 FROM documents WHERE shipment_id = $1::uuid AND deleted_at IS NULL LIMIT 1`,
     [shipmentId],
   );
   if (docRes.rows.length > 0) return true;
@@ -208,7 +208,7 @@ export async function canAutoConsolidateShipmentForSap(
 
   const docRes = await runQuery(
     db,
-    `SELECT 1 FROM documents WHERE shipment_id = $1::uuid LIMIT 1`,
+    `SELECT 1 FROM documents WHERE shipment_id = $1::uuid AND deleted_at IS NULL LIMIT 1`,
     [shipmentUuid],
   );
   if (docRes.rows.length > 0) return false;
@@ -355,7 +355,7 @@ export async function canSupersedeShipmentForStoChange(
 
   const docRes = await runQuery(
     db,
-    `SELECT 1 FROM documents WHERE shipment_id = $1::uuid LIMIT 1`,
+    `SELECT 1 FROM documents WHERE shipment_id = $1::uuid AND deleted_at IS NULL LIMIT 1`,
     [shipmentUuid],
   );
   if (docRes.rows.length > 0) return false;

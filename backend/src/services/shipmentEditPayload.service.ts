@@ -7,8 +7,10 @@ import { JPS_CURRENT_ROW_ORDER_SQL, SHIPMENT_LIST_JPS_SELECT_SQL } from '../util
 import { sqlJpsAtaJsonExpr } from '../jps/scheduleAtaSql';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
-import { getContractImportStatusForShipment } from '../utils/contractDeliveryStatus';
-import { deriveShipmentStatus, isFutureDate, pickDisplayedShipmentStatus } from '../utils/shipmentStatus';
+import { getContractImportStatusForShipment, isContractDeliveryClosed } from '../utils/contractDeliveryStatus';
+import { applyOperationCompletionRule, deriveShipmentStatus, isFutureDate, pickDisplayedShipmentStatus } from '../utils/shipmentStatus';
+import { groupDischargeCompleteAta } from './shipmentPoAssignment.service';
+import { computeRevertBlocks } from './shipmentPoRevert.service';
 import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
@@ -336,6 +338,9 @@ async function loadPortsAndInfo(
       s.actual_vessel_qty_receive,
       s.sfal_qty,
       s.sfbd_qty,
+      -- SAP's own figure for this PO x STO row (reference beside the working figure; migration 255)
+      s.sap_sfal_qty,
+      s.sap_sfbd_qty,
       s.vessel_oa_actual,
       s.vessel_oa_budget,
       s.bl_quantity,
@@ -497,6 +502,43 @@ export async function resolveShipmentEditPayload(
   );
 }
 
+/**
+ * A Completed the opened row reads is held back to what the Shipments table shows while another PO of the same operation has not finished
+ * (see applyOperationCompletionRule). A PO is finished when its shipment is stored Completed, it has a discharge ATC (JPS / manual override / stored / discharge
+ * port row, read the way the list reads it), or its contract is closed in SAP. Failing to look it up leaves the row's own status, as before.
+ */
+async function operationAwareStatus(args: {
+  shipmentUuid: string;
+  lookupKey: string;
+  rowStatus: ReturnType<typeof pickDisplayedShipmentStatus>;
+  ladderWithoutCompletion: ReturnType<typeof deriveShipmentStatus>;
+}): Promise<ReturnType<typeof pickDisplayedShipmentStatus>> {
+  const key = String(args.lookupKey ?? '').trim();
+  if (!key || /^\d+$/.test(key)) return args.rowStatus;
+  try {
+    const memberIds = await resolveStoGroupShipmentIds(args.shipmentUuid);
+    if (memberIds.length < 2) return args.rowStatus;
+    const statuses = await query(`SELECT id::text AS id, status FROM shipments WHERE id = ANY($1::uuid[])`, [memberIds]);
+    const statusById = new Map((statuses.rows as Array<{ id: string; status: string | null }>).map((r) => [r.id, String(r.status ?? '').trim().toUpperCase()]));
+    const memberFinished = await Promise.all(
+      memberIds.map(async (id) => {
+        if (statusById.get(id) === 'COMPLETED') return true;
+        if (await groupDischargeCompleteAta([id])) return true;
+        return isContractDeliveryClosed(await getContractImportStatusForShipment(id));
+      }),
+    );
+    return applyOperationCompletionRule({
+      effective: args.rowStatus,
+      ladderWithoutCompletion: args.ladderWithoutCompletion,
+      operationKeyed: true,
+      memberFinished,
+    });
+  } catch (err) {
+    logger.warn('Edit Shipment: could not apply the operation completion rule', { err, shipmentUuid: args.shipmentUuid });
+    return args.rowStatus;
+  }
+}
+
 async function resolveShipmentEditPayloadUncached(
   shipmentUuid: string,
   preferredSto?: string | null,
@@ -586,6 +628,22 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
     }
   }
 
+  /*
+   * Which POs of the operation the Revert PO button can act on, and why it is disabled for the others (OS Qty empty, closed or cancelled in SAP, already submitted to
+   * Jetty, ...). Left unset when the lookup fails, which the modal reads as "enabled": the server still decides when the button is pressed.
+   */
+  if (lookupKey && contractDetails.length > 1) {
+    try {
+      const blocks = await computeRevertBlocks({ anchorShipmentUuid: shipmentUuid, lookupKey, rows: contractDetails });
+      for (const d of contractDetails) {
+        const id = String(d.contract_row_id ?? '').trim();
+        if (blocks.has(id)) d.revert_block = blocks.get(id);
+      }
+    } catch (err) {
+      logger.warn('Edit Shipment: could not work out which POs can be reverted', { err, shipmentUuid });
+    }
+  }
+
   const shipment = shipmentRes.rows[0] as Record<string, unknown>;
   /*
    * Whether the SAP Delivered / Received of this group are its own (see sqlSapQtySharedAcrossShipments). The Grand Total of the PO table follows the
@@ -622,6 +680,30 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
     contract_import_status: await getContractImportStatusForShipment(shipmentId),
   });
 
+  const rowStatus = pickDisplayedShipmentStatus(shipment.status ?? info.status, derivedStatus, {
+    futureAtc: isFutureDate(info.ata_vessel_complete_discharge),
+  });
+  const effectiveStatus =
+    rowStatus === 'COMPLETED'
+      ? await operationAwareStatus({
+          shipmentUuid,
+          lookupKey,
+          rowStatus,
+          ladderWithoutCompletion: deriveShipmentStatus({
+            ata_arrival_at_loading_port: info.ata_vessel_arrival_at_loading_port,
+            ata_berthed_at_loading_port: info.ata_vessel_berthed_at_loading_port,
+            ata_start_loading: info.ata_vessel_start_loading,
+            ata_completed_loading: info.ata_vessel_completed_loading,
+            ata_sailed_from_loading_port: info.ata_vessel_sailed_from_loading_port,
+            ata_arrive_at_discharge_port: info.ata_vessel_arrive_at_discharge_port,
+            ata_berthed_at_discharge_port: info.ata_vessel_berthed_at_discharge_port,
+            ata_start_discharging: info.ata_vessel_start_discharging,
+            ata_complete_discharge: null,
+            contract_import_status: null,
+          }),
+        })
+      : rowStatus;
+
   return {
     fieldHistory,
     shipment,
@@ -630,8 +712,6 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
     shipmentInfo: portsBundle.shipmentInfo,
     contractDetails,
     jettyStatus: await loadJettyStatusForShipment(shipmentId),
-    effectiveStatus: pickDisplayedShipmentStatus(shipment.status ?? info.status, derivedStatus, {
-      futureAtc: isFutureDate(info.ata_vessel_complete_discharge),
-    }),
+    effectiveStatus,
   };
 }

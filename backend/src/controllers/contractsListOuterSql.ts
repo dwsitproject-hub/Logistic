@@ -41,7 +41,7 @@ const CONTRACTS_LIST_PAYMENT_AND_COUNT_PROJECTION = `
         (SELECT (p.payoff_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_deviation_fb,
         (SELECT COUNT(*) FROM trucking_operations t WHERE t.contract_id = base.id) AS trucking_count,
         (SELECT COUNT(*) FROM shipments s WHERE s.contract_id = base.id) AS shipment_count,
-        (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id) AS document_count,`;
+        (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id AND d.deleted_at IS NULL) AS document_count,`;
 
 const CONTRACTS_LIST_PAYMENT_SAP_ONLY_PROJECTION = `
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'due_date_payment'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(base.latest_spd_data->>'due date payment'), '')) AS due_date_payment_raw,

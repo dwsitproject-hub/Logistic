@@ -121,9 +121,11 @@ describe('buildKlipEditedFieldsChangedSetSql', () => {
  * times and SF keys 0 times, while ATA appears 1,800 times.
  */
 describe('fields SAP never supplies are not tracked', () => {
-  it('leaves SFAL/SFBD off the shipment list', () => {
-    expect(SHIPMENT_PROVENANCE_COLUMNS).not.toContain('sfal_qty');
-    expect(SHIPMENT_PROVENANCE_COLUMNS).not.toContain('sfbd_qty');
+  // Until the SAP Phase 3 template (2026-11) SFAL/SFBD were off this list: no SF key in any of the 27,003 rows. The template now carries them per PO line, so a
+  // figure can come from SAP or from a user and the marker is what tells them apart (SapDataDistributionService.fillSapFigures never replaces a marked one).
+  it('tracks SFAL/SFBD on the shipment list now that SAP supplies them too', () => {
+    expect(SHIPMENT_PROVENANCE_COLUMNS).toContain('sfal_qty');
+    expect(SHIPMENT_PROVENANCE_COLUMNS).toContain('sfbd_qty');
   });
 
   it('leaves daily planning off the trucking list', () => {

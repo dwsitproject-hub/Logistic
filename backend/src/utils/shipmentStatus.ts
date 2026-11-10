@@ -271,6 +271,35 @@ export function pickDisplayedShipmentStatus(
   return derivedRank > storedRank ? derived : storedStatus === 'UNPLANNED' ? 'PLANNED' : storedStatus;
 }
 
+/**
+ * The status Edit Shipment shows for an OPERATION of several POs, brought to the Shipments table's rule.
+ *
+ * The table reads an operation-keyed group (an `OP-...` key, not an STO number) as Completed only when EVERY active PO of it has finished (sqlOwnStoDischargeAtc).
+ * The modal used to read the ONE row it opened, so a finished PO made it say Completed while the operation, with POs added after the voyage, still read Unloading in
+ * the table (operation OP-1004030473-15277540: the first PO finished on 15 Sep, four POs added on 2 Oct have no ATC). This keeps the two the same.
+ *
+ * It only ever takes a COMPLETED back: a modal status that is not Completed is left as it is, a key that is an STO number keeps the row's own reading, and a single-PO
+ * operation is unchanged. While some PO is unfinished the answer is the row's ladder without the ATC and the GR Close, but never below Unloading once any PO of the
+ * operation has finished discharging (the table's group ladder is at least that far).
+ */
+export function applyOperationCompletionRule(args: {
+  effective: ShipmentAutoStatus;
+  /** The opened row's ATA ladder with the discharge-complete ATC and the contract's GR Close left out. */
+  ladderWithoutCompletion: ShipmentAutoStatus;
+  /** The group is keyed by an operation id, not by an STO number. */
+  operationKeyed: boolean;
+  /** One entry per active PO of the group: has it finished (stored Completed, an ATC, or its contract closed). */
+  memberFinished: readonly boolean[];
+}): ShipmentAutoStatus {
+  const { effective, ladderWithoutCompletion, operationKeyed, memberFinished } = args;
+  if (effective !== 'COMPLETED') return effective;
+  if (!operationKeyed || memberFinished.length < 2 || memberFinished.every(Boolean)) return effective;
+  const floor: ShipmentAutoStatus = memberFinished.some(Boolean) ? 'UNLOADING' : 'PLANNED';
+  const ladderRank = SHIPMENT_STATUS_RANK[ladderWithoutCompletion] ?? 1;
+  const floorRank = SHIPMENT_STATUS_RANK[floor] ?? 1;
+  return ladderRank >= floorRank ? ladderWithoutCompletion : floor;
+}
+
 /** Monotonic rank for SAP upsert — higher = further along execution ladder. */
 export const SHIPMENT_STATUS_RANK: Readonly<Record<string, number>> = {
   /** Same rank as PLANNED — Unplanned card is PO-only; STO UNPLANNED is legacy alias. */

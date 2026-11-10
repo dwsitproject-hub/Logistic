@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ApiCallHistory } from '@/components/integrations/ApiCallHistory'
 import { DhmFailedPushButton } from '@/components/integrations/DhmPushPanel'
+import { KmapsWebhookButton } from '@/components/integrations/KmapsWebhookPanel'
 import { JpsPortsEditor, JpsPortsSummary } from '@/components/integrations/JpsPortsField'
 import api from '@/lib/api'
 import { AlertTriangle, CheckCircle2, History, Loader2, Plug, RotateCcw, XCircle } from 'lucide-react'
@@ -39,7 +40,7 @@ interface SettingView {
 }
 
 interface IntegrationView {
-  id: 'dhm' | 'jps'
+  id: 'dhm' | 'jps' | 'kmaps'
   name: string
   description: string
   settings: SettingView[]
@@ -180,6 +181,7 @@ function IntegrationCard({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {integration.id === 'dhm' ? <DhmFailedPushButton /> : null}
+          {integration.id === 'kmaps' ? <KmapsWebhookButton /> : null}
           <Button variant="outline" size="sm" onClick={() => setHistoryOpen((open) => !open)}>
             <History className="mr-1 h-3.5 w-3.5" />
             {historyOpen ? 'Hide history' : 'History'}

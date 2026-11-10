@@ -13,7 +13,7 @@
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 
-export type ApiCallIntegration = 'jps' | 'dhm';
+export type ApiCallIntegration = 'jps' | 'dhm' | 'kmaps';
 
 interface CallTable {
   table: string;
@@ -27,10 +27,11 @@ interface CallTable {
 export const API_CALL_TABLES: Record<ApiCallIntegration, CallTable> = {
   jps: { table: 'jps_api_calls', subject: 'sto_key', reference: 'external_reference' },
   dhm: { table: 'dhm_api_calls', subject: 'slug', reference: 'code' },
+  kmaps: { table: 'kmaps_api_calls', subject: 'subject', reference: 'reference' },
 };
 
 export function isApiCallIntegration(value: unknown): value is ApiCallIntegration {
-  return value === 'jps' || value === 'dhm';
+  return value === 'jps' || value === 'dhm' || value === 'kmaps';
 }
 
 export interface ApiCallRecord {
@@ -55,7 +56,7 @@ export interface ApiCallRecord {
 export const API_CALL_RETENTION_DAYS = 30;
 export const MAX_JSON_CHARS = 32_000;
 const PRUNE_EVERY = 200;
-const writes: Record<ApiCallIntegration, number> = { jps: 0, dhm: 0 };
+const writes: Record<ApiCallIntegration, number> = { jps: 0, dhm: 0, kmaps: 0 };
 
 /**
  * JSON for a jsonb column. A body over the cap is stored as a marker with the start of the text rather than dropped,

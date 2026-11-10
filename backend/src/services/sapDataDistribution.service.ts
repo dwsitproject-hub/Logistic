@@ -62,6 +62,7 @@ import {
 import { mergeContractRecords, mergeDuplicateContractsByPo } from './contractMerge.service';
 import { normalizePoNumber, shipmentPoSapIdKey } from '../utils/contractPoIdentity';
 import { canonicalProductName } from '../utils/productAlias';
+import { buildSapFigureFillSql } from '../utils/sapFigureFill';
 
 export interface DistributionResult {
   contractId?: string;
@@ -822,6 +823,14 @@ export class SapDataDistributionService {
         (parsedData?.shipment as Record<string, unknown> | undefined)?.sto_qty_uom,
     );
 
+    // The material of the PO line (SAP Phase 3 template). SAP is its only writer, so a later import replaces an earlier value; an empty cell keeps what is there.
+    const trimmedOrNull = (value: unknown, max: number): string | null => {
+      const text = String(value ?? '').trim();
+      return text ? text.slice(0, max) : null;
+    };
+    const materialCode = trimmedOrNull(contractData.material_code, 40);
+    const materialDescription = trimmedOrNull(contractData.material_description, 255);
+
     const params = [
       effectiveContractId,
       contractData.group,
@@ -911,10 +920,12 @@ export class SapDataDistributionService {
           po_classification = COALESCE($21, po_classification),
           plant_code = COALESCE($22, plant_code),
           currency = COALESCE($23, currency),
+          material_code = COALESCE($26::varchar, material_code),
+          material_description = COALESCE($27::varchar, material_description),
           updated_at = CURRENT_TIMESTAMP
          WHERE id = $25::uuid
          RETURNING id`,
-        [...params.slice(0, 23), rowCarriesContractNo, existingId],
+        [...params.slice(0, 23), rowCarriesContractNo, existingId, materialCode, materialDescription],
       );
       contractUuid = updated.rows[0].id as string;
     } else {
@@ -924,10 +935,10 @@ export class SapDataDistributionService {
           incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
           delivery_start_date, delivery_end_date, source_type, contract_type,
           status, sto_number, sto_quantity, logistics_classification, po_classification,
-          plant_code, currency, created_by
+          plant_code, currency, created_by, material_code, material_description
         ) VALUES (
           $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, '${KLIP_QTY_STORAGE_UOM}', $11::numeric, $12::numeric,
-          $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, COALESCE($23, 'USD'), $24
+          $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, COALESCE($23, 'USD'), $24, $26::varchar, $27::varchar
         )
         ON CONFLICT (contract_id) DO UPDATE SET
           po_number = COALESCE(EXCLUDED.po_number, contracts.po_number),
@@ -962,9 +973,11 @@ export class SapDataDistributionService {
           po_classification = COALESCE(EXCLUDED.po_classification, contracts.po_classification),
           plant_code = COALESCE(EXCLUDED.plant_code, contracts.plant_code),
           currency = COALESCE(EXCLUDED.currency, contracts.currency),
+          material_code = COALESCE(EXCLUDED.material_code, contracts.material_code),
+          material_description = COALESCE(EXCLUDED.material_description, contracts.material_description),
           updated_at = CURRENT_TIMESTAMP
         RETURNING id`,
-        [...params, rowCarriesContractNo],
+        [...params, rowCarriesContractNo, materialCode, materialDescription],
       );
       contractUuid = inserted.rows[0].id as string;
     }
@@ -1102,6 +1115,8 @@ export class SapDataDistributionService {
       this.parseNumber(shipmentData.bl_quantity),
       shipmentData.bl_quantity_uom,
     );
+    // SAP's own SFAL / SFBD for this PO x STO row. They go to sap_sfal_qty / sap_sfbd_qty only; sfal_qty / sfbd_qty (what users see and edit) are filled afterwards,
+    // once per import, by fillSapFigures - never overwriting a figure a user wrote.
     const sfalQty = this.parseSapFigureQtyKg(shipmentData.sfal, shipmentData.sfal_qty);
     const sfbdQty = this.parseSapFigureQtyKg(shipmentData.sfbd, shipmentData.sfbd_qty);
     const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? normalizeSapQtyToKg(
@@ -1401,8 +1416,8 @@ export class SapDataDistributionService {
           ata_discharge_start = COALESCE($44::date, ata_discharge_start),
           eta_discharge_complete = COALESCE($45::date, eta_discharge_complete),
           ata_discharge_complete = COALESCE($46::date, ata_discharge_complete),
-          sfal_qty = COALESCE($47::numeric, sfal_qty),
-          sfbd_qty = COALESCE($48::numeric, sfbd_qty),
+          sap_sfal_qty = COALESCE($47::numeric, sap_sfal_qty),
+          sap_sfbd_qty = COALESCE($48::numeric, sap_sfbd_qty),
           status = CASE
             WHEN $49::text IN ('CANCELLED', 'CANCELED') THEN 'CANCELLED'
             WHEN UPPER(TRIM(COALESCE(status, ''))) IN ('CANCELLED', 'CANCELED') THEN status
@@ -1535,7 +1550,7 @@ export class SapDataDistributionService {
           eta_loading_complete, ata_loading_complete, eta_discharge_arrival, ata_discharge_arrival,
           ata_discharge_berthed, eta_discharge_start, ata_discharge_start, eta_discharge_complete,
           ata_discharge_complete, loading_rate, discharge_rate, loading_duration_days,
-          discharge_duration_days, total_lead_time_days, sfal_qty, sfbd_qty
+          discharge_duration_days, total_lead_time_days, sap_sfal_qty, sap_sfbd_qty
         ) VALUES (
           $1, $2::uuid, $3, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11, $12::int,
           $13, $14, $15, $16, $17, $18::date, $19::date, $20::date, $21::date, $22::date, $23::date, $24::date,
@@ -1587,8 +1602,8 @@ export class SapDataDistributionService {
           loading_duration_days = COALESCE(EXCLUDED.loading_duration_days, shipments.loading_duration_days),
           discharge_duration_days = COALESCE(EXCLUDED.discharge_duration_days, shipments.discharge_duration_days),
           total_lead_time_days = COALESCE(EXCLUDED.total_lead_time_days, shipments.total_lead_time_days),
-          sfal_qty = COALESCE(EXCLUDED.sfal_qty, shipments.sfal_qty),
-          sfbd_qty = COALESCE(EXCLUDED.sfbd_qty, shipments.sfbd_qty),
+          sap_sfal_qty = COALESCE(EXCLUDED.sap_sfal_qty, shipments.sap_sfal_qty),
+          sap_sfbd_qty = COALESCE(EXCLUDED.sap_sfbd_qty, shipments.sap_sfbd_qty),
           status = CASE
             WHEN EXCLUDED.status IN ('CANCELLED', 'CANCELED') THEN 'CANCELLED'
             WHEN UPPER(TRIM(COALESCE(shipments.status, ''))) IN ('CANCELLED', 'CANCELED')
@@ -2481,10 +2496,33 @@ export class SapDataDistributionService {
   }
 
   /** SAP figure quantities are stored in Kg (same unit as Quantity Delivery / Receive). */
+  /**
+   * Fill the working SFAL / SFBD of the shipments from SAP's own figures, once per import (rules in utils/sapFigureFill.ts). Returns how many shipments each
+   * column filled. Never throws into the import: a failure is logged and the figures are filled by the next import.
+   */
+  static async fillSapFigures(db: {
+    query: (text: string) => Promise<{ rowCount?: number | null }>;
+  }): Promise<{ sfal: number; sfbd: number }> {
+    const filled = { sfal: 0, sfbd: 0 };
+    try {
+      filled.sfal = (await db.query(buildSapFigureFillSql('sfal_qty'))).rowCount ?? 0;
+      filled.sfbd = (await db.query(buildSapFigureFillSql('sfbd_qty'))).rowCount ?? 0;
+      if (filled.sfal > 0 || filled.sfbd > 0) logger.info('SAP SFAL / SFBD filled on shipments', filled);
+    } catch (error) {
+      logger.error('Could not fill SFAL / SFBD from SAP figures; the next import retries', { error });
+    }
+    return filled;
+  }
+
+  /**
+   * A SFAL / SFBD quantity from SAP, in kg. Zero (and below) is "no figure": the Phase 3 template sends 0 on rows that have none (3,332 of 3,458 SFAL cells in the test
+   * pull), and the sheet is read formatted, so that 0 arrives as the text "0.000", which parseNumber turns into 0. The shipment write is `COALESCE(new, old)`, so a 0
+   * here would replace a figure a user entered in KLIP. A vessel never loads 0 kg, so nothing real is lost.
+   */
   private static parseSapFigureQtyKg(...values: unknown[]): number | null {
     for (const value of values) {
       const kg = this.parseNumber(value);
-      if (kg !== null) return kg;
+      if (kg !== null && kg > 0) return kg;
     }
     return null;
   }

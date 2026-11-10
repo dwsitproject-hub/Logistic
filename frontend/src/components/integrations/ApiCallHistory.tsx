@@ -14,7 +14,7 @@ import { Check, Copy, Loader2, RefreshCw } from 'lucide-react'
  * are WIB.
  */
 
-type IntegrationId = 'jps' | 'dhm'
+type IntegrationId = 'jps' | 'dhm' | 'kmaps'
 
 interface CallRow {
   id: string
@@ -54,6 +54,12 @@ const WORDING: Record<IntegrationId, { kinds: string[]; subject: string; referen
     subject: 'Slug',
     reference: 'Kode record',
     placeholder: 'mis. company, ORG-0003 atau req_5ab6',
+  },
+  kmaps: {
+    kinds: ['auth', 'read', 'webhook', 'other'],
+    subject: 'Diminta',
+    reference: '',
+    placeholder: 'mis. 3 vessel codes atau id permintaan',
   },
 }
 

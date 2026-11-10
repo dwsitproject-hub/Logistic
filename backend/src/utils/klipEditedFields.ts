@@ -15,10 +15,14 @@ export const SHIPMENT_PROVENANCE_COLUMNS = [
   'quantity_delivered',
   'actual_vessel_qty_receive',
   /*
-   * sfal_qty / sfbd_qty are deliberately absent. The SAP upsert does assign them - and worse,
-   * overwrites rather than gap-fills - but SAP never sends the values: 0 occurrences of any SF key
-   * across 27,003 sap_processed_data rows. They are KLIP input and prove themselves.
+   * sfal_qty / sfbd_qty were absent until the SAP Phase 3 template (2026-11): SAP never sent the values (0 occurrences of any SF key across 27,003
+   * sap_processed_data rows), so a figure on a row proved itself as KLIP input. The template now carries SFAL / SFBD per PO line, so a figure can come from
+   * either door and the marker is needed. The import writes SAP's figure to sap_sfal_qty / sap_sfbd_qty and fills sfal_qty / sfbd_qty only where no user wrote it
+   * (SapDataDistributionService.fillSapFigures). Migration 255 marks the figures that exist before the first template import as the user's: the one backfill
+   * this list has, justified by that evidence (re-checked on production 2026-11-06: 97 SFAL and 59 SFBD on 2,692 shipments, no SAP row has ever mentioned SFAL).
    */
+  'sfal_qty',
+  'sfbd_qty',
   'ata_arrival',
   'ata_berthed',
   'ata_loading_start',
@@ -81,12 +85,30 @@ export const TRUCKING_PROVENANCE_COLUMNS = [
  * entirely rather than emit a no-op.
  *
  * @param paramPlaceholder the bind placeholder holding a text[] of column names, e.g. '$7'
+ * @param changedPairs columns to record ONLY when the incoming value differs from the stored one, in this same assignment (an UPDATE may assign
+ *   klip_edited_fields once): `{ column: 'sfal_qty', placeholder: '$12::numeric' }`. The comparison reads the OLD row, as buildKlipEditedFieldsChangedSetSql explains.
  */
-export function buildKlipEditedFieldsSetSql(paramPlaceholder: string): string {
+export function buildKlipEditedFieldsSetSql(
+  paramPlaceholder: string,
+  changedPairs: ReadonlyArray<{ column: string; placeholder: string }> = [],
+): string {
+  const changed = changedPairs
+    .map(
+      ({ column, placeholder }) =>
+        ` || CASE WHEN ${placeholder} IS DISTINCT FROM ${column} THEN ARRAY['${column}']::text[] ELSE ARRAY[]::text[] END`,
+    )
+    .join('');
   return `klip_edited_fields = (
-    SELECT COALESCE(ARRAY(SELECT DISTINCT unnest(COALESCE(klip_edited_fields, '{}') || ${paramPlaceholder}::text[]) ORDER BY 1), '{}')
+    SELECT COALESCE(ARRAY(SELECT DISTINCT unnest(COALESCE(klip_edited_fields, '{}') || ${paramPlaceholder}::text[]${changed}) ORDER BY 1), '{}')
   )`;
 }
+
+/**
+ * Columns of `shipments` recorded only when a save CHANGES them. The Edit Shipment modal submits sfal_qty / sfbd_qty on every save, whatever the user touched, so
+ * recording whatever was submitted would mark a figure SAP filled as the user's the first time anyone saved an unrelated edit (an ETA, say) - and SAP would
+ * never fill it again. A figure the user cleared is a change (NULL differs from a value) and stays marked.
+ */
+export const SHIPMENT_CHANGED_ONLY_PROVENANCE_COLUMNS = ['sfal_qty', 'sfbd_qty'] as const;
 
 /**
  * The columns to record for this save, from the fields the request actually supplied.

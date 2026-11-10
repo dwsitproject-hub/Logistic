@@ -17,6 +17,8 @@ import {
   type ShipmentStructuredDocKind,
 } from '../utils/fileUpload';
 import { AuthRequest } from '../middleware/auth';
+import { AuditService } from '../services/audit.service';
+import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { SELECT_CONTRACT_TRUCKING_FOLDER_SQL, SELECT_SHIPMENT_FOLDER_SQL, SELECT_TRUCKING_FOLDER_SQL } from '../utils/documentFolders';
 
 export { ensureUploadDir };
@@ -24,7 +26,7 @@ export { ensureUploadDir };
 export const listDocuments = async (req: Request, res: Response) => {
   try {
     const { contractId, shipmentId, truckingOperationId } = req.query;
-    let sql = 'SELECT * FROM documents WHERE 1=1';
+    let sql = 'SELECT * FROM documents WHERE deleted_at IS NULL';
     const params: any[] = [];
     let idx = 1;
     // A file uploaded from the Trucking page on an operation row carries trucking_operation_id and no contract_id, so a bare contract_id test never found it: the
@@ -271,7 +273,7 @@ export function documentViewOrigins(env: NodeJS.ProcessEnv = process.env, jpsBas
 export const viewDocument = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const result = await query('SELECT * FROM documents WHERE id = $1', [id]);
+    const result = await query('SELECT * FROM documents WHERE id = $1 AND deleted_at IS NULL', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: { message: 'Document not found' } });
     }
@@ -309,10 +311,94 @@ export const viewDocument = async (req: Request, res: Response) => {
   }
 };
 
+/** The shipment documents a user may delete from Edit Shipment. SLD / SDD and every other kind are not part of that feature. */
+export const DELETABLE_SHIPMENT_DOC_TYPES = ['CONTRACT', 'SI', 'BL'] as const;
+export const DELETE_DOCUMENT_CODES = { SENT_TO_JPS: 'SENT_TO_JPS' } as const;
+
+/**
+ * DELETE /documents/:id - delete an uploaded Contract / SI / BL of a shipment (Edit Shipment). A SOFT delete: the row is hidden (deleted_at, deleted_by,
+ * deleted_reason) and the file stays on the share, so a mistake can be undone. Every read path filters deleted rows out. The delete is written to the audit
+ * log against the document, which the shipment's Activity History lists next to the upload.
+ *
+ * A reason is required. When the shipment's operation was already sent to JPS the instruction carries a link to this file, and that link stops working: the
+ * first call answers 409 SENT_TO_JPS and the caller repeats it with `confirmJps: true` once the user has been told.
+ */
+export const deleteShipmentDocument = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(404).json({ success: false, error: { message: 'Document not found' } });
+    }
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: { message: 'Unauthorized' } });
+
+    const reason = String(req.body?.reason ?? '').trim();
+    if (!reason) return res.status(400).json({ success: false, error: { message: 'A reason for deleting the document is required' } });
+    if (reason.length > 500) return res.status(400).json({ success: false, error: { message: 'The reason is too long (500 characters at most)' } });
+
+    const found = await query('SELECT * FROM documents WHERE id = $1::uuid AND deleted_at IS NULL', [id]);
+    const doc = found.rows[0] as
+      | { id: string; document_type: string; file_name: string; shipment_id: string | null; contract_id: string | null }
+      | undefined;
+    if (!doc) return res.status(404).json({ success: false, error: { message: 'Document not found' } });
+
+    const type = String(doc.document_type ?? '').trim().toUpperCase();
+    if (!doc.shipment_id || !(DELETABLE_SHIPMENT_DOC_TYPES as readonly string[]).includes(type)) {
+      return res.status(403).json({ success: false, error: { message: 'Only the Contract, SI and BL documents of a shipment can be deleted here' } });
+    }
+
+    // Sent to JPS: its instruction links to this file.
+    const context = await resolveShipmentEditContext(doc.shipment_id);
+    const shipmentRow = await query('SELECT operation_id FROM shipments WHERE id = $1::uuid', [doc.shipment_id]);
+    const keys = [
+      ...new Set([String(context?.lookup_key ?? '').trim(), String(shipmentRow.rows[0]?.operation_id ?? '').trim()].filter(Boolean)),
+    ];
+    const jps =
+      keys.length === 0
+        ? { rows: [] as unknown[] }
+        : await query(
+            'SELECT 1 FROM jps_shipping_instructions WHERE sto_key = ANY($1::text[]) AND (jps_id IS NOT NULL OR submitted_at IS NOT NULL) LIMIT 1',
+            [keys],
+          );
+    const jpsConfirmed = req.body?.confirmJps === true;
+    if (jps.rows.length > 0 && !jpsConfirmed) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: DELETE_DOCUMENT_CODES.SENT_TO_JPS,
+          message: 'This shipment was already sent to JPS, and the instruction links to this file. After the delete that link no longer opens.',
+        },
+      });
+    }
+
+    const updated = await query(
+      'UPDATE documents SET deleted_at = now(), deleted_by = $2::uuid, deleted_reason = $3 WHERE id = $1::uuid AND deleted_at IS NULL RETURNING id',
+      [id, userId, reason],
+    );
+    if (updated.rows.length === 0) return res.status(404).json({ success: false, error: { message: 'Document not found' } });
+
+    await AuditService.log({
+      userId,
+      action: 'DELETE',
+      entityType: 'DOCUMENT',
+      entityId: id,
+      beforeData: { file_name: doc.file_name, document_type: type, shipment_id: doc.shipment_id },
+      afterData: { reason, sentToJps: jps.rows.length > 0 },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') ?? undefined,
+    });
+
+    return res.json({ success: true, message: 'Document deleted', data: { id } });
+  } catch (error) {
+    logger.error('Delete document error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to delete the document' } });
+  }
+};
+
 export const downloadDocument = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const result = await query('SELECT * FROM documents WHERE id = $1', [id]);
+    const result = await query('SELECT * FROM documents WHERE id = $1 AND deleted_at IS NULL', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: { message: 'Document not found' } });
     }

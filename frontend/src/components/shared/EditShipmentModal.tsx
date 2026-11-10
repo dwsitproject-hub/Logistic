@@ -45,6 +45,8 @@ import {
   History,
   Loader2,
   MapPin,
+  Trash2,
+  Undo2,
   MessageSquare,
   Plus,
   RefreshCw,
@@ -97,7 +99,7 @@ import {
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
 import type { AddNewShipmentSubmitPayload, ShipmentEditContextData, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { attachPurchaseOrderToShipment, OPERATION_ALREADY_COMPLETED } from '@/components/shared/addNewShipmentTypes'
+import { attachPurchaseOrderToShipment, OPERATION_ALREADY_COMPLETED, revertPurchaseOrderFromShipment } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentPoSearchCombobox } from '@/components/shared/ShipmentPoSearchCombobox'
 import {
   ContractDetailModal,
@@ -147,6 +149,7 @@ import {
   type ShipmentQualityFields,
 } from '@/lib/shipmentQualityFields'
 import { isKlipEditedField } from '@/lib/klipProvenance'
+import { sapFigureView } from '@/lib/sapFigure'
 import { describeKlipFieldEdit, type KlipFieldEditInfo } from '@/lib/klipFieldHistory'
 import {
   describePortProvenance,
@@ -586,6 +589,47 @@ function formatMetricReadOnly(value: number | null, unit?: string): string | nul
   return unit ? `${formatNumber(value)} ${unit}` : formatNumber(value)
 }
 
+/**
+ * SFAL / SFBD with the SAP / KLIP badge (lib/sapFigure.ts for the rules). The figure is KLIP input and, since the SAP Phase 3 template, SAP's too: the badge says which
+ * wrote the number on screen and, when a user's differs from SAP's, SAP's is shown underneath. On a multi-PO STO the working figure is empty while SAP's is not (the backend
+ * keeps SAP's as a reference only there): no badge, but SAP's number still appears.
+ */
+function SapFigureField({
+  label,
+  klipKg,
+  sapKg,
+  klipEdited,
+  editing,
+  onChangeKg,
+}: {
+  label: string
+  klipKg: number | null
+  sapKg: number | null
+  klipEdited: boolean
+  editing: boolean
+  onChangeKg: (kg: number | null) => void
+}) {
+  const view = sapFigureView(klipKg, sapKg)
+  return (
+    <div>
+      <KlipSapCompareField
+        label={label}
+        klipValue={view.klipMt}
+        sapValue={view.sapMt}
+        format="number"
+        klipEdited={klipEdited}
+        zeroIsEmpty
+        editing={editing}
+        editControl={
+          <MetricDecimalInput value={view.klipMt} onChange={(mt) => onChangeKg(mt === null ? null : mt * 1000)} />
+        }
+      />
+      {editing ? <p className="mt-1 text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT}</p> : null}
+      {view.referenceOnly ? <KlipSapReferenceFooter sapValue={view.sapMt} format="number" /> : null}
+    </div>
+  )
+}
+
 type ShipmentDetailRow = {
   rowKey: string
   /** False for a PO with no live shipment in this STO / operation group: its quantities cannot be saved (see klipQtyEditableFromApi). */
@@ -614,6 +658,8 @@ type ShipmentDetailRow = {
   po_sto_count: number
   /** Contract row id, to list the PO's STOs next to the OS Qty. Null for a SAP-only contract. */
   contract_row_id: string | null
+  /** Why Revert PO is disabled for this PO, in a few words (OS Qty empty, closed or cancelled in SAP, already submitted to Jetty, ...). Null: it can be tried. */
+  revert_block: string | null
   incoterm: string
 }
 
@@ -673,6 +719,7 @@ function contractDetailRowFromApi(
     vessel_oa_budget_sap: parseApiNumber(d.vessel_oa_budget_sap),
     po_sto_count: Math.max(1, Math.trunc(parseApiNumber(d.po_sto_count) ?? 1)),
     contract_row_id: String(d.contract_row_id ?? '').trim() || null,
+    revert_block: String((d.revert_block as { message?: unknown } | null | undefined)?.message ?? '').trim() || null,
     incoterm: String(d.incoterm ?? '').trim(),
   }
 }
@@ -728,6 +775,7 @@ async function buildContractDetailRows(
         vessel_oa_budget_sap: null,
         po_sto_count: 1,
         contract_row_id: null,
+        revert_block: null,
         incoterm: '',
       }
     })
@@ -789,6 +837,21 @@ function formatActivityLabel(log: ActivityLogRow): string {
   if (action === 'UPDATE' && log.entity_type === 'LOADING_PORT') return `Updated Estimation / Port — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'LOADING_PORT') return `Cancelled Port Activity — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'SHIPMENT') return `Cancelled Shipment — ${user}`
+  if (log.entity_type === 'DOCUMENT' && (action === 'CREATE' || action === 'DELETE')) {
+    const info = ((action === 'DELETE' ? log.before_data : log.after_data) ?? {}) as { file_name?: unknown; document_type?: unknown }
+    const kind = String(info.document_type ?? '').trim().toUpperCase()
+    const file = String(info.file_name ?? '').trim()
+    const reason = action === 'DELETE' ? String((log.after_data as { reason?: unknown } | null)?.reason ?? '').trim() : ''
+    const what = `${kind ? `${kind} ` : ''}document${file ? ` "${file}"` : ''}`
+    return action === 'DELETE'
+      ? `Deleted ${what}${reason ? ` (reason: ${reason})` : ''} — ${user}`
+      : `Uploaded ${what} — ${user}`
+  }
+  if (action === 'REVERT_PO' && log.entity_type === 'SHIPMENT') {
+    const before = (log.before_data ?? {}) as { poNumber?: unknown; contractNumber?: unknown }
+    const po = String(before.poNumber ?? before.contractNumber ?? '').trim()
+    return `Reverted PO${po ? ` ${po}` : ''} to Unplanned — ${user}`
+  }
   return `${action} ${entity} — ${user}`
 }
 
@@ -874,6 +937,10 @@ export function EditShipmentModal({
   const [sfbdQty, setSfbdQty] = useState<number | null>(null)
   const [originalSfalQty, setOriginalSfalQty] = useState<number | null>(null)
   const [originalSfbdQty, setOriginalSfbdQty] = useState<number | null>(null)
+  // SAP's own SFAL / SFBD for this row (reference beside the working figure) and the columns a user wrote on this shipment (klip_edited_fields), for the SAP / KLIP badge.
+  const [sapSfalQty, setSapSfalQty] = useState<number | null>(null)
+  const [sapSfbdQty, setSapSfbdQty] = useState<number | null>(null)
+  const [shipmentKlipEdited, setShipmentKlipEdited] = useState<string[]>([])
   // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
   const [fuelConsumption, setFuelConsumption] = useState<number | null>(null)
   const [freight, setFreight] = useState<number | null>(null)
@@ -890,6 +957,12 @@ export function EditShipmentModal({
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null)
   const [dragOverDocType, setDragOverDocType] = useState<string | null>(null)
   const [viewingDocId, setViewingDocId] = useState<string | null>(null)
+  /** The Contract / SI / BL the user asked to delete, until they confirm or back out. */
+  const [deleteDocTarget, setDeleteDocTarget] = useState<{ id: string; fileName: string; label: string } | null>(null)
+  const [deleteDocReason, setDeleteDocReason] = useState('')
+  const [deletingDoc, setDeletingDoc] = useState(false)
+  /** Set when the server says the shipment was already sent to JPS: the file's link there stops working, so the user is asked once more. */
+  const [deleteDocJpsWarning, setDeleteDocJpsWarning] = useState(false)
   const [pdfPreview, setPdfPreview] = useState<{ id: string; fileName: string; url: string } | null>(null)
   const pdfPreviewUrlRef = useRef<string | null>(null)
   const [shipmentStatus, setShipmentStatus] = useState<string | null>(null)
@@ -946,6 +1019,11 @@ export function EditShipmentModal({
   const [editContext, setEditContext] = useState<ShipmentEditContextData | null>(null)
   const [selectedAddPoOption, setSelectedAddPoOption] = useState<ShipmentPoOption | null>(null)
   const [addingPo, setAddingPo] = useState(false)
+  /** The PO the user asked to revert, until they confirm or back out. */
+  const [revertPoTarget, setRevertPoTarget] = useState<{ contractRowId: string; label: string } | null>(null)
+  const [revertingPo, setRevertingPo] = useState(false)
+  /** Why the server refused, shown inside the confirm panel (the notification at the top of the modal is out of sight while the PO table is on screen). */
+  const [revertPoError, setRevertPoError] = useState<string | null>(null)
   /** Set when the operation already finished discharging: the date to show while asking to reopen it. */
   const [reopenConfirmAta, setReopenConfirmAta] = useState<string | null>(null)
   const [editRemark, setEditRemark] = useState('')
@@ -1265,6 +1343,9 @@ export function EditShipmentModal({
     setQtyEdits({})
     setSfalQty(null)
     setSfbdQty(null)
+    setSapSfalQty(null)
+    setSapSfbdQty(null)
+    setShipmentKlipEdited([])
     setFuelConsumption(null)
     setFreight(null)
     setPumpRate(null)
@@ -1584,6 +1665,9 @@ export function EditShipmentModal({
         setSfbdQty(sfbd)
         setOriginalSfalQty(sfal)
         setOriginalSfbdQty(sfbd)
+        setSapSfalQty(parseApiNumber(info.sap_sfal_qty))
+        setSapSfbdQty(parseApiNumber(info.sap_sfbd_qty))
+        setShipmentKlipEdited(Array.isArray(info.klip_edited_fields) ? (info.klip_edited_fields as unknown[]).map((c) => String(c)) : [])
 
         const fuelConsumptionVal = parseApiNumber(info.fuel_consumption ?? row.fuel_consumption)
         const freightVal = parseApiNumber(info.freight ?? row.freight)
@@ -1745,6 +1829,38 @@ export function EditShipmentModal({
     [loadActivityLog, loadShipmentRemarks, loadShipmentDocuments, editContractNumbers, readOnly, displayStoNumber],
   )
 
+  const handleRevertPo = useCallback(async () => {
+    if (!shipmentId || !revertPoTarget) return
+    setRevertingPo(true)
+    setRevertPoError(null)
+    setNotification(null)
+    try {
+      const outcome = await revertPurchaseOrderFromShipment({ shipmentId, contractRowId: revertPoTarget.contractRowId })
+      setRevertPoTarget(null)
+      onShipmentChanged?.()
+      if (outcome.removedShipmentId && outcome.removedShipmentId === shipmentId) {
+        // The row this modal had open belonged to that PO and is gone: the operation's row is another one now, so the list reopens it from there.
+        onClose()
+        return
+      }
+      setNotification({ type: 'success', message: `PO ${outcome.poNumber || outcome.contractNumber} returned to Unplanned.` })
+      const contractId = editContractId?.trim()
+      const directId = editShipmentIdProp?.trim()
+      const sto = editStoNumber?.trim()
+      if (directId) {
+        await loadShipment(contractId || directId, directId, sto)
+      } else if (contractId) {
+        await loadShipment(contractId, null, sto)
+      }
+    } catch (error: unknown) {
+      const axiosErr = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
+      // The panel stays open with the reason, so the refusal is read where the button was pressed.
+      setRevertPoError(axiosErr.response?.data?.error?.message || axiosErr.message || 'Failed to revert the PO')
+    } finally {
+      setRevertingPo(false)
+    }
+  }, [shipmentId, revertPoTarget, onShipmentChanged, onClose, editContractId, editShipmentIdProp, editStoNumber, loadShipment])
+
   const handleAddPo = useCallback(async (reopenOperation = false) => {
     if (!shipmentId || !selectedAddPoOption) {
       setNotification({ type: 'error', message: 'Select a PO to add.' })
@@ -1840,6 +1956,45 @@ export function EditShipmentModal({
     }
     setPdfPreview(null)
   }, [])
+
+  const handleDeleteDocument = useCallback(
+    async (confirmJps = false) => {
+      if (!deleteDocTarget) return
+      const reason = deleteDocReason.trim()
+      if (!reason) {
+        setNotification({ type: 'error', message: 'Give a reason for deleting the document.' })
+        return
+      }
+      setDeletingDoc(true)
+      setNotification(null)
+      try {
+        const api = (await import('@/lib/api')).default
+        await api.delete(`/documents/${encodeURIComponent(deleteDocTarget.id)}`, { data: { reason, confirmJps } })
+        if (pdfPreview?.id === deleteDocTarget.id) closePdfPreview()
+        setNotification({ type: 'success', message: `${deleteDocTarget.label} document deleted.` })
+        setDeleteDocTarget(null)
+        setDeleteDocReason('')
+        setDeleteDocJpsWarning(false)
+        if (shipmentId) {
+          void loadShipmentDocuments(shipmentId)
+          void loadActivityLog(shipmentId)
+        }
+      } catch (error: unknown) {
+        const axiosErr = error as { response?: { data?: { error?: { message?: string; code?: string } } }; message?: string }
+        const apiError = axiosErr.response?.data?.error
+        if (apiError?.code === 'SENT_TO_JPS') {
+          // Not a failure: ask again, naming the consequence, and repeat the delete with the confirmation.
+          setDeleteDocJpsWarning(true)
+        } else {
+          setNotification({ type: 'error', message: apiError?.message || axiosErr.message || 'Failed to delete the document' })
+        }
+      } finally {
+        setDeletingDoc(false)
+      }
+    },
+    [deleteDocTarget, deleteDocReason, pdfPreview, closePdfPreview, shipmentId, loadShipmentDocuments, loadActivityLog],
+  )
+
 
   const uploadShipmentPdfs = async (
     kind: (typeof SHIPMENT_DOC_TYPES)[number]['type'],
@@ -2756,6 +2911,52 @@ export function EditShipmentModal({
                   </div>
                 )}
 
+                {revertPoTarget ? (
+                  <div
+                    role="alertdialog"
+                    aria-label="Revert PO"
+                    className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+                  >
+                    <p>
+                      Return PO {revertPoTarget.label} to Unplanned? The shipment and its other POs stay as they are. This PO's own shipment row and Shipment Plan
+                      Qty are removed (not cancelled), and the PO can be planned again from Unplanned. It is only possible while the operation has no SAP STO, has
+                      not finished discharging and has not been sent to JPS.
+                    </p>
+                    {revertPoError ? (
+                      <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 font-medium text-red-800">
+                        {revertPoError}
+                      </p>
+                    ) : null}
+                    <div className="flex gap-2">
+                      {revertPoError ? null : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 bg-amber-600 px-3 text-white hover:bg-amber-700"
+                          disabled={revertingPo}
+                          onClick={() => void handleRevertPo()}
+                        >
+                          {revertingPo ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Undo2 className="mr-1 h-3.5 w-3.5" />}
+                          Revert PO
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8 px-3"
+                        disabled={revertingPo}
+                        onClick={() => {
+                          setRevertPoTarget(null)
+                          setRevertPoError(null)
+                        }}
+                      >
+                        {revertPoError ? 'Close' : 'Cancel'}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="overflow-x-auto rounded-lg border border-gray-200">
                   <Table>
                     <TableHeader>
@@ -2812,6 +3013,29 @@ export function EditShipmentModal({
                               ) : (
                                 '—'
                               )}
+                              {canModifyCoreSections && detailRows.length > 1 && row.contract_row_id && !qtyLocked ? (
+                                // The title sits on a wrapper: a disabled button does not always show its own tooltip.
+                                <span
+                                  className="mt-0.5 inline-block"
+                                  title={row.revert_block ? `Cannot revert: ${row.revert_block}` : 'Take this PO out of the operation and return it to Unplanned'}
+                                >
+                                  <button
+                                    type="button"
+                                    className="flex items-center gap-1 text-[0.625rem] font-normal text-gray-500 hover:text-amber-700 hover:underline disabled:cursor-not-allowed disabled:text-gray-300 disabled:no-underline"
+                                    disabled={revertingPo || Boolean(row.revert_block)}
+                                    onClick={() => {
+                                      setRevertPoError(null)
+                                      setRevertPoTarget({
+                                        contractRowId: String(row.contract_row_id),
+                                        label: String(row.po_number || row.contract_number || '').trim(),
+                                      })
+                                    }}
+                                  >
+                                    <Undo2 className="h-3 w-3" />
+                                    Revert PO
+                                  </button>
+                                </span>
+                              ) : null}
                               {qtyLocked ? (
                                 <span
                                   className="block text-[0.625rem] font-normal text-amber-700"
@@ -2985,43 +3209,86 @@ export function EditShipmentModal({
                 )}
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {canEditAtaQuality ? (
-                    <>
-                      <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">SFAL Qty (MT)</label>
-                        <MetricDecimalInput
-                          value={sfalQty === null ? null : sfalQty / 1000}
-                          onChange={(mt) => setSfalQty(mt === null ? null : mt * 1000)}
-                        />
-                        <p className="mt-1 text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT}</p>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">SFBD Qty (MT)</label>
-                        <MetricDecimalInput
-                          value={sfbdQty === null ? null : sfbdQty / 1000}
-                          onChange={(mt) => setSfbdQty(mt === null ? null : mt * 1000)}
-                        />
-                        <p className="mt-1 text-[0.6875rem] text-gray-500">{DECIMAL_DOT_HINT}</p>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <ReadOnlyInfoField
-                        label="SFAL Qty (MT)"
-                        value={formatMetricReadOnly(sfalQty === null ? 0 : sfalQty / 1000)}
-                      />
-                      <ReadOnlyInfoField
-                        label="SFBD Qty (MT)"
-                        value={formatMetricReadOnly(sfbdQty === null ? 0 : sfbdQty / 1000)}
-                      />
-                    </>
-                  )}
+                  <SapFigureField
+                    label="SFAL Qty (MT)"
+                    klipKg={sfalQty}
+                    sapKg={sapSfalQty}
+                    klipEdited={isKlipEditedField(shipmentKlipEdited, 'sfal_qty')}
+                    editing={canEditAtaQuality}
+                    onChangeKg={setSfalQty}
+                  />
+                  <SapFigureField
+                    label="SFBD Qty (MT)"
+                    klipKg={sfbdQty}
+                    sapKg={sapSfbdQty}
+                    klipEdited={isKlipEditedField(shipmentKlipEdited, 'sfbd_qty')}
+                    editing={canEditAtaQuality}
+                    onChangeKg={setSfbdQty}
+                  />
                 </div>
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
                     <FileText className="h-4 w-4 text-gray-600" />
                     <h5 className="text-sm font-semibold text-gray-800">Documents</h5>
                   </div>
+                  {deleteDocTarget ? (
+                    <div
+                      role="alertdialog"
+                      aria-label="Delete document"
+                      className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900"
+                    >
+                      <p>
+                        Delete {deleteDocTarget.label} document <span className="font-medium">{deleteDocTarget.fileName}</span>? It disappears from this shipment but the
+                        file is kept, and the deletion is recorded in Activity History.
+                      </p>
+                      {deleteDocJpsWarning ? (
+                        <p className="font-medium">
+                          This shipment was already sent to JPS and its instruction links to this file. After the delete that link no longer opens. Delete anyway?
+                        </p>
+                      ) : null}
+                      <div>
+                        <label htmlFor="delete-document-reason" className="mb-1 block text-xs font-semibold">
+                          Reason <span className="text-red-600">*</span>
+                        </label>
+                        <textarea
+                          id="delete-document-reason"
+                          rows={2}
+                          maxLength={500}
+                          value={deleteDocReason}
+                          onChange={(e) => setDeleteDocReason(e.target.value)}
+                          disabled={deletingDoc}
+                          placeholder="Why is this file deleted?"
+                          className="w-full rounded-md border border-red-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-400 focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 bg-red-600 px-3 text-white hover:bg-red-700"
+                          disabled={deletingDoc || !deleteDocReason.trim()}
+                          onClick={() => void handleDeleteDocument(deleteDocJpsWarning)}
+                        >
+                          {deletingDoc ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />}
+                          {deleteDocJpsWarning ? 'Delete anyway' : 'Delete document'}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-3"
+                          disabled={deletingDoc}
+                          onClick={() => {
+                            setDeleteDocTarget(null)
+                            setDeleteDocReason('')
+                            setDeleteDocJpsWarning(false)
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                   {docsLoading ? (
                     <div className="flex items-center gap-2 text-sm text-gray-500">
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -3141,6 +3408,24 @@ export function EditShipmentModal({
                                         <Download className="mr-1 h-3 w-3" />
                                         Download
                                       </Button>
+                                      {canModifyCoreSections ? (
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          className="h-7 px-2 text-[0.6875rem] text-red-700 hover:bg-red-50 hover:text-red-800"
+                                          title="Delete this file (it is kept, and the deletion is recorded)"
+                                          disabled={deletingDoc}
+                                          onClick={() => {
+                                            setDeleteDocJpsWarning(false)
+                                            setDeleteDocReason('')
+                                            setDeleteDocTarget({ id: doc.id, fileName: doc.file_name, label })
+                                          }}
+                                        >
+                                          <Trash2 className="mr-1 h-3 w-3" />
+                                          Delete
+                                        </Button>
+                                      ) : null}
                                     </div>
                                   </li>
                                 ))}

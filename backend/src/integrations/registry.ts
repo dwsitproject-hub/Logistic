@@ -12,7 +12,7 @@ import { validateJpsPortsValue } from '../jps/ports';
  * which jobs SchedulerService registers at startup; changing them afterwards has no effect until the
  * backend restarts. The UI says so next to the field rather than letting a save look like it worked.
  */
-export type IntegrationId = 'dhm' | 'jps';
+export type IntegrationId = 'dhm' | 'jps' | 'kmaps';
 
 export type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text' | 'ports';
 
@@ -26,6 +26,11 @@ export interface SettingDef {
   min?: number;
   /** Public prefix a secret must carry, and that the hint may reveal (e.g. "dhm_sk_"). */
   prefix?: string;
+  /**
+   * A secret KLIP only has to CHECK (the key a partner presents to KLIP), not use. It is typed in like any secret, but what is stored is its scrypt hash
+   * (secretHash.ts), sealed like the others. The environment value the code reads is therefore the hash, never the key.
+   */
+  hashOnStore?: boolean;
 }
 
 export interface IntegrationDef {
@@ -100,6 +105,42 @@ export const INTEGRATIONS: IntegrationDef[] = [
         help: 'Testing only. Leave off in production.',
       },
       { key: 'JPS_RETRY_FAILED_AFTER_MS', label: 'Retry failed after (ms)', kind: 'integer', min: 60_000 },
+    ],
+  },
+  {
+    id: 'kmaps',
+    name: 'KMAPS - KPN Downstream Maps',
+    description:
+      'KMAPS reads shipments and vessel pairs from KLIP (partner API at /api/partner/v1). The keys are issued by KMAPS: paste them here once. KLIP keeps only a hash of the private key.',
+    settings: [
+      {
+        key: 'KMAPS_ENABLED',
+        label: 'Enabled',
+        kind: 'boolean',
+        help: 'Takes effect at once. When off, KMAPS gets 403 application_disabled at /auth/token and its tokens stop working.',
+      },
+      { key: 'KMAPS_PUBLIC_KEY', label: 'Public key', kind: 'text', prefix: 'kmaps_pk_' },
+      {
+        key: 'KMAPS_PRIVATE_KEY',
+        label: 'Private key',
+        kind: 'secret',
+        prefix: 'kmaps_sk_',
+        hashOnStore: true,
+        help: 'Begins with kmaps_sk_. Shown once by KMAPS. KLIP stores only a hash, so it cannot be shown again; saving a new one replaces the old one and ends every token issued under it.',
+      },
+      {
+        key: 'KMAPS_WEBHOOK_URL',
+        label: 'Webhook URL',
+        kind: 'url',
+        help: 'Where KLIP rings the bell when a shipment changes. The last path segment is the slug the KMAPS admin chose for KLIP, e.g. http://172.28.92.56:3120/api/v1/webhooks/klip. Empty = no bell (KMAPS still polls). The bell carries no data and no price.',
+      },
+      {
+        key: 'KMAPS_WEBHOOK_SECRET',
+        label: 'Webhook secret',
+        kind: 'secret',
+        prefix: 'whsec_',
+        help: 'Issued by KMAPS together with the keys; begins with whsec_. Signs every bell.',
+      },
     ],
   },
 ];
