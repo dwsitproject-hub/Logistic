@@ -51,7 +51,7 @@ export function resolveShipmentGroupLookupKey(row: {
   return String(row.sto_number ?? '').trim();
 }
 
-async function sapStoExistsInSpd(stoKey: string): Promise<boolean> {
+export async function sapStoExistsInSpd(stoKey: string): Promise<boolean> {
   const sto = String(stoKey ?? '').trim();
   if (!sto) return false;
   const result = await query(

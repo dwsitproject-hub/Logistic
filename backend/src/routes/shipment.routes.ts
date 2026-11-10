@@ -36,6 +36,7 @@ import {
   getShipmentActivityLog,
   cancelKlipShipment,
 } from '../controllers/shipment.controller';
+import { revertPurchaseOrderHandler } from '../controllers/shipmentPoRevert.controller';
 import {
   getShipmentAtaOverride,
   updateShipmentAtaOverride,
@@ -124,6 +125,8 @@ router.post(
   auditLog('CREATE', 'SHIPMENT'),
   attachPurchaseOrderToShipmentHandler,
 );
+// Revert PO: take one PO out of the operation and return it to Unplanned (the service refuses SAP, completed and JPS-sent operations).
+router.delete('/:id/purchase-orders/:contractRowId', revertPurchaseOrderHandler);
 router.put(
   '/:id/po-plan-qty',
   auditLog('UPDATE', 'STO_QTY_ASSIGNED'),

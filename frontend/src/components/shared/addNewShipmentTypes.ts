@@ -437,6 +437,29 @@ export async function attachPurchaseOrderToShipment(args: {
   }
 }
 
+/**
+ * Revert PO: take one PO out of the operation of `shipmentId` and return it to Unplanned. The server refuses an operation that has an SAP STO, has finished
+ * discharging or was sent to JPS, and says why in the error message; `removedShipmentId` tells the caller whether the shipment it has open is gone.
+ */
+export async function revertPurchaseOrderFromShipment(args: {
+  shipmentId: string
+  contractRowId: string
+}): Promise<{ removedShipmentId: string; survivorShipmentId: string; contractNumber: string; poNumber: string | null }> {
+  const api = (await import('@/lib/api')).default
+  const res = await api.delete(
+    `/shipments/${encodeURIComponent(args.shipmentId)}/purchase-orders/${encodeURIComponent(args.contractRowId)}`,
+  )
+  if (!res.data?.success) {
+    throw new Error(res.data?.error?.message || 'Failed to revert the PO')
+  }
+  return {
+    removedShipmentId: String(res.data?.data?.removedShipmentId ?? ''),
+    survivorShipmentId: String(res.data?.data?.survivorShipmentId ?? ''),
+    contractNumber: String(res.data?.data?.contractNumber ?? ''),
+    poNumber: res.data?.data?.poNumber ?? null,
+  }
+}
+
 /** Convert optional per-PO Qty Shipment Plan MT strings to kg keyed by contract_id. */
 export function buildQuantityShipmentPlanByContractKg(
   selectionKeys: string[],

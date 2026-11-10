@@ -45,6 +45,7 @@ import {
   History,
   Loader2,
   MapPin,
+  Undo2,
   MessageSquare,
   Plus,
   RefreshCw,
@@ -97,7 +98,7 @@ import {
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
 import type { AddNewShipmentSubmitPayload, ShipmentEditContextData, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { attachPurchaseOrderToShipment, OPERATION_ALREADY_COMPLETED } from '@/components/shared/addNewShipmentTypes'
+import { attachPurchaseOrderToShipment, OPERATION_ALREADY_COMPLETED, revertPurchaseOrderFromShipment } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentPoSearchCombobox } from '@/components/shared/ShipmentPoSearchCombobox'
 import {
   ContractDetailModal,
@@ -831,6 +832,11 @@ function formatActivityLabel(log: ActivityLogRow): string {
   if (action === 'UPDATE' && log.entity_type === 'LOADING_PORT') return `Updated Estimation / Port — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'LOADING_PORT') return `Cancelled Port Activity — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'SHIPMENT') return `Cancelled Shipment — ${user}`
+  if (action === 'REVERT_PO' && log.entity_type === 'SHIPMENT') {
+    const before = (log.before_data ?? {}) as { poNumber?: unknown; contractNumber?: unknown }
+    const po = String(before.poNumber ?? before.contractNumber ?? '').trim()
+    return `Reverted PO${po ? ` ${po}` : ''} to Unplanned — ${user}`
+  }
   return `${action} ${entity} — ${user}`
 }
 
@@ -992,6 +998,9 @@ export function EditShipmentModal({
   const [editContext, setEditContext] = useState<ShipmentEditContextData | null>(null)
   const [selectedAddPoOption, setSelectedAddPoOption] = useState<ShipmentPoOption | null>(null)
   const [addingPo, setAddingPo] = useState(false)
+  /** The PO the user asked to revert, until they confirm or back out. */
+  const [revertPoTarget, setRevertPoTarget] = useState<{ contractRowId: string; label: string } | null>(null)
+  const [revertingPo, setRevertingPo] = useState(false)
   /** Set when the operation already finished discharging: the date to show while asking to reopen it. */
   const [reopenConfirmAta, setReopenConfirmAta] = useState<string | null>(null)
   const [editRemark, setEditRemark] = useState('')
@@ -1796,6 +1805,37 @@ export function EditShipmentModal({
     },
     [loadActivityLog, loadShipmentRemarks, loadShipmentDocuments, editContractNumbers, readOnly, displayStoNumber],
   )
+
+  const handleRevertPo = useCallback(async () => {
+    if (!shipmentId || !revertPoTarget) return
+    setRevertingPo(true)
+    setNotification(null)
+    try {
+      const outcome = await revertPurchaseOrderFromShipment({ shipmentId, contractRowId: revertPoTarget.contractRowId })
+      setRevertPoTarget(null)
+      onShipmentChanged?.()
+      if (outcome.removedShipmentId && outcome.removedShipmentId === shipmentId) {
+        // The row this modal had open belonged to that PO and is gone: the operation's row is another one now, so the list reopens it from there.
+        onClose()
+        return
+      }
+      setNotification({ type: 'success', message: `PO ${outcome.poNumber || outcome.contractNumber} returned to Unplanned.` })
+      const contractId = editContractId?.trim()
+      const directId = editShipmentIdProp?.trim()
+      const sto = editStoNumber?.trim()
+      if (directId) {
+        await loadShipment(contractId || directId, directId, sto)
+      } else if (contractId) {
+        await loadShipment(contractId, null, sto)
+      }
+    } catch (error: unknown) {
+      const axiosErr = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
+      setRevertPoTarget(null)
+      setNotification({ type: 'error', message: axiosErr.response?.data?.error?.message || axiosErr.message || 'Failed to revert the PO' })
+    } finally {
+      setRevertingPo(false)
+    }
+  }, [shipmentId, revertPoTarget, onShipmentChanged, onClose, editContractId, editShipmentIdProp, editStoNumber, loadShipment])
 
   const handleAddPo = useCallback(async (reopenOperation = false) => {
     if (!shipmentId || !selectedAddPoOption) {
@@ -2808,6 +2848,35 @@ export function EditShipmentModal({
                   </div>
                 )}
 
+                {revertPoTarget ? (
+                  <div
+                    role="alertdialog"
+                    aria-label="Revert PO"
+                    className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+                  >
+                    <p>
+                      Return PO {revertPoTarget.label} to Unplanned? The shipment and its other POs stay as they are. This PO's own shipment row and Shipment Plan
+                      Qty are removed (not cancelled), and the PO can be planned again from Unplanned. It is only possible while the operation has no SAP STO, has
+                      not finished discharging and has not been sent to JPS.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-8 bg-amber-600 px-3 text-white hover:bg-amber-700"
+                        disabled={revertingPo}
+                        onClick={() => void handleRevertPo()}
+                      >
+                        {revertingPo ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Undo2 className="mr-1 h-3.5 w-3.5" />}
+                        Revert PO
+                      </Button>
+                      <Button type="button" size="sm" variant="outline" className="h-8 px-3" disabled={revertingPo} onClick={() => setRevertPoTarget(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="overflow-x-auto rounded-lg border border-gray-200">
                   <Table>
                     <TableHeader>
@@ -2864,6 +2933,23 @@ export function EditShipmentModal({
                               ) : (
                                 '—'
                               )}
+                              {canModifyCoreSections && detailRows.length > 1 && row.contract_row_id && !qtyLocked ? (
+                                <button
+                                  type="button"
+                                  className="mt-0.5 flex items-center gap-1 text-[0.625rem] font-normal text-gray-500 hover:text-amber-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                                  title="Take this PO out of the operation and return it to Unplanned"
+                                  disabled={revertingPo}
+                                  onClick={() =>
+                                    setRevertPoTarget({
+                                      contractRowId: String(row.contract_row_id),
+                                      label: String(row.po_number || row.contract_number || '').trim(),
+                                    })
+                                  }
+                                >
+                                  <Undo2 className="h-3 w-3" />
+                                  Revert PO
+                                </button>
+                              ) : null}
                               {qtyLocked ? (
                                 <span
                                   className="block text-[0.625rem] font-normal text-amber-700"
