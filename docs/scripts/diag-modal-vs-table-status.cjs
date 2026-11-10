@@ -7,7 +7,10 @@
  * READ-ONLY. It writes nothing and needs no deploy: it calls code already in the running image.
  *   table  = the stage the Shipments page derives for the group (the same derivation the KMAPS partner records and the pipeline summary use:
  *            buildPartnerGroupsSql, i.e. shipmentPageEffectiveStatusExpr over the pipeline base with the own-STO columns);
- *   modal  = `effectiveStatus` of resolveShipmentEditPayload(<the group's primary row>), the value the modal shows as Shipment Status.
+ *   modal  = `effectiveStatus` of resolveShipmentEditPayload(<the row the Shipments LIST opens for the group>), the value the modal shows as Shipment Status.
+ *            That row is chosen with the list's own ranking (sqlShipmentListPrimaryOrderBy, which counts a manual ATA override as "has an ATA"). The pipeline derivation
+ *            ranks without the override, so its primary_id can be another row of the group, one a user can never open from the list; opening that one gave a false
+ *            difference on SIT (operation OP-1004030473-15277540).
  *
  * Why: the modal used to read the one row it opened, so a finished PO made it say Completed while the table, for an operation with POs added after the voyage, said
  * Unloading (SIT operation OP-1004030473-15277540). The modal now applies the table's rule to an operation-keyed group (applyOperationCompletionRule). This script
@@ -45,6 +48,9 @@ const intFlag = (name, fallback) => {
   const pool = dist('database/connection').default;
   const { buildPartnerGroupsSql } = dist('partner/recordSql');
   const { resolveShipmentEditPayload } = dist('services/shipmentEditPayload.service');
+  const { sqlShipmentListPrimaryOrderBy } = dist('utils/shipmentListPrimaryShipmentSql');
+  const listPrimaryOrderBy = sqlShipmentListPrimaryOrderBy('$2::text', 'c', 'l', 's', undefined, 'sao');
+  let primaryDiffers = 0;
 
   const all = process.argv.includes('--all');
   const limit = intFlag('limit', Infinity);
@@ -67,8 +73,19 @@ const intFlag = (name, fallback) => {
       if (!g) break;
       let modal = null;
       let error = null;
+      let openedId = String(g.primary_id);
       try {
-        const payload = await resolveShipmentEditPayload(String(g.primary_id));
+        const members = Array.isArray(g.member_ids) ? g.member_ids : [];
+        if (members.length > 1) {
+          const ranked = await pool.query(
+            `SELECT s.id::text AS id FROM shipments s LEFT JOIN contracts c ON c.id = s.contract_id LEFT JOIN shipment_ata_overrides sao ON sao.shipment_id = s.id
+              WHERE s.id = ANY($1::uuid[]) ORDER BY ${listPrimaryOrderBy} LIMIT 1`,
+            [members, String(g.sto_key)],
+          );
+          if (ranked.rows[0]?.id) openedId = ranked.rows[0].id;
+        }
+        if (openedId !== String(g.primary_id)) primaryDiffers += 1;
+        const payload = await resolveShipmentEditPayload(openedId);
         modal = payload ? normalize(payload.effectiveStatus) : null;
       } catch (e) {
         error = e instanceof Error ? e.message : String(e);
@@ -81,7 +98,7 @@ const intFlag = (name, fallback) => {
         table: normalize(g.stage),
         modal,
         error,
-        primary: String(g.primary_id).slice(0, 8),
+        primary: openedId.slice(0, 8),
       });
       done += 1;
       if (done % 25 === 0) console.log(`  ${done}/${targets.length}`);
@@ -113,12 +130,16 @@ const intFlag = (name, fallback) => {
     }
   }
 
+  console.log(`\n${primaryDiffers} group(s): the row the list opens is not the pipeline derivation's primary row (compared with the list's row).`);
+  const operationGroups = results.filter((r) => r.keyed === 'operation').length;
   const bad = results.filter((r) => r.keyed === 'operation' && kind(r) === 'modal Completed, table not').length;
-  console.log(
-    bad === 0
-      ? '\nOK: no operation-keyed group where the modal says Completed and the table does not.'
-      : `\nATTENTION: ${bad} operation-keyed group(s) where the modal says Completed and the table does not.`,
-  );
+  if (operationGroups === 0) {
+    console.log('\nNo operation-keyed group was compared (a --limit sample may have held none): nothing is proven about operations. Run without --limit.');
+  } else if (bad === 0) {
+    console.log(`\nOK: ${operationGroups} operation-keyed group(s) compared, none where the modal says Completed and the table does not.`);
+  } else {
+    console.log(`\nATTENTION: ${bad} of ${operationGroups} operation-keyed group(s) where the modal says Completed and the table does not.`);
+  }
   await pool.end();
 })().catch((e) => {
   console.error(e.message);
