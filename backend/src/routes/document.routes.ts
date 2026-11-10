@@ -1,8 +1,8 @@
 import express from 'express';
-import { authenticateToken } from '../middleware/auth';
+import { authenticateToken, authorizePermission } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import multer from 'multer';
-import { downloadDocument, viewDocument, listDocuments, uploadDocumentHandler, ensureUploadDir } from '../controllers/document.controller';
+import { downloadDocument, viewDocument, listDocuments, uploadDocumentHandler, deleteShipmentDocument, ensureUploadDir } from '../controllers/document.controller';
 import { buildUniqueStoredFilename } from '../utils/fileUpload';
 
 const router = express.Router();
@@ -56,6 +56,9 @@ router.get('/', listDocuments);
 
 // Upload document
 router.post('/upload', upload.single('file'), auditLog('CREATE', 'DOCUMENT'), uploadDocumentHandler);
+
+// Delete (soft) a shipment's Contract / SI / BL: the same right as editing a shipment. The handler writes its own audit entry.
+router.delete('/:id', authorizePermission('data.shipments', 'can_edit'), deleteShipmentDocument);
 
 // Download is registered above, before the auth middleware.
 

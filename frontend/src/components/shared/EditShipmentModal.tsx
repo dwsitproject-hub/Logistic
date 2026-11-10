@@ -45,6 +45,7 @@ import {
   History,
   Loader2,
   MapPin,
+  Trash2,
   Undo2,
   MessageSquare,
   Plus,
@@ -832,6 +833,16 @@ function formatActivityLabel(log: ActivityLogRow): string {
   if (action === 'UPDATE' && log.entity_type === 'LOADING_PORT') return `Updated Estimation / Port — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'LOADING_PORT') return `Cancelled Port Activity — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'SHIPMENT') return `Cancelled Shipment — ${user}`
+  if (log.entity_type === 'DOCUMENT' && (action === 'CREATE' || action === 'DELETE')) {
+    const info = ((action === 'DELETE' ? log.before_data : log.after_data) ?? {}) as { file_name?: unknown; document_type?: unknown }
+    const kind = String(info.document_type ?? '').trim().toUpperCase()
+    const file = String(info.file_name ?? '').trim()
+    const reason = action === 'DELETE' ? String((log.after_data as { reason?: unknown } | null)?.reason ?? '').trim() : ''
+    const what = `${kind ? `${kind} ` : ''}document${file ? ` "${file}"` : ''}`
+    return action === 'DELETE'
+      ? `Deleted ${what}${reason ? ` (reason: ${reason})` : ''} — ${user}`
+      : `Uploaded ${what} — ${user}`
+  }
   if (action === 'REVERT_PO' && log.entity_type === 'SHIPMENT') {
     const before = (log.before_data ?? {}) as { poNumber?: unknown; contractNumber?: unknown }
     const po = String(before.poNumber ?? before.contractNumber ?? '').trim()
@@ -942,6 +953,12 @@ export function EditShipmentModal({
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null)
   const [dragOverDocType, setDragOverDocType] = useState<string | null>(null)
   const [viewingDocId, setViewingDocId] = useState<string | null>(null)
+  /** The Contract / SI / BL the user asked to delete, until they confirm or back out. */
+  const [deleteDocTarget, setDeleteDocTarget] = useState<{ id: string; fileName: string; label: string } | null>(null)
+  const [deleteDocReason, setDeleteDocReason] = useState('')
+  const [deletingDoc, setDeletingDoc] = useState(false)
+  /** Set when the server says the shipment was already sent to JPS: the file's link there stops working, so the user is asked once more. */
+  const [deleteDocJpsWarning, setDeleteDocJpsWarning] = useState(false)
   const [pdfPreview, setPdfPreview] = useState<{ id: string; fileName: string; url: string } | null>(null)
   const pdfPreviewUrlRef = useRef<string | null>(null)
   const [shipmentStatus, setShipmentStatus] = useState<string | null>(null)
@@ -1932,6 +1949,45 @@ export function EditShipmentModal({
     }
     setPdfPreview(null)
   }, [])
+
+  const handleDeleteDocument = useCallback(
+    async (confirmJps = false) => {
+      if (!deleteDocTarget) return
+      const reason = deleteDocReason.trim()
+      if (!reason) {
+        setNotification({ type: 'error', message: 'Give a reason for deleting the document.' })
+        return
+      }
+      setDeletingDoc(true)
+      setNotification(null)
+      try {
+        const api = (await import('@/lib/api')).default
+        await api.delete(`/documents/${encodeURIComponent(deleteDocTarget.id)}`, { data: { reason, confirmJps } })
+        if (pdfPreview?.id === deleteDocTarget.id) closePdfPreview()
+        setNotification({ type: 'success', message: `${deleteDocTarget.label} document deleted.` })
+        setDeleteDocTarget(null)
+        setDeleteDocReason('')
+        setDeleteDocJpsWarning(false)
+        if (shipmentId) {
+          void loadShipmentDocuments(shipmentId)
+          void loadActivityLog(shipmentId)
+        }
+      } catch (error: unknown) {
+        const axiosErr = error as { response?: { data?: { error?: { message?: string; code?: string } } }; message?: string }
+        const apiError = axiosErr.response?.data?.error
+        if (apiError?.code === 'SENT_TO_JPS') {
+          // Not a failure: ask again, naming the consequence, and repeat the delete with the confirmation.
+          setDeleteDocJpsWarning(true)
+        } else {
+          setNotification({ type: 'error', message: apiError?.message || axiosErr.message || 'Failed to delete the document' })
+        }
+      } finally {
+        setDeletingDoc(false)
+      }
+    },
+    [deleteDocTarget, deleteDocReason, pdfPreview, closePdfPreview, shipmentId, loadShipmentDocuments, loadActivityLog],
+  )
+
 
   const uploadShipmentPdfs = async (
     kind: (typeof SHIPMENT_DOC_TYPES)[number]['type'],
@@ -3145,6 +3201,64 @@ export function EditShipmentModal({
                     <FileText className="h-4 w-4 text-gray-600" />
                     <h5 className="text-sm font-semibold text-gray-800">Documents</h5>
                   </div>
+                  {deleteDocTarget ? (
+                    <div
+                      role="alertdialog"
+                      aria-label="Delete document"
+                      className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900"
+                    >
+                      <p>
+                        Delete {deleteDocTarget.label} document <span className="font-medium">{deleteDocTarget.fileName}</span>? It disappears from this shipment but the
+                        file is kept, and the deletion is recorded in Activity History.
+                      </p>
+                      {deleteDocJpsWarning ? (
+                        <p className="font-medium">
+                          This shipment was already sent to JPS and its instruction links to this file. After the delete that link no longer opens. Delete anyway?
+                        </p>
+                      ) : null}
+                      <div>
+                        <label htmlFor="delete-document-reason" className="mb-1 block text-xs font-semibold">
+                          Reason <span className="text-red-600">*</span>
+                        </label>
+                        <textarea
+                          id="delete-document-reason"
+                          rows={2}
+                          maxLength={500}
+                          value={deleteDocReason}
+                          onChange={(e) => setDeleteDocReason(e.target.value)}
+                          disabled={deletingDoc}
+                          placeholder="Why is this file deleted?"
+                          className="w-full rounded-md border border-red-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-400 focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 bg-red-600 px-3 text-white hover:bg-red-700"
+                          disabled={deletingDoc || !deleteDocReason.trim()}
+                          onClick={() => void handleDeleteDocument(deleteDocJpsWarning)}
+                        >
+                          {deletingDoc ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />}
+                          {deleteDocJpsWarning ? 'Delete anyway' : 'Delete document'}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-3"
+                          disabled={deletingDoc}
+                          onClick={() => {
+                            setDeleteDocTarget(null)
+                            setDeleteDocReason('')
+                            setDeleteDocJpsWarning(false)
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                   {docsLoading ? (
                     <div className="flex items-center gap-2 text-sm text-gray-500">
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -3264,6 +3378,24 @@ export function EditShipmentModal({
                                         <Download className="mr-1 h-3 w-3" />
                                         Download
                                       </Button>
+                                      {canModifyCoreSections ? (
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          className="h-7 px-2 text-[0.6875rem] text-red-700 hover:bg-red-50 hover:text-red-800"
+                                          title="Delete this file (it is kept, and the deletion is recorded)"
+                                          disabled={deletingDoc}
+                                          onClick={() => {
+                                            setDeleteDocJpsWarning(false)
+                                            setDeleteDocReason('')
+                                            setDeleteDocTarget({ id: doc.id, fileName: doc.file_name, label })
+                                          }}
+                                        >
+                                          <Trash2 className="mr-1 h-3 w-3" />
+                                          Delete
+                                        </Button>
+                                      ) : null}
                                     </div>
                                   </li>
                                 ))}

@@ -367,7 +367,7 @@ export async function findEligibleStos(
       INNER JOIN shipments s ON TRUE
       INNER JOIN contracts c ON c.id = s.contract_id
       LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
-      INNER JOIN documents d ON d.shipment_id = s.id
+      INNER JOIN documents d ON d.shipment_id = s.id AND d.deleted_at IS NULL
       WHERE ${STO_KEY_SQL} = e.sto_key
         AND UPPER(d.document_type) IN ('CONTRACT', 'SI', 'BL')
       GROUP BY e.sto_key

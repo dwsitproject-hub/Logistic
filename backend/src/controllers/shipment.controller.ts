@@ -5532,6 +5532,9 @@ export const getShipmentActivityLog = async (req: AuthRequest, res: Response) =>
            SELECT vlp.id FROM vessel_loading_ports vlp WHERE vlp.shipment_id = $1::uuid
          ))
          OR (a.entity_type = 'STO_QTY_ASSIGNED' AND a.entity_id = $1::uuid)
+         OR (a.entity_type = 'DOCUMENT' AND a.entity_id IN (
+           SELECT d.id FROM documents d WHERE d.shipment_id = $1::uuid
+         ))
        )
        ORDER BY a.timestamp DESC
        LIMIT 200`,
