@@ -1018,6 +1018,8 @@ export function EditShipmentModal({
   /** The PO the user asked to revert, until they confirm or back out. */
   const [revertPoTarget, setRevertPoTarget] = useState<{ contractRowId: string; label: string } | null>(null)
   const [revertingPo, setRevertingPo] = useState(false)
+  /** Why the server refused, shown inside the confirm panel (the notification at the top of the modal is out of sight while the PO table is on screen). */
+  const [revertPoError, setRevertPoError] = useState<string | null>(null)
   /** Set when the operation already finished discharging: the date to show while asking to reopen it. */
   const [reopenConfirmAta, setReopenConfirmAta] = useState<string | null>(null)
   const [editRemark, setEditRemark] = useState('')
@@ -1826,6 +1828,7 @@ export function EditShipmentModal({
   const handleRevertPo = useCallback(async () => {
     if (!shipmentId || !revertPoTarget) return
     setRevertingPo(true)
+    setRevertPoError(null)
     setNotification(null)
     try {
       const outcome = await revertPurchaseOrderFromShipment({ shipmentId, contractRowId: revertPoTarget.contractRowId })
@@ -1847,8 +1850,8 @@ export function EditShipmentModal({
       }
     } catch (error: unknown) {
       const axiosErr = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
-      setRevertPoTarget(null)
-      setNotification({ type: 'error', message: axiosErr.response?.data?.error?.message || axiosErr.message || 'Failed to revert the PO' })
+      // The panel stays open with the reason, so the refusal is read where the button was pressed.
+      setRevertPoError(axiosErr.response?.data?.error?.message || axiosErr.message || 'Failed to revert the PO')
     } finally {
       setRevertingPo(false)
     }
@@ -2915,19 +2918,36 @@ export function EditShipmentModal({
                       Qty are removed (not cancelled), and the PO can be planned again from Unplanned. It is only possible while the operation has no SAP STO, has
                       not finished discharging and has not been sent to JPS.
                     </p>
+                    {revertPoError ? (
+                      <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 font-medium text-red-800">
+                        {revertPoError}
+                      </p>
+                    ) : null}
                     <div className="flex gap-2">
+                      {revertPoError ? null : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 bg-amber-600 px-3 text-white hover:bg-amber-700"
+                          disabled={revertingPo}
+                          onClick={() => void handleRevertPo()}
+                        >
+                          {revertingPo ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Undo2 className="mr-1 h-3.5 w-3.5" />}
+                          Revert PO
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         size="sm"
-                        className="h-8 bg-amber-600 px-3 text-white hover:bg-amber-700"
+                        variant="outline"
+                        className="h-8 px-3"
                         disabled={revertingPo}
-                        onClick={() => void handleRevertPo()}
+                        onClick={() => {
+                          setRevertPoTarget(null)
+                          setRevertPoError(null)
+                        }}
                       >
-                        {revertingPo ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Undo2 className="mr-1 h-3.5 w-3.5" />}
-                        Revert PO
-                      </Button>
-                      <Button type="button" size="sm" variant="outline" className="h-8 px-3" disabled={revertingPo} onClick={() => setRevertPoTarget(null)}>
-                        Cancel
+                        {revertPoError ? 'Close' : 'Cancel'}
                       </Button>
                     </div>
                   </div>
@@ -2995,12 +3015,13 @@ export function EditShipmentModal({
                                   className="mt-0.5 flex items-center gap-1 text-[0.625rem] font-normal text-gray-500 hover:text-amber-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
                                   title="Take this PO out of the operation and return it to Unplanned"
                                   disabled={revertingPo}
-                                  onClick={() =>
+                                  onClick={() => {
+                                    setRevertPoError(null)
                                     setRevertPoTarget({
                                       contractRowId: String(row.contract_row_id),
                                       label: String(row.po_number || row.contract_number || '').trim(),
                                     })
-                                  }
+                                  }}
                                 >
                                   <Undo2 className="h-3 w-3" />
                                   Revert PO

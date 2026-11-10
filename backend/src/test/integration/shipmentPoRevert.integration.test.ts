@@ -163,12 +163,48 @@ describe('Revert PO', () => {
     expect(await shipmentExists(o.ships.SOLO)).toBe(true);
   });
 
-  it('is refused when the PO already has an SAP STO', async () => {
+  it('a PO that has an SAP STO elsewhere can still be reverted: only its KLIP plan row on THIS operation goes (a PO can have several STOs)', async () => {
     const o = await operation('E', ['ONE', 'TWO']);
     await query(`UPDATE contracts SET sto_number = '1006099777' WHERE id = $1`, [o.contracts.TWO]);
+    await query(`INSERT INTO contract_stos (contract_id, sto_number, sto_quantity) VALUES ($1, '1006099778', 100000)`, [o.contracts.TWO]);
     const res = await revertPurchaseOrderFromShipment({ anchorShipmentUuid: o.ships.ONE, contractRowId: o.contracts.TWO, userId: actorId });
-    expect(res).toMatchObject({ ok: false, status: 403, code: REVERT_PO_CODES.SAP });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    expect(await shipmentExists(o.ships.TWO)).toBe(false);
+    // its SAP STO data is untouched
+    expect((await query(`SELECT 1 FROM contract_stos WHERE contract_id = $1`, [o.contracts.TWO])).rows).toHaveLength(1);
+  });
+
+  it('is refused, and nothing changes, when the PO would not come back anywhere: closed in SAP and no other live shipment', async () => {
+    const o = await operation('E2', ['ONE', 'TWO']);
+    await query(`UPDATE contracts SET status = 'Close' WHERE id = $1`, [o.contracts.TWO]);
+    const res = await revertPurchaseOrderFromShipment({ anchorShipmentUuid: o.ships.ONE, contractRowId: o.contracts.TWO, userId: actorId });
+    expect(res).toMatchObject({ ok: false, status: 409, code: REVERT_PO_CODES.NOWHERE_TO_GO });
     expect(await shipmentExists(o.ships.TWO)).toBe(true);
+    expect((await query(`SELECT 1 FROM user_sto_contract_assignments WHERE sto_number = $1 AND contract_number = $2`, [o.op, `${P}-E2-TWO`])).rows).toHaveLength(1);
+  });
+
+  it('a PO closed in SAP that still has a live shipment of its own elsewhere can leave this operation', async () => {
+    const o = await operation('E3', ['ONE', 'TWO']);
+    await query(`UPDATE contracts SET status = 'Close' WHERE id = $1`, [o.contracts.TWO]);
+    await query(`INSERT INTO shipments (shipment_id, operation_id, contract_id, vessel_name, status) VALUES ($1, $2, $3, 'IT RPO OTHER', 'SAILED')`, [
+      `MNL-${P}-E3-OTHER`,
+      `OP-${P}-E3-OTHER`,
+      o.contracts.TWO,
+    ]);
+    const res = await revertPurchaseOrderFromShipment({ anchorShipmentUuid: o.ships.ONE, contractRowId: o.contracts.TWO, userId: actorId });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    expect(await shipmentExists(o.ships.TWO)).toBe(false);
+  });
+
+  it('a SAP-keyed operation, and a PO row that came from SAP, are still refused', async () => {
+    const sapKeyed = await operation('E4', ['ONE', 'TWO']);
+    await query(`UPDATE shipments SET operation_id = '1006099555', shipment_id = $2 WHERE id = $1`, [sapKeyed.ships.ONE, `MNL-${P}-E4-ONE`]);
+    await query(`UPDATE shipments SET operation_id = '1006099555' WHERE id = $1`, [sapKeyed.ships.TWO]);
+    expect(await revertPurchaseOrderFromShipment({ anchorShipmentUuid: sapKeyed.ships.ONE, contractRowId: sapKeyed.contracts.TWO, userId: actorId })).toMatchObject({
+      ok: false,
+      code: REVERT_PO_CODES.SAP,
+    });
+    await query(`DELETE FROM user_sto_contract_assignments WHERE sto_number = '1006099555'`);
   });
 
   it('is refused for a row that came from the SAP import', async () => {

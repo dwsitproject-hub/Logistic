@@ -2,12 +2,12 @@ import type { PoolClient } from 'pg';
 import { getClient, query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { isSapSourcedShipmentId } from '../utils/klipLogisticsActivity';
-import { poLineHasSapStoSql } from '../utils/poLineSapStoSql';
+import { buildManualPrePlannedEligibleContractsByIdsQuery } from '../utils/prePlannedManualEligibilitySql';
 import { sqlShipmentListPrimaryOrderBy } from '../utils/shipmentListPrimaryShipmentSql';
 import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 import logger from '../utils/logger';
 import { AuditService } from './audit.service';
-import { groupHasSapImportedShell, isKlipOnlyShipmentGroupEligible, sapStoExistsInSpd } from './cancelKlipShipment.service';
+import { isKlipOnlyShipmentGroupEligible, sapStoExistsInSpd } from './cancelKlipShipment.service';
 import { resolveShipmentEditContext } from './shipmentEditContext.service';
 import { groupDischargeCompleteAta } from './shipmentPoAssignment.service';
 
@@ -25,8 +25,13 @@ import { groupDischargeCompleteAta } from './shipmentPoAssignment.service';
  *   - The PO's Preplanned membership. Left active, it would hold the PO and block Preplanned again (ux_ppgm_active_contract), and once the group's shipment link is
  *     cleared by the delete it would show the PO under Preplanned instead of Unplanned. It is released first.
  *
- * Refused (nothing is touched): the PO is the only one on the operation (use Cancel), the operation or the PO has an SAP STO, the row came from the SAP import,
- * the operation has finished discharging, or it has been sent to JPS (the JPS cargo lists the PO; amending it is a separate decision).
+ * Refused (nothing is touched): the PO is the only one on the operation (use Cancel), the operation is keyed by an SAP STO or the PO's row on it came from the SAP import,
+ * the operation has finished discharging, it has been sent to JPS (the JPS cargo lists the PO; amending it is a separate decision), or the PO would have nowhere to go.
+ *
+ * What is NOT checked: whether the PO has an SAP STO somewhere. A PO can have several STOs, and this row is only its KLIP plan on THIS operation; taking it out touches
+ * no STO. What matters is where the PO lands afterwards, and that is tested after the delete, inside the transaction: it must either still have a live shipment of its
+ * own elsewhere, or qualify as Unplanned backlog (the rules of the Unplanned card: outstanding quantity left, not closed or cancelled in SAP). Otherwise everything
+ * is rolled back, so a PO is never made to vanish from the Shipments page.
  */
 export const REVERT_PO_CODES = {
   ONLY_PO: 'ONLY_PO_ON_OPERATION',
@@ -35,6 +40,7 @@ export const REVERT_PO_CODES = {
   SENT_TO_JPS: 'SENT_TO_JPS',
   NOT_ON_SHIPMENT: 'PO_NOT_ON_SHIPMENT',
   AMBIGUOUS: 'PO_ON_SEVERAL_ROWS',
+  NOWHERE_TO_GO: 'PO_WOULD_NOT_RETURN_TO_UNPLANNED',
 } as const;
 
 export type RevertPoResult =
@@ -110,19 +116,20 @@ export async function checkRevertPurchaseOrder(args: { anchorShipmentUuid: strin
     return fail(409, 'This is the only PO on the shipment. Use Cancel to remove the shipment.', REVERT_PO_CODES.ONLY_PO) as Extract<RevertPoResult, { ok: false }>;
   }
 
-  // A KLIP-only plan: no SAP STO on the operation or on this PO, and no row that came from the SAP import.
-  const sapMessage = 'This PO or its operation is linked to SAP STO data and cannot be reverted from KLIP';
+  // Only a KLIP plan can be reverted: the operation is KLIP's own (not keyed by an SAP STO number) and THIS PO's row on it was made in KLIP. Other members of the
+  // operation, and the PO's STOs elsewhere, do not matter: only this one row is touched.
   if (!isKlipOnlyShipmentGroupEligible(lookupKey) || (await sapStoExistsInSpd(lookupKey))) {
-    return fail(403, sapMessage, REVERT_PO_CODES.SAP) as Extract<RevertPoResult, { ok: false }>;
+    return fail(403, 'This operation is keyed by an SAP STO number, so its POs cannot be reverted from KLIP', REVERT_PO_CODES.SAP) as Extract<
+      RevertPoResult,
+      { ok: false }
+    >;
   }
   if (isSapSourcedShipmentId(target.shipment_id) || String(target.operation_id_source ?? '').toUpperCase() === 'SAP_IMPORT') {
-    return fail(403, sapMessage, REVERT_PO_CODES.SAP) as Extract<RevertPoResult, { ok: false }>;
+    return fail(403, "This PO's row on the operation came from SAP, so it cannot be reverted from KLIP", REVERT_PO_CODES.SAP) as Extract<
+      RevertPoResult,
+      { ok: false }
+    >;
   }
-  if (await groupHasSapImportedShell(lookupKey, anchorId)) {
-    return fail(403, sapMessage, REVERT_PO_CODES.SAP) as Extract<RevertPoResult, { ok: false }>;
-  }
-  const poSap = await query(`SELECT 1 FROM contracts c WHERE c.id = $1::uuid AND ${poLineHasSapStoSql('c')} LIMIT 1`, [contractRowId]);
-  if (poSap.rows.length > 0) return fail(403, sapMessage, REVERT_PO_CODES.SAP) as Extract<RevertPoResult, { ok: false }>;
 
   // The operation has finished discharging. The Shipments page's rule for an operation: Completed only when EVERY active PO has finished, so one finished PO
   // does not make it so (operation OP-1004030473-15277540: the first PO finished on 15 Sep, four POs were added on 2 Oct and are still waiting - the table reads
@@ -184,6 +191,7 @@ export async function revertPurchaseOrderFromShipment(args: {
   const moved: Record<string, number> = {};
   let releasedMembers = 0;
   let survivor = remainingIds[0];
+  let nowhereToGo = false;
   try {
     await client.query('BEGIN');
     survivor = await pickSurvivor(client, remainingIds, lookupKey);
@@ -246,12 +254,37 @@ export async function revertPurchaseOrderFromShipment(args: {
     );
 
     await client.query(`DELETE FROM shipments WHERE id = $1::uuid`, [target.id]);
-    await client.query('COMMIT');
+
+    // Where does the PO land? Either it still has a live shipment of its own (another STO or operation), or it is Unplanned backlog again (the Unplanned card's rules,
+    // which also decide whether outstanding quantity is left and whether SAP closed or cancelled it). Neither means it would vanish from the page: undo everything.
+    const other = await client.query(
+      `SELECT 1 FROM shipments ls WHERE ls.contract_id = $1::uuid AND UPPER(TRIM(COALESCE(ls.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'UNPLANNED') LIMIT 1`,
+      [target.contract_uuid],
+    );
+    let lands = other.rows.length > 0;
+    if (!lands) {
+      const { sql, params } = await buildManualPrePlannedEligibleContractsByIdsQuery([target.contract_uuid]);
+      lands = (await client.query(sql, params)).rows.length > 0;
+    }
+    if (!lands) {
+      nowhereToGo = true;
+      await client.query('ROLLBACK');
+    } else {
+      await client.query('COMMIT');
+    }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw error;
   } finally {
     client.release();
+  }
+
+  if (nowhereToGo) {
+    return fail(
+      409,
+      'After this revert the PO would not return to Unplanned: it has no outstanding quantity left, or it is closed or cancelled in SAP, and it has no other live shipment. It stays on the operation.',
+      REVERT_PO_CODES.NOWHERE_TO_GO,
+    );
   }
 
   // Shown in the Activity History of every remaining row, so whichever member the modal opens carries it.
