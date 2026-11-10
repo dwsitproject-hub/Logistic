@@ -1,6 +1,10 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
   classifySapAutoImportRun,
+  listOriginalExcelFiles,
   partitionOriginalFilesByChecksum,
   pickLatestOriginalFile,
   type SapFolderAutoImportRunResult,
@@ -62,6 +66,41 @@ describe('pickLatestOriginalFile', () => {
 });
 
 /**
+ * The folder of 2026-11-10: the daily export, the ME2N workbook written a moment later, and the two halves. Only the first is imported.
+ */
+describe('listOriginalExcelFiles', () => {
+  it('separates the daily export from the ME2N workbooks and the Part 1 / Part 2 halves', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'klip-sap-list-'));
+    const names = [
+      'ZMMLOG_RPT from 01 Jan 2026 to 10 Nov 2026.xlsx',
+      'ME2N from 01 Jan 2026 to 10 Nov 2026.xlsx',
+      'Part 1ZMMLOG_RPT from 260101 to 260630.xlsx',
+      'Part 2ZMMLOG_RPT from 260701 to 261110.xlsx',
+      'Part 2ME2N from 260701 to 261110.xlsx',
+      '~$ZMMLOG_RPT from 01 Jan 2026 to 10 Nov 2026.xlsx',
+      'notes.txt',
+    ];
+    for (const n of names) fs.writeFileSync(path.join(dir, n), 'x');
+    fs.mkdirSync(path.join(dir, 'archive'));
+    const listing = listOriginalExcelFiles(dir);
+    expect(listing.daily).toEqual(['ZMMLOG_RPT from 01 Jan 2026 to 10 Nov 2026.xlsx']);
+    expect(listing.other.sort()).toEqual(
+      [
+        'ME2N from 01 Jan 2026 to 10 Nov 2026.xlsx',
+        'Part 1ZMMLOG_RPT from 260101 to 260630.xlsx',
+        'Part 2ME2N from 260701 to 261110.xlsx',
+        'Part 2ZMMLOG_RPT from 260701 to 261110.xlsx',
+      ].sort(),
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a missing folder is neither', () => {
+    expect(listOriginalExcelFiles(path.join(os.tmpdir(), 'klip-no-such-folder-xyz'))).toEqual({ daily: [], other: [] });
+  });
+});
+
+/**
  * A fresh file in the share that was not pulled looked the same from the outside whatever the reason. Each reason gets its own
  * outcome now, so the Sync button and the status line can say which one it was.
  */
@@ -85,6 +124,13 @@ describe('classifySapAutoImportRun', () => {
     const empty = classifySapAutoImportRun({ ...base, filesScanned: 0 }, { sourceMissing: false });
     expect(empty.outcome).toBe('no_new_file');
     expect(empty.detail).toMatch(/no Excel files/i);
+  });
+
+  it('says so when the folder holds Excel files and none is the daily export - not "no new file"', () => {
+    const r = classifySapAutoImportRun({ ...base, filesScanned: 0 }, { otherExcelFiles: 3 });
+    expect(r.outcome).toBe('failed');
+    expect(r.detail).toMatch(/3 Excel file/);
+    expect(r.detail).toMatch(/none is named like the daily export/);
   });
 
   it('says the newest file was already imported when its checksum is registered', () => {

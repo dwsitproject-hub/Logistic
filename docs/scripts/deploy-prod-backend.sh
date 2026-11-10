@@ -186,7 +186,7 @@ fi
 step "SAP share (route to the NAS, and the host path the backend mounts)"
 SHARE_PATH="$(grep -E '^KLIP_SAP_IMPORT_MOUNT=' .env | tail -n 1 | cut -d= -f2- \
   | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//" || true)"
-SHARE_PATH="${SHARE_PATH:-/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT}"
+SHARE_PATH="${SHARE_PATH:-/mnt/synology-apps/dev/KLIP/import-data/logistics-report}"
 NAS_IP="${SAP_NAS_IP:-172.30.1.94}"
 ROUTE_LINE="$(ip route get "$NAS_IP" 2>/dev/null | head -n 1 || true)"
 ROUTE_DEV="$(printf '%s' "$ROUTE_LINE" | sed -n 's/.* dev \([^ ]*\).*/\1/p')"

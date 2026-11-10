@@ -153,6 +153,42 @@ export function isSapAutoImportExcelFile(fileName: string): boolean {
   return EXCEL_EXT.has(path.extname(base).toLowerCase());
 }
 
+/**
+ * Which Excel files in Original are the daily export.
+ *
+ * Original is IT's folder and it holds more than the daily file. From 2026-11-05 it also holds an `ME2N ...` workbook (a different
+ * SAP report: 17 columns of purchasing documents, nothing KLIP imports) and the `Part 1ZMMLOG_RPT ...` / `Part 2ZMMLOG_RPT ...`
+ * halves the daily file is assembled from. The importer takes the newest file by modification time, and on 2026-11-09 and 2026-11-10
+ * the newest file in the folder was the ME2N workbook, written a fraction of a second after the export: the run would have tried
+ * to read a purchasing report as the logistics report.
+ *
+ * So the daily export is recognised by name: `ZMMLOG_RPT from <date> to <date>.xlsx` (the number of spaces after ZMMLOG_RPT has
+ * varied: one name had two). SAP_AUTO_IMPORT_FILE_PATTERN overrides it with a regular expression (case-insensitive), for the day SAP
+ * renames the report.
+ */
+export const SAP_AUTO_IMPORT_DEFAULT_FILE_PATTERN = '^ZMMLOG_RPT\\s+from\\s';
+
+export function sapAutoImportDailyExportPattern(): RegExp {
+  const configured = String(process.env.SAP_AUTO_IMPORT_FILE_PATTERN || '').trim();
+  if (configured) {
+    try {
+      return new RegExp(configured, 'i');
+    } catch (error) {
+      logger.error('SAP_AUTO_IMPORT_FILE_PATTERN is not a valid regular expression - using the default', {
+        configured,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return new RegExp(SAP_AUTO_IMPORT_DEFAULT_FILE_PATTERN, 'i');
+}
+
+/** An Excel file whose name says it is the daily logistics export (see above). */
+export function isSapAutoImportDailyExport(fileName: string): boolean {
+  if (!isSapAutoImportExcelFile(fileName)) return false;
+  return sapAutoImportDailyExportPattern().test(path.basename(fileName));
+}
+
 export async function sha256File(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');

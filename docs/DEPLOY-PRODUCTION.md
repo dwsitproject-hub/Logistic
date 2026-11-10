@@ -482,7 +482,7 @@ berbeda dari host SIT, dan tidak bisa diasumsikan:
 
 ```bash
 mount | grep -i -E "synology|cifs|172.30.1.94"
-ls -la "/mnt/synology/dev/KLIP/IMPORT DATA/LOGISTICS REPORT/ORIGINAL"
+ls -la "/mnt/synology/dev/KLIP/import-data/logistics-report/original"
 ```
 
 **Titik mount produksi berbeda dari SIT** (diperiksa 2026-09-14). Jangan menyalin path SIT:
@@ -502,7 +502,7 @@ bisa menggantikan mount yang tidak ada.
 ### `.env`
 
 ```env
-KLIP_SAP_IMPORT_MOUNT=/mnt/synology/dev/KLIP/IMPORT DATA/LOGISTICS REPORT
+KLIP_SAP_IMPORT_MOUNT=/mnt/synology/dev/KLIP/import-data/logistics-report
 SAP_AUTO_IMPORT_ROOT=/mnt/sap-import
 SAP_AUTO_IMPORT_RESULTS_ROOT=/app/uploads/SAP Data
 ```
