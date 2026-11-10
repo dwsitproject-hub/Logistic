@@ -17,6 +17,66 @@ import { AuditService } from './audit.service';
 import logger from '../utils/logger';
 import { sqlBacklogContractPort } from '../utils/shipmentDischargePortSql';
 
+/**
+ * The condition, on `pg` (pre_planned_groups) and `pgm` (its members), under which an ACTIVE member row no longer holds its contract.
+ *
+ * ux_ppgm_active_contract allows one active group per contract. These holders are dead and must not block a new Preplanned group:
+ *   - SUGGESTED     an auto suggestion, rebuilt freely;
+ *   - SUPERSEDED / DISMISSED   a group that ended without every member being released (migration 190 left some);
+ *   - ACCEPTED and linked to a shipment that is CANCELLED   the group's voyage is gone, but nothing released its members, so the PO came back as Unplanned and
+ *     could be selected while the old row still held it (PO 1001032955 on production: "duplicate key value violates unique constraint ux_ppgm_active_contract").
+ *     A group has ONE shipment link but can hold several POs, so a member is released only when ITS contract has no live shipment of its own: a PO that went on
+ *     another, live shipment keeps its membership.
+ * A group linked to a live or COMPLETED shipment, and an unlinked ACCEPTED (Preplanned) group, still hold their contracts.
+ */
+export const PRE_PLANNED_RELEASABLE_HOLDER_SQL = `(
+  pg.status IN ('SUGGESTED', 'SUPERSEDED', 'DISMISSED')
+  OR (
+    pg.status = 'ACCEPTED'
+    AND pg.shipment_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM shipments hs
+      WHERE hs.id = pg.shipment_id AND UPPER(TRIM(COALESCE(hs.status, ''))) IN ('CANCELLED', 'CANCELED')
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM shipments ls
+      WHERE ls.contract_id = pgm.contract_id AND UPPER(TRIM(COALESCE(ls.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'UNPLANNED')
+    )
+  )
+)`;
+
+/**
+ * Release the members that a cancelled shipment's group still holds. Called when a shipment is cancelled, so the PO is free the moment it is Unplanned again;
+ * the manual grouping and the nightly rebuild apply the same rule themselves, which also covers every other way a shipment becomes cancelled.
+ * Returns how many member rows were released.
+ */
+export async function releasePrePlannedMembersOfCancelledShipments(shipmentIds?: string[]): Promise<number> {
+  const scoped = Array.isArray(shipmentIds);
+  if (scoped && shipmentIds.length === 0) return 0;
+  const res = await query(
+    `
+    UPDATE pre_planned_group_members pgm
+    SET released_at = now()
+    FROM pre_planned_groups pg
+    WHERE pgm.group_id = pg.id
+      AND pgm.released_at IS NULL
+      AND pg.status = 'ACCEPTED'
+      AND pg.shipment_id IS NOT NULL
+      ${scoped ? 'AND pg.shipment_id = ANY($1::uuid[])' : ''}
+      AND EXISTS (
+        SELECT 1 FROM shipments hs
+        WHERE hs.id = pg.shipment_id AND UPPER(TRIM(COALESCE(hs.status, ''))) IN ('CANCELLED', 'CANCELED')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM shipments ls
+        WHERE ls.contract_id = pgm.contract_id AND UPPER(TRIM(COALESCE(ls.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'UNPLANNED')
+      )
+    `,
+    scoped ? [shipmentIds] : [],
+  );
+  return res.rowCount ?? 0;
+}
+
 export interface PrePlannedGroupMemberDto {
   contractId: string;
   contractNumber: string;
@@ -189,6 +249,15 @@ export async function rebuildPrePlannedGroups(triggeredBy: string): Promise<{
       WHERE pgm.group_id = pg.id
         AND pg.status IN ('SUGGESTED', 'SUPERSEDED')
         AND pgm.released_at IS NULL
+    `);
+    // A group linked to a cancelled shipment (or dismissed) must not keep holding its POs either, or they never come back as suggestions.
+    await client.query(`
+      UPDATE pre_planned_group_members pgm
+      SET released_at = now()
+      FROM pre_planned_groups pg
+      WHERE pgm.group_id = pg.id
+        AND pgm.released_at IS NULL
+        AND ${PRE_PLANNED_RELEASABLE_HOLDER_SQL}
     `);
     await client.query(`
       UPDATE pre_planned_groups
@@ -452,7 +521,7 @@ export async function createManualPrePlannedGroup(
       SET released_at = now()
       FROM pre_planned_groups pg
       WHERE pgm.group_id = pg.id
-        AND pg.status = 'SUGGESTED'
+        AND ${PRE_PLANNED_RELEASABLE_HOLDER_SQL}
         AND pgm.contract_id = ANY($1::uuid[])
         AND pgm.released_at IS NULL
       `,
@@ -515,6 +584,26 @@ export async function createManualPrePlannedGroup(
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
+    // A contract still held by a group that is genuinely alive (a Planned or Completed shipment's group): say which, instead of the raw index name.
+    if ((err as { code?: string })?.code === '23505' && String((err as { constraint?: string }).constraint) === 'ux_ppgm_active_contract') {
+      const holders = await query(
+        `
+        SELECT c.po_number, c.contract_id, pg.group_code, pg.status
+        FROM pre_planned_group_members pgm
+        INNER JOIN pre_planned_groups pg ON pg.id = pgm.group_id
+        INNER JOIN contracts c ON c.id = pgm.contract_id
+        WHERE pgm.released_at IS NULL AND pgm.contract_id = ANY($1::uuid[])
+        ORDER BY c.contract_id, pg.group_code
+        `,
+        [dedupedIds],
+      ).catch(() => ({ rows: [] as Array<Record<string, unknown>> }));
+      if (holders.rows.length > 0) {
+        const named = holders.rows
+          .map((r) => `PO ${String(r.po_number ?? r.contract_id)} is already in Preplanned group ${String(r.group_code)} (${String(r.status)})`)
+          .join('; ');
+        throw new Error(`${named}. Return that group to Unplanned (or complete or cancel its shipment) before grouping the PO again.`);
+      }
+    }
     throw err;
   } finally {
     client.release();

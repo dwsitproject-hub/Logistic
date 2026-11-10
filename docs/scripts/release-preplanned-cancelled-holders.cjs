@@ -13,8 +13,8 @@
  * script unnecessary once it is deployed; run it only to free the POs that are blocked today.
  *
  * What it changes: pre_planned_group_members.released_at = now() for the active members of an ACCEPTED group whose linked shipment is CANCELLED. Nothing else:
- * the group keeps its status, shipment link and history (the member row stays, released). A group linked to a Planned or Completed shipment, and an unlinked
- * Preplanned group, are never touched.
+ * the group keeps its status, shipment link and history (the member row stays, released). A group linked to a Planned or Completed shipment, an unlinked
+ * Preplanned group, and a member whose own contract has a live shipment, are never touched.
  */
 const { Pool } = require('pg');
 
@@ -32,7 +32,12 @@ const { Pool } = require('pg');
     pgm.released_at IS NULL
     AND pg.status = 'ACCEPTED'
     AND pg.shipment_id IS NOT NULL
-    AND UPPER(TRIM(COALESCE(s.status, ''))) IN ('CANCELLED', 'CANCELED')`;
+    AND UPPER(TRIM(COALESCE(s.status, ''))) IN ('CANCELLED', 'CANCELED')
+    -- a PO that went on another, live shipment keeps its membership (a group has one shipment link but can hold several POs)
+    AND NOT EXISTS (
+      SELECT 1 FROM shipments ls
+      WHERE ls.contract_id = pgm.contract_id AND UPPER(TRIM(COALESCE(ls.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'UNPLANNED')
+    )`;
 
   const rows = await pool.query(
     `SELECT pgm.id::text AS member_id, c.contract_id, c.po_number, pg.group_code, pg.source, s.status AS shipment_status, pgm.created_at::date AS member_since

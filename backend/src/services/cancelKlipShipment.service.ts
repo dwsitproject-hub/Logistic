@@ -1,6 +1,7 @@
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { isSapSourcedShipmentId } from '../utils/klipLogisticsActivity';
+import logger from '../utils/logger';
 import { invalidateShipmentsListCache } from './shipmentList.service';
 import { invalidateShippingPerformanceRowCache } from './shippingPerformance.service';
 
@@ -241,6 +242,19 @@ export async function cancelKlipShipmentGroup(
   }
 
   const remarkIds = await insertShipmentCancelRemarks(cancelledIds, normalizedRemark, actorId);
+
+  // A Preplanned group linked to this shipment keeps its members active until something releases them, and an active member blocks the PO from being
+  // grouped again once it is Unplanned (ux_ppgm_active_contract). Release them with the cancel. Best effort: grouping applies the same rule itself.
+  if (cancelledIds.length > 0) {
+    try {
+      const { releasePrePlannedMembersOfCancelledShipments } = await import('./prePlannedGroup.service');
+      await releasePrePlannedMembersOfCancelledShipments(cancelledIds);
+    } catch (error) {
+      logger.warn('Pre-planned members of a cancelled shipment could not be released', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   invalidateShipmentsListCache();
   if (cancelledIds.length > 0) {
