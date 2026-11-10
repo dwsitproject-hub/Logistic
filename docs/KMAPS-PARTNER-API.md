@@ -34,7 +34,9 @@ The records are rebuilt only when a source table changed (a cheap signature), ne
 4. The first build starts when the settings are saved (otherwise about 3 minutes after boot).
 5. Integrations > KMAPS > Test connection reports whether KLIP can authenticate KMAPS now. History shows every call KMAPS makes (path, parameters, status, duration, record count; never a body, a price or a key).
 
-Base URL for KMAPS: SIT `http://172.28.92.56/api/partner/v1` (the frontend host forwards `/api/*` to the backend); production to be agreed (HTTPS is not set up on the production nginx yet).
+Base URL for KMAPS: SIT `http://172.28.92.57:5001/api/partner/v1`, the backend itself (KMAPS's backend runs on the same host); production to be agreed (HTTPS is not set up on the production nginx yet).
+
+Not `http://172.28.92.56/api/partner/v1`: nginx on the SIT frontend host chooses a site by the Host header, the KLIP site answers only to `test-klip.kpndomain.com`, and a request by IP lands on the default site for port 80 (Commercial Documents), which answers 404 for this path. Found by testing on SIT 2026-11-10: with `Host: test-klip.kpndomain.com` the same URL answers correctly. The frontend container (`http://172.28.92.56:3001/api/partner/v1`) answers correctly too.
 
 ## Check by hand
 
