@@ -11,8 +11,9 @@ import { buildKlipEditedFieldsSetSql } from '../../utils/klipEditedFields';
 /**
  * The SAP Phase 3 template (2026-11) through the real import pipeline against a real Postgres:
  * - the material lands on the contract and contracts.product keeps the commercial name;
- * - SAP's SFAL / SFBD go to sap_sfal_qty / sap_sfbd_qty (a zero is no figure) and fill sfal_qty / sfbd_qty only where no user wrote one, on an STO with one row;
- * - a multi-PO STO keeps SAP's figure as a reference only (SAP repeats the voyage figure on some of them).
+ * - SAP's SFAL / SFBD go to sap_sfal_qty / sap_sfbd_qty (a zero is no figure, a figure in tonnes under a KG label is read as kg) and ONE figure per STO is derived from them
+ *   (utils/sapFigureFill.ts): the rows of a multi-PO STO are shares of the voyage (sum) or the whole figure repeated (one), decided by the STO's total B/L; it is written on the
+ *   STO's primary row only, never over a figure a user wrote, and an STO whose rows cannot be told apart gets none.
  * Cells are text, as the importer reads a sheet formatted: SAP's 0 arrives as "0.000", a quantity as "497,100.000".
  */
 
@@ -20,7 +21,7 @@ const PREFIX = 'ITEST-PH3';
 
 const HEADERS = [
   'Contract No.', 'PO No.', 'Supplier', 'Product', 'Material Code', 'Material Description', 'Contract Quantity', 'Contract Qty UoM', 'Sea / Land',
-  'Incoterm', 'STO No.', 'STO Quantity', 'GR PO Status', 'GR STO Status', 'Vessel Name', 'SFAL Qty', 'SFAL UoM', 'SFBD Qty', 'SFBD UoM',
+  'Incoterm', 'STO No.', 'STO Quantity', 'GR PO Status', 'GR STO Status', 'Vessel Name', 'SFAL Qty', 'SFAL UoM', 'SFBD Qty', 'SFBD UoM', 'B/L Quantity', 'B/L Qty UoM',
 ];
 
 interface Row {
@@ -30,11 +31,13 @@ interface Row {
   sfbd: string;
   material?: string;
   description?: string;
+  bl?: string; // B/L Quantity of the row, kg; the rule that tells shares from a repeated figure reads it
 }
 
 const cell = (r: Row): string[] => [
   `${PREFIX}-CTR-${r.key}`, `${PREFIX}-PO-${r.key}`, 'IT-Supplier-Ph3', 'CPO', r.material ?? '8010-10.11102', r.description ?? 'CRUDE PALM OIL FFA 3.5-5',
   '1000', 'MT', 'SEA', 'FOB', `${PREFIX}-STO-${r.sto}`, '500', 'Open', 'Open', 'MV Phase Three', r.sfal, r.sfal === '0.000' ? '' : 'KG', r.sfbd, r.sfbd === '0.000' ? '' : 'KG',
+  r.bl ?? '', r.bl ? 'KG' : '',
 ];
 
 function writeWorkbook(filePath: string, rows: Row[]): void {
@@ -57,7 +60,7 @@ async function cleanup(importIds: string[] = []): Promise<void> {
 
 const shipmentOf = async (key: string) => {
   const r = await query(
-    `SELECT s.sfal_qty, s.sap_sfal_qty, s.sfbd_qty, s.sap_sfbd_qty, s.klip_edited_fields
+    `SELECT s.id, s.sfal_qty, s.sap_sfal_qty, s.sap_sfal_sto_qty, s.sfbd_qty, s.sap_sfbd_qty, s.klip_edited_fields
        FROM shipments s JOIN contracts c ON c.id = s.contract_id WHERE c.contract_id = $1`,
     [`${PREFIX}-CTR-${key}`],
   );
@@ -90,8 +93,13 @@ describe('Integration: SAP Phase 3 template - SFAL / SFBD and the material', () 
       { key: 'S1', sto: 'S1', sfal: '497,100.000', sfbd: '0.000' }, // figure for SFAL, none for SFBD
       { key: 'S2', sto: 'S2', sfal: '300,000.000', sfbd: '290,000.000' }, // the user will own SFAL later
       { key: 'S4', sto: 'S4', sfal: '0.000', sfbd: '0.000' }, // SAP has nothing
-      { key: 'M1', sto: 'M', sfal: '4,006,260.000', sfbd: '0.000', material: '8010-10.11103', description: 'CRUDE PALM OIL FFA > 5 (CPO)' }, // multi-PO STO, voyage figure repeated
-      { key: 'M2', sto: 'M', sfal: '4,006,260.000', sfbd: '0.000' },
+      { key: 'M1', sto: 'M', sfal: '4,006,260.000', sfbd: '0.000', bl: '2,000,000.000', material: '8010-10.11103', description: 'CRUDE PALM OIL FFA > 5 (CPO)' }, // multi-PO STO, voyage figure repeated
+      { key: 'M2', sto: 'M', sfal: '4,006,260.000', sfbd: '0.000', bl: '2,002,063.000' },
+      { key: 'P1', sto: 'P', sfal: '298,000.000', sfbd: '0.000', bl: '300,000.000' }, // multi-PO STO, shares of the voyage: 298,000 + 198,666 = 496,666 of a B/L of 500,000
+      { key: 'P2', sto: 'P', sfal: '198,666.000', sfbd: '0.000', bl: '200,000.000' },
+      { key: 'U1', sto: 'U', sfal: '300,000.000', sfbd: '0.000', bl: '500,000.000' }, // multi-PO STO that cannot be told apart: neither the sum nor one figure is the B/L
+      { key: 'U2', sto: 'U', sfal: '900,000.000', sfbd: '0.000', bl: '500,000.000' },
+      { key: 'T1', sto: 'T1', sfal: '497.799', sfbd: '0.000', bl: '500,000.000' }, // tonnes under a KG label
     ]);
 
     const c = await query(`SELECT product, material_code, material_description FROM contracts WHERE contract_id = $1`, [`${PREFIX}-CTR-S1`]);
@@ -111,12 +119,33 @@ describe('Integration: SAP Phase 3 template - SFAL / SFBD and the material', () 
     expect(num(s4.sap_sfal_qty)).toBeNull();
     expect(num(s4.sfal_qty)).toBeNull();
 
+    // a multi-PO STO whose rows repeat the voyage figure: the figure is ONE of them, on the primary row only
     const m = [...(await shipmentOf('M1')), ...(await shipmentOf('M2'))];
     expect(m).toHaveLength(2);
-    for (const row of m) {
-      expect(num(row.sap_sfal_qty)).toBe(4006260); // kept as the reference
-      expect(num(row.sfal_qty)).toBeNull(); // not auto-filled on a multi-PO STO
+    for (const row of m) expect(num(row.sap_sfal_qty)).toBe(4006260); // each row keeps SAP's own
+    expect(m.filter((row) => num(row.sfal_qty) === 4006260)).toHaveLength(1);
+    expect(m.filter((row) => num(row.sfal_qty) === null)).toHaveLength(1); // a sibling must not carry it too: the list takes the MAX and Oil Loss reads the opened row
+    expect(m.filter((row) => num(row.sap_sfal_sto_qty) === 4006260)).toHaveLength(1);
+    expect(m.find((row) => num(row.sfal_qty) === 4006260)?.id).toBe(m.find((row) => num(row.sap_sfal_sto_qty) === 4006260)?.id);
+
+    // shares: the STO's figure is their SUM
+    const p = [...(await shipmentOf('P1')), ...(await shipmentOf('P2'))];
+    expect(p.filter((row) => num(row.sfal_qty) === 496666)).toHaveLength(1);
+    expect(p.filter((row) => num(row.sfal_qty) === null)).toHaveLength(1);
+    expect(p.filter((row) => num(row.sap_sfal_sto_qty) === 496666)).toHaveLength(1);
+
+    // cannot be told apart: no STO figure and nothing filled, SAP's rows stay for whoever has to look
+    const u = [...(await shipmentOf('U1')), ...(await shipmentOf('U2'))];
+    for (const row of u) {
+      expect(num(row.sfal_qty)).toBeNull();
+      expect(num(row.sap_sfal_sto_qty)).toBeNull();
     }
+    expect(num(u[0].sap_sfal_qty)).not.toBeNull();
+
+    // 497.799 under a KG label with a B/L of 500,000 kg is tonnes
+    const t1 = (await shipmentOf('T1'))[0];
+    expect(num(t1.sap_sfal_qty)).toBe(497799);
+    expect(num(t1.sfal_qty)).toBe(497799);
   }, 120000);
 
   it('a figure a user wrote is never replaced; a figure SAP filled follows SAP; a SAP zero changes nothing', async () => {
@@ -131,8 +160,10 @@ describe('Integration: SAP Phase 3 template - SFAL / SFBD and the material', () 
       { key: 'S1', sto: 'S1', sfal: '500,000.000', sfbd: '0.000' }, // SAP changed its figure; it filled the value, so it follows
       { key: 'S2', sto: 'S2', sfal: '305,000.000', sfbd: '0.000' }, // SAP changed SFAL (user owns it) and sent 0 for SFBD (SAP's earlier 290,000 stays)
       { key: 'S4', sto: 'S4', sfal: '0.000', sfbd: '0.000' },
-      { key: 'M1', sto: 'M', sfal: '4,006,260.000', sfbd: '0.000' },
-      { key: 'M2', sto: 'M', sfal: '4,006,260.000', sfbd: '0.000' },
+      { key: 'M1', sto: 'M', sfal: '4,006,260.000', sfbd: '0.000', bl: '2,000,000.000' },
+      { key: 'M2', sto: 'M', sfal: '4,006,260.000', sfbd: '0.000', bl: '2,002,063.000' },
+      { key: 'P1', sto: 'P', sfal: '298,000.000', sfbd: '0.000', bl: '300,000.000' },
+      { key: 'P2', sto: 'P', sfal: '198,666.000', sfbd: '0.000', bl: '200,000.000' },
     ]);
 
     const s1 = (await shipmentOf('S1'))[0];
@@ -160,7 +191,11 @@ describe('Integration: SAP Phase 3 template - SFAL / SFBD and the material', () 
   }, 60000);
 
   it('a cancelled sibling does not make the STO multi-PO, and running the fill again changes nothing', async () => {
-    // M2 cancelled: M1 is then the only live row of STO M, so SAP's figure fills it
+    // M2 cancelled: M1 is then the only live row of STO M, so its own SAP figure is the STO's. (Clear what the earlier fill wrote, whichever row it chose.)
+    await query(
+      `UPDATE shipments SET sfal_qty = NULL, sap_sfal_sto_qty = NULL WHERE contract_id IN (SELECT id FROM contracts WHERE contract_id = ANY($1::text[]))`,
+      [[`${PREFIX}-CTR-M1`, `${PREFIX}-CTR-M2`]],
+    );
     await query(
       `UPDATE shipments SET status = 'CANCELLED' WHERE contract_id = (SELECT id FROM contracts WHERE contract_id = $1)`,
       [`${PREFIX}-CTR-M2`],

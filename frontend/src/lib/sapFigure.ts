@@ -1,15 +1,15 @@
 /**
  * What the Edit Shipment modal draws for the SFAL / SFBD figures now that SAP supplies them too (SAP Phase 3 template, 2026-11).
  *
- * The working figure (sfal_qty / sfbd_qty, kg) is what users see and edit. SAP's own figure for the PO x STO row (sap_sfal_qty / sap_sfbd_qty) rides beside it
- * as a reference. The badge itself comes from resolveKlipSapProvenance, fed the same way the other SAP-or-KLIP fields feed it:
+ * The working figure (sfal_qty / sfbd_qty, kg) is what users see and edit. SAP's figure for the whole STO (the payload's sap_sfal_qty / sap_sfbd_qty, derived once per STO by
+ * the backend, utils/sapFigureFill.ts) rides beside it as a reference. The badge itself comes from resolveKlipSapProvenance, fed the same way the other SAP-or-KLIP fields feed it:
  *
  *   SAP filled it       SAP's figure, no user wrote the column  -> SAP badge
  *   a user wrote it     klip_edited_fields lists the column     -> KLIP badge, and SAP's figure underneath when it differs
  *   empty               nothing                                 -> no badge
  *
- * A multi-PO STO is the fourth case: the backend keeps SAP's figure there as a reference only (SAP repeats the voyage figure on some of those POs), so the working
- * figure is empty while SAP's is not. There is no badge to show, but the reference must still be visible: that is `referenceOnly`.
+ * The fourth case is a SAP figure the working figure does not carry yet: there is no badge to show, but the reference must be visible: that is `referenceOnly`. (An STO
+ * whose SAP rows could not be told apart gets no SAP figure at all; an STO a user owns still shows SAP's next to theirs.)
  */
 
 /** Quantities are stored in kg and shown in MT. */

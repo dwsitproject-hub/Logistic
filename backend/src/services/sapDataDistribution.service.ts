@@ -62,7 +62,7 @@ import {
 import { mergeContractRecords, mergeDuplicateContractsByPo } from './contractMerge.service';
 import { normalizePoNumber, shipmentPoSapIdKey } from '../utils/contractPoIdentity';
 import { canonicalProductName } from '../utils/productAlias';
-import { buildSapFigureFillSql } from '../utils/sapFigureFill';
+import { buildSapFigureFillStatements, normalizeSapFigureKg, type SapFigureColumn } from '../utils/sapFigureFill';
 
 export interface DistributionResult {
   contractId?: string;
@@ -1117,8 +1117,9 @@ export class SapDataDistributionService {
     );
     // SAP's own SFAL / SFBD for this PO x STO row. They go to sap_sfal_qty / sap_sfbd_qty only; sfal_qty / sfbd_qty (what users see and edit) are filled afterwards,
     // once per import, by fillSapFigures - never overwriting a figure a user wrote.
-    const sfalQty = this.parseSapFigureQtyKg(shipmentData.sfal, shipmentData.sfal_qty);
-    const sfbdQty = this.parseSapFigureQtyKg(shipmentData.sfbd, shipmentData.sfbd_qty);
+    // A figure in tonnes under a KG label is read as kg by the B/L of the same row (normalizeSapFigureKg).
+    const sfalQty = normalizeSapFigureKg(this.parseSapFigureQtyKg(shipmentData.sfal, shipmentData.sfal_qty), blQuantity);
+    const sfbdQty = normalizeSapFigureKg(this.parseSapFigureQtyKg(shipmentData.sfbd, shipmentData.sfbd_qty), blQuantity);
     const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? normalizeSapQtyToKg(
       this.parseNumber(shipmentData.quantity_delivered),
       shipmentData.quantity_delivery_uom,
@@ -2504,13 +2505,23 @@ export class SapDataDistributionService {
     query: (text: string) => Promise<{ rowCount?: number | null }>;
   }): Promise<{ sfal: number; sfbd: number }> {
     const filled = { sfal: 0, sfbd: 0 };
-    try {
-      filled.sfal = (await db.query(buildSapFigureFillSql('sfal_qty'))).rowCount ?? 0;
-      filled.sfbd = (await db.query(buildSapFigureFillSql('sfbd_qty'))).rowCount ?? 0;
-      if (filled.sfal > 0 || filled.sfbd > 0) logger.info('SAP SFAL / SFBD filled on shipments', filled);
-    } catch (error) {
-      logger.error('Could not fill SFAL / SFBD from SAP figures; the next import retries', { error });
-    }
+    // One column at a time, and a failure of one does not stop the other: the statements are independent and the next import repeats them.
+    const run = async (column: SapFigureColumn): Promise<number> => {
+      const sql = buildSapFigureFillStatements(column);
+      try {
+        await db.query(sql.clearReference);
+        await db.query(sql.setReference);
+        const written = (await db.query(sql.setWorking)).rowCount ?? 0;
+        await db.query(sql.clearSiblings);
+        return written;
+      } catch (error) {
+        logger.error(`Could not fill ${column} from SAP figures; the next import retries`, { error });
+        return 0;
+      }
+    };
+    filled.sfal = await run('sfal_qty');
+    filled.sfbd = await run('sfbd_qty');
+    if (filled.sfal > 0 || filled.sfbd > 0) logger.info('SAP SFAL / SFBD filled on shipments', filled);
     return filled;
   }
 

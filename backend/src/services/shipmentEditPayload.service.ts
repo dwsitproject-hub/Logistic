@@ -338,9 +338,17 @@ async function loadPortsAndInfo(
       s.actual_vessel_qty_receive,
       s.sfal_qty,
       s.sfbd_qty,
-      -- SAP's own figure for this PO x STO row (reference beside the working figure; migration 255)
-      s.sap_sfal_qty,
-      s.sap_sfbd_qty,
+      -- SAP's figure for the whole STO (reference beside the working figure; migrations 255 and 263). SFAL / SFBD belong to the shipment, not to a PO: the figure is derived
+      -- once per STO on its primary row (utils/sapFigureFill.ts), and the opened row may be another one, so a sibling's is read too. Where SAP's rows of the STO could not be
+      -- told apart there is none: a single PO's share shown as "SAP" next to the STO's figure would mislead.
+      COALESCE(s.sap_sfal_sto_qty, (
+        SELECT MAX(o.sap_sfal_sto_qty) FROM shipments o
+         WHERE o.shipment_id = s.shipment_id AND o.id <> s.id AND NULLIF(TRIM(s.shipment_id::text), '') IS NOT NULL
+      )) AS sap_sfal_qty,
+      COALESCE(s.sap_sfbd_sto_qty, (
+        SELECT MAX(o.sap_sfbd_sto_qty) FROM shipments o
+         WHERE o.shipment_id = s.shipment_id AND o.id <> s.id AND NULLIF(TRIM(s.shipment_id::text), '') IS NOT NULL
+      )) AS sap_sfbd_qty,
       s.vessel_oa_actual,
       s.vessel_oa_budget,
       s.bl_quantity,
