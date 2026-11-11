@@ -205,7 +205,6 @@ export default function DocumentsPage() {
       get('/commercial-documents/filter-options/creators'),
     ]).then(([plants, incoterms, products, suppliers, creatorList]) => {
       setCreators(((creatorList as { creators?: Array<{ userId: string; name: string }> } | null)?.creators) || [])
-      return
       setOptions({
         plants: asList(plants, 'groupPlants'),
         incoterms: asList(incoterms, 'incoterms'),
