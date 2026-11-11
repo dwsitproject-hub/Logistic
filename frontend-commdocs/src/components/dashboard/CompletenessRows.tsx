@@ -36,6 +36,9 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
         <span className="r" role="columnheader">
           %
         </span>
+        <span className="r" role="columnheader" title="Documents uploaded out of all the documents these POs should have (11 per PO)">
+          Uploaded / Total
+        </span>
         <span className="r" role="columnheader">
           POs
         </span>
@@ -77,6 +80,9 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
               <span className="r" role="cell">
                 <b>{r.completenessPct.toFixed(1)}%</b>
               </span>
+              <span className="r" role="cell" title={`${r.uploadedSlots.toLocaleString('en-US')} documents uploaded of ${r.totalSlots.toLocaleString('en-US')} (11 per PO)`}>
+                {r.uploadedSlots.toLocaleString('en-US')} <span className="hint">/ {r.totalSlots.toLocaleString('en-US')}</span>
+              </span>
               <span className="r" role="cell">
                 {r.contractCount.toLocaleString('en-US')}
               </span>
@@ -97,8 +103,8 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
                     const n = r.byType?.[t] || 0
                     const p = pct(n, r.contractCount)
                     return (
-                      <div className="cr-doc" key={t} title={`${DOCUMENT_LABELS[t]}: ${n.toLocaleString('en-US')} of ${r.contractCount.toLocaleString('en-US')} POs`}>
-                        <span className="cr-doc-name">{DOCUMENT_LABELS[t]}</span>
+                      <div className="cr-doc" key={t} title={`${DOCUMENT_LABELS[t].toUpperCase()}: ${n.toLocaleString('en-US')} of ${r.contractCount.toLocaleString('en-US')} POs`}>
+                        <span className="cr-doc-name">{DOCUMENT_LABELS[t].toUpperCase()}</span>
                         <span className="track">
                           <i className="a" style={{ width: `${p}%` }} />
                         </span>

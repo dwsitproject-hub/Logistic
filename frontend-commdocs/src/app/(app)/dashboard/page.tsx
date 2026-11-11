@@ -90,7 +90,7 @@ export default function DashboardPage() {
     const rows = DOCUMENT_TYPES.map((type) => {
       const total = summary?.[type]?.totalCount ?? 0
       const uploaded = summary?.[type]?.uploadedCount ?? 0
-      return { type, label: DOCUMENT_LABELS[type], total, uploaded, missing: Math.max(0, total - uploaded), pct: pct(uploaded, total) }
+      return { type, label: DOCUMENT_LABELS[type].toUpperCase(), total, uploaded, missing: Math.max(0, total - uploaded), pct: pct(uploaded, total) }
     })
     return order === 'complete' ? rows.sort((x, y) => y.pct - x.pct || x.missing - y.missing) : rows.sort((x, y) => y.missing - x.missing || x.pct - y.pct)
   }, [summary, order])
@@ -178,28 +178,30 @@ export default function DashboardPage() {
               </div>
               {summary ? (
                 <div className="cr">
-                  <div className="cr-row cr-head" style={{ gridTemplateColumns: 'minmax(8rem, 15rem) minmax(0, 1fr) 3.5rem 5.5rem 5.5rem' }}>
+                  <div className="cr-row cr-docs cr-head">
                     <span>Document</span>
                     <span>POs with the document</span>
                     <span className="r">%</span>
-                    <span className="r cr-hide">With it</span>
-                    <span className="r cr-hide">Missing</span>
+                    <span className="r">POs with it</span>
+                    <span className="r cr-hide">POs missing it</span>
+                    <span className="r cr-hide">Total POs</span>
                   </div>
                   {docRows.map((d) => (
-                    <div className="cr-row" key={d.type} style={{ gridTemplateColumns: 'minmax(8rem, 15rem) minmax(0, 1fr) 3.5rem 5.5rem 5.5rem', cursor: 'default' }}>
+                    <div className="cr-row cr-docs" key={d.type} style={{ cursor: 'default' }}>
                       <span className="cr-name" title={d.label}>
                         <b>{d.label}</b>
                       </span>
-                      <span className="track" title={`${d.label}: ${d.uploaded.toLocaleString('en-US')} of ${plural(d.total, 'PO')} have it, ${d.missing.toLocaleString('en-US')} missing`}>
+                      <span className="track" title={`${d.label}: ${d.uploaded.toLocaleString('en-US')} of ${plural(d.total, 'PO')} have it, ${d.missing.toLocaleString('en-US')} do not`}>
                         <i className="a" style={{ width: `${d.pct}%` }} />
                       </span>
                       <span className="r">
                         <b>{d.pct.toFixed(1)}%</b>
                       </span>
-                      <span className="r cr-hide">{d.uploaded.toLocaleString('en-US')}</span>
+                      <span className="r">{d.uploaded.toLocaleString('en-US')}</span>
                       <span className="r cr-hide" style={{ color: d.missing ? 'var(--bad)' : undefined }}>
                         {d.missing.toLocaleString('en-US')}
                       </span>
+                      <span className="r cr-hide">{d.total.toLocaleString('en-US')}</span>
                     </div>
                   ))}
                 </div>
