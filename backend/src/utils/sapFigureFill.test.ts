@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SAP_FIGURE_BL_TOLERANCE,
+  SAP_FIGURE_REPEATED_BL_SPREAD,
   buildSapFigureDecisionPreviewSql,
   buildSapFigureFillStatements,
   normalizeSapFigureKg,
@@ -75,13 +76,31 @@ describe('the per-STO fill statements', () => {
     const oneRow = s.indexOf('WHEN n_rows = 1 THEN sum_sap');
     const repeated = s.indexOf('THEN max_sap');
     const sumFits = s.indexOf(`WHEN ABS(sum_sap / sum_bl - 1) <= ${SAP_FIGURE_BL_TOLERANCE}`);
+    const equalUnequalBl = s.indexOf(`AND max_bl_f / min_bl_f > ${SAP_FIGURE_REPEATED_BL_SPREAD} THEN max_sap`);
     const ratio = s.indexOf('AND max_ratio / min_ratio <=');
     expect(oneRow).toBeGreaterThan(-1);
     expect(repeated).toBeGreaterThan(oneRow);
     expect(sumFits).toBeGreaterThan(repeated); // two POs of 500,000 repeating 1,000,000 are not shares of 2,000,000
-    expect(ratio).toBeGreaterThan(sumFits);
+    // the same figure on POs whose B/L differ is the whole voyage figure, whatever the STO's total B/L (KLIP may lack one of SAP's POs); a sum that fits the B/L still wins
+    expect(equalUnequalBl).toBeGreaterThan(sumFits);
+    expect(ratio).toBeGreaterThan(equalUnequalBl);
+    expect(s).toContain('MIN(bl) FILTER (WHERE sap > 0 AND bl > 0) AS min_bl_f');
     // without a B/L nothing can be decided for a multi-row STO
     expect(s).toContain('WHEN COALESCE(sum_bl, 0) <= 0 THEN NULL');
+  });
+
+  it('read the B/L from the latest SAP row of each PO x STO: shipments.bl_quantity is empty (the importer never fills it)', () => {
+    const s = flat(sfal.setWorking);
+    expect(s).toContain("spd.data->'raw'->>'B/L Quantity'");
+    expect(s).toContain("spd.data->'raw'->>'B/L Qty UoM'");
+    expect(s).toContain('latest_sap_row AS (');
+    expect(s).toContain('DISTINCT ON (TRIM(spd.contract_number), TRIM(spd.sto_number::text)) spd.id');
+    expect(s).toContain('spd.created_at DESC');
+    expect(s).toContain('COALESCE(b.bl_kg, s.bl_quantity) AS bl');
+    // the number is cast only after its text passed the format test, whatever order the planner filters in
+    expect(s).toMatch(/CASE WHEN x\.bl_text ~ '\^\[0-9\]\+\(\\\.\[0-9\]\+\)\?\$' THEN x\.bl_text::numeric/);
+    // MT-family units are x1000, anything else is kg, as normalizeSapQtyToKg does
+    expect(s).toContain("IN ('MT', 'TO', 'TON', 'TONS', 'T')");
   });
 
   it('the preview reads the same decision and writes nothing', () => {
