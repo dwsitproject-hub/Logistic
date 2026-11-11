@@ -7,6 +7,7 @@ import logger from '../utils/logger';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import {
   buildCommercialDocumentStoredName,
+  COMMERCIAL_DOCUMENT_TYPES,
   commercialDocumentTypeLabel,
   commercialDocumentUploadPermissionKey,
   commercialDocumentUploadRelativeDir,
@@ -15,6 +16,7 @@ import {
   isCommercialDocumentType,
 } from '../utils/commercialDocumentsConstants';
 import {
+  buildCommercialDocumentsCompletenessByCreatorQuery,
   buildCommercialDocumentsCompletenessByPlantQuery,
   buildCommercialDocumentsListQuery,
   buildCommercialDocumentsSummaryQuery,
@@ -196,6 +198,129 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
   } catch (err) {
     logger.error('getCommercialDocuments error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch commercial documents' } });
+  }
+};
+
+/**
+ * Completeness by SAP creator (GET /api/commercial-documents/completeness-by-creator). The creator comes from the ME2N report loaded by an
+ * administrator (commercial_po_creators); a PO the report does not know belongs to the row with an empty createdBy.
+ */
+export const getCommercialDocumentsCompletenessByCreator = async (req: AuthRequest, res: Response) => {
+  try {
+    const ytd = defaultYtdRange();
+    const q = req.query as Record<string, string | undefined>;
+    const dateFrom = q.dateFrom || ytd.dateFrom;
+    const dateTo = q.dateTo || ytd.dateTo;
+    const { sql, values } = buildCommercialDocumentsCompletenessByCreatorQuery({
+      dateFrom,
+      dateTo,
+      plant: parseQueryStringList(req.query.plant),
+    });
+    const [result, loaded] = await Promise.all([
+      query(sql, values),
+      query('SELECT COUNT(*)::int AS pos, COUNT(DISTINCT created_by)::int AS creators, MAX(loaded_at) AS loaded_at FROM commercial_po_creators'),
+    ]);
+    const creators = result.rows.map((row) => {
+      const contractCount = Number(row.contract_count) || 0;
+      const uploadedSlots = Number(row.uploaded_slots) || 0;
+      const totalSlots = Number(row.total_slots) || 0;
+      const byType: Record<string, number> = {};
+      for (const type of COMMERCIAL_DOCUMENT_TYPES) byType[type] = Number(row[`uploaded_${type}`]) || 0;
+      return {
+        createdBy: String(row.created_by || ''),
+        displayName: row.display_name ? String(row.display_name) : null,
+        contractCount,
+        uploadedSlots,
+        totalSlots,
+        missingSlots: Math.max(0, totalSlots - uploadedSlots),
+        completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
+        completeCount: Number(row.complete_count) || 0,
+        emptyCount: Number(row.empty_count) || 0,
+        byType,
+      };
+    });
+    return res.json({
+      success: true,
+      data: {
+        creators,
+        loaded: {
+          pos: Number(loaded.rows[0]?.pos) || 0,
+          creators: Number(loaded.rows[0]?.creators) || 0,
+          loadedAt: loaded.rows[0]?.loaded_at ?? null,
+        },
+        filters: { dateFrom, dateTo },
+      },
+    });
+  } catch (err) {
+    logger.error('getCommercialDocumentsCompletenessByCreator error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch completeness by creator' } });
+  }
+};
+
+const MAX_CREATOR_ROWS = 20000;
+
+/**
+ * Load PO -> creator pairs from the SAP ME2N report (POST /api/commercial-documents/po-creators, ADMIN). The browser reads the Excel file and
+ * sends the pairs; a PO already known takes the new creator. Nothing else about a PO changes.
+ */
+export const importCommercialPoCreators = async (req: AuthRequest, res: Response) => {
+  try {
+    const body = (req.body || {}) as { rows?: unknown; source_file?: unknown };
+    if (!Array.isArray(body.rows) || body.rows.length === 0) {
+      return res.status(400).json({ success: false, error: { message: 'rows is required' } });
+    }
+    if (body.rows.length > MAX_CREATOR_ROWS) {
+      return res.status(400).json({ success: false, error: { message: `At most ${MAX_CREATOR_ROWS} rows per request` } });
+    }
+    const pos: string[] = [];
+    const creators: string[] = [];
+    for (const raw of body.rows as Array<Record<string, unknown>>) {
+      const po = String(raw?.po_number ?? '').trim();
+      const by = String(raw?.created_by ?? '').trim();
+      if (!po || !by || po.length > 40 || by.length > 40) {
+        return res.status(400).json({ success: false, error: { message: 'Every row needs a po_number and a created_by (up to 40 characters)' } });
+      }
+      pos.push(po);
+      creators.push(by);
+    }
+    const sourceFile = String(body.source_file ?? '').trim().slice(0, 200) || null;
+    await query(
+      `INSERT INTO commercial_po_creators (po_number, created_by, source_file, loaded_by)
+       SELECT t.po, t.by, $3, $4::uuid FROM unnest($1::text[], $2::text[]) AS t(po, by)
+       ON CONFLICT (po_number) DO UPDATE
+         SET created_by = EXCLUDED.created_by, source_file = EXCLUDED.source_file, loaded_at = CURRENT_TIMESTAMP, loaded_by = EXCLUDED.loaded_by`,
+      [pos, creators, sourceFile, req.user?.id ?? null],
+    );
+    auditCommercial(req, 'IMPORT_PO_CREATORS', undefined, { rows: pos.length, source_file: sourceFile });
+    return res.json({ success: true, data: { loaded: pos.length } });
+  } catch (err) {
+    logger.error('importCommercialPoCreators error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load the creators' } });
+  }
+};
+
+/** Name an SAP creator number (PUT /api/commercial-documents/creator-names, ADMIN). An empty name removes it, and the number shows again. */
+export const setCommercialCreatorName = async (req: AuthRequest, res: Response) => {
+  try {
+    const createdBy = String(req.body?.created_by ?? '').trim();
+    const name = String(req.body?.display_name ?? '').trim().slice(0, 120);
+    if (!createdBy || createdBy.length > 40) {
+      return res.status(400).json({ success: false, error: { message: 'created_by is required' } });
+    }
+    if (!name) {
+      await query('DELETE FROM commercial_creator_names WHERE created_by = $1', [createdBy]);
+    } else {
+      await query(
+        `INSERT INTO commercial_creator_names (created_by, display_name, updated_by) VALUES ($1, $2, $3::uuid)
+         ON CONFLICT (created_by) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = CURRENT_TIMESTAMP, updated_by = EXCLUDED.updated_by`,
+        [createdBy, name, req.user?.id ?? null],
+      );
+    }
+    auditCommercial(req, 'SET_CREATOR_NAME', undefined, { created_by: createdBy, display_name: name || null });
+    return res.json({ success: true, data: { created_by: createdBy, display_name: name || null } });
+  } catch (err) {
+    logger.error('setCommercialCreatorName error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to save the name' } });
   }
 };
 

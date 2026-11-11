@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
+import { CreatorPanel } from '@/components/dashboard/CreatorPanel'
 import { ErrorNote, Spinner } from '@/components/ui'
 import { apiData, errorMessage, isAbort, toQuery } from '@/lib/api'
 import { DOCUMENT_LABELS, DOCUMENT_TYPES } from '@/lib/documentTypes'
@@ -24,7 +25,7 @@ const PERIODS: Array<[DatePreset, string]> = [
  * checklist slots out of POs x 11. The bars split each plant's POs into all eleven / some / none.
  */
 export default function DashboardPage() {
-  const { access } = useSession()
+  const { access, user } = useSession()
   const [period, setPeriod] = useState<DatePreset>('ytd')
   const [order, setOrder] = useState<'complete' | 'gaps'>('complete')
   const [showAll, setShowAll] = useState(false)
@@ -202,6 +203,7 @@ export default function DashboardPage() {
           </div>
         ) : null}
       </div>
+      <CreatorPanel range={range} isAdmin={user?.role === 'ADMIN'} />
     </>
   )
 }

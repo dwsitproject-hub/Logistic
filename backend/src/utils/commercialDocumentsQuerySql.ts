@@ -431,6 +431,39 @@ export function buildCommercialDocumentsCompletenessByPlantQuery(
   return { sql, values: scope.values };
 }
 
+/**
+ * Documents uploaded vs total by the person who created the PO in SAP (commercial_po_creators, loaded from the ME2N report).
+ * Same scope and same slots as the by-plant query: a PO counts for 11 slots, and an uploaded type fills one. POs the report does
+ * not know come back with an empty created_by, so the totals still add up to every PO in the period.
+ */
+export function buildCommercialDocumentsCompletenessByCreatorQuery(
+  params: CommercialDocumentsScopeParams,
+): { sql: string; values: unknown[] } {
+  const scope = buildScopeWhere(params);
+  const uploadedExpr = uploadedTypesExpr();
+  const perType = COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.map(
+    (flag) => `COUNT(*) FILTER (WHERE e.${flag})::int AS uploaded_${flag.replace(/^doc_/, '')}`,
+  ).join(',\n      ');
+  const sql = `
+    ${buildCommercialDocumentsBaseCte()}
+    SELECT
+      COALESCE(NULLIF(TRIM(pc.created_by), ''), '') AS created_by,
+      MAX(cn.display_name) AS display_name,
+      COUNT(*)::int AS contract_count,
+      COALESCE(SUM(${uploadedExpr}), 0)::int AS uploaded_slots,
+      (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS total_slots,
+      COUNT(*) FILTER (WHERE (${uploadedExpr}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_count,
+      COUNT(*) FILTER (WHERE (${uploadedExpr}) = 0)::int AS empty_count,
+      ${perType}
+    FROM enriched e
+    LEFT JOIN commercial_po_creators pc ON pc.po_number = NULLIF(TRIM(e.po_number), '')
+    LEFT JOIN commercial_creator_names cn ON cn.created_by = pc.created_by
+    WHERE ${scope.where.join(' AND ')}
+    GROUP BY 1
+  `;
+  return { sql, values: scope.values };
+}
+
 export function buildCommercialDocumentsSummaryQuery(params: CommercialDocumentsScopeParams): {
   sql: string;
   values: unknown[];
