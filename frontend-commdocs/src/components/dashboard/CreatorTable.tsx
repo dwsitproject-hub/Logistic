@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useMemo, useState } from 'react'
 import { CompletenessRows } from '@/components/dashboard/CompletenessRows'
 import { ErrorNote, Spinner } from '@/components/ui'
-import { longDate, plural } from '@/lib/format'
+import { longDate, plural, poUploaded } from '@/lib/format'
 import type { CreatorCompleteness } from '@/lib/types'
 
 type Order = 'complete' | 'gaps'
@@ -43,10 +43,11 @@ export function CreatorTable({
 
   const rows = useMemo(() => {
     const list = data?.creators || []
-    const ratio = (c: CreatorCompleteness) => (c.totalSlots ? c.uploadedSlots / c.totalSlots : 0)
+    // The share of POs uploaded (at least one document), the same % the rows show.
+    const share = (c: CreatorCompleteness) => poUploaded(c.contractCount, c.emptyCount).pct
     const sorted = [...list].sort((a, b) => {
-      if (order === 'gaps') return ratio(a) - ratio(b) || b.missingSlots - a.missingSlots
-      return ratio(b) - ratio(a) || b.contractCount - a.contractCount
+      if (order === 'gaps') return share(a) - share(b) || b.emptyCount - a.emptyCount
+      return share(b) - share(a) || b.contractCount - a.contractCount
     })
     return showAll ? sorted : sorted.slice(0, 10)
   }, [data, order, showAll])

@@ -7,7 +7,7 @@ import { CreatorTable, type CreatorPayload } from '@/components/dashboard/Creato
 import { ErrorNote, Spinner } from '@/components/ui'
 import { apiData, errorMessage, isAbort, toQuery } from '@/lib/api'
 import { DOCUMENT_LABELS, DOCUMENT_TYPES } from '@/lib/documentTypes'
-import { pct, plantLabel, plural, presetRange, type DatePreset } from '@/lib/format'
+import { pct, plantLabel, plural, poUploaded, presetRange, type DatePreset } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import type { PlantCompleteness, SummaryCard } from '@/lib/types'
 
@@ -96,15 +96,18 @@ export default function DashboardPage() {
   }, [summary, order])
 
   const sorted = useMemo(() => {
-    const ratio = (p: PlantCompleteness) => (p.totalSlots ? p.uploadedSlots / p.totalSlots : 0)
+    // The share of POs uploaded (at least one document), the same % the rows show.
+    const share = (p: PlantCompleteness) => poUploaded(p.contractCount, p.emptyCount).pct
     const list =
       order === 'complete'
-        ? [...plants].sort((a, b) => ratio(b) - ratio(a) || b.uploadedSlots - a.uploadedSlots || a.plant.localeCompare(b.plant))
-        : [...plants].sort((a, b) => ratio(a) - ratio(b) || b.missingSlots - a.missingSlots || a.plant.localeCompare(b.plant))
+        ? [...plants].sort((a, b) => share(b) - share(a) || b.contractCount - a.contractCount || a.plant.localeCompare(b.plant))
+        : [...plants].sort((a, b) => share(a) - share(b) || b.emptyCount - a.emptyCount || a.plant.localeCompare(b.plant))
     return showAll ? list : list.slice(0, 10)
   }, [plants, order, showAll])
 
   const t = totals
+  const up = poUploaded(t?.contractCount ?? 0, t?.emptyCount ?? 0)
+  const upPct = up.pct
   return (
     <>
       <div className="page-head">
@@ -135,11 +138,9 @@ export default function DashboardPage() {
           <small>{t ? `${pct(t.completeCount, t.contractCount)}% of POs` : ''}</small>
         </div>
         <div className="panel kpi">
-          <span>Documents uploaded</span>
-          <b style={{ color: t ? (t.completenessPct >= 80 ? 'var(--ok)' : t.completenessPct >= 50 ? 'var(--warn)' : 'var(--bad)') : undefined }}>
-            {t ? `${t.completenessPct.toFixed(1)}%` : '…'}
-          </b>
-          <small>{t ? `${t.uploadedSlots.toLocaleString('en-US')} of ${t.totalSlots.toLocaleString('en-US')} slots (11 per PO)` : ''}</small>
+          <span>POs uploaded</span>
+          <b style={{ color: t ? (upPct >= 80 ? 'var(--ok)' : upPct >= 50 ? 'var(--warn)' : 'var(--bad)') : undefined }}>{t ? `${upPct.toFixed(1)}%` : '…'}</b>
+          <small>{t ? `${up.withDocs.toLocaleString('en-US')} of ${t.contractCount.toLocaleString('en-US')} POs have at least one document` : ''}</small>
         </div>
         <div className="panel kpi">
           <span>POs with nothing yet</span>

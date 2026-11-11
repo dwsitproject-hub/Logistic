@@ -3,7 +3,7 @@
 import { ChevronRight } from 'lucide-react'
 import { useState } from 'react'
 import { DOCUMENT_LABELS, DOCUMENT_TYPES } from '@/lib/documentTypes'
-import { pct } from '@/lib/format'
+import { pct, poUploaded } from '@/lib/format'
 
 export type CompletenessRow = {
   key: string
@@ -21,8 +21,8 @@ export type CompletenessRow = {
 }
 
 /**
- * The rows of Dashboard > Completeness (By plant and By user): the name, a bar of the POs by how many documents they have, the completeness %, the
- * number of POs, and how many have all 11 or nothing yet. A row opens (click or Enter) to show, for that plant or person, how many POs have each
+ * The rows of Dashboard > Completeness (By plant and By user): the name, a bar of the POs by how many documents they have, the % of POs uploaded (a PO
+ * is uploaded when it has at least one document), uploaded / total POs, and how many POs have all 11 or nothing yet. A row opens (click or Enter) to show, for that plant or person, how many POs have each
  * of the 11 document types. One row is open at a time.
  */
 export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; rows: CompletenessRow[] }) {
@@ -32,15 +32,12 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
       <div className="cr-row cr-head" role="row">
         <span />
         <span role="columnheader">{firstLabel}</span>
-        <span role="columnheader">Documents uploaded</span>
+        <span role="columnheader" title="Each PO by how many of its 11 documents are uploaded">POs by documents uploaded</span>
         <span className="r" role="columnheader">
           %
         </span>
-        <span className="r" role="columnheader" title="Documents uploaded out of all the documents these POs should have (11 per PO)">
-          Uploaded / Total
-        </span>
-        <span className="r" role="columnheader">
-          POs
+        <span className="r" role="columnheader" title="POs that have at least one document uploaded, out of all POs">
+          Uploaded / Total POs
         </span>
         <span className="r cr-hide" role="columnheader">
           All 11
@@ -51,6 +48,7 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
       </div>
       {rows.map((r) => {
         const some = Math.max(0, r.contractCount - r.completeCount - r.emptyCount)
+        const up = poUploaded(r.contractCount, r.emptyCount)
         const w = (n: number) => (r.contractCount ? `${(n / r.contractCount) * 100}%` : '0%')
         const canOpen = Boolean(r.byType)
         const isOpen = open === r.key
@@ -78,13 +76,10 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
                 </span>
               </span>
               <span className="r" role="cell">
-                <b>{r.completenessPct.toFixed(1)}%</b>
+                <b>{up.pct.toFixed(1)}%</b>
               </span>
-              <span className="r" role="cell" title={`${r.uploadedSlots.toLocaleString('en-US')} documents uploaded of ${r.totalSlots.toLocaleString('en-US')} (11 per PO)`}>
-                {r.uploadedSlots.toLocaleString('en-US')} <span className="hint">/ {r.totalSlots.toLocaleString('en-US')}</span>
-              </span>
-              <span className="r" role="cell">
-                {r.contractCount.toLocaleString('en-US')}
+              <span className="r" role="cell" title={`${up.withDocs.toLocaleString('en-US')} of ${r.contractCount.toLocaleString('en-US')} POs have at least one document`}>
+                {up.withDocs.toLocaleString('en-US')} <span className="hint">/ {r.contractCount.toLocaleString('en-US')}</span>
               </span>
               <span className="r cr-hide" role="cell">
                 {r.completeCount.toLocaleString('en-US')}
@@ -96,7 +91,7 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
             {isOpen && r.byType ? (
               <div className="cr-detail">
                 <p className="hint" style={{ margin: '0 0 8px' }}>
-                  POs of <b>{r.name}</b> that have each document ({r.contractCount.toLocaleString('en-US')} POs, {r.uploadedSlots.toLocaleString('en-US')} of {r.totalSlots.toLocaleString('en-US')} documents)
+                  POs of <b>{r.name}</b> that have each document ({up.withDocs.toLocaleString('en-US')} of {r.contractCount.toLocaleString('en-US')} POs have at least one, {r.completeCount.toLocaleString('en-US')} have all 11)
                 </p>
                 <div className="cr-doc-grid">
                   {DOCUMENT_TYPES.map((t) => {
