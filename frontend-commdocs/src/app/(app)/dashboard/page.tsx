@@ -47,7 +47,8 @@ export default function DashboardPage() {
       { signal: ctrl.signal },
     )
       .then((d) => {
-        setPlants(d.plants || [])
+        // Only plants with a name: POs without a Region/Plant (the "Unassigned" bucket) are not listed. The KPIs above still count every PO.
+        setPlants((d.plants || []).filter((p) => p.plant && p.plant !== 'Unassigned'))
         setTotals(d.totals || null)
         setLoading(false)
       })

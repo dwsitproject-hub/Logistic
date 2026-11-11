@@ -11,6 +11,7 @@ import {
   getCommercialDocumentsCompletenessByCreator,
   getCommercialDocumentsCompletenessByPlant,
   getCommercialDocumentsSummary,
+  getCommercialPoCreatorsStatus,
   importCommercialPoCreators,
   syncCommercialPoCreators,
   uploadCommercialDocument,
@@ -46,6 +47,7 @@ router.get(
 );
 router.get('/completeness-by-creator', authenticateToken, canViewCompleteness, getCommercialDocumentsCompletenessByCreator);
 router.post('/po-creators', authenticateToken, authorize('ADMIN'), importCommercialPoCreators);
+router.get('/po-creators/status', authenticateToken, authorize('ADMIN'), getCommercialPoCreatorsStatus);
 router.post('/po-creators/sync', authenticateToken, authorize('ADMIN'), syncCommercialPoCreators);
 router.get('/history/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentHistory);
 router.get('/files/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentFiles);

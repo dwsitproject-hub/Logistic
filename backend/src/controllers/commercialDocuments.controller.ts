@@ -37,7 +37,10 @@ import { buildTandaTerimaContractsByExtNoSql } from '../utils/tandaTerimaQuerySq
 import { logAudit } from '../middleware/audit';
 import {
   isPoCreatorsAutoLoadEnabled,
+  isPoCreatorsRunning,
   latestPoCreatorsRuns,
+  listPoCreatorRuns,
+  poCreatorsCron,
   runPoCreatorsAutoLoad,
   upsertPoCreators,
 } from '../services/poCreators.service';
@@ -302,6 +305,36 @@ export const importCommercialPoCreators = async (req: AuthRequest, res: Response
   } catch (err) {
     logger.error('importCommercialPoCreators error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to load the creators' } });
+  }
+};
+
+/**
+ * The ME2N Report page (GET /api/commercial-documents/po-creators/status, ADMIN): whether the schedule is on and when, how much is loaded, and the
+ * latest runs (the schedule's and the Sync button's), so a quiet morning and a problem do not look the same.
+ */
+export const getCommercialPoCreatorsStatus = async (_req: AuthRequest, res: Response) => {
+  try {
+    const [loaded, runs] = await Promise.all([
+      query('SELECT COUNT(*)::int AS pos, COUNT(DISTINCT created_by)::int AS creators, MAX(loaded_at) AS loaded_at FROM commercial_po_creators'),
+      listPoCreatorRuns(30),
+    ]);
+    return res.json({
+      success: true,
+      data: {
+        running: isPoCreatorsRunning(),
+        enabled: isPoCreatorsAutoLoadEnabled(),
+        cron: poCreatorsCron(),
+        loaded: {
+          pos: Number(loaded.rows[0]?.pos) || 0,
+          creators: Number(loaded.rows[0]?.creators) || 0,
+          loadedAt: loaded.rows[0]?.loaded_at ?? null,
+        },
+        runs,
+      },
+    });
+  } catch (err) {
+    logger.error('getCommercialPoCreatorsStatus error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to read the ME2N status' } });
   }
 };
 

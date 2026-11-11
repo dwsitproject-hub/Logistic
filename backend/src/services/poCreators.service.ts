@@ -32,6 +32,11 @@ export type PoCreatorsRunResult = {
   detail: string | null;
 };
 
+/** The schedule: PO_CREATORS_AUTO_LOAD_CRON, or the default (half an hour after each tick of the SAP import). */
+export function poCreatorsCron(): string {
+  return process.env.PO_CREATORS_AUTO_LOAD_CRON || '30 6-10 * * *';
+}
+
 export function isPoCreatorsAutoLoadEnabled(): boolean {
   return String(process.env.PO_CREATORS_AUTO_LOAD_ENABLED || 'false').toLowerCase() === 'true';
 }
@@ -218,4 +223,48 @@ export async function latestPoCreatorsRuns(): Promise<{ lastLoaded: PoCreatorsRu
     query(`SELECT ${cols} FROM commercial_po_creator_runs ORDER BY started_at DESC LIMIT 1`),
   ]);
   return { lastLoaded: runInfo(loaded.rows[0]), lastRun: runInfo(last.rows[0]) };
+}
+
+/** True while a load is running (the ME2N Report page disables its buttons). */
+export function isPoCreatorsRunning(): boolean {
+  return running;
+}
+
+export type PoCreatorRunRow = {
+  id: string;
+  trigger: string;
+  startedAt: string;
+  finishedAt: string | null;
+  outcome: string;
+  fileName: string | null;
+  fileMtime: string | null;
+  rows: number | null;
+  creators: number | null;
+  conflicts: number | null;
+  skipped: number | null;
+  detail: string | null;
+};
+
+/** The latest runs, newest first, for the ME2N Report page. */
+export async function listPoCreatorRuns(limit = 30): Promise<PoCreatorRunRow[]> {
+  const r = await query(
+    `SELECT id, trigger_source, started_at, finished_at, outcome, file_name, file_mtime, rows_loaded, creators, conflicts, skipped, detail
+     FROM commercial_po_creator_runs ORDER BY started_at DESC LIMIT $1`,
+    [Math.max(1, Math.min(200, limit))],
+  );
+  const iso = (v: unknown) => (v ? new Date(String(v)).toISOString() : null);
+  return r.rows.map((row) => ({
+    id: String(row.id),
+    trigger: String(row.trigger_source),
+    startedAt: new Date(String(row.started_at)).toISOString(),
+    finishedAt: iso(row.finished_at),
+    outcome: String(row.outcome),
+    fileName: row.file_name ? String(row.file_name) : null,
+    fileMtime: iso(row.file_mtime),
+    rows: row.rows_loaded === null ? null : Number(row.rows_loaded),
+    creators: row.creators === null ? null : Number(row.creators),
+    conflicts: row.conflicts === null ? null : Number(row.conflicts),
+    skipped: row.skipped === null ? null : Number(row.skipped),
+    detail: row.detail ? String(row.detail) : null,
+  }));
 }
