@@ -50,7 +50,14 @@ export interface PartnerRefreshResult {
 
 const EMPTY: PartnerRefreshResult = { refreshed: false, records: 0, created: 0, changed: 0, retired: 0, changedRecordIds: [], bellsQueued: 0, durationMs: 0 };
 
-/** One text per run that changes whenever any table the records are built from changes (or the date does). */
+/**
+ * Which rules turn the tables into records. Part of the signature: a deploy that changes WHAT is sent (not the data) must make the next run rebuild, or the
+ * records already stored keep the old answer until some source row happens to change. Raise it with every change of the rules in recordSql / recordBuilder.
+ *   2026-11-11  a shipment is sent only with a vessel AND some schedule (partnerIneligibleReason)
+ */
+export const PARTNER_RULES_VERSION = '2026-11-11-eligibility';
+
+/** One text per run that changes whenever any table the records are built from changes (or the date does), or the rules do. */
 export async function partnerSourceSignature(): Promise<string> {
   const tables = [
     'shipments',
@@ -75,7 +82,7 @@ export async function partnerSourceSignature(): Promise<string> {
   // SAP imports change the close flags the stage reads through sap_processed_data.
   const spd = await query(`SELECT COUNT(*)::text AS n, COALESCE(MAX(created_at)::text, '') AS m FROM sap_processed_data`);
   const day = await query(`SELECT CURRENT_DATE::text AS d`);
-  return [...parts, `sap_processed_data=${spd.rows[0].n}/${spd.rows[0].m}`, `day=${day.rows[0].d}`].join('|');
+  return [...parts, `sap_processed_data=${spd.rows[0].n}/${spd.rows[0].m}`, `day=${day.rows[0].d}`, `rules=${PARTNER_RULES_VERSION}`].join('|');
 }
 
 async function lockClient(): Promise<PoolClient | null> {
