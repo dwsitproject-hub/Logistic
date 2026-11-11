@@ -5,6 +5,7 @@ import { enqueueChangeEvents, type ChangeEvent } from './deliveries';
 import { assignRecordIds, newRecordId, type StoredIdentity } from './identity';
 import {
   buildPartnerRecord,
+  partitionPartnerGroups,
   type BuiltRecord,
   type GroupRow,
   type LegRow,
@@ -167,7 +168,16 @@ async function rebuild(startedAt: number): Promise<Omit<PartnerRefreshResult, 'r
   for (const l of lineRows.rows as LineRow[]) linesByKey.set(l.sto_key, [...(linesByKey.get(l.sto_key) ?? []), l]);
   const pairs = pairRows.rows as PairRow[];
 
-  const built: BuiltRecord[] = groups.map((group) =>
+  // Only a shipment with a vessel and some schedule is sent (see partnerIneligibleReason). The rest stay out of `built`, so a record already sent for one of them is
+  // left unclaimed below and retired as a tombstone, not as Cancelled: it was never a real shipment.
+  const { eligible, ineligibleMemberIds, ineligibleByReason } = partitionPartnerGroups({ groups, primaryById, legsById, linesByKey });
+  const ineligible = groups.length - eligible.length;
+  // A judgement that rejects every group while records are live is a fault in the read, not a fleet with no vessel: retiring all of it would tell KMAPS everything ended.
+  if (eligible.length === 0 && groups.length > 0 && stored.some((s) => s.active)) {
+    throw new Error('Every shipment group was judged ineligible while active records exist; nothing was retired.');
+  }
+
+  const built: BuiltRecord[] = eligible.map((group) =>
     buildPartnerRecord({
       group,
       primary: primaryById.get(group.primary_id),
@@ -184,11 +194,13 @@ async function rebuild(startedAt: number): Promise<Omit<PartnerRefreshResult, 'r
   const storedById = new Map(stored.map((s) => [s.record_id, s]));
 
   // A stored record no group claims: gone from the page scope. If its shipments still exist (SAP withdrew the PO, a type changed) it is a Cancelled record;
-  // if they are gone too it is a tombstone.
+  // if they are gone too it is a tombstone. Shipments of a group judged ineligible count as gone: the shipment exists in KLIP but KMAPS must stop holding it.
   const unclaimedMembers = assignment.unclaimed.flatMap((id) => storedById.get(id)?.member_ids ?? []);
   const stillThere = new Set<string>(
     unclaimedMembers.length
-      ? ((await query(`SELECT id::text AS id FROM shipments WHERE id = ANY($1::uuid[])`, [unclaimedMembers])).rows as Array<{ id: string }>).map((r) => r.id)
+      ? ((await query(`SELECT id::text AS id FROM shipments WHERE id = ANY($1::uuid[])`, [unclaimedMembers])).rows as Array<{ id: string }>)
+          .map((r) => r.id)
+          .filter((id) => !ineligibleMemberIds.has(id))
       : [],
   );
 
@@ -294,7 +306,7 @@ async function rebuild(startedAt: number): Promise<Omit<PartnerRefreshResult, 'r
     client.release();
   }
 
-  logger.info('KMAPS partner records refreshed', { groups: built.length, created, changed, retired, ms: Date.now() - startedAt });
+  logger.info('KMAPS partner records refreshed', { groups: built.length, ineligible, ineligibleByReason, created, changed, retired, ms: Date.now() - startedAt });
   return { records: built.length, created, changed, retired, changedRecordIds, bellsQueued };
 }
 

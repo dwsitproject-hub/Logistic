@@ -131,6 +131,94 @@ export function pairOf(masterVesselId: string | null, pairs: PairRow[]): { pairC
     : { pairCode: mine.pair_code, other: { code: mine.bg_code, name: mine.bg_name, role: 'BARGE' } };
 }
 
+/** Every ETA and ATA the groups query reads (partner/recordSql.ts). One of them filled is a date somebody put on the voyage. */
+const SCHEDULE_COLUMNS = [
+  'eta_loading_arrival',
+  'eta_loading_berthed',
+  'eta_loading_start',
+  'eta_loading_end',
+  'eta_sailed',
+  'eta_discharge_arrival',
+  'eta_discharge_berthed',
+  'eta_discharge_start',
+  'eta_discharge_end',
+  'ata_loading_arrival',
+  'ata_loading_berthed',
+  'ata_loading_start',
+  'ata_loading_end',
+  'ata_sailed',
+  'ata_discharge_arrival',
+  'ata_discharge_berthed',
+  'ata_discharge_start',
+  'ata_discharge_end',
+] as const;
+
+export type PartnerIneligibleReason = 'no_vessel' | 'no_schedule' | 'no_vessel_no_schedule';
+
+/**
+ * Why a shipment is NOT sent to KMAPS, or null when it is.
+ *
+ * A row with an STO is "Planned" on the Shipments page by rule, so an SAP-imported shell with nothing on it (2,445 on production on 2026-10-14) reads Planned
+ * and active. KMAPS draws vessels on a map: such a row has no ports, no leg, no date and nothing delivered, so it gives the map nothing to show and hides the shipments
+ * that are real. Decision of Ryan, 2026-11-11: send a shipment only when it has BOTH
+ *
+ *   a vessel    a name or a code, KLIP's or SAP's. A vessel with no DHM code is still sent (KMAPS lists it as unmapped, contract 4.2); no vessel at all is not.
+ *   a schedule  at least one of: an ETA or ATA (shipment level or per port), a loading or discharge port, a planned leg, a delivered quantity.
+ *
+ * Trucking (LAND) and FOB Type T legs without a vessel never reach this point: the groups query reads the Shipments page's own sea scope.
+ * A group whose primary shipment the query did not return is not judged (null): retiring a real shipment on a missing read would be worse than sending an odd one.
+ */
+export function partnerIneligibleReason(input: {
+  group: GroupRow;
+  primary: PrimaryRow | undefined;
+  legs: LegRow[];
+  lines: LineRow[];
+}): PartnerIneligibleReason | null {
+  const { group, primary, legs, lines } = input;
+  if (!primary) return null;
+
+  const hasVessel = [primary.mv_name, primary.shipment_vessel_name, primary.shipment_vessel_code, primary.mv_vessel_code, primary.vessel_dhm_code, primary.mv_id].some(
+    (v) => clean(v) !== null,
+  );
+  const hasPort = [primary.loading_port_code, primary.loading_port_name, primary.discharge_port_code, primary.discharge_port_name].some((v) => clean(v) !== null);
+  const hasDelivered = lines.some((l) => (numberOrNull(l.quantity_delivered) ?? 0) > 0);
+  const hasSchedule = SCHEDULE_COLUMNS.some((k) => clean(group[k]) !== null) || legs.length > 0 || hasPort || hasDelivered;
+
+  if (hasVessel && hasSchedule) return null;
+  if (!hasVessel && !hasSchedule) return 'no_vessel_no_schedule';
+  return hasVessel ? 'no_schedule' : 'no_vessel';
+}
+
+/**
+ * Splits the groups into those that are sent and those that are not. `ineligibleMemberIds` lets the refresh tell a record that was SENT and is now out
+ * (a tombstone: it was never a real shipment, so it must not read Cancelled) from one whose shipments left the page scope (SAP withdrew the PO).
+ */
+export function partitionPartnerGroups(input: {
+  groups: GroupRow[];
+  primaryById: Map<string, PrimaryRow>;
+  legsById: Map<string, LegRow[]>;
+  linesByKey: Map<string, LineRow[]>;
+}): { eligible: GroupRow[]; ineligibleMemberIds: Set<string>; ineligibleByReason: Record<PartnerIneligibleReason, number> } {
+  const eligible: GroupRow[] = [];
+  const ineligibleMemberIds = new Set<string>();
+  const ineligibleByReason: Record<PartnerIneligibleReason, number> = { no_vessel: 0, no_schedule: 0, no_vessel_no_schedule: 0 };
+  for (const group of input.groups) {
+    const reason = partnerIneligibleReason({
+      group,
+      primary: input.primaryById.get(group.primary_id),
+      legs: input.legsById.get(group.primary_id) ?? [],
+      lines: input.linesByKey.get(group.sto_key) ?? [],
+    });
+    if (reason === null) {
+      eligible.push(group);
+      continue;
+    }
+    ineligibleByReason[reason] += 1;
+    for (const id of group.member_ids) ineligibleMemberIds.add(id);
+  }
+  return { eligible, ineligibleMemberIds, ineligibleByReason };
+}
+
 export function buildPartnerRecord(input: {
   group: GroupRow;
   primary: PrimaryRow | undefined;

@@ -2,7 +2,18 @@ import { describe, expect, it } from 'vitest';
 import crypto from 'crypto';
 import { assignRecordIds, newRecordId } from './identity';
 import { mapCharterType, normalizeStage, isActiveStage, numberOrNull, stableStringify, toContractQuantity, wibIso } from './format';
-import { buildPartnerRecord, contentHashOf, pairOf, type GroupRow, type PairRow, type PrimaryRow } from './recordBuilder';
+import {
+  buildPartnerRecord,
+  contentHashOf,
+  pairOf,
+  partitionPartnerGroups,
+  partnerIneligibleReason,
+  type GroupRow,
+  type LegRow,
+  type LineRow,
+  type PairRow,
+  type PrimaryRow,
+} from './recordBuilder';
 import { decodeCursor, encodeCursor, parseCodeList, parseShipmentsQuery, PartnerQueryError } from './query';
 import { buildListSql } from './shipmentsRoute';
 
@@ -260,6 +271,105 @@ describe('record builder', () => {
     expect(pairOf('mv3', pairs)).toMatchObject({ pairCode: 'TBG-002', other: { code: 'VSL-0001', role: 'BARGE' } });
     expect(pairOf('mvX', pairs)).toBeNull();
     expect(pairOf(null, pairs)).toBeNull();
+  });
+});
+
+/**
+ * Which shipments KMAPS is sent (Ryan, 2026-11-11). STO 1006020770 reached KMAPS as an active Planned record: vessel BG. AS MARINA 12, no ETA, no ATA, no port,
+ * no leg, nothing delivered - an SAP-imported shell that the Shipments page calls Planned because every row with an STO is.
+ */
+describe('eligibility: a vessel AND some schedule', () => {
+  const noDates: Partial<GroupRow> = {
+    eta_loading_arrival: null,
+    ata_loading_arrival: null,
+  };
+  const noPorts: Partial<PrimaryRow> = {
+    loading_port_name: null,
+    loading_port_code: null,
+    discharge_port_name: null,
+    discharge_port_code: null,
+  };
+  const shellPrimary = (over: Partial<PrimaryRow> = {}) => primary({ ...noPorts, ...over });
+  const leg = (): LegRow => ({
+    primary_id: 'p1',
+    port_sequence: 1,
+    is_discharge: false,
+    port_name: 'LP',
+    master_port_name: null,
+    port_code: null,
+    eta_local: null,
+    ata_local: null,
+  });
+  const line = (over: Partial<LineRow> = {}): LineRow =>
+    ({ sto_key: '1006000001', shipment_uuid: 'p1', contract_uuid: 'c1', quantity_delivered: null, ...over }) as LineRow;
+  const reason = (g: GroupRow, p: PrimaryRow | undefined, legs: LegRow[] = [], lines: LineRow[] = []) => partnerIneligibleReason({ group: g, primary: p, legs, lines });
+
+  it('the empty SAP shell of STO 1006020770 (vessel named, nothing else) is not sent', () => {
+    expect(reason(group(noDates), shellPrimary(), [], [line()])).toBe('no_schedule');
+  });
+
+  it('a vessel and any one date is sent, ETA or ATA, at either end of the voyage', () => {
+    expect(reason(group({ ...noDates, eta_loading_arrival: '2026-11-20' }), shellPrimary())).toBeNull();
+    expect(reason(group({ ...noDates, ata_loading_end: '2026-11-02' }), shellPrimary())).toBeNull();
+    expect(reason(group({ ...noDates, eta_discharge_end: '2026-11-25' }), shellPrimary())).toBeNull();
+  });
+
+  it('a port, a planned leg or a delivered quantity each count as a schedule; a zero or empty quantity does not', () => {
+    expect(reason(group(noDates), shellPrimary({ loading_port_name: 'LP' }))).toBeNull();
+    expect(reason(group(noDates), shellPrimary({ discharge_port_code: 'PRT-2' }))).toBeNull();
+    expect(reason(group(noDates), shellPrimary(), [leg()])).toBeNull();
+    expect(reason(group(noDates), shellPrimary(), [], [line({ quantity_delivered: '1500' })])).toBeNull();
+    expect(reason(group(noDates), shellPrimary(), [], [line({ quantity_delivered: 0 }), line({ quantity_delivered: '' })])).toBe('no_schedule');
+  });
+
+  it('dates but no vessel at all is not sent; a vessel KLIP can only name, or only code by SAP, is (KMAPS lists it as unmapped)', () => {
+    const noVessel = shellPrimary({
+      shipment_vessel_name: null,
+      shipment_vessel_code: null,
+      mv_id: null,
+      mv_name: null,
+      vessel_dhm_code: null,
+      mv_vessel_code: null,
+    });
+    expect(reason(group(), noVessel)).toBe('no_vessel');
+    expect(reason(group(), { ...noVessel, shipment_vessel_name: 'MV NAME ONLY' })).toBeNull();
+    expect(reason(group(), { ...noVessel, shipment_vessel_code: 'SAP9' })).toBeNull();
+    expect(reason(group(), { ...noVessel, vessel_dhm_code: null, mv_id: 'mv9' })).toBeNull();
+  });
+
+  it('neither a vessel nor a schedule says both; blank strings are as empty as null', () => {
+    const blank = shellPrimary({ shipment_vessel_name: '  ', shipment_vessel_code: '', mv_id: null, mv_name: null, vessel_dhm_code: null, mv_vessel_code: null });
+    expect(reason(group({ ...noDates, eta_sailed: '  ' }), blank)).toBe('no_vessel_no_schedule');
+  });
+
+  it('a group whose primary shipment the read did not return is not judged: it keeps its record rather than retiring a real shipment on a missing read', () => {
+    expect(reason(group(noDates), undefined)).toBeNull();
+  });
+
+  it('partition: eligible groups are built, the others only give their member ids and a count per reason', () => {
+    const real = group({ sto_key: 'A', primary_id: 'pa', member_ids: ['pa', 'pa2'] });
+    const shell = group({ ...noDates, sto_key: 'B', primary_id: 'pb', member_ids: ['pb'] });
+    const noVesselDated = group({ sto_key: 'C', primary_id: 'pc', member_ids: ['pc'] });
+    const primaryById = new Map<string, PrimaryRow>([
+      ['pa', primary({ primary_id: 'pa' })],
+      ['pb', shellPrimary({ primary_id: 'pb' })],
+      [
+        'pc',
+        shellPrimary({
+          primary_id: 'pc',
+          shipment_vessel_name: null,
+          shipment_vessel_code: null,
+          mv_id: null,
+          mv_name: null,
+          vessel_dhm_code: null,
+          mv_vessel_code: null,
+        }),
+      ],
+    ]);
+    const out = partitionPartnerGroups({ groups: [real, shell, noVesselDated], primaryById, legsById: new Map(), linesByKey: new Map() });
+    expect(out.eligible.map((g) => g.sto_key)).toEqual(['A']);
+    expect([...out.ineligibleMemberIds].sort()).toEqual(['pb', 'pc']);
+    expect(out.ineligibleByReason).toEqual({ no_vessel: 1, no_schedule: 1, no_vessel_no_schedule: 0 });
   });
 });
 
