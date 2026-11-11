@@ -1,5 +1,6 @@
 import { DOCUMENT_LABELS, DOCUMENT_TYPES, hasType, typesDone } from './documentTypes'
 import { saveBlob } from './files'
+import { plantLabel } from './format'
 import type { DocumentRow } from './types'
 
 /**
@@ -41,7 +42,7 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
   { header: 'Buyer', width: 24, value: (r) => r.buyer },
   { header: 'Product', width: 20, value: (r) => r.product },
   { header: 'Incoterm', width: 10, value: (r) => r.incoterm },
-  { header: 'Region/Plant', width: 18, value: (r) => r.plant_site },
+  { header: 'Region/Plant', width: 18, value: (r) => (r.plant_site ? plantLabel(r.plant_site) : null) },
   { header: 'Contract Qty (kg)', width: 18, kind: 'qty', value: (r) => numberCell(r.quantity_ordered) },
   { header: 'Payment Due Date', width: 17, kind: 'date', value: (r) => dateCell(r.payment_due_date) },
   { header: 'DP Date', width: 12, kind: 'date', value: (r) => dateCell(r.dp_due_date) },

@@ -1,8 +1,8 @@
 'use client'
 
-import { Pencil, Save, Upload } from 'lucide-react'
+import { RefreshCw, Upload } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ErrorNote, Modal, Spinner, useToast } from '@/components/ui'
+import { ErrorNote, Spinner, useToast } from '@/components/ui'
 import { apiData, apiJson, errorMessage, isAbort, toQuery } from '@/lib/api'
 import { DOCUMENT_LABELS, DOCUMENT_TYPES } from '@/lib/documentTypes'
 import { longDate, plural } from '@/lib/format'
@@ -10,16 +10,24 @@ import { readPoCreators } from '@/lib/poCreators'
 import type { CreatorCompleteness } from '@/lib/types'
 
 type Order = 'pos' | 'complete' | 'gaps'
-type Payload = { creators: CreatorCompleteness[]; loaded: { pos: number; creators: number; loadedAt: string | null } }
+type Run = { outcome: string; trigger: string; at: string; fileName: string | null; detail: string | null }
+type Payload = {
+  creators: CreatorCompleteness[]
+  loaded: { pos: number; creators: number; loadedAt: string | null }
+  /** The scheduled load from the SAP share: whether it is on, the last run that loaded a file, and the last run of any kind. */
+  auto?: { enabled: boolean; lastLoaded: Run | null; lastRun: Run | null }
+}
 
 const CHUNK = 1000
 
 /**
- * Documents uploaded vs total, by the person who created the PO in SAP (GET /api/commercial-documents/completeness-by-creator).
- * The creator is the "Created by" of the SAP ME2N report, which an administrator loads here: the SAP auto-import does not read it.
- * SAP gives an employee number; an administrator can give a number a name. A PO the report does not know is listed as "No creator data".
+ * The "By user" view of the Dashboard's Completeness: documents uploaded vs total, by the person who created the PO in SAP
+ * (GET /api/commercial-documents/completeness-by-creator). The creator is the "Created by" of the SAP ME2N report: loaded every morning from the
+ * SAP share, or by an administrator here. SAP gives an employee number (NIK). A name for it will come from the PRC application, so for now the
+ * number is what shows: `displayName` and the commercial_creator_names table are the place for that sync, and nothing here edits them.
+ * A PO the report does not know is listed as "No creator data".
  */
-export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; dateTo: string }; isAdmin: boolean }) {
+export function CreatorTable({ range, isAdmin }: { range: { dateFrom: string; dateTo: string }; isAdmin: boolean }) {
   const { toast } = useToast()
   const [data, setData] = useState<Payload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -27,7 +35,7 @@ export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; da
   const [order, setOrder] = useState<Order>('pos')
   const [reload, setReload] = useState(0)
   const [loadingFile, setLoadingFile] = useState('')
-  const [naming, setNaming] = useState<CreatorCompleteness | null>(null)
+  const [checking, setChecking] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -41,7 +49,7 @@ export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; da
       })
       .catch((err) => {
         if (isAbort(err)) return
-        setError(errorMessage(err, 'Could not load the creators. Please try again.'))
+        setError(errorMessage(err, 'Could not load the users. Please try again.'))
         setLoading(false)
       })
     return () => ctrl.abort()
@@ -51,13 +59,12 @@ export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; da
     const list = data?.creators || []
     const ratio = (c: CreatorCompleteness) => (c.totalSlots ? c.uploadedSlots / c.totalSlots : 0)
     // The row for POs without a creator always comes last: it is a gap in the data, not a person.
-    const sorted = [...list].sort((a, b) => {
+    return [...list].sort((a, b) => {
       if (!a.createdBy !== !b.createdBy) return a.createdBy ? -1 : 1
       if (order === 'complete') return ratio(b) - ratio(a) || b.contractCount - a.contractCount
       if (order === 'gaps') return ratio(a) - ratio(b) || b.missingSlots - a.missingSlots
       return b.contractCount - a.contractCount || ratio(b) - ratio(a)
     })
-    return sorted
   }, [data, order])
 
   const loadFile = async (file: File | undefined) => {
@@ -77,7 +84,7 @@ export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; da
       const notes = [read.conflicts ? `${plural(read.conflicts, 'PO')} had two creators (the first was kept)` : '', read.skipped ? `${plural(read.skipped, 'row')} skipped` : '']
         .filter(Boolean)
         .join(', ')
-      toast(`Loaded ${plural(read.rows.length, 'PO')} from ${plural(read.creators, 'creator')}${notes ? ` · ${notes}` : ''}`)
+      toast(`Loaded ${plural(read.rows.length, 'PO')} from ${plural(read.creators, 'user')}${notes ? ` · ${notes}` : ''}`)
       setReload((n) => n + 1)
     } catch (err) {
       setError(errorMessage(err, 'The report could not be loaded.'))
@@ -87,42 +94,61 @@ export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; da
     }
   }
 
+  // "Check now": the same look at the SAP share that the schedule makes.
+  const checkNow = async () => {
+    setChecking(true)
+    setError('')
+    try {
+      const res = await apiJson<{ outcome: string; fileName: string | null; rows: number; creators: number; detail: string | null }>('/commercial-documents/po-creators/sync', { method: 'POST' })
+      const r = res.data
+      if (r.outcome === 'loaded') toast(`Loaded ${plural(r.rows, 'PO')} from ${plural(r.creators, 'user')} (${r.fileName})`)
+      else if (r.outcome === 'unchanged') toast(`Already up to date (${r.fileName})`)
+      else setError(r.detail || 'The report could not be loaded.')
+      if (r.outcome === 'loaded') setReload((n) => n + 1)
+    } catch (err) {
+      setError(errorMessage(err, 'Could not check for the report.'))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  // The NIK is the SAP number; a name (from the PRC sync, when it exists) goes beside it.
   const label = (c: CreatorCompleteness) => (c.createdBy ? c.displayName || c.createdBy : 'No creator data')
   const known = data?.loaded.pos || 0
+  // A problem shows while the last check is newer than the last successful load: quiet "unchanged" runs do not hide it.
+  const lastRun = data?.auto?.lastRun
+  const problem =
+    lastRun && ['failed', 'source_missing', 'no_file'].includes(lastRun.outcome) && (!data?.auto?.lastLoaded || lastRun.at > data.auto.lastLoaded.at) ? lastRun : null
 
   return (
-    <div className="panel" style={{ marginTop: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '14px 16px 0', flexWrap: 'wrap' }}>
-        <div>
-          <h3 style={{ padding: 0 }}>Documents by SAP creator</h3>
-          <p className="hint" style={{ margin: '2px 0 0' }}>
-            Uploaded out of 11 per PO, by the person who created the PO in SAP.
-          </p>
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '10px 16px 0', flexWrap: 'wrap' }}>
+        <div className="chips">
+          {(
+            [
+              ['pos', 'Most POs'],
+              ['complete', 'Most complete'],
+              ['gaps', 'Biggest gaps'],
+            ] as Array<[Order, string]>
+          ).map(([k, l]) => (
+            <button key={k} className="chip" type="button" aria-pressed={order === k} onClick={() => setOrder(k)}>
+              {l}
+            </button>
+          ))}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <div className="chips">
-            {(
-              [
-                ['pos', 'Most POs'],
-                ['complete', 'Most complete'],
-                ['gaps', 'Biggest gaps'],
-              ] as Array<[Order, string]>
-            ).map(([k, l]) => (
-              <button key={k} className="chip" type="button" aria-pressed={order === k} onClick={() => setOrder(k)}>
-                {l}
-              </button>
-            ))}
+        {isAdmin ? (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn sm" type="button" onClick={() => void checkNow()} disabled={checking || Boolean(loadingFile)} title="Look for a new ME2N report in the SAP share now">
+              <RefreshCw aria-hidden />
+              {checking ? 'Checking…' : 'Check now'}
+            </button>
+            <button className="btn sm" type="button" onClick={() => fileRef.current?.click()} disabled={Boolean(loadingFile)}>
+              <Upload aria-hidden />
+              {loadingFile || 'Load ME2N report'}
+            </button>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" hidden onChange={(e) => void loadFile(e.target.files?.[0])} />
           </div>
-          {isAdmin ? (
-            <>
-              <button className="btn sm" type="button" onClick={() => fileRef.current?.click()} disabled={Boolean(loadingFile)}>
-                <Upload aria-hidden />
-                {loadingFile || 'Load ME2N report'}
-              </button>
-              <input ref={fileRef} type="file" accept=".xlsx,.xls" hidden onChange={(e) => void loadFile(e.target.files?.[0])} />
-            </>
-          ) : null}
-        </div>
+        ) : null}
       </div>
       <div style={{ padding: '8px 16px 0' }}>
         <ErrorNote>{error}</ErrorNote>
@@ -133,7 +159,7 @@ export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; da
         </div>
       ) : !known ? (
         <p className="hint" style={{ padding: 16, margin: 0 }}>
-          No creator data yet.{' '}
+          No user data yet.{' '}
           {isAdmin
             ? 'Load the SAP ME2N report (Excel) with the button above: it has the "Created by" of every PO.'
             : 'An administrator needs to load the SAP ME2N report first.'}
@@ -143,7 +169,7 @@ export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; da
           <table style={{ minWidth: '44rem' }}>
             <thead>
               <tr>
-                <th>Created by</th>
+                <th>User (SAP NIK)</th>
                 <th style={{ textAlign: 'right' }}>POs</th>
                 <th>Documents uploaded</th>
                 <th style={{ textAlign: 'right' }}>All 11</th>
@@ -154,16 +180,9 @@ export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; da
             <tbody>
               {rows.map((c) => (
                 <tr key={c.createdBy || '(none)'}>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-                      <b>{label(c)}</b>
-                      {c.createdBy && c.displayName ? <span className="hint">· {c.createdBy}</span> : null}
-                      {isAdmin && c.createdBy ? (
-                        <button className="icon-btn" type="button" title="Give this number a name" aria-label={`Name ${c.createdBy}`} onClick={() => setNaming(c)}>
-                          <Pencil aria-hidden />
-                        </button>
-                      ) : null}
-                    </div>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <b>{label(c)}</b>
+                    {c.createdBy && c.displayName ? <span className="hint"> · {c.createdBy}</span> : null}
                   </td>
                   <td className="num" style={{ textAlign: 'right' }}>
                     {c.contractCount.toLocaleString('en-US')}
@@ -222,67 +241,22 @@ export function CreatorPanel({ range, isAdmin }: { range: { dateFrom: string; da
       )}
       {known ? (
         <p className="hint" style={{ padding: '10px 16px 14px', margin: 0 }}>
-          Creators come from the SAP ME2N report loaded
-          {data?.loaded.loadedAt ? ` on ${longDate(data.loaded.loadedAt)}` : ''} ({plural(known, 'PO')}, {plural(data?.loaded.creators || 0, 'creator')}). A PO created after that is listed under
-          &quot;No creator data&quot; until the report is loaded again.
+          Users come from the SAP ME2N report loaded
+          {data?.loaded.loadedAt ? ` on ${longDate(data.loaded.loadedAt)}` : ''} ({plural(known, 'PO')}, {plural(data?.loaded.creators || 0, 'user')}). A PO created after that is listed under
+          &quot;No creator data&quot; until the report is loaded again.{' '}
+          {data?.auto?.enabled ? 'The SAP share is checked for a new report every morning.' : 'Automatic loading is off: an administrator loads the report here.'} SAP only gives the
+          NIK; names will come from the PRC application.
         </p>
       ) : null}
-      {naming ? (
-        <NameModal
-          creator={naming}
-          onClose={() => setNaming(null)}
-          onSaved={() => {
-            setNaming(null)
-            setReload((n) => n + 1)
-          }}
-        />
+      {problem ? (
+        <div style={{ padding: '0 16px 14px' }}>
+          <div className="alert bad" role="alert">
+            <span>
+              The last check of the SAP share ({longDate(problem.at)}) found a problem: {problem.detail || problem.outcome}
+            </span>
+          </div>
+        </div>
       ) : null}
-    </div>
-  )
-}
-
-function NameModal({ creator, onClose, onSaved }: { creator: CreatorCompleteness; onClose: () => void; onSaved: () => void }) {
-  const [name, setName] = useState(creator.displayName || '')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-
-  const save = async () => {
-    setBusy(true)
-    setError('')
-    try {
-      await apiJson('/commercial-documents/creator-names', { method: 'PUT', body: { created_by: creator.createdBy, display_name: name.trim() } })
-      onSaved()
-    } catch (err) {
-      setError(errorMessage(err))
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Modal
-      title="Name this SAP user"
-      subtitle={`SAP user ${creator.createdBy}`}
-      onClose={onClose}
-      busy={busy}
-      narrow
-      footer={
-        <>
-          <button className="btn" type="button" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button className="btn primary" type="button" onClick={() => void save()} disabled={busy}>
-            <Save aria-hidden />
-            Save
-          </button>
-        </>
-      }
-    >
-      <div className="field">
-        <label htmlFor="cn-name">Name</label>
-        <input className="input" id="cn-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" maxLength={120} autoFocus />
-        <span className="hint">Leave it empty to show the number again.</span>
-      </div>
-      <ErrorNote>{error}</ErrorNote>
-    </Modal>
+    </>
   )
 }

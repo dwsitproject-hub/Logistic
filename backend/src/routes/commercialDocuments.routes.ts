@@ -12,7 +12,7 @@ import {
   getCommercialDocumentsCompletenessByPlant,
   getCommercialDocumentsSummary,
   importCommercialPoCreators,
-  setCommercialCreatorName,
+  syncCommercialPoCreators,
   uploadCommercialDocument,
   viewCommercialDocument,
 } from '../controllers/commercialDocuments.controller';
@@ -46,7 +46,7 @@ router.get(
 );
 router.get('/completeness-by-creator', authenticateToken, canViewCompleteness, getCommercialDocumentsCompletenessByCreator);
 router.post('/po-creators', authenticateToken, authorize('ADMIN'), importCommercialPoCreators);
-router.put('/creator-names', authenticateToken, authorize('ADMIN'), setCommercialCreatorName);
+router.post('/po-creators/sync', authenticateToken, authorize('ADMIN'), syncCommercialPoCreators);
 router.get('/history/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentHistory);
 router.get('/files/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentFiles);
 router.post('/upload', authenticateToken, canViewDocuments, commercialDocumentUpload.single('file'), uploadCommercialDocument);

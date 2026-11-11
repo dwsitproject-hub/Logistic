@@ -6,6 +6,7 @@ import { FinanceMaterializedViewService } from './financeMaterializedView.servic
 import { PipelineDailySummaryService } from './pipelineDailySummary.service';
 import { runContractEtaReminderJob } from './contractEtaReminder.service';
 import { runSapFolderAutoImportJob } from './sapFolderAutoImport.service';
+import { runPoCreatorsAutoLoadJob } from './poCreators.service';
 
 export interface ScheduledImport {
   id: string;
@@ -38,8 +39,31 @@ export class SchedulerService {
     this.startSapFolderAutoImportCron();
     this.startDhmVesselSyncCron();
     this.startJpsSyncCron();
+    this.startPoCreatorsAutoLoadCron();
 
     logger.info('Scheduler service initialized successfully');
+  }
+
+  /**
+   * COD dashboard: PO -> SAP creator from the ME2N report that IT drops in the share's Original folder, next to the daily export.
+   * Off unless PO_CREATORS_AUTO_LOAD_ENABLED=true. PO_CREATORS_AUTO_LOAD_CRON overrides the schedule; the default runs half an hour after
+   * each tick of the SAP import (06:30 to 10:30), because the ME2N file is written right after the export. A file already loaded is
+   * skipped by its hash, so the extra ticks cost one read.
+   */
+  private static startPoCreatorsAutoLoadCron(): void {
+    if (String(process.env.PO_CREATORS_AUTO_LOAD_ENABLED || 'false').toLowerCase() !== 'true') {
+      logger.info('PO creators auto-load cron is disabled (PO_CREATORS_AUTO_LOAD_ENABLED is not true)');
+      return;
+    }
+    const schedule = process.env.PO_CREATORS_AUTO_LOAD_CRON || '30 6-10 * * *';
+    cron.schedule(
+      schedule,
+      async () => {
+        await runPoCreatorsAutoLoadJob();
+      },
+      { timezone: 'Asia/Jakarta' },
+    );
+    logger.info(`PO creators auto-load cron scheduled: ${schedule} (Asia/Jakarta)`);
   }
 
   /**

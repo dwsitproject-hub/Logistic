@@ -10,7 +10,7 @@ import { apiData, errorMessage, isAbort, toQuery, type QueryValue } from '@/lib/
 import { DOCUMENT_LABELS, DOCUMENT_TYPES, isDocumentType, type DocumentType } from '@/lib/documentTypes'
 import { saveDocumentsExcel } from '@/lib/documentsExcel'
 import { exportGate } from '@/lib/exportGate'
-import { isoDate, pct, plural, presetRange, type DatePreset } from '@/lib/format'
+import { isoDate, pct, plantLabel, plural, presetRange, type DatePreset } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import type { ContractCounts, DocumentRow, Pagination, SummaryCard } from '@/lib/types'
 
@@ -378,7 +378,7 @@ export default function DocumentsPage() {
             <option value="">Region/Plant: All</option>
             {plantChoices.map((p) => (
               <option key={p} value={p}>
-                {p}
+                {plantLabel(p)}
               </option>
             ))}
           </select>

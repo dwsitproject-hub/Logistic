@@ -35,6 +35,12 @@ import {
 } from '../services/tandaTerimaPdf.service';
 import { buildTandaTerimaContractsByExtNoSql } from '../utils/tandaTerimaQuerySql';
 import { logAudit } from '../middleware/audit';
+import {
+  isPoCreatorsAutoLoadEnabled,
+  latestPoCreatorsRuns,
+  runPoCreatorsAutoLoad,
+  upsertPoCreators,
+} from '../services/poCreators.service';
 
 /**
  * One audit_logs row per upload, view, download, delete and Tanda Terima - the Audit trail page of the Commercial Documents app.
@@ -216,9 +222,10 @@ export const getCommercialDocumentsCompletenessByCreator = async (req: AuthReque
       dateTo,
       plant: parseQueryStringList(req.query.plant),
     });
-    const [result, loaded] = await Promise.all([
+    const [result, loaded, runs] = await Promise.all([
       query(sql, values),
       query('SELECT COUNT(*)::int AS pos, COUNT(DISTINCT created_by)::int AS creators, MAX(loaded_at) AS loaded_at FROM commercial_po_creators'),
+      latestPoCreatorsRuns().catch(() => ({ lastLoaded: null, lastRun: null })),
     ]);
     const creators = result.rows.map((row) => {
       const contractCount = Number(row.contract_count) || 0;
@@ -248,6 +255,7 @@ export const getCommercialDocumentsCompletenessByCreator = async (req: AuthReque
           creators: Number(loaded.rows[0]?.creators) || 0,
           loadedAt: loaded.rows[0]?.loaded_at ?? null,
         },
+        auto: { enabled: isPoCreatorsAutoLoadEnabled(), lastLoaded: runs.lastLoaded, lastRun: runs.lastRun },
         filters: { dateFrom, dateTo },
       },
     });
@@ -284,12 +292,10 @@ export const importCommercialPoCreators = async (req: AuthRequest, res: Response
       creators.push(by);
     }
     const sourceFile = String(body.source_file ?? '').trim().slice(0, 200) || null;
-    await query(
-      `INSERT INTO commercial_po_creators (po_number, created_by, source_file, loaded_by)
-       SELECT t.po, t.by, $3, $4::uuid FROM unnest($1::text[], $2::text[]) AS t(po, by)
-       ON CONFLICT (po_number) DO UPDATE
-         SET created_by = EXCLUDED.created_by, source_file = EXCLUDED.source_file, loaded_at = CURRENT_TIMESTAMP, loaded_by = EXCLUDED.loaded_by`,
-      [pos, creators, sourceFile, req.user?.id ?? null],
+    await upsertPoCreators(
+      pos.map((po_number, i) => ({ po_number, created_by: creators[i] })),
+      sourceFile,
+      req.user?.id ?? null,
     );
     auditCommercial(req, 'IMPORT_PO_CREATORS', undefined, { rows: pos.length, source_file: sourceFile });
     return res.json({ success: true, data: { loaded: pos.length } });
@@ -299,30 +305,25 @@ export const importCommercialPoCreators = async (req: AuthRequest, res: Response
   }
 };
 
-/** Name an SAP creator number (PUT /api/commercial-documents/creator-names, ADMIN). An empty name removes it, and the number shows again. */
-export const setCommercialCreatorName = async (req: AuthRequest, res: Response) => {
+/**
+ * "Check now" (POST /api/commercial-documents/po-creators/sync, ADMIN): the same run as the schedule - look for the newest ME2N report in
+ * the share's Original folder and load it if it is new. Answers with what happened (loaded, unchanged, no file, folder missing, failed).
+ */
+export const syncCommercialPoCreators = async (req: AuthRequest, res: Response) => {
   try {
-    const createdBy = String(req.body?.created_by ?? '').trim();
-    const name = String(req.body?.display_name ?? '').trim().slice(0, 120);
-    if (!createdBy || createdBy.length > 40) {
-      return res.status(400).json({ success: false, error: { message: 'created_by is required' } });
-    }
-    if (!name) {
-      await query('DELETE FROM commercial_creator_names WHERE created_by = $1', [createdBy]);
-    } else {
-      await query(
-        `INSERT INTO commercial_creator_names (created_by, display_name, updated_by) VALUES ($1, $2, $3::uuid)
-         ON CONFLICT (created_by) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = CURRENT_TIMESTAMP, updated_by = EXCLUDED.updated_by`,
-        [createdBy, name, req.user?.id ?? null],
-      );
-    }
-    auditCommercial(req, 'SET_CREATOR_NAME', undefined, { created_by: createdBy, display_name: name || null });
-    return res.json({ success: true, data: { created_by: createdBy, display_name: name || null } });
+    const result = await runPoCreatorsAutoLoad({ trigger: 'manual', startedBy: req.user?.id ?? null });
+    auditCommercial(req, 'SYNC_PO_CREATORS', undefined, { outcome: result.outcome, file: result.fileName, rows: result.rows });
+    return res.json({ success: true, data: result });
   } catch (err) {
-    logger.error('setCommercialCreatorName error:', err);
-    return res.status(500).json({ success: false, error: { message: 'Failed to save the name' } });
+    logger.error('syncCommercialPoCreators error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to check for the report' } });
   }
 };
+
+/*
+ * No endpoint edits creator names. SAP gives an employee number (NIK); names will come from the PRC application's sync, which will write
+ * commercial_creator_names (created_by -> display_name). The table and the join in the by-creator query are the place for it.
+ */
 
 export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Response) => {
   try {

@@ -9,7 +9,7 @@ import { GuidePrompt, GuideViewer } from '@/components/GuidePrompt'
 import { Brand, Spinner, useToast } from '@/components/ui'
 import { apiJson } from '@/lib/api'
 import { NAV, homePath, navKeyForPath, type NavKey } from '@/lib/access'
-import { initials } from '@/lib/format'
+import { initials, plantLabel } from '@/lib/format'
 import { GUIDE_SEEN_KEY, GUIDE_URL, GUIDE_VERSION } from '@/lib/guide'
 import { hubOpenBugReport, isHubSdkEnabled } from '@/lib/hubSdk'
 import { useSession } from '@/lib/session'
@@ -87,7 +87,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       </Link>
     )
   }
-  const scope = user.plants?.length ? user.plants.join(', ') : null
+  const scope = user.plants?.length ? user.plants.map(plantLabel).join(', ') : null
 
   return (
     <>

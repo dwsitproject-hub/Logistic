@@ -6,7 +6,7 @@ import { ErrorNote, Modal, PageSize, Pager, Spinner, usePreference, useToast } f
 import { BulkUsersModal } from '@/components/BulkUsersModal'
 import { NewRoleModal } from '@/components/NewRoleModal'
 import { apiData, apiJson, errorMessage } from '@/lib/api'
-import { initials, longDate, plural } from '@/lib/format'
+import { initials, longDate, plantLabel, plural } from '@/lib/format'
 import { roleLabel } from '@/lib/roles'
 import { useSession } from '@/lib/session'
 import type { ManagedUser, Role } from '@/lib/types'
@@ -192,8 +192,8 @@ export default function UsersPage() {
                       </span>
                     </td>
                     <td>{u.level || '-'}</td>
-                    <td className="ellipsis" style={{ maxWidth: 200 }} title={u.plants?.join(', ')}>
-                      {u.plants?.length ? u.plants.join(', ') : 'All'}
+                    <td className="ellipsis" style={{ maxWidth: 200 }} title={u.plants?.map(plantLabel).join(', ')}>
+                      {u.plants?.length ? u.plants.map(plantLabel).join(', ') : 'All'}
                     </td>
                     <td>
                       <span className={`pill ${tone}`}>{label}</span>
@@ -496,7 +496,7 @@ function UserModal({
                     checked={userPlants.includes(p)}
                     onChange={() => setUserPlants((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]))}
                   />{' '}
-                  {p}
+                  {plantLabel(p)}
                 </label>
               ))}
           </div>

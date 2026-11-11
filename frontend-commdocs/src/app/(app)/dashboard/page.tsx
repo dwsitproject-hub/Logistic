@@ -2,11 +2,11 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
-import { CreatorPanel } from '@/components/dashboard/CreatorPanel'
+import { CreatorTable } from '@/components/dashboard/CreatorTable'
 import { ErrorNote, Spinner } from '@/components/ui'
 import { apiData, errorMessage, isAbort, toQuery } from '@/lib/api'
 import { DOCUMENT_LABELS, DOCUMENT_TYPES } from '@/lib/documentTypes'
-import { pct, plural, presetRange, type DatePreset } from '@/lib/format'
+import { pct, plantLabel, plural, presetRange, type DatePreset } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import type { PlantCompleteness, SummaryCard } from '@/lib/types'
 
@@ -29,6 +29,7 @@ export default function DashboardPage() {
   const [period, setPeriod] = useState<DatePreset>('ytd')
   const [order, setOrder] = useState<'complete' | 'gaps'>('complete')
   const [showAll, setShowAll] = useState(false)
+  const [view, setView] = useState<'plant' | 'user'>('plant')
   const [plants, setPlants] = useState<PlantCompleteness[]>([])
   const [totals, setTotals] = useState<Totals | null>(null)
   const [missing, setMissing] = useState<Array<{ label: string; count: number }> | null>(null)
@@ -88,7 +89,7 @@ export default function DashboardPage() {
       <div className="page-head">
         <div>
           <h1>Dashboard</h1>
-          <p>How complete each plant&apos;s documents are, by contract date.</p>
+          <p>How complete the documents are, by plant or by SAP user, by contract date.</p>
         </div>
         <div className="actions">
           <select className="select" aria-label="Period" value={period} onChange={(e) => setPeriod(e.target.value as DatePreset)}>
@@ -125,19 +126,31 @@ export default function DashboardPage() {
           <small>need attention</small>
         </div>
       </div>
-      <div className="split">
+      <div className={`split${view === 'user' ? ' one' : ''}`}>
         <div className="panel">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '14px 16px 0', flexWrap: 'wrap' }}>
-            <h3 style={{ padding: 0 }}>Completeness by plant</h3>
-            <div className="chips">
-              <button className="chip" type="button" aria-pressed={order === 'complete'} onClick={() => setOrder('complete')}>
-                Most complete
+            <h3 style={{ padding: 0 }}>Completeness</h3>
+            <div className="chips" role="group" aria-label="Group completeness by">
+              <button className="chip" type="button" aria-pressed={view === 'plant'} onClick={() => setView('plant')}>
+                By plant
               </button>
-              <button className="chip" type="button" aria-pressed={order === 'gaps'} onClick={() => setOrder('gaps')}>
-                Biggest gaps
+              <button className="chip" type="button" aria-pressed={view === 'user'} onClick={() => setView('user')}>
+                By user
               </button>
             </div>
           </div>
+          {view === 'user' ? (
+            <CreatorTable range={range} isAdmin={user?.role === 'ADMIN'} />
+          ) : (
+            <>
+              <div style={{ padding: '10px 16px 0' }} className="chips">
+                <button className="chip" type="button" aria-pressed={order === 'complete'} onClick={() => setOrder('complete')}>
+                  Most complete
+                </button>
+                <button className="chip" type="button" aria-pressed={order === 'gaps'} onClick={() => setOrder('gaps')}>
+                  Biggest gaps
+                </button>
+              </div>
           {loading ? (
             <div style={{ padding: 16 }}>
               <Spinner />
@@ -149,10 +162,10 @@ export default function DashboardPage() {
                 const w = (n: number) => (p.contractCount ? `${(n / p.contractCount) * 100}%` : '0%')
                 return (
                   <div className="plant" key={p.plant}>
-                    <span className="nm">{p.plant}</span>
+                    <span className="nm">{plantLabel(p.plant)}</span>
                     <div
                       className="track"
-                      title={`${p.plant}: ${p.completeCount} with all 11, ${some} with some, ${p.emptyCount} with none`}
+                      title={`${plantLabel(p.plant)}: ${p.completeCount} with all 11, ${some} with some, ${p.emptyCount} with none`}
                     >
                       <i className="a" style={{ width: w(p.completeCount) }} />
                       <i className="b" style={{ width: w(some) }} />
@@ -185,6 +198,8 @@ export default function DashboardPage() {
               </button>
             ) : null}
           </div>
+            </>
+          )}
         </div>
         {missing ? (
           <div className="panel">
@@ -203,7 +218,6 @@ export default function DashboardPage() {
           </div>
         ) : null}
       </div>
-      <CreatorPanel range={range} isAdmin={user?.role === 'ADMIN'} />
     </>
   )
 }

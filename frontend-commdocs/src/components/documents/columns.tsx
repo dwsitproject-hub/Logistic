@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { DOCUMENT_TYPES, hasType, typesDone } from '@/lib/documentTypes'
-import { ddmmyy, num, priceCell } from '@/lib/format'
+import { ddmmyy, num, plantLabel, priceCell } from '@/lib/format'
 import type { DocumentRow } from '@/lib/types'
 
 export type Column = {
@@ -66,8 +66,8 @@ export const COLUMNS: Column[] = [
     label: 'Region/Plant',
     visibleByDefault: true,
     sortKey: 'plant_site',
-    cell: (r) => r.plant_site || '-',
-    csv: (r) => r.plant_site,
+    cell: (r) => plantLabel(r.plant_site) || '-',
+    csv: (r) => plantLabel(r.plant_site),
   },
   {
     id: 'qty',
