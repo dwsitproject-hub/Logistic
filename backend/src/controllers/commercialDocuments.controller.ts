@@ -44,6 +44,7 @@ import {
   runPoCreatorsAutoLoad,
   upsertPoCreators,
 } from '../services/poCreators.service';
+import { listSapUsers, upsertSapUsers, type SapUserRow } from '../services/sapUsers.service';
 
 /**
  * One audit_logs row per upload, view, download, delete and Tanda Terima - the Audit trail page of the Commercial Documents app.
@@ -353,9 +354,59 @@ export const syncCommercialPoCreators = async (req: AuthRequest, res: Response) 
   }
 };
 
+/**
+ * Load the SAP user master extract (POST /api/commercial-documents/sap-users, ADMIN): the browser reads the ZUSER Excel file and sends the users in
+ * chunks. The name is built here (first + last, in capitals). Users PRC wrote are left alone (PRC wins; see migration 262).
+ */
+export const importSapUsers = async (req: AuthRequest, res: Response) => {
+  try {
+    const body = (req.body || {}) as { rows?: unknown; source_file?: unknown };
+    if (!Array.isArray(body.rows) || body.rows.length === 0) {
+      return res.status(400).json({ success: false, error: { message: 'rows is required' } });
+    }
+    if (body.rows.length > 5000) {
+      return res.status(400).json({ success: false, error: { message: 'At most 5000 rows per request' } });
+    }
+    const rows: SapUserRow[] = [];
+    for (const raw of body.rows as Array<Record<string, unknown>>) {
+      const user_id = String(raw?.user_id ?? '').trim();
+      const first_name = String(raw?.first_name ?? '').trim();
+      const last_name = String(raw?.last_name ?? '').trim();
+      const client = String(raw?.client ?? '').trim();
+      if (!user_id || user_id.length > 40 || first_name.length > 120 || last_name.length > 120 || client.length > 10) {
+        return res.status(400).json({ success: false, error: { message: 'Every row needs a user_id (up to 40 characters); names up to 120' } });
+      }
+      rows.push({ user_id, client, first_name, last_name });
+    }
+    await upsertSapUsers(rows, 'ZUSER', req.user?.id ?? null);
+    auditCommercial(req, 'IMPORT_SAP_USERS', undefined, { rows: rows.length, source_file: String(body.source_file ?? '').slice(0, 200) || null });
+    return res.json({ success: true, data: { loaded: rows.length } });
+  } catch (err) {
+    logger.error('importSapUsers error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load the SAP users' } });
+  }
+};
+
+/** The SAP Users menu (GET /api/commercial-documents/sap-users, ADMIN): users with their names and number of POs; filter by search and by "has data". */
+export const getSapUsers = async (req: AuthRequest, res: Response) => {
+  try {
+    const q = req.query as Record<string, string | undefined>;
+    const data = await listSapUsers({
+      search: q.search || null,
+      hasData: q.hasData === '1' || q.hasData === 'true',
+      page: Number(q.page) || 1,
+      limit: Number(q.limit) || 25,
+    });
+    return res.json({ success: true, data });
+  } catch (err) {
+    logger.error('getSapUsers error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to read the SAP users' } });
+  }
+};
+
 /*
  * No endpoint edits creator names. SAP gives an employee number (NIK); names will come from the PRC application's sync, which will write
- * commercial_creator_names (created_by -> display_name). The table and the join in the by-creator query are the place for it.
+ * sap_users (the ZUSER extract; PRC later, and it wins), which the by-creator query joins for the name.
  */
 
 export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Response) => {

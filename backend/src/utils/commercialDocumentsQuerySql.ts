@@ -454,7 +454,7 @@ export function buildCommercialDocumentsCompletenessByCreatorQuery(
     ${buildCommercialDocumentsBaseCte()}
     SELECT
       COALESCE(NULLIF(TRIM(pc.created_by), ''), '') AS created_by,
-      MAX(cn.display_name) AS display_name,
+      NULLIF(MAX(su.display_name), '') AS display_name,
       COUNT(*)::int AS contract_count,
       COALESCE(SUM(${uploadedExpr}), 0)::int AS uploaded_slots,
       (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS total_slots,
@@ -463,7 +463,7 @@ export function buildCommercialDocumentsCompletenessByCreatorQuery(
       ${perType}
     FROM enriched e
     LEFT JOIN commercial_po_creators pc ON pc.po_number = NULLIF(TRIM(e.po_number), '')
-    LEFT JOIN commercial_creator_names cn ON cn.created_by = pc.created_by
+    LEFT JOIN sap_users su ON su.user_id = pc.created_by
     WHERE ${scope.where.join(' AND ')}
     GROUP BY 1
   `;

@@ -201,7 +201,8 @@ describe('commercialDocumentsQuerySql filters for the Commercial Documents app',
   it('by creator: joins the ME2N creators by PO, counts 11 slots per PO and every document type, and keeps the date scope', () => {
     const { sql, values } = buildCommercialDocumentsCompletenessByCreatorQuery({ dateFrom: '2026-01-01', dateTo: '2026-11-11' });
     expect(sql).toContain('LEFT JOIN commercial_po_creators pc ON pc.po_number = NULLIF(TRIM(e.po_number)');
-    expect(sql).toContain('LEFT JOIN commercial_creator_names cn ON cn.created_by = pc.created_by');
+    expect(sql).toContain('LEFT JOIN sap_users su ON su.user_id = pc.created_by');
+    expect(sql).not.toContain('commercial_creator_names');
     expect(sql).toContain("COALESCE(NULLIF(TRIM(pc.created_by), ''), '') AS created_by");
     expect(sql).toContain('(COUNT(*) * 11)::int AS total_slots');
     expect(sql).toMatch(/GROUP BY 1\s*$/);

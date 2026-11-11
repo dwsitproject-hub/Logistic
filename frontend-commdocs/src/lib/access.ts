@@ -10,7 +10,7 @@ import type { PermissionMap } from './types'
  * - Delete a file: data.commercial_documents can_delete
  * - Users, Roles: role ADMIN (routes/user.routes.ts, role.routes.ts)
  * - Audit trail: role ADMIN / SUPPORT / ADMIN_SUPPORT (routes/audit.routes.ts)
- * - ME2N Report: role ADMIN (the po-creators routes of routes/commercialDocuments.routes.ts)
+ * - ME2N Report, SAP Users: role ADMIN (the po-creators and sap-users routes of routes/commercialDocuments.routes.ts)
  * ADMIN passes every permission check on the server, so it does here too.
  */
 
@@ -21,6 +21,7 @@ export type Access = {
   roles: boolean
   audit: boolean
   me2n: boolean
+  sapUsers: boolean
   deleteFiles: boolean
   upload: (type: DocumentType) => boolean
 }
@@ -39,13 +40,14 @@ export function accessFor(role: string | null | undefined, permissions: Permissi
     roles: admin,
     audit: admin || role === 'SUPPORT' || role === 'ADMIN_SUPPORT',
     me2n: admin,
+    sapUsers: admin,
     deleteFiles: flag('data.commercial_documents', 'canDelete'),
     upload: (type) =>
       flag(`${UPLOAD_PERMISSION_PREFIX}${type}`, 'canCreate') || flag(`${UPLOAD_PERMISSION_PREFIX}${type}`, 'canEdit'),
   }
 }
 
-export type NavKey = 'documents' | 'dashboard' | 'users' | 'roles' | 'audit' | 'me2n'
+export type NavKey = 'documents' | 'dashboard' | 'users' | 'roles' | 'audit' | 'me2n' | 'sapUsers'
 
 export const NAV: Array<{ key: NavKey; href: string; label: string; admin?: boolean }> = [
   { key: 'dashboard', href: '/dashboard', label: 'Dashboard' },
@@ -54,6 +56,7 @@ export const NAV: Array<{ key: NavKey; href: string; label: string; admin?: bool
   { key: 'roles', href: '/roles', label: 'Roles & access', admin: true },
   { key: 'audit', href: '/audit', label: 'Audit trail', admin: true },
   { key: 'me2n', href: '/me2n-report', label: 'ME2N Report', admin: true },
+  { key: 'sapUsers', href: '/sap-users', label: 'SAP Users', admin: true },
 ]
 
 /** Where a user lands after signing in: Documents first (the daily work), else the first page they may open. */
