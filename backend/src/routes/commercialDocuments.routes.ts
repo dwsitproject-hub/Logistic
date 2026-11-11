@@ -7,11 +7,13 @@ import {
   downloadTandaTerima,
   getCommercialDocumentFiles,
   getCommercialDocumentHistory,
+  getCommercialDocumentCreators,
   getCommercialDocuments,
   getCommercialDocumentsCompletenessByCreator,
   getCommercialDocumentsCompletenessByPlant,
   getCommercialDocumentsSummary,
   getCommercialPoCreatorsStatus,
+  getMyCommercialCreator,
   getSapUsers,
   importCommercialPoCreators,
   importSapUsers,
@@ -40,6 +42,8 @@ const canEditDocuments = authorizePermission('page.commercial_documents', 'can_e
 const canViewCompleteness = authorizeAnyPermission(['page.commercial_dashboard', 'page.commercial_documents'], 'can_view');
 
 router.get('/', authenticateToken, canViewDocuments, getCommercialDocuments);
+router.get('/filter-options/creators', authenticateToken, canViewDocuments, getCommercialDocumentCreators);
+router.get('/my-creator', authenticateToken, canViewDocuments, getMyCommercialCreator);
 router.get('/summary', authenticateToken, canViewDocuments, getCommercialDocumentsSummary);
 router.get(
   '/completeness-by-plant',

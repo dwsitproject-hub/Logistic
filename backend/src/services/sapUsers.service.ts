@@ -126,3 +126,14 @@ export async function listSapUsers(params: SapUsersListParams): Promise<SapUsers
     unmatchedCreators: Number(unmatched.rows[0]?.n) || 0,
   };
 }
+
+/** The SAP users who created POs of the ME2N report, with their name (the NIK when the master has none), by name. For the Documents page filter. */
+export async function listCreatorOptions(): Promise<Array<{ userId: string; name: string }>> {
+  const r = await query(
+    `SELECT p.created_by AS user_id, COALESCE(NULLIF(u.display_name, ''), p.created_by) AS name
+     FROM (SELECT DISTINCT created_by FROM commercial_po_creators) p
+     LEFT JOIN sap_users u ON u.user_id = p.created_by
+     ORDER BY COALESCE(NULLIF(u.display_name, ''), p.created_by) ASC`,
+  );
+  return r.rows.map((row) => ({ userId: String(row.user_id), name: String(row.name) }));
+}

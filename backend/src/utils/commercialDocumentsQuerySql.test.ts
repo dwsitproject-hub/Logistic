@@ -104,13 +104,32 @@ describe('commercialDocumentsQuerySql summary cards', () => {
       'sppb',
       'sppd',
       'delivery_order',
-      'invoice_fp_dp',
-      'invoice_fp_payoff',
       'invoice_fp_full',
     ]) {
       expect(sql).toContain(`FILTER (WHERE e.doc_${key})::int AS uploaded_${key}`);
     }
     expect(sql).not.toContain('is_open = true');
+  });
+
+  it('Invoice + FP DP and Payoff count only the POs that have a DP / Payoff date in SAP, as the total and as the uploaded ones', () => {
+    const { sql } = buildCommercialDocumentsSummaryQuery(scope);
+    expect(sql).toContain('FILTER (WHERE e.doc_invoice_fp_dp AND e.dp_due_date IS NOT NULL)::int AS uploaded_invoice_fp_dp');
+    expect(sql).toContain('FILTER (WHERE e.dp_due_date IS NOT NULL)::int AS total_invoice_fp_dp');
+    expect(sql).toContain('FILTER (WHERE e.doc_invoice_fp_payoff AND e.payoff_date IS NOT NULL)::int AS uploaded_invoice_fp_payoff');
+    expect(sql).toContain('FILTER (WHERE e.payoff_date IS NOT NULL)::int AS total_invoice_fp_payoff');
+  });
+
+  it('clicking the DP / Payoff card lists the same dated POs, so the card number equals the rows', () => {
+    const dp = buildCommercialDocumentsListQuery({ documentType: 'invoice_fp_dp', documentStatus: 'checked', page: 1, limit: 50 });
+    expect(dp.sql).toContain('e.doc_invoice_fp_dp = true');
+    expect(dp.sql).toContain('e.dp_due_date IS NOT NULL');
+    expect(dp.countSql).toContain('e.dp_due_date IS NOT NULL');
+    const payoff = buildCommercialDocumentsListQuery({ documentType: 'invoice_fp_payoff', documentStatus: 'checked', page: 1, limit: 50 });
+    expect(payoff.sql).toContain('e.payoff_date IS NOT NULL');
+    // the other types keep every PO
+    const contract = buildCommercialDocumentsListQuery({ documentType: 'contract', documentStatus: 'checked', page: 1, limit: 50 });
+    expect(contract.sql).not.toContain('dp_due_date IS NOT NULL');
+    expect(contract.sql).not.toContain('payoff_date IS NOT NULL');
   });
 
   it('uses the same scope filters and bind values as the table, so a card number equals its table total', () => {
@@ -211,5 +230,22 @@ describe('commercialDocumentsQuerySql filters for the Commercial Documents app',
     }
     expect(sql).toContain('e.contract_date >= $1::date');
     expect(values).toEqual(['2026-01-01', '2026-11-11']);
+  });
+});
+
+describe('commercialDocuments Created by filter', () => {
+  it('keeps the POs created by the chosen SAP user, in the table and in the cards (the same scope)', () => {
+    const scope = { dateFrom: '2026-01-01', dateTo: '2026-11-11', createdBy: ['04124040143'] };
+    const list = buildCommercialDocumentsListQuery({ ...scope, page: 1, limit: 50 });
+    expect(list.sql).toContain('FROM commercial_po_creators pcf');
+    expect(list.sql).toContain('pcf.created_by = ANY($3::text[])');
+    expect(list.values.slice(0, 3)).toEqual(['2026-01-01', '2026-11-11', ['04124040143']]);
+    const summary = buildCommercialDocumentsSummaryQuery(scope);
+    expect(summary.sql).toContain('FROM commercial_po_creators pcf');
+    expect(summary.values).toEqual(list.values.slice(0, list.values.length - 2));
+  });
+  it('no creator, no condition', () => {
+    expect(buildCommercialDocumentsListQuery({ page: 1, limit: 50 }).sql).not.toContain('pcf');
+    expect(buildCommercialDocumentsListQuery({ createdBy: [], page: 1, limit: 50 }).sql).not.toContain('pcf');
   });
 });

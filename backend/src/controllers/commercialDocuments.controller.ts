@@ -44,7 +44,8 @@ import {
   runPoCreatorsAutoLoad,
   upsertPoCreators,
 } from '../services/poCreators.service';
-import { listSapUsers, upsertSapUsers, type SapUserRow } from '../services/sapUsers.service';
+import { listCreatorOptions, listSapUsers, upsertSapUsers, type SapUserRow } from '../services/sapUsers.service';
+import { matchCreatorForUser } from '../utils/creatorMatch';
 
 /**
  * One audit_logs row per upload, view, download, delete and Tanda Terima - the Audit trail page of the Commercial Documents app.
@@ -179,6 +180,7 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
       product: parseQueryStringList(req.query.product),
       supplier: parseQueryStringList(req.query.supplier),
       plant: parseQueryStringList(req.query.plant),
+      createdBy: parseQueryStringList(req.query.createdBy),
       page,
       limit,
       sortKey: q.sortKey || null,
@@ -355,6 +357,36 @@ export const syncCommercialPoCreators = async (req: AuthRequest, res: Response) 
 };
 
 /**
+ * The "Created by" choices of the Documents page (GET /api/commercial-documents/filter-options/creators): the SAP users who created POs of the ME2N
+ * report, with the name from the SAP user master (the NIK when it has none). Anyone who may open the page may read it.
+ */
+export const getCommercialDocumentCreators = async (_req: AuthRequest, res: Response) => {
+  try {
+    return res.json({ success: true, data: { creators: await listCreatorOptions() } });
+  } catch (err) {
+    logger.error('getCommercialDocumentCreators error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to read the creators' } });
+  }
+};
+
+/**
+ * The creator to pre-select for the person who opens the Documents page (GET /api/commercial-documents/my-creator): the SAP user whose name is this
+ * account's name (see utils/creatorMatch.ts). Null when there is none or more than one; then nothing is pre-selected.
+ */
+export const getMyCommercialCreator = async (req: AuthRequest, res: Response) => {
+  try {
+    const me = req.user?.id ? await query('SELECT email, full_name FROM users WHERE id = $1::uuid', [req.user.id]) : { rows: [] as Array<Record<string, unknown>> };
+    const row = me.rows[0];
+    const options = (await listCreatorOptions()).filter((o) => o.name !== o.userId);
+    const hit = row ? matchCreatorForUser({ email: String(row.email || ''), fullName: String(row.full_name || '') }, options) : null;
+    return res.json({ success: true, data: { creator: hit } });
+  } catch (err) {
+    logger.error('getMyCommercialCreator error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to read your creator' } });
+  }
+};
+
+/**
  * Load the SAP user master extract (POST /api/commercial-documents/sap-users, ADMIN): the browser reads the ZUSER Excel file and sends the users in
  * chunks. The name is built here (first + last, in capitals). Users PRC wrote are left alone (PRC wins; see migration 262).
  */
@@ -423,13 +455,15 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
       product: parseQueryStringList(req.query.product),
       supplier: parseQueryStringList(req.query.supplier),
       plant: parseQueryStringList(req.query.plant),
+      createdBy: parseQueryStringList(req.query.createdBy),
     });
     const result = await query(summaryQuery.sql, summaryQuery.values);
     const row = result.rows[0] ?? {};
     const totalCount = Number(row.total_contract_count ?? 0);
 
     // Percentages are derived on the client from these two counts, to one decimal.
-    const card = (key: string) => ({ totalCount, uploadedCount: Number(row[key] ?? 0) });
+    // Invoice + FP Down Payment / Payoff are counted among the POs that have a DP / Payoff date in SAP (their own total), the rest among all POs.
+    const card = (key: string, totalKey?: string) => ({ totalCount: totalKey ? Number(row[totalKey] ?? 0) : totalCount, uploadedCount: Number(row[key] ?? 0) });
     return res.json({
       success: true,
       data: {
@@ -442,8 +476,8 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
           sppb: card('uploaded_sppb'),
           sppd: card('uploaded_sppd'),
           delivery_order: card('uploaded_delivery_order'),
-          invoice_fp_dp: card('uploaded_invoice_fp_dp'),
-          invoice_fp_payoff: card('uploaded_invoice_fp_payoff'),
+          invoice_fp_dp: card('uploaded_invoice_fp_dp', 'total_invoice_fp_dp'),
+          invoice_fp_payoff: card('uploaded_invoice_fp_payoff', 'total_invoice_fp_payoff'),
           invoice_fp_full: card('uploaded_invoice_fp_full'),
         },
         // All eleven / none / anything short of eleven - the list's completeness filter returns the same rows.
