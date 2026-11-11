@@ -130,3 +130,8 @@ export function presetRange(preset: DatePreset, today = new Date()): { dateFrom:
       return null
   }
 }
+
+/** A Region/Plant name as it is shown anywhere in the app: in capitals (the stored value, which filters use, is left as it is). */
+export function plantLabel(name: string | null | undefined): string {
+  return String(name ?? '').trim().toUpperCase()
+}

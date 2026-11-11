@@ -7,6 +7,7 @@ import {
   commercialCompletenessPct,
   COMMERCIAL_DOCUMENT_SLOT_COUNT,
 } from './commercialDocumentsQuerySql';
+import { buildCommercialDocumentsCompletenessByCreatorQuery } from './commercialDocumentsQuerySql';
 
 describe('commercialDocumentsQuerySql Region/Site', () => {
   it('plant_site uses Discharge Destination with B2B overlay, not master_plants.group_plant', () => {
@@ -188,5 +189,26 @@ describe('commercialDocumentsQuerySql filters for the Commercial Documents app',
   it('summary and per-plant queries count complete and empty contracts', () => {
     expect(buildCommercialDocumentsSummaryQuery({}).sql).toMatch(/AS complete_contract_count[\s\S]*AS empty_contract_count/);
     expect(buildCommercialDocumentsCompletenessByPlantQuery({}).sql).toMatch(/AS complete_count[\s\S]*AS empty_count/);
+  });
+
+  it('by plant: also counts the POs with each document type, for the detail of a row', () => {
+    const { sql } = buildCommercialDocumentsCompletenessByPlantQuery({});
+    for (const key of ['draft_contract', 'berita_acara', 'sppb', 'sppd', 'invoice_fp_full']) {
+      expect(sql).toContain(`COUNT(*) FILTER (WHERE e.doc_${key})::int AS uploaded_${key}`);
+    }
+  });
+
+  it('by creator: joins the ME2N creators by PO, counts 11 slots per PO and every document type, and keeps the date scope', () => {
+    const { sql, values } = buildCommercialDocumentsCompletenessByCreatorQuery({ dateFrom: '2026-01-01', dateTo: '2026-11-11' });
+    expect(sql).toContain('LEFT JOIN commercial_po_creators pc ON pc.po_number = NULLIF(TRIM(e.po_number)');
+    expect(sql).toContain('LEFT JOIN commercial_creator_names cn ON cn.created_by = pc.created_by');
+    expect(sql).toContain("COALESCE(NULLIF(TRIM(pc.created_by), ''), '') AS created_by");
+    expect(sql).toContain('(COUNT(*) * 11)::int AS total_slots');
+    expect(sql).toMatch(/GROUP BY 1\s*$/);
+    for (const key of ['draft_contract', 'berita_acara', 'bea_cukai', 'sppb', 'sppd', 'invoice_fp_full']) {
+      expect(sql).toContain(`COUNT(*) FILTER (WHERE e.doc_${key})::int AS uploaded_${key}`);
+    }
+    expect(sql).toContain('e.contract_date >= $1::date');
+    expect(values).toEqual(['2026-01-01', '2026-11-11']);
   });
 });

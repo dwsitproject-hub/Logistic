@@ -366,6 +366,28 @@ describe('identity and version', () => {
   });
 });
 
+describe('eligibility: a vessel AND some schedule', () => {
+  it('an empty SAP shell is not sent; it is sent once it has a date; and when the date goes it becomes a tombstone, never a Cancelled record', async () => {
+    const c = await newContract('E');
+    const shipE = await newShipment(c, 'E', 'IT PTN SHELL');
+    await refreshPartnerRecords({ force: true });
+    expect(byShipmentNo(await records('/shipments'), 'E')).toBeUndefined();
+    const none = await one<{ n: string }>(`SELECT COUNT(*)::text AS n FROM partner_shipment_records WHERE payload->>'shipmentNo' = $1`, [`${P}-S-E`]);
+    expect(Number(none.n)).toBe(0);
+
+    await query(`UPDATE shipments SET eta_arrival = '2026-11-20' WHERE id = $1`, [shipE]);
+    await refreshPartnerRecords({ force: true });
+    const sent = byShipmentNo(await records('/shipments'), 'E');
+    expect(sent).toMatchObject({ active: true, status: 'PLANNED' });
+
+    await query(`UPDATE shipments SET eta_arrival = NULL WHERE id = $1`, [shipE]);
+    await refreshPartnerRecords({ force: true });
+    expect(byShipmentNo(await records('/shipments'), 'E')).toBeUndefined();
+    const tomb = (await records('/shipments?updatedSince=2000-01-01T00:00:00Z&includeDeleted=true')).find((r) => r.id === sent!.id);
+    expect(tomb).toEqual({ id: sent!.id, deleted: true, active: false, version: expect.any(Number), updatedAt: expect.any(String) });
+  });
+});
+
 describe('GET /vessel-pairs', () => {
   it('lists a pair with both DHM codes and leaves out one KLIP cannot name', async () => {
     const tbNoCode = (await one<{ id: string }>(

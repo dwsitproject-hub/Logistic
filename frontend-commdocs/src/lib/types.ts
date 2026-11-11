@@ -108,6 +108,23 @@ export type PlantCompleteness = {
   completenessPct: number
   completeCount: number
   emptyCount: number
+  /** POs with each document type uploaded (not on the totals row). */
+  byType?: Record<string, number>
+}
+
+/** One row of the Dashboard's "Documents by SAP creator" (an empty createdBy = POs the ME2N report does not know). */
+export type CreatorCompleteness = {
+  createdBy: string
+  displayName: string | null
+  contractCount: number
+  uploadedSlots: number
+  totalSlots: number
+  missingSlots: number
+  completenessPct: number
+  completeCount: number
+  emptyCount: number
+  /** POs with each document type uploaded, by type key. */
+  byType: Record<string, number>
 }
 
 export type ManagedUser = {

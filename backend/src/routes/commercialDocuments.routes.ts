@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticateToken, authorizeAnyPermission, authorizePermission } from '../middleware/auth';
+import { authenticateToken, authorize, authorizeAnyPermission, authorizePermission } from '../middleware/auth';
 import {
   commercialDocumentUpload,
   deleteCommercialDocument,
@@ -8,8 +8,12 @@ import {
   getCommercialDocumentFiles,
   getCommercialDocumentHistory,
   getCommercialDocuments,
+  getCommercialDocumentsCompletenessByCreator,
   getCommercialDocumentsCompletenessByPlant,
   getCommercialDocumentsSummary,
+  getCommercialPoCreatorsStatus,
+  importCommercialPoCreators,
+  syncCommercialPoCreators,
   uploadCommercialDocument,
   viewCommercialDocument,
 } from '../controllers/commercialDocuments.controller';
@@ -41,6 +45,10 @@ router.get(
   canViewCompleteness,
   getCommercialDocumentsCompletenessByPlant,
 );
+router.get('/completeness-by-creator', authenticateToken, canViewCompleteness, getCommercialDocumentsCompletenessByCreator);
+router.post('/po-creators', authenticateToken, authorize('ADMIN'), importCommercialPoCreators);
+router.get('/po-creators/status', authenticateToken, authorize('ADMIN'), getCommercialPoCreatorsStatus);
+router.post('/po-creators/sync', authenticateToken, authorize('ADMIN'), syncCommercialPoCreators);
 router.get('/history/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentHistory);
 router.get('/files/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentFiles);
 router.post('/upload', authenticateToken, canViewDocuments, commercialDocumentUpload.single('file'), uploadCommercialDocument);

@@ -7,6 +7,7 @@ import logger from '../utils/logger';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import {
   buildCommercialDocumentStoredName,
+  COMMERCIAL_DOCUMENT_TYPES,
   commercialDocumentTypeLabel,
   commercialDocumentUploadPermissionKey,
   commercialDocumentUploadRelativeDir,
@@ -15,6 +16,7 @@ import {
   isCommercialDocumentType,
 } from '../utils/commercialDocumentsConstants';
 import {
+  buildCommercialDocumentsCompletenessByCreatorQuery,
   buildCommercialDocumentsCompletenessByPlantQuery,
   buildCommercialDocumentsListQuery,
   buildCommercialDocumentsSummaryQuery,
@@ -33,6 +35,15 @@ import {
 } from '../services/tandaTerimaPdf.service';
 import { buildTandaTerimaContractsByExtNoSql } from '../utils/tandaTerimaQuerySql';
 import { logAudit } from '../middleware/audit';
+import {
+  isPoCreatorsAutoLoadEnabled,
+  isPoCreatorsRunning,
+  latestPoCreatorsRuns,
+  listPoCreatorRuns,
+  poCreatorsCron,
+  runPoCreatorsAutoLoad,
+  upsertPoCreators,
+} from '../services/poCreators.service';
 
 /**
  * One audit_logs row per upload, view, download, delete and Tanda Terima - the Audit trail page of the Commercial Documents app.
@@ -199,6 +210,154 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
   }
 };
 
+/**
+ * Completeness by SAP creator (GET /api/commercial-documents/completeness-by-creator). The creator comes from the ME2N report loaded by an
+ * administrator (commercial_po_creators); a PO the report does not know belongs to the row with an empty createdBy.
+ */
+export const getCommercialDocumentsCompletenessByCreator = async (req: AuthRequest, res: Response) => {
+  try {
+    const ytd = defaultYtdRange();
+    const q = req.query as Record<string, string | undefined>;
+    const dateFrom = q.dateFrom || ytd.dateFrom;
+    const dateTo = q.dateTo || ytd.dateTo;
+    const { sql, values } = buildCommercialDocumentsCompletenessByCreatorQuery({
+      dateFrom,
+      dateTo,
+      plant: parseQueryStringList(req.query.plant),
+    });
+    const [result, loaded, runs] = await Promise.all([
+      query(sql, values),
+      query('SELECT COUNT(*)::int AS pos, COUNT(DISTINCT created_by)::int AS creators, MAX(loaded_at) AS loaded_at FROM commercial_po_creators'),
+      latestPoCreatorsRuns().catch(() => ({ lastLoaded: null, lastRun: null })),
+    ]);
+    const creators = result.rows.map((row) => {
+      const contractCount = Number(row.contract_count) || 0;
+      const uploadedSlots = Number(row.uploaded_slots) || 0;
+      const totalSlots = Number(row.total_slots) || 0;
+      const byType: Record<string, number> = {};
+      for (const type of COMMERCIAL_DOCUMENT_TYPES) byType[type] = Number(row[`uploaded_${type}`]) || 0;
+      return {
+        createdBy: String(row.created_by || ''),
+        displayName: row.display_name ? String(row.display_name) : null,
+        contractCount,
+        uploadedSlots,
+        totalSlots,
+        missingSlots: Math.max(0, totalSlots - uploadedSlots),
+        completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
+        completeCount: Number(row.complete_count) || 0,
+        emptyCount: Number(row.empty_count) || 0,
+        byType,
+      };
+    });
+    return res.json({
+      success: true,
+      data: {
+        creators,
+        loaded: {
+          pos: Number(loaded.rows[0]?.pos) || 0,
+          creators: Number(loaded.rows[0]?.creators) || 0,
+          loadedAt: loaded.rows[0]?.loaded_at ?? null,
+        },
+        auto: { enabled: isPoCreatorsAutoLoadEnabled(), lastLoaded: runs.lastLoaded, lastRun: runs.lastRun },
+        filters: { dateFrom, dateTo },
+      },
+    });
+  } catch (err) {
+    logger.error('getCommercialDocumentsCompletenessByCreator error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch completeness by creator' } });
+  }
+};
+
+const MAX_CREATOR_ROWS = 20000;
+
+/**
+ * Load PO -> creator pairs from the SAP ME2N report (POST /api/commercial-documents/po-creators, ADMIN). The browser reads the Excel file and
+ * sends the pairs; a PO already known takes the new creator. Nothing else about a PO changes.
+ */
+export const importCommercialPoCreators = async (req: AuthRequest, res: Response) => {
+  try {
+    const body = (req.body || {}) as { rows?: unknown; source_file?: unknown };
+    if (!Array.isArray(body.rows) || body.rows.length === 0) {
+      return res.status(400).json({ success: false, error: { message: 'rows is required' } });
+    }
+    if (body.rows.length > MAX_CREATOR_ROWS) {
+      return res.status(400).json({ success: false, error: { message: `At most ${MAX_CREATOR_ROWS} rows per request` } });
+    }
+    const pos: string[] = [];
+    const creators: string[] = [];
+    for (const raw of body.rows as Array<Record<string, unknown>>) {
+      const po = String(raw?.po_number ?? '').trim();
+      const by = String(raw?.created_by ?? '').trim();
+      if (!po || !by || po.length > 40 || by.length > 40) {
+        return res.status(400).json({ success: false, error: { message: 'Every row needs a po_number and a created_by (up to 40 characters)' } });
+      }
+      pos.push(po);
+      creators.push(by);
+    }
+    const sourceFile = String(body.source_file ?? '').trim().slice(0, 200) || null;
+    await upsertPoCreators(
+      pos.map((po_number, i) => ({ po_number, created_by: creators[i] })),
+      sourceFile,
+      req.user?.id ?? null,
+    );
+    auditCommercial(req, 'IMPORT_PO_CREATORS', undefined, { rows: pos.length, source_file: sourceFile });
+    return res.json({ success: true, data: { loaded: pos.length } });
+  } catch (err) {
+    logger.error('importCommercialPoCreators error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load the creators' } });
+  }
+};
+
+/**
+ * The ME2N Report page (GET /api/commercial-documents/po-creators/status, ADMIN): whether the schedule is on and when, how much is loaded, and the
+ * latest runs (the schedule's and the Sync button's), so a quiet morning and a problem do not look the same.
+ */
+export const getCommercialPoCreatorsStatus = async (_req: AuthRequest, res: Response) => {
+  try {
+    const [loaded, runs] = await Promise.all([
+      query('SELECT COUNT(*)::int AS pos, COUNT(DISTINCT created_by)::int AS creators, MAX(loaded_at) AS loaded_at FROM commercial_po_creators'),
+      listPoCreatorRuns(30),
+    ]);
+    return res.json({
+      success: true,
+      data: {
+        running: isPoCreatorsRunning(),
+        enabled: isPoCreatorsAutoLoadEnabled(),
+        cron: poCreatorsCron(),
+        loaded: {
+          pos: Number(loaded.rows[0]?.pos) || 0,
+          creators: Number(loaded.rows[0]?.creators) || 0,
+          loadedAt: loaded.rows[0]?.loaded_at ?? null,
+        },
+        runs,
+      },
+    });
+  } catch (err) {
+    logger.error('getCommercialPoCreatorsStatus error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to read the ME2N status' } });
+  }
+};
+
+/**
+ * "Check now" (POST /api/commercial-documents/po-creators/sync, ADMIN): the same run as the schedule - look for the newest ME2N report in
+ * the share's Original folder and load it if it is new. Answers with what happened (loaded, unchanged, no file, folder missing, failed).
+ */
+export const syncCommercialPoCreators = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await runPoCreatorsAutoLoad({ trigger: 'manual', startedBy: req.user?.id ?? null });
+    auditCommercial(req, 'SYNC_PO_CREATORS', undefined, { outcome: result.outcome, file: result.fileName, rows: result.rows });
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    logger.error('syncCommercialPoCreators error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to check for the report' } });
+  }
+};
+
+/*
+ * No endpoint edits creator names. SAP gives an employee number (NIK); names will come from the PRC application's sync, which will write
+ * commercial_creator_names (created_by -> display_name). The table and the join in the by-creator query are the place for it.
+ */
+
 export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Response) => {
   try {
     const ytd = defaultYtdRange();
@@ -268,6 +427,8 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
       const contractCount = Number(row.contract_count) || 0;
       const uploadedSlots = Number(row.uploaded_slots) || 0;
       const totalSlots = Number(row.total_slots) || 0;
+      const byType: Record<string, number> = {};
+      for (const type of COMMERCIAL_DOCUMENT_TYPES) byType[type] = Number(row[`uploaded_${type}`]) || 0;
       return {
         plant: String(row.plant_site || 'Unassigned'),
         contractCount,
@@ -277,6 +438,7 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
         completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
         completeCount: Number(row.complete_count) || 0,
         emptyCount: Number(row.empty_count) || 0,
+        byType,
       };
     });
     const contractCount = plants.reduce((sum, row) => sum + row.contractCount, 0);
