@@ -1,6 +1,6 @@
 'use client'
 
-import { BarChart3, BookOpen, ExternalLink, FileSpreadsheet, FileText, History, KeyRound, LogOut, Menu, MessageSquareWarning, ShieldCheck, Users } from 'lucide-react'
+import { BarChart3, BookOpen, ExternalLink, FileSpreadsheet, FileText, History, KeyRound, LogOut, Menu, MessageSquareWarning, ShieldCheck, UserSearch, Users } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -21,6 +21,7 @@ const ICONS: Record<NavKey, typeof FileText> = {
   roles: ShieldCheck,
   audit: History,
   me2n: FileSpreadsheet,
+  sapUsers: UserSearch,
 }
 
 export default function AppLayout({ children }: { children: ReactNode }) {

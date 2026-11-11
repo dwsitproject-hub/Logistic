@@ -25,9 +25,17 @@ type Filters = {
   incoterm: string
   products: string[]
   suppliers: string[]
+  /** The SAP user (NIK) who created the PO. */
+  createdBy: string
 }
 
-const EMPTY_FILTERS: Filters = { preset: 'ytd', from: '', to: '', plant: '', incoterm: '', products: [], suppliers: [] }
+const EMPTY_FILTERS: Filters = { preset: 'ytd', from: '', to: '', plant: '', incoterm: '', products: [], suppliers: [], createdBy: '' }
+
+/** The two types whose card total is not every PO: only the POs that have the date in SAP (DP Date / Payoff Date). */
+const SUMMARY_BASIS: Partial<Record<DocumentType, string>> = {
+  invoice_fp_dp: 'PO with DP Date',
+  invoice_fp_payoff: 'PO with Payoff Date',
+}
 
 const DATE_PRESETS: Array<[DatePreset, string]> = [
   ['ytd', 'This year'],
@@ -57,6 +65,10 @@ export default function DocumentsPage() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [supplierQuery, setSupplierQuery] = useState('')
   const [options, setOptions] = useState<Options>({ plants: [], incoterms: [], products: [], suppliers: [] })
+  // The SAP users who created POs (the "Created by" choices), and whether the pre-selection for the person who opened the page is settled: the table
+  // and the cards wait for it, so the first list is already the right one instead of everything and then a reload.
+  const [creators, setCreators] = useState<Array<{ userId: string; name: string }>>([])
+  const [creatorReady, setCreatorReady] = useState(false)
 
   // ---- table ----
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'contract_date', dir: 'desc' })
@@ -84,6 +96,10 @@ export default function DocumentsPage() {
   const visible = COLUMNS.filter((c) => c.fixed || cols[c.id])
   const selectedRows = Object.values(selected)
   // Plants with data; the chosen plant stays in the list even if the date range moved away from it, so the select never shows a blank.
+  const creatorChoices = useMemo(() => {
+    return filters.createdBy && !creators.some((c) => c.userId === filters.createdBy) ? [...creators, { userId: filters.createdBy, name: filters.createdBy }] : creators
+  }, [creators, filters.createdBy])
+  const creatorName = (id: string) => creatorChoices.find((c) => c.userId === id)?.name || id
   const plantChoices = useMemo(() => {
     const list = plantsWithData ?? options.plants
     return filters.plant && !list.includes(filters.plant) ? [...list, filters.plant].sort((a, b) => a.localeCompare(b)) : list
@@ -112,6 +128,7 @@ export default function DocumentsPage() {
       incoterm: filters.incoterm,
       product: filters.products,
       supplier: filters.suppliers,
+      createdBy: filters.createdBy ? [filters.createdBy] : [],
     }),
     [range, search, filters],
   )
@@ -144,6 +161,7 @@ export default function DocumentsPage() {
           filters.products.length && 'Product',
           filters.suppliers.length && 'Supplier',
           search && 'Search',
+          filters.createdBy && 'Created by',
           docFilter && 'Document card',
         ].filter((x): x is string => typeof x === 'string' && x !== ''),
       }),
@@ -184,14 +202,31 @@ export default function DocumentsPage() {
       get('/contracts/filter-options/incoterms'),
       get('/dashboard/filter-options/products'),
       get('/dashboard/filter-options/suppliers'),
-    ]).then(([plants, incoterms, products, suppliers]) =>
+      get('/commercial-documents/filter-options/creators'),
+    ]).then(([plants, incoterms, products, suppliers, creatorList]) => {
+      setCreators(((creatorList as { creators?: Array<{ userId: string; name: string }> } | null)?.creators) || [])
       setOptions({
         plants: asList(plants, 'groupPlants'),
         incoterms: asList(incoterms, 'incoterms'),
         products: asList(products, 'products'),
         suppliers: asList(suppliers, 'suppliers'),
-      }),
-    )
+      })
+    })
+    return () => ctrl.abort()
+  }, [])
+
+  // Created by is pre-selected for the person who opens the page, when the server can tell which SAP user they are (their name; see backend utils/creatorMatch.ts).
+  // Only once, and the person can change or clear it: Reset all clears it too.
+  useEffect(() => {
+    const ctrl = new AbortController()
+    apiData<{ creator: { userId: string; name: string } | null }>('/commercial-documents/my-creator', { signal: ctrl.signal })
+      .then((d) => {
+        if (d?.creator) setFilters((f) => (f.createdBy ? f : { ...f, createdBy: d.creator!.userId }))
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!ctrl.signal.aborted) setCreatorReady(true)
+      })
     return () => ctrl.abort()
   }, [])
 
@@ -214,6 +249,7 @@ export default function DocumentsPage() {
 
   // The table.
   useEffect(() => {
+    if (!creatorReady) return
     if (filters.preset === 'custom' && (!filters.from || !filters.to)) return
     const ctrl = new AbortController()
     setLoading(true)
@@ -245,10 +281,11 @@ export default function DocumentsPage() {
         setLoading(false)
       })
     return () => ctrl.abort()
-  }, [listParams, page, pageSize, reload, filters.preset, filters.from, filters.to])
+  }, [listParams, page, pageSize, reload, filters.preset, filters.from, filters.to, creatorReady])
 
   // The cards and chip counts follow the scope (not the card / chip itself).
   useEffect(() => {
+    if (!creatorReady) return
     if (filters.preset === 'custom' && (!filters.from || !filters.to)) return
     const ctrl = new AbortController()
     apiData<{ summary: Record<string, SummaryCard>; contracts?: ContractCounts }>(`/commercial-documents/summary${scopeQuery}`, {
@@ -260,7 +297,7 @@ export default function DocumentsPage() {
       })
       .catch(() => undefined)
     return () => ctrl.abort()
-  }, [scopeQuery, reload, filters.preset, filters.from, filters.to])
+  }, [scopeQuery, reload, filters.preset, filters.from, filters.to, creatorReady])
 
   // Keep the floating selection bar and toasts from overlapping.
   const barShown = selectedRows.length > 0 && !open && !ttRows
@@ -312,6 +349,7 @@ export default function DocumentsPage() {
 
   const fchips: Array<[string, string, () => void]> = [
     ...(search ? [['q', `Search: ${search}`, () => (setSearchInput(''), setSearch(''))] as [string, string, () => void]] : []),
+    ...(filters.createdBy ? [['c', `Created by: ${creatorName(filters.createdBy)}`, () => setF({ createdBy: '' })] as [string, string, () => void]] : []),
     ...filters.products.map(
       (p) => [`p:${p}`, `Product: ${p}`, () => setF({ products: filters.products.filter((x) => x !== p) })] as [string, string, () => void],
     ),
@@ -379,6 +417,14 @@ export default function DocumentsPage() {
             {plantChoices.map((p) => (
               <option key={p} value={p}>
                 {plantLabel(p)}
+              </option>
+            ))}
+          </select>
+          <select className="select" aria-label="Created by" value={filters.createdBy} onChange={(e) => setF({ createdBy: e.target.value })} title="The SAP user who created the PO">
+            <option value="">Created by: All</option>
+            {creatorChoices.map((c) => (
+              <option key={c.userId} value={c.userId}>
+                {c.name}
               </option>
             ))}
           </select>
@@ -474,8 +520,8 @@ export default function DocumentsPage() {
 
       <section className="sumcards-wrap" aria-label="Documents uploaded per type">
         <p className="hint">
-          Contracts with the document uploaded, out of all contracts in the selected date range. Click a card to list them in the table
-          below.
+          Contracts with the document uploaded, out of all contracts in the selected date range. For Invoice + FP Down Payment and Payoff, out of the POs that
+          have a DP Date or a Payoff Date in SAP. Click a card to list them in the table below.
         </p>
         <div className="sumcards">
           {DOCUMENT_TYPES.map((t) => {
@@ -487,11 +533,11 @@ export default function DocumentsPage() {
                 type="button"
                 className={`sumcard${c && c.uploadedCount === 0 ? ' empty' : ''}`}
                 aria-pressed={docFilter === t}
-                title={`Show contracts with ${DOCUMENT_LABELS[t]} uploaded`}
+                title={`Show contracts with ${DOCUMENT_LABELS[t]} uploaded${SUMMARY_BASIS[t] ? ` (among the ${SUMMARY_BASIS[t]}s)` : ''}`}
                 onClick={() => setDocFilter(docFilter === t ? null : t)}
               >
                 <span className="sc-l">{DOCUMENT_LABELS[t]}</span>
-                <span className="sc-k">Contract</span>
+                <span className="sc-k">{SUMMARY_BASIS[t] || 'Contract'}</span>
                 <span className="sc-n num">
                   {c ? `${c.uploadedCount.toLocaleString('en-US')}/${c.totalCount.toLocaleString('en-US')}` : '…'}
                 </span>
@@ -509,7 +555,7 @@ export default function DocumentsPage() {
         <div className="tbl-tools">
           <span className="hint">
             {docFilter && isDocumentType(docFilter)
-              ? `Showing POs with ${DOCUMENT_LABELS[docFilter]} uploaded · `
+              ? `Showing POs with ${DOCUMENT_LABELS[docFilter]} uploaded${SUMMARY_BASIS[docFilter] ? ` (only the ${SUMMARY_BASIS[docFilter]}s)` : ''} · `
               : docFilter === 'incomplete'
                 ? 'Showing POs that miss at least one document · '
                 : ''}

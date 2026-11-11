@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useMemo, useState } from 'react'
 import { CompletenessRows } from '@/components/dashboard/CompletenessRows'
 import { ErrorNote, Spinner } from '@/components/ui'
-import { longDate, plural } from '@/lib/format'
+import { longDate, plural, poUploaded } from '@/lib/format'
 import type { CreatorCompleteness } from '@/lib/types'
 
 type Order = 'complete' | 'gaps'
@@ -20,9 +20,9 @@ export type CreatorPayload = {
  * The "By user" view of the Dashboard's Completeness: the same bars as By plant, one per person, with the number of POs that person created in SAP
  * (GET /api/commercial-documents/completeness-by-creator). The creator is the "Created by" of the SAP ME2N report, loaded every morning from the SAP
  * share by the schedule; the ME2N Report menu (administrators) is the backup, so this view has no buttons.
- * SAP gives an employee number (NIK). A name for it will come from the PRC application, so for now the number is what shows: `displayName` and the
- * commercial_creator_names table are the place for that sync, and nothing here edits them. POs the report does not know have no creator, so they are
- * not listed (the API still returns them as an empty createdBy, so the totals there add up).
+ * SAP gives an employee number (NIK); its name comes from the SAP user master (the SAP Users menu, table sap_users) and is what shows here, in
+ * capitals, with no NIK. The NIK shows only for someone the master does not know. POs the report does not know have no creator, so they are not
+ * listed (the API still returns them as an empty createdBy, so the totals there add up).
  */
 export function CreatorTable({
   payload,
@@ -43,15 +43,16 @@ export function CreatorTable({
 
   const rows = useMemo(() => {
     const list = data?.creators || []
-    const ratio = (c: CreatorCompleteness) => (c.totalSlots ? c.uploadedSlots / c.totalSlots : 0)
+    // The share of POs uploaded (at least one document), the same % the rows show.
+    const share = (c: CreatorCompleteness) => poUploaded(c.contractCount, c.emptyCount).pct
     const sorted = [...list].sort((a, b) => {
-      if (order === 'gaps') return ratio(a) - ratio(b) || b.missingSlots - a.missingSlots
-      return ratio(b) - ratio(a) || b.contractCount - a.contractCount
+      if (order === 'gaps') return share(a) - share(b) || b.emptyCount - a.emptyCount
+      return share(b) - share(a) || b.contractCount - a.contractCount
     })
     return showAll ? sorted : sorted.slice(0, 10)
   }, [data, order, showAll])
 
-  // The NIK is the SAP number; a name (from the PRC sync, when it exists) goes first and the number stays beside it.
+  // The name from the SAP user master (in capitals); the NIK only when the master has no name for it.
   const label = (c: CreatorCompleteness) => c.displayName || c.createdBy
   const known = data?.loaded.pos || 0
   const total = data?.creators.length || 0
@@ -95,11 +96,10 @@ export function CreatorTable({
       ) : (
         <>
           <CompletenessRows
-            firstLabel="User (SAP NIK)"
+            firstLabel="User"
             rows={rows.map((c) => ({
               key: c.createdBy,
               name: label(c),
-              sub: c.displayName ? c.createdBy : null,
               contractCount: c.contractCount,
               completeCount: c.completeCount,
               emptyCount: c.emptyCount,
@@ -135,10 +135,10 @@ export function CreatorTable({
       ) : null}
       {known ? (
         <p className="hint" style={{ padding: '0 16px 14px', margin: 0 }}>
-          POs are counted by the SAP user who created them (NIK), from the SAP ME2N report loaded
+          POs are counted by the SAP user who created them, from the SAP ME2N report loaded
           {data?.loaded.loadedAt ? ` on ${longDate(data.loaded.loadedAt)}` : ''} ({plural(known, 'PO')}, {plural(data?.loaded.creators || 0, 'user')}). A PO created after that is not
           listed until the report is loaded again.{' '}
-          {data?.auto?.enabled ? 'The SAP share is checked for a new report every morning.' : 'Automatic loading is off on this server.'} Names will come from the PRC application.
+          {data?.auto?.enabled ? 'The SAP share is checked for a new report every morning.' : 'Automatic loading is off on this server.'} Names come from the SAP user master (SAP Users menu).
         </p>
       ) : null}
       {problem ? (

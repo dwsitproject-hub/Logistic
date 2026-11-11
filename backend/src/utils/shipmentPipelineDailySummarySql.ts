@@ -11,7 +11,6 @@ import {
 import { buildShipmentListAtaSelectSql, SHIPMENT_ATA_OVERRIDES_JOIN } from './shipmentAtaOverrideSql';
 import {
   shipmentEffectiveStatusExpr,
-  shipmentListContractOsWithinBandExpr,
   sqlShipmentGroupStatusAgg,
   sqlShipmentGroupStatusFloorAgg,
 } from './shipmentListFilters';
@@ -142,13 +141,6 @@ export function buildShipmentDailyBaseCteSql(options: ShipmentDailyBaseOptions =
           MAX(c.product) AS product,
           MAX(c.incoterm) AS incoterm,
           BOOL_AND(${sqlIsContractSapClosedForStoExpr('c', listStoKeySql)}) AS is_contract_sap_closed,
-          /*
-           * Must be computed here too, not only in the list's base CTE: the circle counts this
-           * table feeds are derived with shipmentEffectiveStatusExpr over the same alias, so a
-           * missing column both breaks the refresh outright (42703) and, if it were defaulted
-           * away instead, would let the cards disagree with the rows they count.
-           */
-          BOOL_AND(${shipmentListContractOsWithinBandExpr()}) AS is_contract_os_within_band,
           ${ataSelect}
           ''::text AS contract_numbers_from_join,
           ''::text AS po_numbers_from_join,
@@ -157,7 +149,6 @@ export function buildShipmentDailyBaseCteSql(options: ShipmentDailyBaseOptions =
         FROM shipments s
         ${sqlShipmentListB2bOriginContractJoins()}
         ${sqlShipmentListExecutionCsStoJoin(listStoKeySql)}
-        LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id
         LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
         LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
         ${SHIPMENT_ATA_OVERRIDES_JOIN}

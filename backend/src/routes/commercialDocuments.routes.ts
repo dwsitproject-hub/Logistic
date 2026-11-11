@@ -7,12 +7,16 @@ import {
   downloadTandaTerima,
   getCommercialDocumentFiles,
   getCommercialDocumentHistory,
+  getCommercialDocumentCreators,
   getCommercialDocuments,
   getCommercialDocumentsCompletenessByCreator,
   getCommercialDocumentsCompletenessByPlant,
   getCommercialDocumentsSummary,
   getCommercialPoCreatorsStatus,
+  getMyCommercialCreator,
+  getSapUsers,
   importCommercialPoCreators,
+  importSapUsers,
   syncCommercialPoCreators,
   uploadCommercialDocument,
   viewCommercialDocument,
@@ -38,6 +42,8 @@ const canEditDocuments = authorizePermission('page.commercial_documents', 'can_e
 const canViewCompleteness = authorizeAnyPermission(['page.commercial_dashboard', 'page.commercial_documents'], 'can_view');
 
 router.get('/', authenticateToken, canViewDocuments, getCommercialDocuments);
+router.get('/filter-options/creators', authenticateToken, canViewDocuments, getCommercialDocumentCreators);
+router.get('/my-creator', authenticateToken, canViewDocuments, getMyCommercialCreator);
 router.get('/summary', authenticateToken, canViewDocuments, getCommercialDocumentsSummary);
 router.get(
   '/completeness-by-plant',
@@ -47,6 +53,8 @@ router.get(
 );
 router.get('/completeness-by-creator', authenticateToken, canViewCompleteness, getCommercialDocumentsCompletenessByCreator);
 router.post('/po-creators', authenticateToken, authorize('ADMIN'), importCommercialPoCreators);
+router.get('/sap-users', authenticateToken, authorize('ADMIN'), getSapUsers);
+router.post('/sap-users', authenticateToken, authorize('ADMIN'), importSapUsers);
 router.get('/po-creators/status', authenticateToken, authorize('ADMIN'), getCommercialPoCreatorsStatus);
 router.post('/po-creators/sync', authenticateToken, authorize('ADMIN'), syncCommercialPoCreators);
 router.get('/history/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentHistory);

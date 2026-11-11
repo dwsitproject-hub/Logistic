@@ -220,15 +220,14 @@ describe('normalizeShipmentListRows', () => {
   });
 
   it('a second pass keeps the status the SQL decided (the hybrid list normalizes the same rows twice)', () => {
-    // Production, PO 1011003250: three FOB POs of one voyage, nothing outstanding on any of them. The SQL says COMPLETED; the milestone dates alone say PLANNED (an ETA, no ATA).
+    // Production, PO 1011003250: three FOB POs of one voyage. The SQL says COMPLETED; the milestone dates alone say PLANNED (an ETA, no ATA).
     const row = () =>
       ({
         row_kind: 'shipment',
         sto_number: null,
         status: 'PLANNED',
         effective_status: 'COMPLETED',
-        is_contract_os_within_band: true,
-        is_contract_sap_closed: false,
+        is_contract_sap_closed: true,
         eta_arrival: '2026-10-10',
         quantity_delivered: '1000000.00',
         quantity_delivered_klip: '1000000.00',

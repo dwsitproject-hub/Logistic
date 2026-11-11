@@ -26,7 +26,7 @@ describe('a sibling STO\'s discharge does not finish this STO for the OS', () =>
 
   it('still emits the column when no group key is given, so every base CTE has it', () => {
     // A shipment_base variant missing a column the summary selects fails the refresh with 42703;
-    // that has already happened once on this page, with is_contract_os_within_band.
+    // that has already happened once on this page, with a per-contract OS flag (since removed from the status).
     expect(buildShipmentListAtaSelectSql()).toContain('as ata_vessel_complete_discharge_own_sto');
   });
 

@@ -1,5 +1,4 @@
 ﻿import { performance } from 'node:perf_hooks';
-import { shipmentListContractOsWithinBandExpr } from '../utils/shipmentListFilters';
 import { appendContractPerfSourceTypeFilter } from './contractSqlFragments';
 import { Response } from 'express';
 import { query } from '../database/connection';
@@ -1138,19 +1137,6 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(c.delivery_start_date) as delivery_start_date,
           MAX(c.delivery_end_date) as delivery_end_date,
           BOOL_AND(${sqlIsContractSapClosedForStoExpr('c', listStoKeySql)}) AS is_contract_sap_closed,
-          /*
-           * Outstanding within the zero band, per contract, collapsed over the STO group.
-           *
-           * BOOL_AND rather than a summed OS: one contract can belong to several STO groups, so
-           * summing would need the per-STO division the aggregates apply to avoid overstating.
-           * Testing each contract avoids that and matches is_contract_sap_closed directly above.
-           *
-           * Fed by a single primary-key join on contract_qty_move_snapshot - the same source the
-           * OS cards read through the qty_move CTE, so the column and the card cannot disagree.
-           * Measured on dev: the OS join over every sea contract is 33ms, and 220 contracts newly
-           * reach COMPLETED (of 1,591 inside the band, the rest already being Close or ATC'd).
-           */
-          BOOL_AND(${shipmentListContractOsWithinBandExpr()}) AS is_contract_os_within_band,
           ${sqlShipmentListLoadingPortsKlipAgg()},
           ${sqlShipmentListDischargePortsKlipAgg()},
           -- the ending B2B child's port (b2b_end is the snapshot join above), unless a user typed this shipment's port: where it is set it replaces every other port (utils/b2bChildDischargePortSql.ts)
@@ -1161,7 +1147,6 @@ ${contractMetaSelectCore}
         FROM shipments s
         ${sqlShipmentListB2bOriginContractJoins()}
         ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
-        LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id
         ${sqlShipmentListExecutionCsStoJoin(listStoKeySql)}
 ${vlpLateralJoins}
         LEFT JOIN vessel_loading_ports vlp_load ON vlp_load.shipment_id = s.id
@@ -2997,7 +2982,7 @@ export const batchSaveShipmentPoKlipQtyHandler = async (req: AuthRequest, res: R
     /*
      * Everything derived from these quantities has to be refreshed for EVERY sibling written, not only the anchor.
      *
-     * A shipment's Completed status and a contract's OS Qty read contract_qty_move_snapshot (shipmentListContractOsWithinBandExpr), and
+     * A contract's OS Qty reads contract_qty_move_snapshot, and
      * PUT /shipments/:id refreshes that snapshot for the anchor shipment only - and runs BEFORE this request in the Edit Shipment save.
      * So clearing Delivered on a 3-PO group left two contracts still counted as delivered: Delivery Qty read 2,000 MT instead of 0,
      * OS 1,000 MT instead of 3,000, and the row was Completed by one contract's snapshot and Planned by another's, which is how it

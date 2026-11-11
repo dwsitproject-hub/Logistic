@@ -23,6 +23,8 @@ export type CommercialDocumentsListParams = {
   product?: string | string[] | null;
   supplier?: string | string[] | null;
   plant?: string | string[] | null;
+  /** SAP user (NIK) who created the PO, from the ME2N report (commercial_po_creators). Any of several. */
+  createdBy?: string | string[] | null;
   /** complete = all nine types, empty = none, incomplete = anything short of all nine. */
   completeness?: 'complete' | 'incomplete' | 'empty' | null;
   page?: number;
@@ -241,6 +243,16 @@ export function buildCommercialDocumentsBaseCte(): string {
   `;
 }
 
+/**
+ * Two document types only apply to a PO that has the date in SAP: Invoice + FP Down Payment needs a DP date, Invoice + FP Payoff a Payoff date
+ * (the DP Date and Payoff Date columns of the table). The summary card of those types counts only those POs - as the total and as the uploaded
+ * ones - and clicking the card lists the same POs, so the number on the card is the number of rows after the click (Ryan, 2026-11-12).
+ */
+export const COMMERCIAL_DOCUMENT_SAP_DATE_BASIS: Record<string, string> = {
+  invoice_fp_dp: 'e.dp_due_date IS NOT NULL',
+  invoice_fp_payoff: 'e.payoff_date IS NOT NULL',
+};
+
 function docTypeCheckedColumn(documentType: string): string | null {
   const map: Record<string, string> = {
     draft_contract: 'doc_draft_contract',
@@ -265,7 +277,7 @@ function docTypeCheckedColumn(documentType: string): string | null {
  */
 export type CommercialDocumentsScopeParams = Pick<
   CommercialDocumentsListParams,
-  'dateFrom' | 'dateTo' | 'search' | 'incoterm' | 'product' | 'supplier' | 'plant'
+  'dateFrom' | 'dateTo' | 'search' | 'incoterm' | 'product' | 'supplier' | 'plant' | 'createdBy'
 >;
 
 function valueList(value: string | string[] | null | undefined): string[] {
@@ -315,6 +327,11 @@ function buildScopeWhere(params: CommercialDocumentsScopeParams): { where: strin
     where.push(`TRIM(COALESCE(e.supplier, '')) = ANY($${idx++}::text[])`);
     values.push(suppliers);
   }
+  const creators = valueList(params.createdBy);
+  if (creators.length) {
+    where.push(`EXISTS (SELECT 1 FROM commercial_po_creators pcf WHERE pcf.po_number = NULLIF(TRIM(e.po_number), '') AND pcf.created_by = ANY($${idx++}::text[]))`);
+    values.push(creators);
+  }
   const plants = (Array.isArray(params.plant) ? params.plant : params.plant ? [params.plant] : [])
     .map((p) => String(p).trim())
     .filter(Boolean);
@@ -344,6 +361,8 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
     const col = docTypeCheckedColumn(params.documentType);
     if (col) {
       where.push(params.documentStatus === 'checked' ? `e.${col} = true` : `e.${col} = false`);
+      const basis = COMMERCIAL_DOCUMENT_SAP_DATE_BASIS[params.documentType];
+      if (basis) where.push(basis);
     }
   }
   if (params.completeness === 'complete') where.push(`(${uploadedTypesExpr()}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT}`);
@@ -454,7 +473,7 @@ export function buildCommercialDocumentsCompletenessByCreatorQuery(
     ${buildCommercialDocumentsBaseCte()}
     SELECT
       COALESCE(NULLIF(TRIM(pc.created_by), ''), '') AS created_by,
-      MAX(cn.display_name) AS display_name,
+      NULLIF(MAX(su.display_name), '') AS display_name,
       COUNT(*)::int AS contract_count,
       COALESCE(SUM(${uploadedExpr}), 0)::int AS uploaded_slots,
       (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS total_slots,
@@ -463,7 +482,7 @@ export function buildCommercialDocumentsCompletenessByCreatorQuery(
       ${perType}
     FROM enriched e
     LEFT JOIN commercial_po_creators pc ON pc.po_number = NULLIF(TRIM(e.po_number), '')
-    LEFT JOIN commercial_creator_names cn ON cn.created_by = pc.created_by
+    LEFT JOIN sap_users su ON su.user_id = pc.created_by
     WHERE ${scope.where.join(' AND ')}
     GROUP BY 1
   `;
@@ -488,8 +507,10 @@ export function buildCommercialDocumentsSummaryQuery(params: CommercialDocuments
       ${count('doc_sppb')} AS uploaded_sppb,
       ${count('doc_sppd')} AS uploaded_sppd,
       ${count('doc_delivery_order')} AS uploaded_delivery_order,
-      ${count('doc_invoice_fp_dp')} AS uploaded_invoice_fp_dp,
-      ${count('doc_invoice_fp_payoff')} AS uploaded_invoice_fp_payoff,
+      COUNT(*) FILTER (WHERE e.doc_invoice_fp_dp AND ${COMMERCIAL_DOCUMENT_SAP_DATE_BASIS.invoice_fp_dp})::int AS uploaded_invoice_fp_dp,
+      COUNT(*) FILTER (WHERE ${COMMERCIAL_DOCUMENT_SAP_DATE_BASIS.invoice_fp_dp})::int AS total_invoice_fp_dp,
+      COUNT(*) FILTER (WHERE e.doc_invoice_fp_payoff AND ${COMMERCIAL_DOCUMENT_SAP_DATE_BASIS.invoice_fp_payoff})::int AS uploaded_invoice_fp_payoff,
+      COUNT(*) FILTER (WHERE ${COMMERCIAL_DOCUMENT_SAP_DATE_BASIS.invoice_fp_payoff})::int AS total_invoice_fp_payoff,
       ${count('doc_invoice_fp_full')} AS uploaded_invoice_fp_full,
       COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_contract_count,
       COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = 0)::int AS empty_contract_count

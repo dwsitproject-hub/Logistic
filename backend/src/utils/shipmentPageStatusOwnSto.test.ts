@@ -11,7 +11,7 @@ import { shipmentEffectiveStatusExpr, shipmentPageEffectiveStatusExpr } from './
  * the strip came 8,144.9 MT under the OS card. This runs both expressions in Postgres on rows shaped like those two, so it proves the SQL, not a string.
  */
 const ROW_COLUMNS = `
-  status, is_contract_sap_closed, is_contract_os_within_band,
+  status, is_contract_sap_closed,
   ata_vessel_complete_discharge, ata_vessel_complete_discharge_own_sto,
   ata_vessel_start_discharging, ata_vessel_start_discharging_own_sto,
   ata_vessel_berthed_at_discharge_port, ata_vessel_berthed_at_discharge_port_own_sto,
@@ -31,7 +31,7 @@ const rowSql = (label: string, over: Record<string, string>) => {
   const cols = ROW_COLUMNS.split(',').map((c) => c.trim());
   const values = cols.map((c) => {
     if (over[c] !== undefined) return over[c];
-    if (c === 'is_contract_sap_closed' || c === 'is_contract_os_within_band') return 'FALSE';
+    if (c === 'is_contract_sap_closed') return 'FALSE';
     return NULL_OF[c] ?? 'NULL::date';
   });
   return `SELECT '${label}'::text AS label, ${cols.map((c, i) => `${values[i]} AS ${c}`).join(', ')}`;

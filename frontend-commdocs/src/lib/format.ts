@@ -135,3 +135,12 @@ export function presetRange(preset: DatePreset, today = new Date()): { dateFrom:
 export function plantLabel(name: string | null | undefined): string {
   return String(name ?? '').trim().toUpperCase()
 }
+
+/**
+ * The Dashboard's "uploaded", counted in POs: a PO is uploaded when it has at least one document (it is not weighed by the 11 document types).
+ * Returns those POs and their share of all POs, to one decimal. (POs with nothing yet are the rest.)
+ */
+export function poUploaded(contractCount: number, emptyCount: number): { withDocs: number; pct: number } {
+  const withDocs = Math.max(0, contractCount - emptyCount)
+  return { withDocs, pct: pct(withDocs, contractCount) }
+}
