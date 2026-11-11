@@ -19,6 +19,11 @@ import { sqlShipmentListPrimaryOrderBy } from './shipmentListPrimaryShipmentSql'
  *
  * Rule 2 comes before rule 3 so that two POs of 500,000 kg each repeating 1,000,000 are not read as shares of 2,000,000.
  *
+ * The B/L is SAP's, read from the LATEST sap_processed_data row of each PO x STO (its "B/L Quantity" header, kg; MT / TO / TON are x1000), NOT from shipments.bl_quantity:
+ * the importer's bucket rule does not list "b/l quantity" for the shipment object (only "b/l qty uom"), so that column has been empty - 3,023 of 3,024 shipments on SIT, found by
+ * the dry run of this very rule, where every multi-PO STO came out undecided for want of a B/L. Fixing the bucket would change the B/L the modal shows and everything computed from it,
+ * which is not this change's to decide. Only the ids of the newest rows are picked by their keys; the JSON is read for those alone.
+ *
  * Two things never change:
  * - A user's figure. klip_edited_fields holds the column once a user saved it (migration 167; migration 255 marks the figures that existed before the template as the users').
  *   If ANY live row of the STO is marked, the STO is the user's: nothing is written, not even to the other rows. A user who clears the field has written it too: it stays empty.
@@ -69,10 +74,32 @@ function figureCtes(column: SapFigureColumn): string {
   const live = `NULLIF(TRIM(s.shipment_id::text), '') IS NOT NULL
          AND UPPER(COALESCE(s.status, '')) NOT IN ('CANCELLED', 'CANCELED')`;
   return `
+    latest_sap_row AS (
+      SELECT DISTINCT ON (TRIM(spd.contract_number), TRIM(spd.sto_number::text)) spd.id
+        FROM sap_processed_data spd
+       WHERE NULLIF(TRIM(spd.contract_number), '') IS NOT NULL
+         AND NULLIF(TRIM(spd.sto_number::text), '') IS NOT NULL
+       ORDER BY TRIM(spd.contract_number), TRIM(spd.sto_number::text), spd.created_at DESC, spd.id DESC
+    ),
+    sap_bl AS (
+      SELECT x.contract_number, x.sto,
+             CASE WHEN x.bl_text ~ '^[0-9]+(\\.[0-9]+)?$'
+                  THEN x.bl_text::numeric * CASE WHEN x.bl_uom IN ('MT', 'TO', 'TON', 'TONS', 'T') THEN 1000 ELSE 1 END
+             END AS bl_kg
+        FROM (
+          SELECT TRIM(spd.contract_number) AS contract_number, TRIM(spd.sto_number::text) AS sto,
+                 REPLACE(TRIM(COALESCE(spd.data->'raw'->>'B/L Quantity', '')), ',', '') AS bl_text,
+                 UPPER(TRIM(COALESCE(spd.data->'raw'->>'B/L Qty UoM', ''))) AS bl_uom
+            FROM sap_processed_data spd
+            JOIN latest_sap_row r ON r.id = spd.id
+        ) x
+    ),
     live AS (
-      SELECT s.id, ${key} AS sto, s.${sap} AS sap, s.bl_quantity AS bl,
+      SELECT s.id, ${key} AS sto, s.${sap} AS sap, COALESCE(b.bl_kg, s.bl_quantity) AS bl,
              ('${column}' = ANY(COALESCE(s.klip_edited_fields, '{}'))) AS owned
         FROM shipments s
+        LEFT JOIN contracts c ON c.id = s.contract_id
+        LEFT JOIN sap_bl b ON b.contract_number = TRIM(c.contract_id) AND b.sto = ${key}
        WHERE ${live}
     ),
     agg AS (

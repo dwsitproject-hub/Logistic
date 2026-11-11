@@ -84,6 +84,20 @@ describe('the per-STO fill statements', () => {
     expect(s).toContain('WHEN COALESCE(sum_bl, 0) <= 0 THEN NULL');
   });
 
+  it('read the B/L from the latest SAP row of each PO x STO: shipments.bl_quantity is empty (the importer never fills it)', () => {
+    const s = flat(sfal.setWorking);
+    expect(s).toContain("spd.data->'raw'->>'B/L Quantity'");
+    expect(s).toContain("spd.data->'raw'->>'B/L Qty UoM'");
+    expect(s).toContain('latest_sap_row AS (');
+    expect(s).toContain('DISTINCT ON (TRIM(spd.contract_number), TRIM(spd.sto_number::text)) spd.id');
+    expect(s).toContain('spd.created_at DESC');
+    expect(s).toContain('COALESCE(b.bl_kg, s.bl_quantity) AS bl');
+    // the number is cast only after its text passed the format test, whatever order the planner filters in
+    expect(s).toMatch(/CASE WHEN x\.bl_text ~ '\^\[0-9\]\+\(\\\.\[0-9\]\+\)\?\$' THEN x\.bl_text::numeric/);
+    // MT-family units are x1000, anything else is kg, as normalizeSapQtyToKg does
+    expect(s).toContain("IN ('MT', 'TO', 'TON', 'TONS', 'T')");
+  });
+
   it('the preview reads the same decision and writes nothing', () => {
     const p = flat(buildSapFigureDecisionPreviewSql('sfal_qty'));
     expect(p).toContain('decided AS (');

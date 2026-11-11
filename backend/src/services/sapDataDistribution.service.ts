@@ -581,6 +581,14 @@ export class SapDataDistributionService {
       });
       const shipmentPayload = { ...(parsedData.shipment || {}) };
       this.enrichShipmentSfalSfbdFromRaw(shipmentPayload, parsedData.raw);
+      // SAP's B/L of this row, for the tonnes guard only (shipments.bl_quantity is not fed from SAP: the importer does not put "B/L Quantity" in the shipment object)
+      if (shipmentPayload.sap_bl_raw == null && parsedData.raw) {
+        const rawBl = parsedData.raw['B/L Quantity'];
+        if (rawBl != null && String(rawBl).trim() !== '') {
+          shipmentPayload.sap_bl_raw = rawBl;
+          shipmentPayload.sap_bl_uom_raw = parsedData.raw['B/L Qty UoM'];
+        }
+      }
 
       const { id: shipmentId, klipProtectShipmentFields } = await this.upsertShipment(
         client,
@@ -1118,8 +1126,9 @@ export class SapDataDistributionService {
     // SAP's own SFAL / SFBD for this PO x STO row. They go to sap_sfal_qty / sap_sfbd_qty only; sfal_qty / sfbd_qty (what users see and edit) are filled afterwards,
     // once per import, by fillSapFigures - never overwriting a figure a user wrote.
     // A figure in tonnes under a KG label is read as kg by the B/L of the same row (normalizeSapFigureKg).
-    const sfalQty = normalizeSapFigureKg(this.parseSapFigureQtyKg(shipmentData.sfal, shipmentData.sfal_qty), blQuantity);
-    const sfbdQty = normalizeSapFigureKg(this.parseSapFigureQtyKg(shipmentData.sfbd, shipmentData.sfbd_qty), blQuantity);
+    const blForFigures = blQuantity ?? normalizeSapQtyToKg(this.parseNumber(shipmentData.sap_bl_raw), shipmentData.sap_bl_uom_raw);
+    const sfalQty = normalizeSapFigureKg(this.parseSapFigureQtyKg(shipmentData.sfal, shipmentData.sfal_qty), blForFigures);
+    const sfbdQty = normalizeSapFigureKg(this.parseSapFigureQtyKg(shipmentData.sfbd, shipmentData.sfbd_qty), blForFigures);
     const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? normalizeSapQtyToKg(
       this.parseNumber(shipmentData.quantity_delivered),
       shipmentData.quantity_delivery_uom,
