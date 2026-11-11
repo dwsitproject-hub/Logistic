@@ -4,9 +4,8 @@
  * An STO is a row when it is Completed the way the Shipments page decides it (shipmentEffectiveStatusExpr), and its
  * members are the shipments of that STO that are not Cancelled:
  *   1. GR Close first - GR PO or GR STO by incoterm, every contract of the STO (sqlIsContractSapClosedForStoExpr),
- *   2. else ATC of the STO's own shipments filled,
- *   3. else every contract's outstanding inside the zero band (contract_qty_move_snapshot).
- * The stored shipments.status of a row is NOT the rule: it is written only by a SAP import, a save or a create, one row at a
+ *   2. else ATC of the STO's own shipments filled.
+ * Outstanding quantity is NOT a rule: it stopped completing a shipment on the Shipments page on 2026-11-11, and this follows. The stored shipments.status of a row is NOT the rule: it is written only by a SAP import, a save or a create, one row at a
  * time, so a PO whose row never reached COMPLETED used to be dropped from a STO that SAP had closed for every PO.
  *
  * The POs of the row are the contracts linked to the STO (contractsOnStoSubquery - contract_stos, SAP rows, shipments), the
@@ -47,7 +46,6 @@ import {
 import { sqlMasterVesselLateralJoin } from './masterVesselDisplaySql';
 import { sqlSapVesselNameFromSpdJsonb, sqlShipmentListDisplayVesselName } from './sapVesselFields';
 import { SHIPMENT_ATA_OVERRIDES_JOIN, sqlJpsAtaWhileOpen } from './shipmentAtaOverrideSql';
-import { shipmentListContractOsWithinBandExpr } from './shipmentListFilters';
 import { contractsOnStoSubquery } from './stoLinkedContractSql';
 
 const LIST_STO_KEY_SQL = shipmentListSeaStoKeyExpr('c', 'l', 's');
@@ -99,8 +97,7 @@ function vesselMemberJoins(): string {
             AND COALESCE(vlp_df.is_discharge_port, false) = true
           ORDER BY vlp_df.port_sequence NULLS LAST, vlp_df.id
           LIMIT 1
-        ) vlp_d ON TRUE
-        LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id`;
+        ) vlp_d ON TRUE`;
 }
 
 function vesselFromSql(extraJoins = ''): string {
@@ -164,10 +161,9 @@ export function buildOilLossVesselCompletedCtes(): string {
           COALESCE(MAX(${sqlShipmentB2bChildDischargePort('s', 'c')}), MAX(s.port_of_discharge)) AS unloading_location,
           ${sqlOpenedShipmentQty('NULLIF(s.sfal_qty, 0)')} AS shipment_sfal_kg,
           ${sqlOpenedShipmentQty('NULLIF(s.sfbd_qty, 0)')} AS shipment_sfbd_kg,
-          -- Completed, the way the Shipments page decides it (see the file header): GR Close, else ATC, else outstanding inside the zero band
+          -- Completed, the way the Shipments page decides it (see the file header): GR Close, else ATC. Outstanding does not complete a shipment.
           BOOL_AND(COALESCE(${sqlIsContractSapClosedForStoExpr('c', LIST_STO_KEY_SQL)}, FALSE)) AS is_gr_closed,
-          MAX(${ATC_SQL}) FILTER (WHERE ${OWN_STO_ONLY_SQL}) AS atc_own_sto,
-          BOOL_AND(COALESCE(${shipmentListContractOsWithinBandExpr()}, FALSE)) AS is_os_within_band
+          MAX(${ATC_SQL}) FILTER (WHERE ${OWN_STO_ONLY_SQL}) AS atc_own_sto
         ${vesselFromSql(vesselMemberJoins())}
         GROUP BY ${LIST_STO_KEY_SQL}
       ),
@@ -176,7 +172,7 @@ export function buildOilLossVesselCompletedCtes(): string {
         FROM vessel_base f
         WHERE COALESCE(f.sap_presence, 'PRESENT') = 'PRESENT'
           AND f.id IS NOT NULL
-          AND (COALESCE(f.is_gr_closed, FALSE) OR f.atc_own_sto IS NOT NULL OR COALESCE(f.is_os_within_band, FALSE))
+          AND (COALESCE(f.is_gr_closed, FALSE) OR f.atc_own_sto IS NOT NULL)
       ),
       vessel_sto_contract AS (
         -- the POs the Shipments View Table lists for the STO (linked by contract_stos / SAP / shipments) ...

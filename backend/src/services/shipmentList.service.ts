@@ -1186,9 +1186,9 @@ function attachShipmentExecutionTradeCycleDays(
  *
  * normalizeShipmentListRows deletes effective_status once it has copied it into status, and the hybrid list normalizes the same row objects TWICE: once inside
  * fetchShipmentExecutionPage and again over the merged execution + backlog rows. The second pass found no effective_status and fell back to deriveShipmentStatus, which
- * reads the milestone dates alone. A grouped row the SQL had made COMPLETED ("nothing left outstanding on every contract of the STO group", is_contract_os_within_band)
- * therefore came out PLANNED whenever it carried an ETA - while the status cards, which filter on the SQL expression, still listed it under Completed. Production,
- * PO 1011003250: three FOB POs of one voyage, 1,000 MT delivered of 1,000 MT each, read Planned in the table and were missing under the Planned card.
+ * reads the milestone dates alone. A grouped row the SQL had made COMPLETED (GR Close of every contract of the STO group, or its own-STO ATC; the "nothing outstanding"
+ * arm that once did it was removed on 2026-11-11) therefore came out PLANNED whenever it carried an ETA - while the status cards, which filter on the SQL expression,
+ * still listed it under Completed. Production, PO 1011003250 was the case: three FOB POs of one voyage read Planned in the table and were missing under the Planned card.
  */
 const STATUS_DECIDED_BY_SQL = new WeakSet<object>();
 

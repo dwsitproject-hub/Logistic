@@ -6,7 +6,7 @@ import {
 } from './oilLossVesselCompletedSql';
 import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
 import { contractsOnStoSubquery } from './stoLinkedContractSql';
-import { shipmentEffectiveStatusExpr, shipmentListContractOsWithinBandExpr } from './shipmentListFilters';
+import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
 import { deriveShipmentStatus } from './shipmentStatus';
 import { sqlShipmentListDisplayVesselName } from './sapVesselFields';
 import { shipmentListSeaStoKeyExpr } from './shipmentStoTypeSql';
@@ -51,7 +51,7 @@ function collapseSql(sql: string): string {
 }
 
 describe('vessel completed population', () => {
-  it('keeps one STO that is Completed the way the Shipments page decides it: GR Close, else ATC, else OS inside the zero band', () => {
+  it('keeps one STO that is Completed the way the Shipments page decides it: GR Close, else ATC (outstanding does not complete it)', () => {
     const sql = buildOilLossVesselCompletedCtes();
     const flat = collapseSql(sql);
     const stoKey = shipmentListSeaStoKeyExpr('c', 'l', 's');
@@ -59,14 +59,15 @@ describe('vessel completed population', () => {
     expect(flat).toContain(collapseSql(sqlOilLossVesselMemberStatus('s')));
     expect(flat).not.toContain("UPPER(TRIM(COALESCE(s.status, ''))) = 'COMPLETED'");
     expect(flat).toContain(collapseSql(stoKey));
-    // the STO is Completed when every contract is GR Close, or its own ATC is filled, or every contract's OS is inside the band
+    // the STO is Completed when every contract is GR Close, or its own ATC is filled - and by nothing else (OS no longer counts)
     expect(flat).toContain(collapseSql(sqlIsContractSapClosedForStoExpr('c', stoKey)));
-    expect(flat).toContain(collapseSql(shipmentListContractOsWithinBandExpr()));
+    expect(flat).not.toContain('is_os_within_band');
     expect(flat).toContain('ata_discharge_complete');
-    expect(flat).toContain('COALESCE(f.is_gr_closed, FALSE) OR f.atc_own_sto IS NOT NULL OR COALESCE(f.is_os_within_band, FALSE)');
+    expect(flat).toContain('AND (COALESCE(f.is_gr_closed, FALSE) OR f.atc_own_sto IS NOT NULL)');
     // the POs are the ones the Shipments View Table lists for the STO, not only those of Completed rows
     expect(flat).toContain(collapseSql(contractsOnStoSubquery("NULLIF(TRIM(g.sto_key::text), '')")));
-    expect(flat).toContain('contract_qty_move_snapshot');
+    // the quantities are the STO-scoped SAP kilograms; the contract OS snapshot is no longer read here (it was only the OS-band rule's source)
+    expect(flat).not.toContain('contract_qty_move_snapshot');
     expect(flat).toContain('FROM vessel_sto_contract vsc');
     // a Cancelled contract linked through SAP is listed by Shipments but its quantity is not the voyage's
     expect(flat).toContain("UPPER(TRIM(COALESCE(c2.status, ''))) NOT IN ('CANCELLED', 'CANCELED')");
@@ -139,7 +140,8 @@ describe('vessel completed population', () => {
   it('excludes Cancelled and does not promote COMPLETED_LOADING through the status expression', () => {
     const expr = shipmentEffectiveStatusExpr('f');
     expect(expr).toMatch(/'CANCELLED' THEN 'CANCELLED'/);
-    expect(expr).toContain('is_contract_os_within_band');
+    // Outstanding no longer completes a shipment on the Shipments page (Ryan, 2026-11-11): only GR Close and the own-STO ATC do.
+    expect(expr).not.toContain('is_contract_os_within_band');
     expect(expr).toContain('is_contract_sap_closed');
     expect(expr).toContain('ata_vessel_complete_discharge');
     const completed = expr.indexOf("THEN 'COMPLETED'");

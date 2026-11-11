@@ -600,20 +600,11 @@ export function shipmentEffectiveStatusExpr(
       /* An ATC dated after today is a data-entry mistake and does not complete the shipment (the own-STO column already drops it at the source). */
       WHEN ${atc} IS NOT NULL AND (${atc})::date <= CURRENT_DATE THEN 'COMPLETED'
       /*
-       * Nothing left outstanding finishes a shipment, even with GR still Open and no ATC.
-       * Trucking has had this since isTruckingPipelineCompleted, and the OS cards already apply
-       * it (shipmentOutstandingQtySummarySql); the list's status column was the last place that
-       * did not, so a row could read PLANNED while its own OS card counted it as finished.
-       *
-       * Sits AFTER the Cancelled and GR-Close arms so it can only ever add COMPLETED, never
-       * override a decision already made.
-       *
-       * The flag is computed once per STO group in the base CTE as BOOL_AND over the group's
-       * contracts - the same shape as is_contract_sap_closed above. BOOL_AND, not a summed OS:
-       * a contract can belong to several STO groups, so summing would need the per-STO division
-       * the aggregates apply to avoid overstating. Testing each contract sidesteps that entirely.
+       * Outstanding quantity does NOT finish a shipment (Ryan, 2026-11-11). A shipment is Completed by GR Close or by its own STO's ATC, and by nothing else.
+       * There used to be an arm here that read "every contract of the STO group is within the OS zero band" as Completed, so a voyage with everything delivered
+       * but no ATC recorded read Completed. It was taken out on purpose: do not put it back as a status rule. The OS strip still sets such a row aside when it
+       * adds the OS up (execution_os in shipmentOutstandingQtySummarySql) - that is arithmetic on the quantity, not the status the page shows.
        */
-      WHEN COALESCE(${f}.is_contract_os_within_band, FALSE) IS TRUE THEN 'COMPLETED'
       WHEN ${mile('ata_vessel_start_discharging')} IS NOT NULL THEN 'UNLOADING'
       WHEN ${mile('ata_vessel_berthed_at_discharge_port')} IS NOT NULL THEN 'BERTHED_DP'
       WHEN ${mile('ata_vessel_arrive_at_discharge_port')} IS NOT NULL THEN 'ARRIVED_DP'
