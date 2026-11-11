@@ -42,12 +42,14 @@ describe('the per-STO fill statements', () => {
   const flat = (s: string) => s.replace(/\s+/g, ' ');
 
   it('write only the column and the STO-level reference of their own column', () => {
-    expect(flat(sfal.setWorking)).toContain('SET sfal_qty = t.total');
+    expect(flat(sfal.setWorking)).toContain('SET sfal_qty = ROUND(t.total, 2)');
+    // compared at the scale of the column (DECIMAL(15,2)), or a 3-decimal sum is "different" from what was stored and is rewritten by every import
+    expect(flat(sfal.setWorking)).toContain('s.sfal_qty IS DISTINCT FROM ROUND(t.total, 2)');
     expect(flat(sfal.setWorking)).not.toContain('sfbd_qty');
     expect(flat(sfal.setReference)).toContain('SET sap_sfal_sto_qty = t.total');
     expect(flat(sfal.clearReference)).toContain('SET sap_sfal_sto_qty = NULL');
     const sfbd = buildSapFigureFillStatements('sfbd_qty');
-    expect(flat(sfbd.setWorking)).toContain('SET sfbd_qty = t.total');
+    expect(flat(sfbd.setWorking)).toContain('SET sfbd_qty = ROUND(t.total, 2)');
     expect(flat(sfbd.setWorking)).not.toContain('sfal_qty');
     expect(flat(sfbd.setReference)).toContain('SET sap_sfbd_sto_qty = t.total');
   });

@@ -167,7 +167,11 @@ export interface SapFigureFillStatements {
   clearReference: string;
   /** The STO-level SAP figure is written on the primary row of each decided STO (also when the STO is a user's). */
   setReference: string;
-  /** The working figure is written on the primary row of each decided STO that no user owns. Its rowCount is "how many shipments this column filled". */
+  /**
+   * The working figure is written on the primary row of each decided STO that no user owns. Its rowCount is "how many shipments this column filled".
+   * Rounded to 2 decimals, the scale of shipments.sfal_qty / sfbd_qty (DECIMAL(15,2)): a sum such as 2,489,494.799 compared unrounded differs from what was stored on EVERY run,
+   * so the same rows were rewritten, and had their updated_at moved, by every import (seen on SIT: setWorking 2 after the import that had just filled them).
+   */
   setWorking: string;
   /** A figure SAP wrote earlier on another row of a decided STO that no user owns is removed from that row. */
   clearSiblings: string;
@@ -190,12 +194,12 @@ export function buildSapFigureFillStatements(column: SapFigureColumn): SapFigure
          AND s.${ref} IS DISTINCT FROM t.total`,
     setWorking: `WITH ${ctes}
       UPDATE shipments s
-         SET ${column} = t.total,
+         SET ${column} = ROUND(t.total, 2),
              updated_at = CURRENT_TIMESTAMP
         FROM target t
        WHERE s.id = t.carrier_id
          AND NOT t.any_owned
-         AND s.${column} IS DISTINCT FROM t.total`,
+         AND s.${column} IS DISTINCT FROM ROUND(t.total, 2)`,
     clearSiblings: `WITH ${ctes}
       UPDATE shipments s
          SET ${column} = NULL,
