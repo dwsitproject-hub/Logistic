@@ -14,6 +14,9 @@ import { sqlShipmentListPrimaryOrderBy } from './shipmentListPrimaryShipmentSql'
  *   1. one shipment row: that row's figure (no B/L needed);
  *   2. every row that has a figure carries the SAME figure, and it is within 5% of the B/L, while the rows' sum is not: the whole voyage figure repeated - take ONE;
  *   3. the rows' sum is within 5% of the B/L: shares (or the whole figure on one row) - take the SUM;
+ *   3b. every row with a figure carries the SAME figure although their B/L differ by more than 5%: shares are proportional to the B/L, so equal figures on unequal B/L can only be
+ *       the whole voyage figure repeated - take ONE. It does not need the STO's total B/L to fit, which matters when KLIP lacks one of SAP's POs of the STO (STO 1006017652: 2,500,151
+ *       on the two POs KLIP has, whose B/L total 2,000,000; SAP has a third PO and a total B/L of 2,500,151). It comes after rule 3, so a sum that fits the B/L still wins;
  *   4. every row with a B/L has a figure, and figure / B/L is the same ratio on all of them (0.8 to 1.25, spread 1%): shares of a voyage SAP measured off the B/L - take the SUM;
  *   5. anything else is undecided: no STO figure, nothing filled; SAP's rows stay in sap_sfal_qty for whoever has to look.
  *
@@ -54,6 +57,8 @@ export const SAP_FIGURE_BL_TOLERANCE = 0.05;
 export const SAP_FIGURE_SHARE_RATIO_MIN = 0.8;
 export const SAP_FIGURE_SHARE_RATIO_MAX = 1.25;
 export const SAP_FIGURE_SHARE_RATIO_SPREAD = 1.01;
+/** Rule 3b: the rows carry the same figure while their B/L differ by more than this (max / min). Shares are proportional to the B/L, so they cannot be equal then. */
+export const SAP_FIGURE_REPEATED_BL_SPREAD = 1.05;
 
 /**
  * A few SAP rows carry the figure in TONNES while the unit column says KG (497.799 for a B/L of 500,000 kg; 2,282.685 for 2,234,530 kg - 10 of 902 SFAL rows in the 11 Nov file).
@@ -114,6 +119,8 @@ function figureCtes(column: SapFigureColumn): string {
              COUNT(*) FILTER (WHERE COALESCE(sap, 0) > 0 AND NOT (COALESCE(bl, 0) > 0)) AS sap_without_bl,
              MIN(sap / bl) FILTER (WHERE sap > 0 AND bl > 0) AS min_ratio,
              MAX(sap / bl) FILTER (WHERE sap > 0 AND bl > 0) AS max_ratio,
+             MIN(bl) FILTER (WHERE sap > 0 AND bl > 0) AS min_bl_f,
+             MAX(bl) FILTER (WHERE sap > 0 AND bl > 0) AS max_bl_f,
              BOOL_OR(owned) AS any_owned
         FROM live
        GROUP BY sto
@@ -129,6 +136,8 @@ function figureCtes(column: SapFigureColumn): string {
                 AND ABS(sum_sap / sum_bl - 1) > ${tol} THEN max_sap
                WHEN ABS(sum_sap / sum_bl - 1) <= ${tol}
                 AND NOT (n_sap >= 2 AND min_sap = max_sap AND ABS(max_sap / sum_bl - 1) <= ${tol}) THEN sum_sap
+               WHEN n_sap >= 2 AND min_sap = max_sap AND sap_without_bl = 0
+                AND max_bl_f / min_bl_f > ${SAP_FIGURE_REPEATED_BL_SPREAD} THEN max_sap
                WHEN n_sap >= 2 AND bl_without_sap = 0 AND sap_without_bl = 0
                 AND min_ratio >= ${SAP_FIGURE_SHARE_RATIO_MIN} AND max_ratio <= ${SAP_FIGURE_SHARE_RATIO_MAX}
                 AND max_ratio / min_ratio <= ${SAP_FIGURE_SHARE_RATIO_SPREAD} THEN sum_sap

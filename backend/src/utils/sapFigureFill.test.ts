@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SAP_FIGURE_BL_TOLERANCE,
+  SAP_FIGURE_REPEATED_BL_SPREAD,
   buildSapFigureDecisionPreviewSql,
   buildSapFigureFillStatements,
   normalizeSapFigureKg,
@@ -75,11 +76,15 @@ describe('the per-STO fill statements', () => {
     const oneRow = s.indexOf('WHEN n_rows = 1 THEN sum_sap');
     const repeated = s.indexOf('THEN max_sap');
     const sumFits = s.indexOf(`WHEN ABS(sum_sap / sum_bl - 1) <= ${SAP_FIGURE_BL_TOLERANCE}`);
+    const equalUnequalBl = s.indexOf(`AND max_bl_f / min_bl_f > ${SAP_FIGURE_REPEATED_BL_SPREAD} THEN max_sap`);
     const ratio = s.indexOf('AND max_ratio / min_ratio <=');
     expect(oneRow).toBeGreaterThan(-1);
     expect(repeated).toBeGreaterThan(oneRow);
     expect(sumFits).toBeGreaterThan(repeated); // two POs of 500,000 repeating 1,000,000 are not shares of 2,000,000
-    expect(ratio).toBeGreaterThan(sumFits);
+    // the same figure on POs whose B/L differ is the whole voyage figure, whatever the STO's total B/L (KLIP may lack one of SAP's POs); a sum that fits the B/L still wins
+    expect(equalUnequalBl).toBeGreaterThan(sumFits);
+    expect(ratio).toBeGreaterThan(equalUnequalBl);
+    expect(s).toContain('MIN(bl) FILTER (WHERE sap > 0 AND bl > 0) AS min_bl_f');
     // without a B/L nothing can be decided for a multi-row STO
     expect(s).toContain('WHEN COALESCE(sum_bl, 0) <= 0 THEN NULL');
   });
