@@ -127,7 +127,7 @@ export default function DashboardPage() {
           <small>need attention</small>
         </div>
       </div>
-      <div className={`split${view === 'user' ? ' one' : ''}`}>
+      <div className="split">
         <div className="panel">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '14px 16px 0', flexWrap: 'wrap' }}>
             <h3 style={{ padding: 0 }}>Completeness</h3>

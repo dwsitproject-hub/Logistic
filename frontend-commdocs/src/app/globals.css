@@ -285,7 +285,6 @@ tbody tr.picked td { background: #f2f8f8; }
 .plant .val { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.8125rem; }
 .legend { display: flex; gap: 1rem; font-size: 0.7813rem; color: var(--ink-2); padding: 0 1rem 0.875rem; flex-wrap: wrap; }
 .legend i { display: inline-block; width: 0.625rem; height: 0.625rem; border-radius: 0.1875rem; margin-right: 0.375rem; vertical-align: -1px; }
-.split.one { grid-template-columns: minmax(0, 1fr); }
 .split { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
 .mini { padding: 0.5rem 1rem 0.875rem; display: grid; gap: 0.5rem; }
 .mini .r { display: flex; justify-content: space-between; gap: 0.625rem; font-size: 0.8125rem; border-bottom: 1px dashed var(--line); padding-bottom: 0.5rem; }
