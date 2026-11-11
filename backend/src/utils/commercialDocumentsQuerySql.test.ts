@@ -191,6 +191,13 @@ describe('commercialDocumentsQuerySql filters for the Commercial Documents app',
     expect(buildCommercialDocumentsCompletenessByPlantQuery({}).sql).toMatch(/AS complete_count[\s\S]*AS empty_count/);
   });
 
+  it('by plant: also counts the POs with each document type, for the detail of a row', () => {
+    const { sql } = buildCommercialDocumentsCompletenessByPlantQuery({});
+    for (const key of ['draft_contract', 'berita_acara', 'sppb', 'sppd', 'invoice_fp_full']) {
+      expect(sql).toContain(`COUNT(*) FILTER (WHERE e.doc_${key})::int AS uploaded_${key}`);
+    }
+  });
+
   it('by creator: joins the ME2N creators by PO, counts 11 slots per PO and every document type, and keeps the date scope', () => {
     const { sql, values } = buildCommercialDocumentsCompletenessByCreatorQuery({ dateFrom: '2026-01-01', dateTo: '2026-11-11' });
     expect(sql).toContain('LEFT JOIN commercial_po_creators pc ON pc.po_number = NULLIF(TRIM(e.po_number)');

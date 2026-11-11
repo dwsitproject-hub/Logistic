@@ -1,15 +1,15 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { CompletenessRows } from '@/components/dashboard/CompletenessRows'
 import { ErrorNote, Spinner } from '@/components/ui'
-import { apiData, errorMessage, isAbort, toQuery } from '@/lib/api'
 import { longDate, plural } from '@/lib/format'
 import type { CreatorCompleteness } from '@/lib/types'
 
 type Order = 'complete' | 'gaps'
 type Run = { outcome: string; trigger: string; at: string; fileName: string | null; detail: string | null }
-type Payload = {
+export type CreatorPayload = {
   creators: CreatorCompleteness[]
   loaded: { pos: number; creators: number; loadedAt: string | null }
   /** The scheduled load from the SAP share: whether it is on, the last run that loaded a file, and the last run of any kind. */
@@ -24,30 +24,22 @@ type Payload = {
  * commercial_creator_names table are the place for that sync, and nothing here edits them. POs the report does not know have no creator, so they are
  * not listed (the API still returns them as an empty createdBy, so the totals there add up).
  */
-export function CreatorTable({ range, isAdmin }: { range: { dateFrom: string; dateTo: string }; isAdmin: boolean }) {
-  const [data, setData] = useState<Payload | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+export function CreatorTable({
+  payload,
+  loading,
+  error,
+  isAdmin,
+}: {
+  /** Loaded by the Dashboard in the background as soon as the plants are in, so opening this view shows it at once. */
+  payload: CreatorPayload | null
+  loading: boolean
+  error: string
+  isAdmin: boolean
+}) {
+  // Only users the report names: the row of POs without a creator is left out.
+  const data = useMemo(() => (payload ? { ...payload, creators: (payload.creators || []).filter((c) => c.createdBy) } : null), [payload])
   const [order, setOrder] = useState<Order>('complete')
   const [showAll, setShowAll] = useState(false)
-
-  useEffect(() => {
-    const ctrl = new AbortController()
-    setLoading(true)
-    setError('')
-    apiData<Payload>(`/commercial-documents/completeness-by-creator${toQuery(range)}`, { signal: ctrl.signal })
-      .then((d) => {
-        // Only users the report names: the row of POs without a creator is left out.
-        setData({ ...d, creators: (d.creators || []).filter((c) => c.createdBy) })
-        setLoading(false)
-      })
-      .catch((err) => {
-        if (isAbort(err)) return
-        setError(errorMessage(err, 'Could not load the users. Please try again.'))
-        setLoading(false)
-      })
-    return () => ctrl.abort()
-  }, [range])
 
   const rows = useMemo(() => {
     const list = data?.creators || []
@@ -101,27 +93,24 @@ export function CreatorTable({ range, isAdmin }: { range: { dateFrom: string; da
           )}
         </p>
       ) : (
-        <div className="plants">
-          {rows.map((c) => {
-            const some = Math.max(0, c.contractCount - c.completeCount - c.emptyCount)
-            const w = (n: number) => (c.contractCount ? `${(n / c.contractCount) * 100}%` : '0%')
-            return (
-              <div className="plant" key={c.createdBy || '(none)'}>
-                <span className="nm" title={c.createdBy && c.displayName ? `${c.displayName} · ${c.createdBy}` : undefined}>
-                  {label(c)}
-                </span>
-                <div className="track" title={`${label(c)}: ${c.completeCount} with all 11, ${some} with some, ${c.emptyCount} with none`}>
-                  <i className="a" style={{ width: w(c.completeCount) }} />
-                  <i className="b" style={{ width: w(some) }} />
-                </div>
-                <span className="val">
-                  <b>{c.completenessPct.toFixed(1)}%</b> <span className="hint">{plural(c.contractCount, 'PO')}</span>
-                </span>
-              </div>
-            )
-          })}
-          {!total ? <p className="hint">No POs in this period.</p> : null}
-        </div>
+        <>
+          <CompletenessRows
+            firstLabel="User (SAP NIK)"
+            rows={rows.map((c) => ({
+              key: c.createdBy,
+              name: label(c),
+              sub: c.displayName ? c.createdBy : null,
+              contractCount: c.contractCount,
+              completeCount: c.completeCount,
+              emptyCount: c.emptyCount,
+              completenessPct: c.completenessPct,
+              uploadedSlots: c.uploadedSlots,
+              totalSlots: c.totalSlots,
+              byType: c.byType,
+            }))}
+          />
+          {!total ? <p className="hint" style={{ padding: '0 16px' }}>No POs in this period.</p> : null}
+        </>
       )}
       {known ? (
         <div className="legend">

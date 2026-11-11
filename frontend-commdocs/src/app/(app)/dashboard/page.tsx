@@ -2,7 +2,8 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
-import { CreatorTable } from '@/components/dashboard/CreatorTable'
+import { CompletenessRows } from '@/components/dashboard/CompletenessRows'
+import { CreatorTable, type CreatorPayload } from '@/components/dashboard/CreatorTable'
 import { ErrorNote, Spinner } from '@/components/ui'
 import { apiData, errorMessage, isAbort, toQuery } from '@/lib/api'
 import { DOCUMENT_LABELS, DOCUMENT_TYPES } from '@/lib/documentTypes'
@@ -29,10 +30,14 @@ export default function DashboardPage() {
   const [period, setPeriod] = useState<DatePreset>('ytd')
   const [order, setOrder] = useState<'complete' | 'gaps'>('complete')
   const [showAll, setShowAll] = useState(false)
-  const [view, setView] = useState<'plant' | 'user'>('plant')
+  const [view, setView] = useState<'plant' | 'user' | 'document'>('plant')
+  const [creators, setCreators] = useState<CreatorPayload | null>(null)
+  const [creatorsLoading, setCreatorsLoading] = useState(true)
+  const [creatorsError, setCreatorsError] = useState('')
   const [plants, setPlants] = useState<PlantCompleteness[]>([])
   const [totals, setTotals] = useState<Totals | null>(null)
-  const [missing, setMissing] = useState<Array<{ label: string; count: number }> | null>(null)
+  // The Documents summary (per type: POs in the period and POs with it uploaded): the "By document" view. It needs the Documents permission.
+  const [summary, setSummary] = useState<Record<string, SummaryCard> | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -42,6 +47,7 @@ export default function DashboardPage() {
     const ctrl = new AbortController()
     setLoading(true)
     setError('')
+    setCreatorsLoading(true)
     apiData<{ plants: PlantCompleteness[]; totals: Totals }>(
       `/commercial-documents/completeness-by-plant${toQuery(range)}`,
       { signal: ctrl.signal },
@@ -51,29 +57,43 @@ export default function DashboardPage() {
         setPlants((d.plants || []).filter((p) => p.plant && p.plant !== 'Unassigned'))
         setTotals(d.totals || null)
         setLoading(false)
+        // By user is fetched now, behind the plants, so the toggle shows it at once instead of a spinner. (After the plants, not with them: it is
+        // the same heavy query and the cards and bars come first.)
+        setCreatorsLoading(true)
+        setCreatorsError('')
+        apiData<CreatorPayload>(`/commercial-documents/completeness-by-creator${toQuery(range)}`, { signal: ctrl.signal })
+          .then((c) => {
+            setCreators(c)
+            setCreatorsLoading(false)
+          })
+          .catch((err) => {
+            if (isAbort(err)) return
+            setCreatorsError(errorMessage(err, 'Could not load the users. Please try again.'))
+            setCreatorsLoading(false)
+          })
       })
       .catch((err) => {
         if (isAbort(err)) return
         setError(errorMessage(err, 'Could not load the dashboard. Please try again.'))
         setLoading(false)
       })
-    // "Most often missing" comes from the Documents summary, which needs the Documents permission.
+    // By document: the same summary as the cards on the Documents page, which needs the Documents permission.
     if (access.documents) {
       apiData<{ summary: Record<string, SummaryCard> }>(`/commercial-documents/summary${toQuery(range)}`, { signal: ctrl.signal })
-        .then((d) =>
-          setMissing(
-            DOCUMENT_TYPES.map((t) => ({
-              label: DOCUMENT_LABELS[t],
-              count: (d.summary?.[t]?.totalCount ?? 0) - (d.summary?.[t]?.uploadedCount ?? 0),
-            }))
-              .sort((a, b) => b.count - a.count)
-              .slice(0, 5),
-          ),
-        )
-        .catch(() => setMissing(null))
+        .then((d) => setSummary(d.summary || null))
+        .catch(() => setSummary(null))
     }
     return () => ctrl.abort()
   }, [range, access.documents])
+
+  const docRows = useMemo(() => {
+    const rows = DOCUMENT_TYPES.map((type) => {
+      const total = summary?.[type]?.totalCount ?? 0
+      const uploaded = summary?.[type]?.uploadedCount ?? 0
+      return { type, label: DOCUMENT_LABELS[type], total, uploaded, missing: Math.max(0, total - uploaded), pct: pct(uploaded, total) }
+    })
+    return order === 'complete' ? rows.sort((x, y) => y.pct - x.pct || x.missing - y.missing) : rows.sort((x, y) => y.missing - x.missing || x.pct - y.pct)
+  }, [summary, order])
 
   const sorted = useMemo(() => {
     const ratio = (p: PlantCompleteness) => (p.totalSlots ? p.uploadedSlots / p.totalSlots : 0)
@@ -90,7 +110,7 @@ export default function DashboardPage() {
       <div className="page-head">
         <div>
           <h1>Dashboard</h1>
-          <p>How complete the documents are, by plant or by SAP user, by contract date.</p>
+          <p>How complete the documents are, by plant, by SAP user or by document, by contract date.</p>
         </div>
         <div className="actions">
           <select className="select" aria-label="Period" value={period} onChange={(e) => setPeriod(e.target.value as DatePreset)}>
@@ -127,8 +147,7 @@ export default function DashboardPage() {
           <small>need attention</small>
         </div>
       </div>
-      <div className="split">
-        <div className="panel">
+      <div className="panel">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '14px 16px 0', flexWrap: 'wrap' }}>
             <h3 style={{ padding: 0 }}>Completeness</h3>
             <div className="chips" role="group" aria-label="Group completeness by">
@@ -138,10 +157,71 @@ export default function DashboardPage() {
               <button className="chip" type="button" aria-pressed={view === 'user'} onClick={() => setView('user')}>
                 By user
               </button>
+              {access.documents ? (
+                <button className="chip" type="button" aria-pressed={view === 'document'} onClick={() => setView('document')}>
+                  By document
+                </button>
+              ) : null}
             </div>
           </div>
           {view === 'user' ? (
-            <CreatorTable range={range} isAdmin={user?.role === 'ADMIN'} />
+            <CreatorTable payload={creators} loading={creatorsLoading} error={creatorsError} isAdmin={user?.role === 'ADMIN'} />
+          ) : view === 'document' ? (
+            <>
+              <div style={{ padding: '10px 16px 0' }} className="chips">
+                <button className="chip" type="button" aria-pressed={order === 'complete'} onClick={() => setOrder('complete')}>
+                  Most complete
+                </button>
+                <button className="chip" type="button" aria-pressed={order === 'gaps'} onClick={() => setOrder('gaps')}>
+                  Biggest gaps
+                </button>
+              </div>
+              {summary ? (
+                <div className="cr">
+                  <div className="cr-row cr-head" style={{ gridTemplateColumns: 'minmax(8rem, 15rem) minmax(0, 1fr) 3.5rem 5.5rem 5.5rem' }}>
+                    <span>Document</span>
+                    <span>POs with the document</span>
+                    <span className="r">%</span>
+                    <span className="r cr-hide">With it</span>
+                    <span className="r cr-hide">Missing</span>
+                  </div>
+                  {docRows.map((d) => (
+                    <div className="cr-row" key={d.type} style={{ gridTemplateColumns: 'minmax(8rem, 15rem) minmax(0, 1fr) 3.5rem 5.5rem 5.5rem', cursor: 'default' }}>
+                      <span className="cr-name" title={d.label}>
+                        <b>{d.label}</b>
+                      </span>
+                      <span className="track" title={`${d.label}: ${d.uploaded.toLocaleString('en-US')} of ${plural(d.total, 'PO')} have it, ${d.missing.toLocaleString('en-US')} missing`}>
+                        <i className="a" style={{ width: `${d.pct}%` }} />
+                      </span>
+                      <span className="r">
+                        <b>{d.pct.toFixed(1)}%</b>
+                      </span>
+                      <span className="r cr-hide">{d.uploaded.toLocaleString('en-US')}</span>
+                      <span className="r cr-hide" style={{ color: d.missing ? 'var(--bad)' : undefined }}>
+                        {d.missing.toLocaleString('en-US')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ padding: 16 }}>
+                  <Spinner />
+                </div>
+              )}
+              <div className="legend">
+                <span>
+                  <i style={{ background: 'var(--accent)' }} />
+                  POs with the document
+                </span>
+                <span>
+                  <i style={{ background: 'var(--muted-bg)', border: '1px solid var(--line)' }} />
+                  POs missing it
+                </span>
+                <Link className="link" href="/documents" style={{ marginLeft: 'auto' }}>
+                  Open Documents
+                </Link>
+              </div>
+            </>
           ) : (
             <>
               <div style={{ padding: '10px 16px 0' }} className="chips">
@@ -157,28 +237,23 @@ export default function DashboardPage() {
               <Spinner />
             </div>
           ) : (
-            <div className="plants">
-              {sorted.map((p) => {
-                const some = Math.max(0, p.contractCount - p.completeCount - p.emptyCount)
-                const w = (n: number) => (p.contractCount ? `${(n / p.contractCount) * 100}%` : '0%')
-                return (
-                  <div className="plant" key={p.plant}>
-                    <span className="nm">{plantLabel(p.plant)}</span>
-                    <div
-                      className="track"
-                      title={`${plantLabel(p.plant)}: ${p.completeCount} with all 11, ${some} with some, ${p.emptyCount} with none`}
-                    >
-                      <i className="a" style={{ width: w(p.completeCount) }} />
-                      <i className="b" style={{ width: w(some) }} />
-                    </div>
-                    <span className="val">
-                      <b>{p.completenessPct.toFixed(1)}%</b> <span className="hint">{plural(p.contractCount, 'PO')}</span>
-                    </span>
-                  </div>
-                )
-              })}
-              {!plants.length ? <p className="hint">No POs in this period.</p> : null}
-            </div>
+            <>
+              <CompletenessRows
+                firstLabel="Plant"
+                rows={sorted.map((p) => ({
+                  key: p.plant,
+                  name: plantLabel(p.plant),
+                  contractCount: p.contractCount,
+                  completeCount: p.completeCount,
+                  emptyCount: p.emptyCount,
+                  completenessPct: p.completenessPct,
+                  uploadedSlots: p.uploadedSlots,
+                  totalSlots: p.totalSlots,
+                  byType: p.byType,
+                }))}
+              />
+              {!plants.length ? <p className="hint" style={{ padding: '0 16px' }}>No POs in this period.</p> : null}
+            </>
           )}
           <div className="legend">
             <span>
@@ -201,23 +276,6 @@ export default function DashboardPage() {
           </div>
             </>
           )}
-        </div>
-        {missing ? (
-          <div className="panel">
-            <h3>Most often missing</h3>
-            <div className="mini">
-              {missing.map((m) => (
-                <div className="r" key={m.label}>
-                  <span>{m.label}</span>
-                  <b className="num">{plural(m.count, 'PO')}</b>
-                </div>
-              ))}
-              <Link className="link" href="/documents" style={{ fontSize: 13 }}>
-                Open Documents
-              </Link>
-            </div>
-          </div>
-        ) : null}
       </div>
     </>
   )

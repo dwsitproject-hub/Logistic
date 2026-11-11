@@ -427,6 +427,8 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
       const contractCount = Number(row.contract_count) || 0;
       const uploadedSlots = Number(row.uploaded_slots) || 0;
       const totalSlots = Number(row.total_slots) || 0;
+      const byType: Record<string, number> = {};
+      for (const type of COMMERCIAL_DOCUMENT_TYPES) byType[type] = Number(row[`uploaded_${type}`]) || 0;
       return {
         plant: String(row.plant_site || 'Unassigned'),
         contractCount,
@@ -436,6 +438,7 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
         completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
         completeCount: Number(row.complete_count) || 0,
         emptyCount: Number(row.empty_count) || 0,
+        byType,
       };
     });
     const contractCount = plants.reduce((sum, row) => sum + row.contractCount, 0);

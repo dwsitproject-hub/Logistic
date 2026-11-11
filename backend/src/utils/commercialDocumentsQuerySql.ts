@@ -398,6 +398,13 @@ export function commercialCompletenessPct(uploaded: number, total: number): numb
  * Document completeness by Region/Plant. Uploaded is the count of checklist slots that have a file.
  * Total is contracts × the eleven document types. Blank plant is labeled Unassigned.
  */
+/** POs with each document type uploaded, one column per type (uploaded_<type>): the detail of a row on the Dashboard. */
+function perTypeUploadedCounts(): string {
+  return COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.map(
+    (flag) => `COUNT(*) FILTER (WHERE e.${flag})::int AS uploaded_${flag.replace(/^doc_/, '')}`,
+  ).join(',\n      ');
+}
+
 export function buildCommercialDocumentsCompletenessByPlantQuery(
   params: CommercialDocumentsScopeParams,
 ): { sql: string; values: unknown[] } {
@@ -417,7 +424,8 @@ export function buildCommercialDocumentsCompletenessByPlantQuery(
       COALESCE(SUM(${uploadedExpr}), 0)::int AS uploaded_slots,
       (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS total_slots,
       COUNT(*) FILTER (WHERE (${uploadedExpr}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_count,
-      COUNT(*) FILTER (WHERE (${uploadedExpr}) = 0)::int AS empty_count
+      COUNT(*) FILTER (WHERE (${uploadedExpr}) = 0)::int AS empty_count,
+      ${perTypeUploadedCounts()}
     FROM enriched e
     WHERE ${scope.where.join(' AND ')}
     GROUP BY 1
@@ -441,9 +449,7 @@ export function buildCommercialDocumentsCompletenessByCreatorQuery(
 ): { sql: string; values: unknown[] } {
   const scope = buildScopeWhere(params);
   const uploadedExpr = uploadedTypesExpr();
-  const perType = COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.map(
-    (flag) => `COUNT(*) FILTER (WHERE e.${flag})::int AS uploaded_${flag.replace(/^doc_/, '')}`,
-  ).join(',\n      ');
+  const perType = perTypeUploadedCounts();
   const sql = `
     ${buildCommercialDocumentsBaseCte()}
     SELECT
