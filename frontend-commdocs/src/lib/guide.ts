@@ -3,7 +3,7 @@
  * When a new version of the guide is released: replace that PDF, raise GUIDE_VERSION here, and add a row to HISTORY in
  * docs/commdocs-user-guide/build-deck.cjs (the guide's own version-history slide). The two numbers must match.
  */
-export const GUIDE_VERSION = 'v1'
+export const GUIDE_VERSION = 'v2'
 
 /** Where this browser remembers which guide version the user has opened; the sidebar shows a "New" mark until it matches GUIDE_VERSION. */
 export const GUIDE_SEEN_KEY = 'cd.guideSeenVersion'
