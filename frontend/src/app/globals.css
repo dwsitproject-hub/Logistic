@@ -421,6 +421,21 @@
     padding-right: 0.5rem;
   }
 
+  /* Fewer icons, narrower column, the same 8px between the icons and the column edge (see compactTableActionsColWidthPx). */
+  .klip-compact-table--operational.klip-actions-w-1 th.klip-op-col--actions,
+  .klip-compact-table--operational.klip-actions-w-1 td.klip-op-col--actions {
+    width: 48px;
+    min-width: 48px;
+    max-width: 48px;
+  }
+
+  .klip-compact-table--operational.klip-actions-w-2 th.klip-op-col--actions,
+  .klip-compact-table--operational.klip-actions-w-2 td.klip-op-col--actions {
+    width: 84px;
+    min-width: 84px;
+    max-width: 84px;
+  }
+
   .klip-compact-table--operational thead th.klip-op-col--actions {
     top: 0;
     z-index: 40;

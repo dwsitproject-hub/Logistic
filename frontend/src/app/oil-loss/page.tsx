@@ -66,6 +66,7 @@ import {
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
+import { compactTableActionsColWidthPx } from '@/lib/compactTableUi'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
@@ -269,7 +270,7 @@ function renderLossPctCell(pct: number | null): ReactNode {
 }
 
 /** One icon. Other pages use 112px because Actions holds two buttons. */
-const OIL_LOSS_ACTIONS_COL_WIDTH_PX = 120
+const OIL_LOSS_ACTIONS_COL_WIDTH_PX = compactTableActionsColWidthPx(1)
 
 function firstOilLossToken(value: string | null | undefined): string {
   return String(value ?? '').split(',')[0]?.trim() ?? ''
@@ -2419,6 +2420,7 @@ export default function OilLossPage() {
                         COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                         'klip-compact-table--perf-narrow-cols',
                         'klip-oil-loss-table',
+                        'klip-actions-w-1',
                       )}
                     >
                       <colgroup>
@@ -2442,6 +2444,8 @@ export default function OilLossPage() {
                             />
                           )
                         })}
+                        {/* An empty column with no width takes the slack, so Actions keeps its own width on a wide screen. */}
+                        <col />
                         <col style={{ width: compactTableColWidthCss(OIL_LOSS_ACTIONS_COL_WIDTH_PX) }} />
                       </colgroup>
                       <thead>
@@ -2485,6 +2489,7 @@ export default function OilLossPage() {
                               </th>
                             )
                           })}
+                          <th aria-hidden="true" className="sticky top-0 z-20 bg-gray-50 p-0" />
                           <th
                             scope="col"
                             className={cn(
@@ -2504,13 +2509,13 @@ export default function OilLossPage() {
                       >
                         {(loading || dataFetching) && rows.length === 0 ? (
                           <TableInitialLoadPlaceholder
-                            colSpan={visibleColumns.length + 1 || 1}
+                            colSpan={visibleColumns.length + 2}
                             icon={Droplets}
                           />
                         ) : !dataFetching && !viewTransitionLoading && filteredRows.length === 0 ? (
                           <tr className="bg-white">
                             <td
-                              colSpan={visibleColumns.length + 1 || 1}
+                              colSpan={visibleColumns.length + 2}
                               className="px-4 py-10 text-center text-gray-500"
                             >
                               <Droplets className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -2557,6 +2562,7 @@ export default function OilLossPage() {
                                     </td>
                                   )
                                 })}
+                                <td aria-hidden="true" className={cn('p-0', stripeClass)} />
                                 <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
                                   <div className="flex items-center justify-center">
                                     {viewMode === 'all_contract' ? (

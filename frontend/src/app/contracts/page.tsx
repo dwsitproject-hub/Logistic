@@ -23,6 +23,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { ListPager } from '@/components/performance/ListPager'
+import { compactTableActionsColWidthPx } from '@/lib/compactTableUi'
 import { refreshDocumentPresence } from '@/lib/documentPresence'
 import { contractsSortStackParam, nextContractsSortStack } from '@/lib/contractsSortStack'
 import { sortEntryFor, sortPriority, type SortEntry } from '@/lib/sortStack'
@@ -42,7 +43,6 @@ import { formatTruckingStatusLabel } from '@/lib/truckingStatusDisplay'
 import {
   contextPerformanceClass,
   formatAvgDays,
-  statusCardAvgDaysClass,
   formatLogCycleDays,
   formatLogCycleDaysCompact,
   formatSignedCycleDays,
@@ -134,7 +134,7 @@ import {
   ContractPerfUnifiedNodeCard,
   type PerfSegmentFilter,
 } from '@/components/contract-performance/ContractPerfUnifiedNodeCard'
-import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
+import { PerformanceStatusCard, PerformanceOnTimeBar } from '@/components/performance/PerformanceStatusCard'
 import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import {
   CONTRACT_PERF_COLUMN_LAYOUT_VERSION,
@@ -523,33 +523,6 @@ function buildNextContractPerfDrilldownSelection(
 function contractPerfTradeCycleDaysForAgg(tradeCycle: number | null | undefined): number {
   if (tradeCycle == null || Number.isNaN(tradeCycle)) return 0
   return Math.abs(tradeCycle)
-}
-
-/** On Time / Late share for Contract Performance Open & Close summary cards (Trade Cycle >= 0 vs < 0). */
-function contractPerfOnTimeLatePercents(
-  onTimeCount: number,
-  lateCount: number,
-): { onTimeLabel: string; lateLabel: string } {
-  const total = onTimeCount + lateCount
-  if (total <= 0) return { onTimeLabel: 'N/A', lateLabel: 'N/A' }
-  return {
-    onTimeLabel: `${Math.round((onTimeCount / total) * 100)}%`,
-    lateLabel: `${Math.round((lateCount / total) * 100)}%`,
-  }
-}
-
-function ContractPerfStatusPctBadges({ onTimeCount, lateCount }: { onTimeCount: number; lateCount: number }) {
-  const { onTimeLabel, lateLabel } = contractPerfOnTimeLatePercents(onTimeCount, lateCount)
-  return (
-    <div className="flex flex-wrap gap-1.5 justify-end shrink-0">
-      <Badge className="bg-green-100 text-green-800 hover:bg-green-100 border-0 font-normal text-xs">
-        On Time: {onTimeLabel}
-      </Badge>
-      <Badge className="bg-red-100 text-red-800 hover:bg-red-100 border-0 font-normal text-xs">
-        Late: {lateLabel}
-      </Badge>
-    </div>
-  )
 }
 
 const CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP = {
@@ -4136,107 +4109,77 @@ function ContractsPageContent() {
             closeStatusContractCount > 0 ? statusCardSummary.closeAvgDays : null
           return (
             <div className={`transition-opacity duration-200 ${latePerfSummaryLoading ? 'opacity-65' : 'opacity-100'}`}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <PerformanceSection1CardShell
+              <div className="grid grid-cols-1 gap-2">
+                <PerformanceStatusCard
                   variant="open"
                   title="OPEN"
-                  titleSize="base"
                   selected={openSelected}
-                  className="border-2 shadow-sm"
                   onClick={() => applySummaryStatusCard('Open')}
-                  headerEnd={
-                    <ContractPerfStatusPctBadges
+                  label={
+                    <>
+                      Outstanding Qty (MT)
+                      <FieldHelp text={FIELD_HELP.contractPerfOutstandingQty} />
+                    </>
+                  }
+                  value={formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
+                  middle={
+                    <PerformanceOnTimeBar
                       onTimeCount={statusCardSummary.openOnTimeCount ?? 0}
                       lateCount={statusCardSummary.openLateCount ?? 0}
                     />
                   }
-                >
-                  <div className="text-sm text-gray-500 mb-1 flex items-center gap-1">
-                    Outstanding Qty (MT)
-                    <FieldHelp text={FIELD_HELP.contractPerfOutstandingQty} />
-                  </div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">
-                    {formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 items-center">
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Trade:"
-                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgTrade}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(openTradeAvgDays, statusCardSummary.openIsLateContext)}`}>
-                        {formatAvgDays(openTradeAvgDays)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg DP:"
-                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgDp}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.openAvgDpCycle, statusCardSummary.openIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.openAvgDpCycle)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Log:"
-                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgLog}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.openAvgLogCycle, statusCardSummary.openIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.openAvgLogCycle)}
-                      </span>
-                    </span>
-                  </div>
-                </PerformanceSection1CardShell>
+                  groups={[
+                    {
+                      stats: [
+                        {
+                          label: <ContractPerfStatusCardMetricLabel label="Avg Trade" help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgTrade} />,
+                          value: formatAvgDays(openTradeAvgDays),
+                        },
+                        {
+                          label: <ContractPerfStatusCardMetricLabel label="Avg DP" help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgDp} />,
+                          value: formatAvgDays(statusCardSummary.openAvgDpCycle),
+                        },
+                        {
+                          label: <ContractPerfStatusCardMetricLabel label="Avg Log" help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgLog} />,
+                          value: formatAvgDays(statusCardSummary.openAvgLogCycle),
+                        },
+                      ],
+                    },
+                  ]}
+                />
 
-                <PerformanceSection1CardShell
+                <PerformanceStatusCard
                   variant="close"
                   title="CLOSE"
-                  titleSize="base"
                   selected={closeSelected}
-                  className="border-2 shadow-sm"
                   onClick={() => applySummaryStatusCard('Close')}
-                  headerEnd={
-                    <ContractPerfStatusPctBadges
+                  label="Contract Qty (MT)"
+                  value={formatContractPerfOutstandingMt(statusCardSummary.closeContractQty)}
+                  middle={
+                    <PerformanceOnTimeBar
                       onTimeCount={statusCardSummary.closeOnTimeCount ?? 0}
                       lateCount={statusCardSummary.closeLateCount ?? 0}
                     />
                   }
-                >
-                  <div className="text-sm text-gray-500 mb-1">Contract Qty (MT)</div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">
-                    {formatContractPerfOutstandingMt(statusCardSummary.closeContractQty)}
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 items-center">
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Trade:"
-                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgTrade}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(closeTradeAvgDays, statusCardSummary.closeIsLateContext)}`}>
-                        {formatAvgDays(closeTradeAvgDays)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg DP:"
-                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgDp}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.closeAvgDpCycle, statusCardSummary.closeIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.closeAvgDpCycle)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Log:"
-                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgLog}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.closeAvgLogCycle, statusCardSummary.closeIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.closeAvgLogCycle)}
-                      </span>
-                    </span>
-                  </div>
-                </PerformanceSection1CardShell>
+                  groups={[
+                    {
+                      stats: [
+                        {
+                          label: <ContractPerfStatusCardMetricLabel label="Avg Trade" help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgTrade} />,
+                          value: formatAvgDays(closeTradeAvgDays),
+                        },
+                        {
+                          label: <ContractPerfStatusCardMetricLabel label="Avg DP" help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgDp} />,
+                          value: formatAvgDays(statusCardSummary.closeAvgDpCycle),
+                        },
+                        {
+                          label: <ContractPerfStatusCardMetricLabel label="Avg Log" help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgLog} />,
+                          value: formatAvgDays(statusCardSummary.closeAvgLogCycle),
+                        },
+                      ],
+                    },
+                  ]}
+                />
               </div>
             </div>
           )
@@ -4820,6 +4763,7 @@ function ContractsPageContent() {
                           COMPACT_OPERATIONAL_TABLE_CLASS,
                           COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                           'klip-compact-table--perf-narrow-cols',
+                          'klip-actions-w-2',
                         )}
                       >
                       <colgroup>
@@ -4835,11 +4779,9 @@ function ContractsPageContent() {
                             }}
                           />
                         ))}
-                        <col
-                          style={{
-                            width: isContractPerformance ? 120 : COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
-                          }}
-                        />
+                        {/* An empty column with no width takes the slack, so Actions keeps its own width on a wide screen. */}
+                        <col />
+                        <col style={{ width: compactTableActionsColWidthPx(2) }} />
                       </colgroup>
                       {/* Header */}
                       <thead>
@@ -5213,6 +5155,7 @@ function ContractsPageContent() {
                             </th>
                           )
                         })}
+                        <th aria-hidden="true" className="sticky top-0 z-20 bg-gray-50 p-0" />
                         <th
                           scope="col"
                           className={cn(
@@ -5239,14 +5182,14 @@ function ContractsPageContent() {
                           (isContractPerformance && contractPerfSection3Loading)) &&
                         contracts.length === 0 ? (
                           <TableInitialLoadPlaceholder
-                            colSpan={visibleColumns.length + 1}
+                            colSpan={visibleColumns.length + 2}
                             icon={FileText}
                           />
                         ) : !(listFetching ||
                             (isContractPerformance && contractPerfSection3Loading)) &&
                           sortedContracts.length === 0 ? (
                           <tr className="bg-white">
-                            <td colSpan={visibleColumns.length + 1} className="px-4 py-10 text-center text-gray-500">
+                            <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-gray-500">
                               <p>No contracts found</p>
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
                             </td>
@@ -5297,6 +5240,7 @@ function ContractsPageContent() {
                                   )
                                 })}
 
+                                <td aria-hidden="true" className={cn('p-0', stripeClass)} />
                                 <td
                                   className={cn(
                                     COMPACT_TABLE_ACTIONS_CELL_CLASS,
