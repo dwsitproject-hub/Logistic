@@ -36,7 +36,6 @@ const VESSELS_PER_PAGE = 20
 const EMPTY_FILTER_OPTIONS: MasterVesselFilterOptions = {
   owners: [],
   vesselTypes: ['BARGE', 'TANKER', 'SPOB', 'TUG BOAT'],
-  lambungTypes: ['DHDB', 'SHSB', 'SHDB'],
   terms: ['T/C', 'V/C', 'CIF'],
 }
 
@@ -54,8 +53,6 @@ export default function MasterVesselPage() {
   const [filterOptions, setFilterOptions] = useState<MasterVesselFilterOptions>(EMPTY_FILTER_OPTIONS)
   const [selectedOwners, setSelectedOwners] = useState<string[]>([])
   const [selectedVesselTypes, setSelectedVesselTypes] = useState<string[]>([])
-  const [selectedHeating, setSelectedHeating] = useState<string[]>([])
-  const [selectedLambungTypes, setSelectedLambungTypes] = useState<string[]>([])
   const [selectedTerms, setSelectedTerms] = useState<string[]>([])
   const [selectedKlipTransaction, setSelectedKlipTransaction] = useState<string[]>([])
 
@@ -75,16 +72,12 @@ export default function MasterVesselPage() {
       searchTerm.length > 0 ||
       selectedOwners.length > 0 ||
       selectedVesselTypes.length > 0 ||
-      selectedHeating.length > 0 ||
-      selectedLambungTypes.length > 0 ||
       selectedTerms.length > 0 ||
       selectedKlipTransaction.length > 0,
     [
       searchTerm,
       selectedOwners,
       selectedVesselTypes,
-      selectedHeating,
-      selectedLambungTypes,
       selectedTerms,
       selectedKlipTransaction,
     ],
@@ -101,8 +94,6 @@ export default function MasterVesselPage() {
         if (searchTerm.length >= 2) params.search = searchTerm
         if (selectedOwners.length) params.owners = selectedOwners
         if (selectedVesselTypes.length) params.vesselTypes = selectedVesselTypes
-        if (selectedHeating.length) params.heating = heatingFilterToApi(selectedHeating)
-        if (selectedLambungTypes.length) params.lambungTypes = selectedLambungTypes
         if (selectedTerms.length) params.terms = termsFilterToApi(selectedTerms)
         if (selectedKlipTransaction.length) params.klipTransaction = heatingFilterToApi(selectedKlipTransaction)
         params.sortKey = sortKey
@@ -125,8 +116,6 @@ export default function MasterVesselPage() {
       searchTerm,
       selectedOwners,
       selectedVesselTypes,
-      selectedHeating,
-      selectedLambungTypes,
       selectedTerms,
       selectedKlipTransaction,
       sortKey,
@@ -163,7 +152,6 @@ export default function MasterVesselPage() {
           setFilterOptions({
             owners: data.owners ?? [],
             vesselTypes: data.vesselTypes ?? EMPTY_FILTER_OPTIONS.vesselTypes,
-            lambungTypes: data.lambungTypes ?? EMPTY_FILTER_OPTIONS.lambungTypes,
             terms: data.terms ?? EMPTY_FILTER_OPTIONS.terms,
           })
         }
@@ -181,8 +169,6 @@ export default function MasterVesselPage() {
     searchTerm,
     selectedOwners,
     selectedVesselTypes,
-    selectedHeating,
-    selectedLambungTypes,
     selectedTerms,
     selectedKlipTransaction,
     sortKey,
@@ -211,8 +197,6 @@ export default function MasterVesselPage() {
     setSearchTerm('')
     setSelectedOwners([])
     setSelectedVesselTypes([])
-    setSelectedHeating([])
-    setSelectedLambungTypes([])
     setSelectedTerms([])
     setSelectedKlipTransaction([])
   }
@@ -331,10 +315,6 @@ export default function MasterVesselPage() {
           onOwnersChange={setSelectedOwners}
           selectedVesselTypes={selectedVesselTypes}
           onVesselTypesChange={setSelectedVesselTypes}
-          selectedHeating={selectedHeating}
-          onHeatingChange={setSelectedHeating}
-          selectedLambungTypes={selectedLambungTypes}
-          onLambungTypesChange={setSelectedLambungTypes}
           selectedTerms={selectedTerms}
           onTermsChange={setSelectedTerms}
           selectedKlipTransaction={selectedKlipTransaction}

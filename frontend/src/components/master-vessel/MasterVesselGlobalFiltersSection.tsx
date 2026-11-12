@@ -14,7 +14,6 @@ import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 export interface MasterVesselFilterOptions {
   owners: string[]
   vesselTypes: string[]
-  lambungTypes: string[]
   terms: string[]
 }
 
@@ -29,10 +28,6 @@ export interface MasterVesselGlobalFiltersSectionProps {
   onOwnersChange: (values: string[]) => void
   selectedVesselTypes: string[]
   onVesselTypesChange: (values: string[]) => void
-  selectedHeating: string[]
-  onHeatingChange: (values: string[]) => void
-  selectedLambungTypes: string[]
-  onLambungTypesChange: (values: string[]) => void
   selectedTerms: string[]
   onTermsChange: (values: string[]) => void
   selectedKlipTransaction: string[]
@@ -42,7 +37,6 @@ export interface MasterVesselGlobalFiltersSectionProps {
   action?: ReactNode
 }
 
-const HEATING_FILTER_OPTIONS = ['Yes', 'No', '(Blank)'] as const
 const TERMS_FILTER_OPTIONS = ['T/C', 'V/C', 'CIF', '(Blank)'] as const
 const KLIP_TRANSACTION_FILTER_OPTIONS = ['Yes', 'No'] as const
 
@@ -57,10 +51,6 @@ export function MasterVesselGlobalFiltersSection({
   onOwnersChange,
   selectedVesselTypes,
   onVesselTypesChange,
-  selectedHeating,
-  onHeatingChange,
-  selectedLambungTypes,
-  onLambungTypesChange,
   selectedTerms,
   onTermsChange,
   selectedKlipTransaction,
@@ -84,8 +74,6 @@ export function MasterVesselGlobalFiltersSection({
           : []),
         ...selectionChips('Owner', selectedOwners, onOwnersChange),
         ...selectionChips('Vessel type', selectedVesselTypes, onVesselTypesChange),
-        ...selectionChips('Heating', selectedHeating, onHeatingChange),
-        ...selectionChips('Lambung type', selectedLambungTypes, onLambungTypesChange),
         ...selectionChips('Term', selectedTerms, onTermsChange),
         ...selectionChips('Klip transaction', selectedKlipTransaction, onKlipTransactionChange),
       ]}
@@ -129,26 +117,6 @@ export function MasterVesselGlobalFiltersSection({
           onChange={onVesselTypesChange}
           placeholder="All"
           emptyMessage="No types"
-        />
-        <SearchableMultiSelect
-          className="min-w-[7.5rem] flex-1"
-          labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-          label="Heating"
-          options={[...HEATING_FILTER_OPTIONS]}
-          selected={selectedHeating}
-          onChange={onHeatingChange}
-          placeholder="All"
-          emptyMessage="No options"
-        />
-        <SearchableMultiSelect
-          className="min-w-[7.5rem] flex-1"
-          labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-          label="Lambung Type"
-          options={filterOptions.lambungTypes}
-          selected={selectedLambungTypes}
-          onChange={onLambungTypesChange}
-          placeholder="All"
-          emptyMessage="No lambung types"
         />
         <SearchableMultiSelect
           className="min-w-[7.5rem] flex-1"
