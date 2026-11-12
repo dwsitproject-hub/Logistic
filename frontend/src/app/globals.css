@@ -452,6 +452,27 @@
     z-index: 10;
   }
 
+  /* Icon-only status columns (DHM status, Klip transaction): the width of a one-icon Actions column (56px, 12px each side), the same on every master table. */
+  .klip-compact-table--operational th.klip-op-col--icon,
+  .klip-compact-table--operational td.klip-op-col--icon {
+    width: 56px;
+    min-width: 56px;
+    max-width: 56px;
+    box-sizing: border-box;
+    text-align: center;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--icon {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  /* The header only has to fit "DHM" and its sort arrow. */
+  .klip-compact-table--operational th.klip-op-col--icon {
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+  }
+
   .klip-compact-table--operational thead th.klip-op-col--actions {
     top: 0;
     z-index: 40;

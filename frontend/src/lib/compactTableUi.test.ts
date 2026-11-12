@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { COMPACT_TABLE_ACTIONS_COL_WIDTH_PX, compactTableActionsColWidthPx } from './compactTableUi'
+import { COMPACT_TABLE_ACTIONS_COL_WIDTH_PX, COMPACT_TABLE_ICON_COL_WIDTH_PX, compactTableActionsColWidthPx } from './compactTableUi'
 
 describe('compactTableActionsColWidthPx', () => {
   it('keeps the same room around the icons, whatever the icon count', () => {
@@ -11,6 +11,11 @@ describe('compactTableActionsColWidthPx', () => {
 
   it('makes the three-icon width (Shipments and Trucking) the default column width', () => {
     expect(COMPACT_TABLE_ACTIONS_COL_WIDTH_PX).toBe(compactTableActionsColWidthPx(3))
+  })
+
+  it('gives the icon-only status columns of the master tables the width of a one-icon Actions column', () => {
+    expect(COMPACT_TABLE_ICON_COL_WIDTH_PX).toBe(compactTableActionsColWidthPx(1))
+    expect(COMPACT_TABLE_ICON_COL_WIDTH_PX).toBe(56) // .klip-op-col--icon in globals.css
   })
 
   it('never goes below one icon', () => {
