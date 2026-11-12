@@ -64,7 +64,7 @@ export interface JpsCargoSource {
   sto_no?: string | null;
   /** contracts.product */
   product: string | null;
-  /** contracts.material_code: the SAP material of the PO line, the key of its DHM commodity (product_materials). Named in the hold's reason when no code could be found. */
+  /** contracts.material_code: the SAP material of the PO line, the key of its DHM commodity (products.material_code). Named in the hold's reason when no code could be found. */
   material_code?: string | null;
   /** products.code_dhm of that product, the DataHub code JPS takes as cargo_hub_code. Empty until Master Product is synced. */
   product_hub_code?: string | null;

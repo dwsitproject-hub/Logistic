@@ -7,7 +7,7 @@ import { PARTNER_LINES_SQL } from './recordSql';
 import { PARTNER_RULES_VERSION, partnerSourceSignature } from './refresh';
 
 /**
- * The product a partner (KMAPS) receives carries the DataHub code of the contract's SAP MATERIAL first (product_materials: one DHM commodity per material), the broad product's second.
+ * The product a partner (KMAPS) receives carries the DataHub code of the contract's SAP MATERIAL first (the Master Product row carrying that material_code: one DHM commodity per material), the product named like the contract's second.
  * Same rule as the JPS cargo line; the name stays the broad product's.
  */
 const flat = (s: string) => s.replace(/\s+/g, ' ');
@@ -16,7 +16,7 @@ describe('the partner product code follows the material', () => {
   const sql = flat(PARTNER_LINES_SQL);
 
   it('looks the material up by the contract\'s material_code, only a row that HAS a DHM code counts, a live one first', () => {
-    expect(sql).toContain('FROM product_materials m');
+    expect(sql).toContain('FROM products m');
     expect(sql).toContain("WHERE NULLIF(TRIM(c.material_code), '') IS NOT NULL");
     expect(sql).toContain('UPPER(TRIM(m.material_code)) = UPPER(TRIM(c.material_code))');
     expect(sql).toContain("NULLIF(TRIM(m.code_dhm), '') IS NOT NULL");
@@ -45,11 +45,11 @@ describe('a change of the rule, or of a material, makes the next run rebuild the
     expect(PARTNER_RULES_VERSION).toBe('2026-11-12-material-product-code');
   });
 
-  it('product_materials is one of the tables the signature reads, so a DHM code arriving rebuilds the records', async () => {
+  it('products is one of the tables the signature reads, so a DHM code or a material_code arriving rebuilds the records', async () => {
     const signature = await partnerSourceSignature();
-    expect(signature).toContain('product_materials=');
+    expect(signature).toContain('products=');
     expect(signature).toContain(`rules=${PARTNER_RULES_VERSION}`);
     const sqls = vi.mocked(query).mock.calls.map((c) => flat(String(c[0])));
-    expect(sqls.some((s) => s.includes('FROM product_materials'))).toBe(true);
+    expect(sqls.some((s) => s.includes('FROM products'))).toBe(true);
   });
 });

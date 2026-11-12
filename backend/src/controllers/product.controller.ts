@@ -3,7 +3,6 @@ import { Request, Response } from 'express';
 import { query } from '../database/connection';
 import { attachDhmPushState, productDhmExtra, pushNamedMasterToDhm } from '../dhm';
 import logger from '../utils/logger';
-import { logAudit } from '../middleware/audit';
 
 interface AuthRequest extends Request { user?: { id: string; role: string } }
 
@@ -137,81 +136,6 @@ export const updateProduct = async (req: AuthRequest, res: Response): Promise<vo
     logger.error('Error updating product:', error);
     const message = error?.code === '23505' ? duplicateMessage(error) : 'Failed to update product';
     res.status(error?.code === '23505' ? 409 : 500).json({ success: false, error: { message } });
-  }
-};
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const MATERIAL_SELECT = `
-  SELECT m.id, m.material_code, m.material_description, m.product_id, p.product_name, m.product_label, m.product_link_source,
-         m.code_dhm, COALESCE(m.dhm_is_deleted, FALSE) AS dhm_is_deleted, COALESCE(cc.n, 0)::int AS contracts, m.last_seen_at
-    FROM product_materials m
-    LEFT JOIN products p ON p.id = m.product_id
-    LEFT JOIN (SELECT UPPER(TRIM(material_code)) AS k, COUNT(*) AS n FROM contracts WHERE NULLIF(TRIM(material_code), '') IS NOT NULL GROUP BY 1) cc
-           ON cc.k = UPPER(TRIM(m.material_code))`;
-
-/**
- * The SAP materials under the Master Products (product_materials, migration 265): the smallest unit of a commodity and the key of its DHM code. Read only here; the SAP import fills
- * the list, the DHM sync fills the code. `status`: all | unlinked (no Master Product yet) | no_dhm (no DHM code yet).
- */
-export const listProductMaterials = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const { search = '', status = 'all' } = req.query as Record<string, string>;
-    const where: string[] = [];
-    const params: unknown[] = [];
-    const term = String(search).trim();
-    if (term) {
-      params.push(`%${term}%`);
-      const p = `$${params.length}`;
-      where.push(`(m.material_code ILIKE ${p} OR m.material_description ILIKE ${p} OR p.product_name ILIKE ${p} OR m.product_label ILIKE ${p} OR m.code_dhm ILIKE ${p})`);
-    }
-    if (status === 'unlinked') where.push('m.product_id IS NULL');
-    if (status === 'no_dhm') where.push("NULLIF(TRIM(m.code_dhm), '') IS NULL");
-    const items = await query(
-      `${MATERIAL_SELECT}${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY (m.product_id IS NULL) DESC, COALESCE(p.product_name, m.product_label, '~'), m.material_code
-       LIMIT 1000`,
-      params,
-    );
-    const summary = await query(
-      `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE product_id IS NULL)::int AS unlinked,
-              COUNT(*) FILTER (WHERE NULLIF(TRIM(code_dhm), '') IS NULL)::int AS no_dhm FROM product_materials`,
-    );
-    const products = await query(`SELECT id, product_name FROM products WHERE COALESCE(dhm_is_deleted, FALSE) IS NOT TRUE ORDER BY product_name`);
-    res.json({ success: true, data: { items: items.rows, summary: summary.rows[0], products: products.rows } });
-  } catch (error) {
-    logger.error('Error listing product materials:', error);
-    res.status(500).json({ success: false, error: { message: 'Failed to load SAP materials' } });
-  }
-};
-
-/**
- * Link a SAP material to a Master Product (or take the link off with product_id null). A link set here is a person's: the SAP import never changes it again.
- */
-export const linkProductMaterial = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    if (!UUID_RE.test(String(id))) { res.status(400).json({ success: false, error: { message: 'Invalid material id' } }); return; }
-    const raw = (req.body as { product_id?: unknown })?.product_id;
-    const productId = raw === null || raw === undefined || raw === '' ? null : String(raw);
-    if (productId !== null && !UUID_RE.test(productId)) { res.status(400).json({ success: false, error: { message: 'Invalid product id' } }); return; }
-    if (productId !== null) {
-      const exists = await query('SELECT 1 FROM products WHERE id = $1', [productId]);
-      if (exists.rowCount === 0) { res.status(404).json({ success: false, error: { message: 'Product not found' } }); return; }
-    }
-    const before = await query(`${MATERIAL_SELECT} WHERE m.id = $1`, [id]);
-    if (before.rowCount === 0) { res.status(404).json({ success: false, error: { message: 'Material not found' } }); return; }
-    await query(`UPDATE product_materials SET product_id = $2, product_link_source = 'USER', updated_at = NOW() WHERE id = $1`, [id, productId]);
-    const after = await query(`${MATERIAL_SELECT} WHERE m.id = $1`, [id]);
-    try {
-      await logAudit(req as never, 'UPDATE', 'PRODUCT_MATERIAL', id, before.rows[0], after.rows[0]);
-    } catch (auditError) {
-      logger.warn('Could not audit the product material link', { auditError });
-    }
-    res.json({ success: true, data: after.rows[0] });
-  } catch (error) {
-    logger.error('Error linking product material:', error);
-    res.status(500).json({ success: false, error: { message: 'Failed to link the material' } });
   }
 };
 

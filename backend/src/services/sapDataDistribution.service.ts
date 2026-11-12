@@ -63,7 +63,6 @@ import { mergeContractRecords, mergeDuplicateContractsByPo } from './contractMer
 import { normalizePoNumber, shipmentPoSapIdKey } from '../utils/contractPoIdentity';
 import { canonicalProductName } from '../utils/productAlias';
 import { buildSapFigureFillStatements, normalizeSapFigureKg, type SapFigureColumn } from '../utils/sapFigureFill';
-import { SYNC_PRODUCT_MATERIALS_SQL } from '../utils/productMaterials';
 
 export interface DistributionResult {
   contractId?: string;
@@ -2533,24 +2532,6 @@ export class SapDataDistributionService {
     filled.sfbd = await run('sfbd_qty');
     if (filled.sfal > 0 || filled.sfbd > 0) logger.info('SAP SFAL / SFBD filled on shipments', filled);
     return filled;
-  }
-
-  /**
-   * Keep product_materials in step with the materials the contracts now carry (utils/productMaterials.ts), once per import. Never throws into the import: a failure is logged and the
-   * next import repeats it. Returns how many rows it inserted or updated.
-   */
-  static async syncProductMaterials(db: {
-    query: (text: string) => Promise<{ rowCount?: number | null }>;
-  }): Promise<number> {
-    try {
-      const res = await db.query(SYNC_PRODUCT_MATERIALS_SQL);
-      const n = res.rowCount ?? 0;
-      if (n > 0) logger.info('SAP materials recorded in product_materials', { rows: n });
-      return n;
-    } catch (error) {
-      logger.error('Could not record the SAP materials in product_materials; the next import retries', { error });
-      return 0;
-    }
   }
 
   /**

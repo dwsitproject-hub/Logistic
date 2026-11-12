@@ -24,7 +24,6 @@ import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import { Plus } from 'lucide-react'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
-import { SapMaterialsCard } from '@/components/master-product/SapMaterialsCard'
 
 interface Product {
   id: string
@@ -77,8 +76,6 @@ export default function MasterProductConfigurationPage() {
   const [sortKey, setSortKey] = useState('product_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [isAdmin, setIsAdmin] = useState(false)
-  // who may link a SAP material to a Master Product: the roles that may edit a product (routes/product.routes.ts)
-  const [canLinkMaterials, setCanLinkMaterials] = useState(false)
   const productColumns = useListColumnLayout('master-product.visibleColumns.v5', PRODUCT_COLUMNS)
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit])
@@ -88,12 +85,9 @@ export default function MasterProductConfigurationPage() {
     if (!userStr) { router.push('/login'); return }
     try {
       const user = JSON.parse(userStr) as { role?: string }
-      const role = String(user.role || '').toUpperCase()
-      setIsAdmin(role === 'ADMIN')
-      setCanLinkMaterials(['ADMIN', 'TRADING', 'LOGISTICS'].includes(role))
+      setIsAdmin(String(user.role || '').toUpperCase() === 'ADMIN')
     } catch {
       setIsAdmin(false)
-      setCanLinkMaterials(false)
     }
   }, [router])
 
@@ -276,8 +270,6 @@ export default function MasterProductConfigurationPage() {
           />
         </CardContent>
       </Card>
-
-      <SapMaterialsCard canEdit={canLinkMaterials} />
 
       {showModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">

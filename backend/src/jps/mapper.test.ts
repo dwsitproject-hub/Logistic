@@ -197,7 +197,7 @@ describe('buildJpsSubmitPayload', () => {
     expect(problems[problems.length - 1]).toBe('no cargo line could be built');
   });
 
-  // The commodity is the SAP MATERIAL (smallest unit, product_materials): "CPO" alone does not say which of its three commodities has no code.
+  // The commodity is the SAP MATERIAL (smallest unit, products.material_code): "CPO" alone does not say which of its three commodities has no code.
   it('names the material when the contract has one and no code could be found for it or for the product', () => {
     const line = { contract_no: 'C1', po_no: 'P1', product: 'CPO', material_code: '8010-10.11121', product_hub_code: null, sto_quantity_kg: 1000, contract_quantity_kg: 1000 };
     const { payload, problems } = buildJpsSubmitPayload(source({ cargo: [line] }));

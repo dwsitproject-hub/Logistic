@@ -151,7 +151,7 @@ describe('findEligibleStos: masters deleted in DHM give no code', () => {
     expect(cargo).toContain("'product_deleted'");
   });
 
-  it('material: the contract\'s SAP material is looked up first (product_materials), a deleted one gives no code, and the product is the fallback', async () => {
+  it('material: the contract\'s SAP material is looked up first (the Master Product row carrying that material_code), a deleted one gives no code, and the product is the fallback', async () => {
     const sql = await sqlOf();
     const cargo = sql.slice(sql.indexOf('cargo AS ('), sql.indexOf('docs AS ('));
     // every cargo line carries the contract's material, in both arms of the UNION and in the GROUP BY of the first
@@ -159,7 +159,7 @@ describe('findEligibleStos: masters deleted in DHM give no code', () => {
     expect(cargo).toContain("GROUP BY c.contract_id, c.po_number, c.product, NULLIF(TRIM(c.material_code), '')");
     expect(cargo).toContain("'material_code', x.material_code");
     // matched by material_code, only a row that HAS a DHM code counts, a live one first
-    expect(cargo).toContain('FROM product_materials m');
+    expect(cargo).toContain('FROM products m');
     expect(cargo).toContain('UPPER(TRIM(m.material_code)) = UPPER(TRIM(x.material_code))');
     expect(cargo).toContain("NULLIF(TRIM(m.code_dhm), '') IS NOT NULL");
     expect(cargo).toContain('ORDER BY COALESCE(m.dhm_is_deleted, FALSE), m.code_dhm');

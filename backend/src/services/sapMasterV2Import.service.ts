@@ -1768,9 +1768,6 @@ export class SapMasterV2ImportService {
       // SAP's SFAL / SFBD went to the shipments' reference columns row by row; fill the working figure from them now that every row is in (utils/sapFigureFill.ts).
       if (!importWasCancelled) await SapDataDistributionService.fillSapFigures(pool);
 
-      // The materials this import brought go to product_materials, the key of the mapping to the DHM commodity (and from there to JPS).
-      if (!importWasCancelled) await SapDataDistributionService.syncProductMaterials(pool);
-
       // Final bookkeeping pass, once, after every chunk has committed (or rolled back) its own
       // transaction - same status-update + absence/presence logic as before (7/7b below), just
       // no longer sharing a single connection with the per-row work.

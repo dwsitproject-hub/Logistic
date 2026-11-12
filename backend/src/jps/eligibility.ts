@@ -292,8 +292,8 @@ export async function findEligibleStos(
                'po_no', x.po_no,
                'product', x.product,
                'material_code', x.material_code,
-               -- The commodity of the contract's MATERIAL first (product_materials: SAP material -> its own DHM commodity), then the broad Master Product's. A material whose
-               -- commodity DHM has not given a code yet falls back to the product's, as before.
+               -- The commodity of the contract's MATERIAL first (the Master Product row whose material_code is the contract's: one row per SAP material, the DHM commodity it syncs with), then the
+               -- Master Product named like the contract's product. A material with no row or no DHM code yet falls back to the product's, as before.
                'product_hub_code', CASE WHEN pm.code_dhm IS NOT NULL
                                         THEN (CASE WHEN COALESCE(pm.dhm_is_deleted, FALSE) THEN NULL ELSE pm.code_dhm END)
                                         ELSE (CASE WHEN COALESCE(pc.dhm_is_deleted, FALSE) THEN NULL ELSE pc.code_dhm END) END,
@@ -348,11 +348,10 @@ export async function findEligibleStos(
             SELECT 1 FROM contract_stos cs3 WHERE cs3.contract_id = c.id
           )
       ) x ON TRUE
-      -- cargo_hub_code is the DataHub code of the commodity: the contract's MATERIAL's own (product_materials, matched by material_code), else the broad
-      -- product's, matched by name; NULL (no such material or product, or one not yet synced) holds the STO with a reason instead of sending a guess.
+      -- cargo_hub_code is the DataHub code of the commodity: the contract's MATERIAL's own (products.material_code), else the product's, matched by name; NULL (no such material or product, or one not yet synced) holds the STO with a reason instead of sending a guess.
       LEFT JOIN LATERAL (
         SELECT m.code_dhm, m.dhm_is_deleted
-        FROM product_materials m
+        FROM products m
         WHERE x.material_code IS NOT NULL
           AND UPPER(TRIM(m.material_code)) = UPPER(TRIM(x.material_code))
           AND NULLIF(TRIM(m.code_dhm), '') IS NOT NULL

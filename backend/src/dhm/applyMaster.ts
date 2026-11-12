@@ -3,7 +3,6 @@ import logger from '../utils/logger';
 import { dhmDataName, dhmRefCode } from './mapper';
 import { asDhmUuid, persistMasterReplica, rememberDhmOrganization, replicaCode } from './masterReplica';
 import { shouldApplyDhmRecord, type DhmApplyOptions } from './versionGuard';
-import { sqlCanonicalProductName } from '../utils/productAlias';
 import type { DhmRecord } from './types';
 
 export const DHM_MASTER_SLUGS = [
@@ -34,75 +33,8 @@ function commodityText(data: Record<string, unknown> | null | undefined, key: st
   return text || null;
 }
 
-/**
- * A DHM commodity is identified by its material_code (unique in DHM; the same short_name is allowed, Ryan 2026-11-12), and the material is the smallest unit KLIP keeps: one
- * product_materials row per commodity, carrying ITS OWN DataHub code, which is what JPS takes as cargo_hub_code. Three commodities named "CPO" are three rows here.
- *
- * Local database only: this reads what DHM sent and records it. The SAP import fills the material, its description and the link to the broad Master Product; this adds the DHM side
- * (code_dhm, dhm_*) and never overwrites SAP's description or a link a person set.
- */
-async function recordMaterialCommodity(args: {
-  materialCode: string;
-  name: string | null;
-  longName: string | null;
-  code: string | null;
-  dhmId: string | null;
-  record: DhmRecord;
-}): Promise<void> {
-  const { materialCode, name, longName, code, dhmId, record } = args;
-  try {
-    // code_dhm and dhm_id are unique: if another material already holds this record's code, keep that one and say so, instead of failing the record.
-    const holder = await findId(
-      `SELECT id FROM product_materials
-        WHERE (($1::text IS NOT NULL AND code_dhm = $1) OR ($2::uuid IS NOT NULL AND dhm_id = $2::uuid))
-          AND upper(trim(material_code)) <> upper(trim($3))
-        LIMIT 1`,
-      [code, dhmId, materialCode],
-    );
-    if (holder) {
-      logger.warn('DHM commodity code already belongs to another material; the record was not stored at material level', { code, materialCode });
-      return;
-    }
-    await query(
-      `INSERT INTO product_materials (material_code, material_description, product_label, product_id, code_dhm, dhm_id, dhm_version, dhm_updated_at, dhm_is_deleted, dhm_payload)
-       VALUES ($1, $2, $3,
-               (SELECT p.id FROM products p
-                 WHERE UPPER(TRIM(${sqlCanonicalProductName('p.product_name')})) = UPPER(TRIM(${sqlCanonicalProductName('$3::text')}))
-                 ORDER BY p.created_at LIMIT 1),
-               $4, $5::uuid, $6, $7::timestamptz, $8, $9::jsonb)
-       ON CONFLICT (upper(trim(material_code))) DO UPDATE SET
-         code_dhm = COALESCE(EXCLUDED.code_dhm, product_materials.code_dhm),
-         dhm_id = COALESCE(EXCLUDED.dhm_id, product_materials.dhm_id),
-         dhm_version = EXCLUDED.dhm_version,
-         dhm_updated_at = EXCLUDED.dhm_updated_at,
-         dhm_is_deleted = EXCLUDED.dhm_is_deleted,
-         dhm_payload = EXCLUDED.dhm_payload,
-         material_description = COALESCE(product_materials.material_description, EXCLUDED.material_description),
-         product_label = COALESCE(product_materials.product_label, EXCLUDED.product_label),
-         product_id = CASE
-           WHEN product_materials.product_link_source = 'USER' THEN product_materials.product_id
-           ELSE COALESCE(product_materials.product_id, EXCLUDED.product_id)
-         END,
-         updated_at = CURRENT_TIMESTAMP`,
-      [
-        materialCode,
-        longName,
-        name,
-        code,
-        dhmId,
-        record.version || null,
-        record.updatedAt || null,
-        record.isDeleted,
-        JSON.stringify(record.data ?? {}),
-      ],
-    );
-  } catch (error) {
-    logger.warn('DHM commodity could not be stored at material level', { code, materialCode, error: error instanceof Error ? error.message : String(error) });
-  }
-}
-
 async function applyCommodity(record: DhmRecord): Promise<void> {
-  const name = commodityText(record.data, 'short_name') || dhmDataName(record.data);
+  let name = commodityText(record.data, 'short_name') || dhmDataName(record.data);
   const longName = commodityText(record.data, 'long_name');
   const commodityType = commodityText(record.data, 'type');
   const materialCodeRaw = commodityText(record.data, 'material_code');
@@ -111,17 +43,15 @@ async function applyCommodity(record: DhmRecord): Promise<void> {
   const uom = commodityText(record.data, 'uom');
   const code = replicaCode(record, null);
   const dhmId = asDhmUuid(record.id);
-  // The commodity of a SAP material is recorded at material level whatever happens to the broad Master Product below.
-  if (materialCodeRaw) await recordMaterialCommodity({ materialCode: materialCodeRaw, name, longName, code, dhmId, record });
   const byIdentity =
     (dhmId && (await findId(`SELECT id FROM products WHERE dhm_id = $1::uuid LIMIT 1`, [dhmId]))) ||
     (code && (await findId(`SELECT id FROM products WHERE code_dhm = $1 LIMIT 1`, [code]))) ||
     // The SAP material number is the stable identity of a product, so it comes before the name.
     (materialCodeRaw &&
       (await findId(`SELECT id FROM products WHERE upper(trim(material_code)) = upper(trim($1)) LIMIT 1`, [materialCodeRaw])));
-  // A product keeps ONE DHM link, and DHM may hold several commodities under one short_name (CPO has three materials). A record that is none of the product's linked commodity, yet
-  // names a product that IS linked to another one, is a sibling: matched by name it would take the product's dhm_id, code and material_code from the first, and swap them back on the
-  // next record, every sync. It stays at material level (product_materials) only.
+  // A Master Product row is ONE DHM commodity, and DHM may hold several under one short_name (the same name is allowed there; the material_code tells them apart). A record that is
+  // none of the row's linked commodity, yet shares its name with a row linked to ANOTHER commodity, would be matched by name and take that row's dhm_id, code and material_code, then
+  // hand them back on the next record, every sync. It gets a row of its own, named with its material code.
   if (!byIdentity && materialCodeRaw && name) {
     const sibling = await findId(
       `SELECT id FROM products
@@ -130,8 +60,8 @@ async function applyCommodity(record: DhmRecord): Promise<void> {
       [name, dhmId],
     );
     if (sibling) {
-      logger.info('DHM commodity shares its short_name with another commodity of the product: kept at material level', { code, materialCode: materialCodeRaw, name });
-      return;
+      logger.info('DHM commodity shares its short_name with another commodity: it gets a Master Product row of its own', { code, materialCode: materialCodeRaw, name });
+      name = `${name} (${materialCodeRaw})`;
     }
   }
   const existing =
