@@ -27,7 +27,7 @@ function isStaffLevel(level: string | null | undefined): boolean {
  * Build contract-level WHERE fragments for missing-ETA alert queries.
  *
  * - Non-Staff (Dept Head / Section Head / Admin / null): no plant/product/transport narrowing
- * - Staff: optional filters when user fields are populated (transport_type, group_plants, products)
+ * - Staff: optional filters when user fields are populated (transport_type, group_plants). A user's products are NOT used: the product default filter is retired.
  */
 export function buildMissingEtaAlertScopeClause(user: SessionUserPayload): MissingEtaAlertScopeClause {
   if (!isStaffLevel(user.level)) {
@@ -51,13 +51,6 @@ export function buildMissingEtaAlertScopeClause(user: SessionUserPayload): Missi
     parts.push(`UPPER(NULLIF(TRIM(${REGION_SITE}), 'Blank')) IN (${placeholders})`);
     params.push(...groupPlants);
     paramIndex += groupPlants.length;
-  }
-
-  const products = (user.products ?? []).map((p) => String(p).trim()).filter(Boolean);
-  if (products.length > 0) {
-    parts.push(`TRIM(COALESCE(c.product::text, '')) = ANY($${paramIndex}::text[])`);
-    params.push(products);
-    paramIndex += 1;
   }
 
   if (parts.length === 0) {

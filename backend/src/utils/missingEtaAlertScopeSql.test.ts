@@ -80,15 +80,14 @@ describe('missingEtaAlertScopeSql', () => {
     expect(scope.params).toEqual(['TANJUNG PURA']);
   });
 
-  it('Staff with products adds product filter', () => {
+  it('Staff products do not narrow the alerts: the product default filter is retired', () => {
     const scope = buildMissingEtaAlertScopeClause(
       baseUser({ products: ['CPO', 'PK'] }),
     );
-    expect(scope.sql).toContain('c.product');
-    expect(scope.params).toEqual([['CPO', 'PK']]);
+    expect(scope).toEqual({ sql: '', params: [] });
   });
 
-  it('Staff combines transport, plant, and product when all set', () => {
+  it('Staff combines transport and plant when both are set, and ignores products', () => {
     const scope = buildMissingEtaAlertScopeClause(
       baseUser({
         transport_type: 'LAND',
@@ -96,7 +95,8 @@ describe('missingEtaAlertScopeSql', () => {
         products: ['CPO'],
       }),
     );
-    expect(scope.params).toEqual(['LAND%', 'PLANT-B', ['CPO']]);
+    expect(scope.sql).not.toContain('c.product');
+    expect(scope.params).toEqual(['LAND%', 'PLANT-B']);
   });
 
   it('roleMaySeeMissingEtaBell allows logistics/trading/admin/management', () => {

@@ -277,12 +277,15 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     const normRole = String(role || '').toUpperCase();
     const normLevel = String(level || '').trim();
     const requiresTransport = normRole === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(normLevel);
+    // LOGISTICS Section Head/Staff/Admin must carry a transport type: it picks the permission scope (rolePermissionScope.ts), and an account with none would match only
+    // the unscoped permission rows. The Add User form no longer asks, so nothing sent means ALL; a value that is sent must still be valid.
+    let nextTransportType: string | null = transport_type ? String(transport_type).toUpperCase() : null;
     if (requiresTransport) {
-      const validTransport = ['SEA', 'LAND', 'ALL', 'MIX'];
-      if (!validTransport.includes(String(transport_type || '').toUpperCase())) {
+      if (!nextTransportType) nextTransportType = 'ALL';
+      else if (!['SEA', 'LAND', 'ALL', 'MIX'].includes(nextTransportType)) {
         res.status(400).json({
           success: false,
-          error: { message: 'Transport Type is required for LOGISTICS with Section Head/Staff/Admin level' },
+          error: { message: 'Invalid Transport Type' },
         });
         return;
       }
@@ -332,7 +335,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
         phone,
         department,
         level || null,
-        transport_type ? String(transport_type).toUpperCase() : null,
+        nextTransportType,
         null,
       ]
     );
@@ -459,12 +462,16 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const requiresTransport = nextRole === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(nextLevel);
+    let nextTransportType: string | null = transport_type ? String(transport_type).toUpperCase() : null;
     if (requiresTransport) {
-      const t = String(transport_type ?? existingUser.rows[0].transport_type ?? '').toUpperCase();
-      if (!['SEA', 'LAND', 'ALL', 'MIX'].includes(t)) {
+      const t = nextTransportType ?? String(existingUser.rows[0].transport_type ?? '').toUpperCase();
+      if (!t) {
+        // Nothing sent and nothing on file (a role or level change made one necessary): ALL, as on create.
+        nextTransportType = 'ALL';
+      } else if (!['SEA', 'LAND', 'ALL', 'MIX'].includes(t)) {
         res.status(400).json({
           success: false,
-          error: { message: 'Transport Type is required for LOGISTICS with Section Head/Staff/Admin level' },
+          error: { message: 'Invalid Transport Type' },
         });
         return;
       }
@@ -489,7 +496,10 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       }
     }
 
-    const shouldSyncAssociations = plants !== undefined || products !== undefined;
+    // Plants and products are synced independently: the Users page no longer sends products (the product default filter is retired), and saving a user's
+    // Region/Plant must not wipe a product list an older version of the page set.
+    const shouldSyncPlants = plants !== undefined;
+    const shouldSyncProducts = products !== undefined;
     const scopedPlants = nextRoleUsesRegionScope ? (plants ?? []) : [];
     const scopedProducts = ['LOGISTICS', 'TRADING'].includes(nextRole)
       ? (products ?? [])
@@ -498,14 +508,14 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     await client.query('BEGIN');
     transactionStarted = true;
 
-    let savedPlants: string[] | undefined;
-    let savedProducts: string[] | undefined;
     let plantSummary: string | null | undefined;
 
-    if (shouldSyncAssociations) {
-      savedPlants = await syncUserRegionSites(client, id, scopedPlants);
-      savedProducts = await syncUserProducts(client, id, scopedProducts);
+    if (shouldSyncPlants) {
+      const savedPlants = await syncUserRegionSites(client, id, scopedPlants);
       plantSummary = legacyPlantSummary(savedPlants);
+    }
+    if (shouldSyncProducts) {
+      await syncUserProducts(client, id, scopedProducts);
     }
 
     const updateParams = [
@@ -516,13 +526,13 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       phone,
       department,
       level ?? null,
-      transport_type ? String(transport_type).toUpperCase() : null,
+      nextTransportType,
       is_active,
       id,
     ];
 
-    const plantClause = shouldSyncAssociations ? 'plant = $11,' : '';
-    if (shouldSyncAssociations) {
+    const plantClause = shouldSyncPlants ? 'plant = $11,' : '';
+    if (shouldSyncPlants) {
       updateParams.push(plantSummary);
     }
 
@@ -548,20 +558,14 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
 
     logger.info(`User updated by ${req.user?.username}: ${normalizedEmail ?? existingUser.rows[0].email}`);
 
+    // Read the associations back whichever of them this request changed, so the response always shows what is stored.
     const responseData = { ...result.rows[0] };
-    if (savedPlants) {
-      responseData.plants = savedPlants;
-      responseData.group_plants = savedPlants;
-      responseData.products = savedProducts ?? [];
-      responseData.plant = plantSummary;
-    } else {
-      const associations = await fetchUserAssociations([id]);
-      const enriched = enrichUserRow(result.rows[0], associations);
-      responseData.plants = enriched.plants;
-      responseData.group_plants = enriched.group_plants;
-      responseData.products = enriched.products;
-      responseData.plant = enriched.plant;
-    }
+    const associations = await fetchUserAssociations([id]);
+    const enriched = enrichUserRow(result.rows[0], associations);
+    responseData.plants = enriched.plants;
+    responseData.group_plants = enriched.group_plants;
+    responseData.products = enriched.products;
+    responseData.plant = enriched.plant;
 
     res.json({
       success: true,

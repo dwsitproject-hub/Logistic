@@ -3,23 +3,33 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Shield, ArrowLeft, Save, CheckCircle, AlertCircle, Plus } from 'lucide-react'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { ArrowLeft, CheckCircle, AlertCircle, Plus } from 'lucide-react'
 import api from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { deriveRoleCode, isValidRoleCode } from '@/lib/roleCode'
+import { RoleList } from '@/components/roles/RoleList'
+import { RoleHeader } from '@/components/roles/RoleHeader'
+import { PermissionMatrix } from '@/components/roles/PermissionMatrix'
+import { RoleSaveBar } from '@/components/roles/RoleSaveBar'
+import { countUsersByRole } from '@/lib/userDirectory'
+import {
+  PERMISSION_ACTION_FIELDS,
+  countPermissionChanges,
+  type PermissionField,
+  type PermissionRow,
+} from '@/lib/rolePermissionsView'
 
 interface Role {
   id: string
@@ -29,34 +39,11 @@ interface Role {
   uses_region_scope?: boolean
 }
 
-interface Permission {
-  id: string
-  permission_key: string
-  permission_name: string
-  description: string
-  category: string
-  can_view?: boolean
-  can_create?: boolean
-  can_edit?: boolean
-  can_delete?: boolean
-}
-
-interface GroupedPermissions {
-  [category: string]: Permission[]
-}
+type Permission = PermissionRow
 
 const LEVEL_OPTIONS = ['Dept Head', 'Section Head', 'Staff', 'Admin'] as const
 const DEFAULT_LEVEL = LEVEL_OPTIONS[2] // Staff
 const TRANSPORT_OPTIONS = ['SEA', 'LAND', 'ALL', 'MIX'] as const
-
-type PermissionField = 'can_view' | 'can_create' | 'can_edit' | 'can_delete'
-
-const PERMISSION_ACTION_FIELDS: PermissionField[] = [
-  'can_view',
-  'can_create',
-  'can_edit',
-  'can_delete',
-]
 
 function sortRolesForEditor(roles: Role[]): Role[] {
   const weight: Record<string, number> = {
@@ -96,9 +83,12 @@ function getScopeHint(roleName?: string): string {
 export default function RolesPage() {
   const router = useRouter()
   const [roles, setRoles] = useState<Role[]>([])
+  const [roleCounts, setRoleCounts] = useState<Record<string, number> | null>(null)
   const [selectedRoleId, setSelectedRoleId] = useState<string>('')
   const [selectedRole, setSelectedRole] = useState<Role | null>(null)
   const [permissions, setPermissions] = useState<Permission[]>([])
+  /** What was last loaded or saved for this scope: the unsaved-changes count compares against it. */
+  const [savedPermissions, setSavedPermissions] = useState<Permission[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -116,7 +106,9 @@ export default function RolesPage() {
 
   const sortedRoles = sortRolesForEditor(roles)
   const selectedRoleFromList = sortedRoles.find((role) => role.id === selectedRoleId) ?? null
-  const transportAppliesMostlyToLogistics = selectedRoleFromList?.role_name === 'LOGISTICS'
+  const activeRole = selectedRoleFromList ?? selectedRole
+  const changeCount = countPermissionChanges(savedPermissions, permissions)
+  const transportLabel = selectedTransportType === 'all' ? 'All Transport' : selectedTransportType
 
   useEffect(() => {
     // Check if user is admin
@@ -141,18 +133,36 @@ export default function RolesPage() {
     const requestId = ++fetchRequestIdRef.current
     setPermissionsLoading(true)
     setPermissions([])
+    setSavedPermissions([])
     setSelectedRole(selectedRoleFromList)
     setError('')
 
     void fetchRolePermissions(selectedRoleId, requestId)
   }, [selectedRoleId, selectedLevel, selectedTransportType, selectedRoleFromList?.id])
 
+  // Leaving the page with unsaved ticks would lose them without a word.
+  useEffect(() => {
+    if (changeCount === 0) return
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [changeCount])
+
+  /** Run `apply` unless it would throw away unsaved ticks the user then declines to lose. */
+  const guardUnsaved = (apply: () => void) => {
+    if (changeCount > 0 && !window.confirm('Discard the unsaved changes for this role?')) return
+    apply()
+  }
+
   const fetchRoles = async (selectId?: string) => {
     try {
       const response = await api.get('/roles')
       const rolesData = sortRolesForEditor(response.data.data)
       setRoles(rolesData)
-      
+
       if (rolesData.length > 0) {
         const preferred = selectId ? rolesData.find((role: Role) => role.id === selectId) : undefined
         const defaultRole = preferred ?? rolesData.find((role: Role) => role.role_name !== 'ADMIN') ?? rolesData[0]
@@ -163,6 +173,14 @@ export default function RolesPage() {
       setError('Failed to load roles')
     } finally {
       setLoading(false)
+    }
+
+    // Head counts per role: nice to have, so a failure only leaves the numbers out.
+    try {
+      const usersResponse = await api.get('/users')
+      setRoleCounts(countUsersByRole(usersResponse.data?.data ?? []))
+    } catch {
+      setRoleCounts(null)
     }
   }
 
@@ -209,7 +227,9 @@ export default function RolesPage() {
       if (roleData.id !== roleId) return
 
       setSelectedRole(roleData)
-      setPermissions(roleData.permissions || [])
+      const loaded: Permission[] = roleData.permissions || []
+      setPermissions(loaded)
+      setSavedPermissions(loaded)
     } catch (err) {
       if (requestId !== fetchRequestIdRef.current) return
       console.error('Error fetching role permissions:', err)
@@ -221,7 +241,7 @@ export default function RolesPage() {
     }
   }
 
-  const updatePermission = (permissionId: string, field: string, value: boolean) => {
+  const updatePermission = (permissionId: string, field: PermissionField, value: boolean) => {
     setPermissions((prev) =>
       prev.map((perm) =>
         perm.id === permissionId ? { ...perm, [field]: value } : perm
@@ -242,21 +262,14 @@ export default function RolesPage() {
     )
   }
 
-  const isAllPermissionActionsChecked = (permission: Permission): boolean =>
-    PERMISSION_ACTION_FIELDS.every((field) => Boolean(permission[field]))
-
-  const isAnyPermissionActionChecked = (permission: Permission): boolean =>
-    PERMISSION_ACTION_FIELDS.some((field) => Boolean(permission[field]))
-
   const handleSave = async () => {
     if (!selectedRoleId || permissionsLoading) return
 
-    const roleLabel = selectedRoleFromList?.display_name ?? selectedRole?.display_name ?? 'selected role'
+    const roleLabel = activeRole?.display_name ?? 'selected role'
     const levelLabel = selectedLevel
-    const transportLabel = selectedTransportType === 'all' ? 'All Transport' : selectedTransportType
     const confirmed = window.confirm(
       `Save permission changes for:\n\n` +
-        `Role: ${roleLabel} (${selectedRoleFromList?.role_name ?? selectedRole?.role_name ?? '?'})\n` +
+        `Role: ${roleLabel} (${activeRole?.role_name ?? '?'})\n` +
         `Level: ${levelLabel}\n` +
         `Transport: ${transportLabel}\n\n` +
         `This only updates permissions for this exact scope.`
@@ -291,7 +304,7 @@ export default function RolesPage() {
       const requestId = ++fetchRequestIdRef.current
       setPermissionsLoading(true)
       await fetchRolePermissions(selectedRoleId, requestId)
-      
+
       setTimeout(() => setSuccess(''), 5000)
     } catch (err: any) {
       setError(err.response?.data?.error?.message || 'Failed to update permissions')
@@ -299,52 +312,6 @@ export default function RolesPage() {
       setSaving(false)
     }
   }
-
-  const groupPermissionsByCategory = (perms: Permission[]): GroupedPermissions => {
-    return perms.reduce((acc: GroupedPermissions, perm) => {
-      const category = perm.category || 'other'
-      if (!acc[category]) {
-        acc[category] = []
-      }
-      acc[category].push(perm)
-      return acc
-    }, {})
-  }
-
-  const sortPermissionsInCategory = (perms: Permission[]): Permission[] =>
-    [...perms].sort((a, b) => {
-      const keyOrder = (key: string) => {
-        if (key === 'page.commercial_documents') return 'page.commercial_documents'
-        if (key === 'data.commercial_documents') return 'data.commercial_documents'
-        return key
-      }
-      return keyOrder(a.permission_key).localeCompare(keyOrder(b.permission_key))
-        || a.permission_name.localeCompare(b.permission_name)
-    })
-
-  const getCategoryTitle = (category: string): string => {
-    const titles: Record<string, string> = {
-      page: 'Page Access',
-      data: 'Data Access',
-      dashboard: 'Dashboard Widgets',
-      action: 'Actions',
-      other: 'Other Permissions',
-    }
-    return titles[category] || category
-  }
-
-  const getCategoryIcon = (category: string): string => {
-    const icons: Record<string, string> = {
-      page: '📄',
-      data: '💾',
-      dashboard: '📊',
-      action: '⚡',
-      other: '🔧',
-    }
-    return icons[category] || '🔧'
-  }
-
-  const groupedPermissions = groupPermissionsByCategory(permissions)
 
   if (loading) {
     return (
@@ -358,84 +325,24 @@ export default function RolesPage() {
 
   return (
     <Layout>
-      <div className="space-y-6">
+      <div className="space-y-5">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="flex items-center gap-3 mb-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => router.push('/users')}
-              >
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Users
-              </Button>
-            </div>
-            <p className="text-gray-600">
-              Configure what each role can view, edit, and access in the system
+            <Button variant="outline" size="sm" onClick={() => guardUnsaved(() => router.push('/users'))}>
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back to Users
+            </Button>
+            <h2 className="mt-3 text-lg font-semibold text-gray-900">Roles and access</h2>
+            <p className="mt-0.5 text-sm text-gray-500">
+              Pick a role, then choose what it can view, create, edit and delete.
             </p>
           </div>
-          <Button onClick={() => setShowAddRole((open) => !open)} variant={showAddRole ? 'outline' : 'default'}>
+          <Button onClick={() => setShowAddRole(true)}>
             <Plus className="h-4 w-4 mr-2" />
-            {showAddRole ? 'Close' : 'Add Role'}
+            Add Role
           </Button>
         </div>
-
-        {showAddRole && (
-          <Card>
-            <CardHeader>
-              <CardTitle>New role</CardTitle>
-              <CardDescription>
-                A new role starts with no access. After creating it, choose the pages it may open and save. The code cannot
-                be changed later.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="new_role_name">Role name *</Label>
-                  <Input
-                    id="new_role_name"
-                    value={newRoleName}
-                    onChange={(e) => setNewRoleName(e.target.value)}
-                    placeholder="e.g. AR UPSTREAM"
-                    maxLength={100}
-                  />
-                  <p className="text-xs text-gray-500">
-                    Code: <span className="font-mono">{newRoleCode || '-'}</span>
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="new_role_description">Description</Label>
-                  <Input
-                    id="new_role_description"
-                    value={newRoleDescription}
-                    onChange={(e) => setNewRoleDescription(e.target.value)}
-                    placeholder="What this role is for"
-                  />
-                </div>
-              </div>
-              <label className="flex items-start gap-2 text-sm cursor-pointer">
-                <Checkbox
-                  checked={newRoleRegionScope}
-                  onCheckedChange={(checked) => setNewRoleRegionScope(checked === true)}
-                />
-                <span>
-                  Users of this role can be given a Region/Plant
-                  <span className="block text-xs text-gray-500">
-                    It becomes their default filter on the pages they open. They can still clear it.
-                  </span>
-                </span>
-              </label>
-              <div className="flex justify-end">
-                <Button onClick={() => void handleCreateRole()} disabled={creatingRole || !isValidRoleCode(newRoleCode)}>
-                  {creatingRole ? 'Creating...' : 'Create role'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
 
         {/* Alerts */}
         {error && (
@@ -452,277 +359,129 @@ export default function RolesPage() {
           </Alert>
         )}
 
-        {/* Role Selector */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Select Role to Configure</CardTitle>
-            <CardDescription>
-              Choose a role and level (required). Transport defaults to All unless you need a specific type.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-4 items-end">
-              <div className="flex-1">
-                <Select value={selectedRoleId} onValueChange={setSelectedRoleId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a role" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sortedRoles.map((role) => (
-                      <SelectItem key={role.id} value={role.id}>
-                        <div className="flex items-center gap-2">
-                          <Shield className="h-4 w-4" />
-                          <span className="font-medium">{role.display_name}</span>
-                          <span className="text-sm text-gray-500">({role.role_name})</span>
-                          {role.role_name === 'ADMIN' ? (
-                            <span className="text-xs text-amber-600">full access</span>
-                          ) : null}
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="w-52">
-                <Select value={selectedLevel} onValueChange={setSelectedLevel}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select level" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {LEVEL_OPTIONS.map((level) => (
-                      <SelectItem key={level} value={level}>
-                        {level}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="w-44">
-                <Select value={selectedTransportType} onValueChange={setSelectedTransportType}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="All Transport" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Transport (unscoped)</SelectItem>
-                    {TRANSPORT_OPTIONS.map((transport) => (
-                      <SelectItem key={transport} value={transport}>
-                        {transport}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={handleSave} disabled={saving || permissionsLoading || !selectedRoleId}>
-                <Save className="h-4 w-4 mr-2" />
-                {saving ? 'Saving...' : permissionsLoading ? 'Loading...' : 'Save Changes'}
-              </Button>
+        <div className="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)]">
+          <RoleList
+            roles={sortedRoles}
+            selectedId={selectedRoleId}
+            onSelect={(id) => guardUnsaved(() => setSelectedRoleId(id))}
+            counts={roleCounts}
+          />
+
+          {activeRole ? (
+            <section className="min-w-0 overflow-hidden rounded-xl border border-gray-200 bg-white" aria-label="Permissions">
+              <RoleHeader
+                displayName={activeRole.display_name}
+                roleName={activeRole.role_name}
+                description={activeRole.description}
+                usesRegionScope={Boolean(activeRole.uses_region_scope)}
+                isAdmin={activeRole.role_name === 'ADMIN'}
+                level={selectedLevel}
+                onLevel={(value) => guardUnsaved(() => setSelectedLevel(value))}
+                levelOptions={LEVEL_OPTIONS}
+                transport={selectedTransportType}
+                onTransport={(value) => guardUnsaved(() => setSelectedTransportType(value))}
+                transportOptions={TRANSPORT_OPTIONS}
+                hint={getScopeHint(activeRole.role_name)}
+                loading={permissionsLoading}
+              />
+              <PermissionMatrix
+                permissions={permissions}
+                loading={permissionsLoading}
+                roleLabel={activeRole.display_name}
+                onChange={updatePermission}
+                onSetAll={setAllPermissionActions}
+              />
+              <RoleSaveBar
+                changeCount={changeCount}
+                scopeLabel={`${activeRole.display_name}, ${selectedLevel}, ${transportLabel}`}
+                saving={saving}
+                loading={permissionsLoading}
+                onSave={() => void handleSave()}
+                onDiscard={() => setPermissions(savedPermissions)}
+              />
+            </section>
+          ) : (
+            <div className="rounded-xl border border-gray-200 bg-white px-5 py-16 text-center text-sm text-gray-500">
+              Pick a role on the left.
             </div>
+          )}
+        </div>
 
-            {(selectedRoleFromList || selectedRole) && (
-              <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                <h3 className="font-semibold text-blue-900">
-                  {selectedRoleFromList?.display_name ?? selectedRole?.display_name}
-                </h3>
-                <p className="text-sm text-blue-700 mt-1">
-                  {selectedRoleFromList?.description ?? selectedRole?.description}
-                </p>
-                <p className="text-xs text-blue-700 mt-2">
-                  Editing scope:{' '}
-                  <span className="font-medium">
-                    Role={selectedRoleFromList?.role_name ?? selectedRole?.role_name}
-                  </span>
-                  {' · '}
-                  <span className="font-medium">Level={selectedLevel}</span>
-                  {' · '}
-                  <span className="font-medium">
-                    Transport={selectedTransportType === 'all' ? 'All Transport' : selectedTransportType}
-                  </span>
-                </p>
-                {permissionsLoading ? (
-                  <p className="text-xs text-blue-600 mt-2">Loading permissions for this scope…</p>
-                ) : (
-                  <p className="text-xs text-blue-600 mt-2">
-                    {getScopeHint(selectedRoleFromList?.role_name ?? selectedRole?.role_name)}
-                    {!transportAppliesMostlyToLogistics ? (
-                      <span className="block mt-1 text-blue-500">
-                        Transport filter is optional for {selectedRoleFromList?.display_name ?? 'this role'} — leave as All unless you need a transport-specific override.
-                      </span>
-                    ) : null}
-                  </p>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Permissions */}
-        {(selectedRoleFromList || selectedRole) && (
-          <div className="space-y-4">
-            {permissionsLoading ? (
-              <Card>
-                <CardContent className="py-12 text-center text-gray-500">
-                  Loading permissions…
-                </CardContent>
-              </Card>
-            ) : null}
-            {Object.entries(groupedPermissions).map(([category, perms]) => (
-              <Card key={category}>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <span>{getCategoryIcon(category)}</span>
-                    {getCategoryTitle(category)}
-                  </CardTitle>
-                  <CardDescription>
-                    Configure {category} permissions for{' '}
-                    {selectedRoleFromList?.display_name ?? selectedRole?.display_name}
-                    {category === 'page' ? (
-                      <span className="block mt-1 text-gray-500">
-                        Includes <strong>Commercial Documents</strong> (<code className="text-xs">page.commercial_documents</code>) for contract payment document access.
-                      </span>
-                    ) : null}
-                    {category === 'data' ? (
-                      <span className="block mt-1 text-gray-500">
-                        <strong>Commercial Documents Data</strong> (<code className="text-xs">data.commercial_documents</code>) controls file management on that page (Delete).
-                        <strong> Commercial Documents Upload: …</strong> (<code className="text-xs">data.commercial_documents.upload.*</code>) decides, per document type, which role
-                        may upload it - tick Create (or Edit) for the role, level and transport that may.
-                      </span>
-                    ) : null}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {sortPermissionsInCategory(perms).map((permission) => (
-                      <div
-                        key={permission.id}
-                        className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
-                      >
-                        <div className="flex-1">
-                          <div className="font-medium">{permission.permission_name}</div>
-                          <div className="text-sm text-gray-500 mt-1">
-                            {permission.description}
-                          </div>
-                          <div className="text-xs text-gray-400 mt-1 font-mono">
-                            {permission.permission_key}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-4 ml-4 shrink-0">
-                          <div className="flex gap-6">
-                            <label className={`flex items-center gap-2 ${permissionsLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
-                              <Checkbox
-                                checked={permission.can_view || false}
-                                disabled={permissionsLoading}
-                                onCheckedChange={(checked) =>
-                                  updatePermission(permission.id, 'can_view', checked as boolean)
-                                }
-                              />
-                              <span className="text-sm">View</span>
-                            </label>
-
-                            <label className={`flex items-center gap-2 ${permissionsLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
-                              <Checkbox
-                                checked={permission.can_create || false}
-                                disabled={permissionsLoading}
-                                onCheckedChange={(checked) =>
-                                  updatePermission(permission.id, 'can_create', checked as boolean)
-                                }
-                              />
-                              <span className="text-sm">Create</span>
-                            </label>
-
-                            <label className={`flex items-center gap-2 ${permissionsLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
-                              <Checkbox
-                                checked={permission.can_edit || false}
-                                disabled={permissionsLoading}
-                                onCheckedChange={(checked) =>
-                                  updatePermission(permission.id, 'can_edit', checked as boolean)
-                                }
-                              />
-                              <span className="text-sm">Edit</span>
-                            </label>
-
-                            <label className={`flex items-center gap-2 ${permissionsLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
-                              <Checkbox
-                                checked={permission.can_delete || false}
-                                disabled={permissionsLoading}
-                                onCheckedChange={(checked) =>
-                                  updatePermission(permission.id, 'can_delete', checked as boolean)
-                                }
-                              />
-                              <span className="text-sm">Delete</span>
-                            </label>
-                          </div>
-
-                          <div className="flex flex-col items-center gap-1 border-l pl-4">
-                            <span className="text-xs text-gray-500">Row</span>
-                            <div className="flex items-center gap-1">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                disabled={permissionsLoading || isAllPermissionActionsChecked(permission)}
-                                onClick={() => setAllPermissionActions(permission.id, true)}
-                              >
-                                All
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                disabled={permissionsLoading || !isAnyPermissionActionChecked(permission)}
-                                onClick={() => setAllPermissionActions(permission.id, false)}
-                              >
-                                None
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-
-        {/* Info Card */}
-        <Card className="border-blue-200 bg-blue-50">
-          <CardContent className="pt-6">
-            <div className="flex gap-3">
-              <AlertCircle className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-blue-900">
-                <p className="font-semibold mb-1">Permission Guidelines:</p>
-                <ul className="list-disc list-inside space-y-1 text-blue-800">
-                  <li><strong>View:</strong> User can see this page or data</li>
-                  <li><strong>Create:</strong> User can add new records</li>
-                  <li><strong>Edit:</strong> User can modify existing records</li>
-                  <li><strong>Delete:</strong> User can remove records</li>
-                  <li>
-                    <strong>Row actions:</strong> Use <strong>All</strong> / <strong>None</strong> on each permission row to select or clear View, Create, Edit, and Delete for that item only.
-                  </li>
-                  <li>
-                    <strong>Scope:</strong> Each permission scope is Role + one Level + Transport.
-                    Level is required (Dept Head, Section Head, Staff, or Admin). Transport can be All Transport or a specific type (SEA, LAND, ALL, MIX).
-                  </li>
-                  <li>
-                    <strong>Commercial Documents:</strong> Enable <code className="text-xs">page.commercial_documents</code> (View) and{' '}
-                    <code className="text-xs">data.commercial_documents</code> (Delete) under Page Access and Data Access. Who may upload each document type is set
-                    by <code className="text-xs">Commercial Documents Upload: …</code> (one row per type, Create/Edit); a role without that row cannot upload that type.
-                    LOGISTICS Staff scope should remain denied unless explicitly granted.
-                  </li>
-                </ul>
-                <p className="mt-2">
-                  Dashboard widgets control which statistics and charts appear on the user's dashboard.
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <details className="group rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm text-gray-700">
+          <summary className="cursor-pointer select-none font-medium text-gray-900">How permissions work</summary>
+          <ul className="mt-3 list-disc space-y-1.5 pl-5 text-gray-600">
+            <li><strong>View:</strong> the user can see this page or data. <strong>Create:</strong> add new records. <strong>Edit:</strong> change existing records. <strong>Delete:</strong> remove records.</li>
+            <li><strong>Row:</strong> All ticks all four boxes of that permission; None clears them. It touches that row only.</li>
+            <li>
+              <strong>Scope:</strong> each permission set belongs to one Role + one Level + a Transport. Level is required (Dept Head, Section Head, Staff or
+              Admin). Transport can be All Transport or a specific type (SEA, LAND, ALL, MIX). Saving only updates the scope shown above.
+            </li>
+            <li>
+              <strong>Commercial Documents:</strong> turn on <code className="text-xs">page.commercial_documents</code> (View) under Pages and{' '}
+              <code className="text-xs">data.commercial_documents</code> (Delete) under Data. Who may upload each document type is set by{' '}
+              <code className="text-xs">Commercial Documents Upload: ...</code> (one row per type, Create/Edit); a role without that row cannot upload that
+              type. LOGISTICS Staff should stay denied unless explicitly granted.
+            </li>
+            <li>Dashboard widgets control which statistics and charts appear on the user&apos;s dashboard.</li>
+          </ul>
+        </details>
       </div>
+
+      <Dialog open={showAddRole} onOpenChange={setShowAddRole}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>New role</DialogTitle>
+            <DialogDescription>
+              A new role starts with no access. After creating it, choose the pages it may open and save. The code cannot be changed later.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="new_role_name">Role name *</Label>
+              <Input
+                id="new_role_name"
+                value={newRoleName}
+                onChange={(e) => setNewRoleName(e.target.value)}
+                placeholder="e.g. AR UPSTREAM"
+                maxLength={100}
+              />
+              <p className="text-xs text-gray-500">
+                Code: <span className="font-mono">{newRoleCode || '-'}</span>
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new_role_description">Description</Label>
+              <Input
+                id="new_role_description"
+                value={newRoleDescription}
+                onChange={(e) => setNewRoleDescription(e.target.value)}
+                placeholder="What this role is for"
+              />
+            </div>
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <Checkbox
+                checked={newRoleRegionScope}
+                onCheckedChange={(checked) => setNewRoleRegionScope(checked === true)}
+              />
+              <span>
+                Users of this role can be given a Region/Plant
+                <span className="block text-xs text-gray-500">
+                  It becomes their default filter on the pages they open. They can still clear it.
+                </span>
+              </span>
+            </label>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setShowAddRole(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleCreateRole()} disabled={creatingRole || !isValidRoleCode(newRoleCode)}>
+              <Plus className="mr-2 h-4 w-4" aria-hidden />
+              {creatingRole ? 'Creating...' : 'Create role'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   )
 }
-
