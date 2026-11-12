@@ -14,9 +14,11 @@ import {
   getCommercialDocumentsSummary,
   getCommercialPoCreatorsStatus,
   getMyCommercialCreator,
+  getUserCreatorSetting,
   getSapUsers,
   importCommercialPoCreators,
   importSapUsers,
+  setUserCreatorSetting,
   syncCommercialPoCreators,
   uploadCommercialDocument,
   viewCommercialDocument,
@@ -54,6 +56,8 @@ router.get(
 router.get('/completeness-by-creator', authenticateToken, canViewCompleteness, getCommercialDocumentsCompletenessByCreator);
 router.post('/po-creators', authenticateToken, authorize('ADMIN'), importCommercialPoCreators);
 router.get('/sap-users', authenticateToken, authorize('ADMIN'), getSapUsers);
+router.get('/users/:id/creator', authenticateToken, authorize('ADMIN'), getUserCreatorSetting);
+router.put('/users/:id/creator', authenticateToken, authorize('ADMIN'), setUserCreatorSetting);
 router.post('/sap-users', authenticateToken, authorize('ADMIN'), importSapUsers);
 router.get('/po-creators/status', authenticateToken, authorize('ADMIN'), getCommercialPoCreatorsStatus);
 router.post('/po-creators/sync', authenticateToken, authorize('ADMIN'), syncCommercialPoCreators);
