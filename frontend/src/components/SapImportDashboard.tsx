@@ -14,7 +14,7 @@ import {
   type BulkUploadStatusResult,
 } from '@/components/BulkUploadStatusModal';
 import { SapImportDetailModal } from '@/components/SapImportDetailModal';
-import SapFolderSyncControl from '@/components/SapFolderSyncControl';
+import { SapFolderSyncButton, SapFolderSyncStatus, useSapFolderSync } from '@/components/SapFolderSyncControl';
 import api from '../lib/api';
 import { canCreatePermission, usePermissions } from '@/components/PermissionsContext';
 import {
@@ -460,6 +460,7 @@ const SapImportDashboard: React.FC = () => {
   };
 
   const summary = useMemo(() => summarizeSapImports(imports), [imports]);
+  const folderSync = useSapFolderSync(() => void loadImports(true));
 
   if (loading) {
     return (
@@ -481,15 +482,12 @@ const SapImportDashboard: React.FC = () => {
         style={{ display: 'none' }}
       />
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900">Logistics data imports</h2>
-          <p className="mt-0.5 text-sm text-gray-500">
-            SAP MASTER v2: upload a file, or let the schedule pull it from the SAP folder.
-          </p>
-        </div>
-        <div className="flex items-start gap-2">
-          <SapFolderSyncControl canSync={canUploadSap} onTick={() => void loadImports(true)} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-gray-500">
+          SAP MASTER v2: upload a file, or let the schedule pull it from the SAP folder.
+        </p>
+        <div className="flex items-center gap-2">
+          <SapFolderSyncButton folderSync={folderSync} canSync={canUploadSap} />
           {canUploadSap ? (
             <Button size="sm" onClick={handleStartImport} disabled={importing}>
               {importing ? (
@@ -507,6 +505,8 @@ const SapImportDashboard: React.FC = () => {
           ) : null}
         </div>
       </div>
+
+      <SapFolderSyncStatus folderSync={folderSync} />
 
       {!canUploadSap ? (
         <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-600">
