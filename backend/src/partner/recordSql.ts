@@ -148,7 +148,9 @@ export const PARTNER_LINES_SQL = `
     c.unit_price,
     c.currency,
     c.contract_value,
-    pc.code AS product_code,
+    -- The commodity of the contract's SAP MATERIAL first (product_materials: its own DataHub code), the broad product's by name when the contract has no material or the material
+    -- has no code yet; the name stays the broad product's (DHM's short_name). A material whose commodity is deleted in DHM gives NO code, as for JPS, not the product's.
+    CASE WHEN pm.has_code THEN pm.code ELSE pc.code END AS product_code,
     pc.name AS product_name,
     pl.code AS plant_dhm_code,
     pl.name AS plant_name
@@ -156,6 +158,15 @@ export const PARTNER_LINES_SQL = `
   JOIN shipments s ON s.id = g.shipment_id
   JOIN contracts c ON c.id = s.contract_id
   LEFT JOIN contract_stos cs ON cs.contract_id = c.id AND UPPER(TRIM(cs.sto_number)) = UPPER(g.sto_key)
+  LEFT JOIN LATERAL (
+    SELECT TRUE AS has_code, CASE WHEN COALESCE(m.dhm_is_deleted, FALSE) THEN NULL ELSE NULLIF(TRIM(m.code_dhm), '') END AS code
+      FROM product_materials m
+     WHERE NULLIF(TRIM(c.material_code), '') IS NOT NULL
+       AND UPPER(TRIM(m.material_code)) = UPPER(TRIM(c.material_code))
+       AND NULLIF(TRIM(m.code_dhm), '') IS NOT NULL
+     ORDER BY COALESCE(m.dhm_is_deleted, FALSE), m.code_dhm
+     LIMIT 1
+  ) pm ON TRUE
   LEFT JOIN LATERAL (
     SELECT CASE WHEN COALESCE(p.dhm_is_deleted, FALSE) THEN NULL ELSE NULLIF(TRIM(p.code_dhm), '') END AS code, p.product_name AS name
       FROM products p
