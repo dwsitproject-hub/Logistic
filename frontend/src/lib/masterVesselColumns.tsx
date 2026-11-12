@@ -111,7 +111,7 @@ const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
   dhm_code: 132,
   pair_code: 104,
   vessel_name: 176,
-  klip_transaction: 120,
+  klip_transaction: 72,
   sap_vendor_code: 120,
   vessel_owner: 160,
   vessel_capacity_mt: 112,
@@ -159,7 +159,7 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
   textColumn('vessel_name', 'Nama Vessel'),
   {
     id: 'klip_transaction',
-    label: 'Klip Transaction',
+    label: 'In KLIP',
     getCellText: (row) => getMasterVesselCellText('klip_transaction', row),
     render: (row) => masterVesselCell(<KlipTransactionBadge value={row.klip_transaction} />),
   },
