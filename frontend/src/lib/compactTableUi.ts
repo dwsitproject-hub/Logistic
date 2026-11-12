@@ -33,6 +33,9 @@ export function compactTableActionsColWidthPx(iconCount: number): number {
 
 export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = compactTableActionsColWidthPx(3)
 
+/** An icon-only status column (DHM status, Klip transaction) is as wide as an Actions column with one icon, so every master table has the same one. Keep in step with .klip-op-col--icon in globals.css. */
+export const COMPACT_TABLE_ICON_COL_WIDTH_PX = compactTableActionsColWidthPx(1)
+
 export const COMPACT_TABLE_ACTIONS_HEADER_CLASS =
   'klip-op-col--actions text-center align-middle font-semibold whitespace-nowrap px-2 py-1.5'
 

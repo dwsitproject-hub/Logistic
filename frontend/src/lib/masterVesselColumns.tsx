@@ -111,7 +111,7 @@ const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
   dhm_code: 132,
   pair_code: 104,
   vessel_name: 176,
-  klip_transaction: 72,
+  klip_transaction: 56,
   sap_vendor_code: 120,
   vessel_owner: 160,
   vessel_capacity_mt: 112,

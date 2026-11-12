@@ -20,6 +20,7 @@ import {
   LIST_PAGE_TABLE_HEADER_ROW_CLASS,
   compactTableColWidthCss,
   resolveCompactColumnWidthPx,
+  COMPACT_TABLE_ICON_COL_WIDTH_PX,
 } from '@/lib/compactTableUi'
 import { cn } from '@/lib/utils'
 import { MasterCodeBadge, masterCodeKind } from '@/components/shared/MasterCodeBadge'
@@ -173,12 +174,15 @@ export function MasterListCompactTable<T>({
             <colgroup>
               {orderedColumns.map((col) => {
                 const hugs = masterListColumnHugsContent(col.id)
+                const isIcon = col.id === 'dhm_status'
                 return (
                   <col
                     key={col.id}
-                    className={hugs ? 'klip-master-col-hug' : 'klip-master-col-grow'}
+                    className={isIcon ? 'klip-op-col--icon' : hugs ? 'klip-master-col-hug' : 'klip-master-col-grow'}
                     style={
-                      hugs
+                      isIcon
+                        ? { width: COMPACT_TABLE_ICON_COL_WIDTH_PX }
+                        : hugs
                         ? {
                             width: fitContent
                               ? '1%'
@@ -221,8 +225,12 @@ export function MasterListCompactTable<T>({
                     className={cn(
                       'relative text-left font-semibold cursor-move align-top sticky top-0 z-20 bg-slate-50',
                       CONTRACT_PERF_TABLE_CELL_PAD,
-                      masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
-                      col.id === 'dhm_status' && 'klip-op-col--dhm-sticky cursor-default text-center',
+                      col.id === 'dhm_status'
+                        ? 'klip-op-col--icon'
+                        : masterListColumnHugsContent(col.id)
+                          ? 'klip-master-col-hug'
+                          : 'klip-master-col-grow',
+                      col.id === 'dhm_status' && 'klip-op-col--dhm-sticky cursor-default',
                       dragColId === col.id && 'opacity-60',
                     )}
                   >
@@ -292,8 +300,11 @@ export function MasterListCompactTable<T>({
                               'align-middle uppercase',
                               col.id === 'dhm_status' && 'klip-op-col--dhm-sticky text-center',
                               CONTRACT_PERF_TABLE_CELL_PAD,
-                              masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
-                              col.id === 'dhm_status' && 'klip-op-col--token',
+                              col.id === 'dhm_status'
+                                ? 'klip-op-col--icon'
+                                : masterListColumnHugsContent(col.id)
+                                  ? 'klip-master-col-hug'
+                                  : 'klip-master-col-grow',
                               stripe,
                               onRowClick && 'group-hover:bg-blue-50',
                             )}

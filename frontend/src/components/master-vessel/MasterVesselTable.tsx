@@ -16,6 +16,7 @@ import {
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
   LIST_PAGE_TABLE_HEADER_ROW_CLASS,
+  COMPACT_TABLE_ICON_COL_WIDTH_PX,
 } from '@/lib/compactTableUi'
 import {
   MASTER_VESSEL_COLUMNS,
@@ -40,6 +41,9 @@ export interface MasterVesselTableProps {
   onColumnDragEnd: () => void
   onColumnDrop: (columnId: MasterVesselColumnId) => void
 }
+
+/** Icon-only status columns: one fixed width (see .klip-op-col--icon). */
+const ICON_COLUMN_IDS = new Set(['dhm_status', 'klip_transaction'])
 
 const VESSEL_HUG_COLUMN_IDS = new Set(['vessel_code', 'vessel_codes_sap', 'dhm_code', 'dhm_status', 'klip_transaction', 'pair_code'])
 
@@ -120,11 +124,12 @@ export function MasterVesselTable({
                 const col = MASTER_VESSEL_COLUMNS.find((item) => item.id === id)
                 if (!col) return null
                 const hugs = VESSEL_HUG_COLUMN_IDS.has(col.id)
+                const isIcon = ICON_COLUMN_IDS.has(col.id)
                 return (
                 <col
                   key={col.id}
-                  className={hugs ? 'klip-master-col-hug' : 'klip-master-col-grow'}
-                  style={hugs ? { width: '1%' } : undefined}
+                  className={isIcon ? 'klip-op-col--icon' : hugs ? 'klip-master-col-hug' : 'klip-master-col-grow'}
+                  style={isIcon ? { width: COMPACT_TABLE_ICON_COL_WIDTH_PX } : hugs ? { width: '1%' } : undefined}
                 />
                 )
               })}
@@ -159,8 +164,12 @@ export function MasterVesselTable({
                         'relative text-left font-semibold cursor-move align-top sticky top-0 z-20 bg-slate-50',
                         CONTRACT_PERF_TABLE_CELL_PAD,
                         opColClass,
-                        VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
-                        col.id === 'dhm_status' && 'klip-op-col--dhm-sticky cursor-default text-center',
+                        ICON_COLUMN_IDS.has(col.id)
+                          ? 'klip-op-col--icon'
+                          : VESSEL_HUG_COLUMN_IDS.has(col.id)
+                            ? 'klip-master-col-hug'
+                            : 'klip-master-col-grow',
+                        col.id === 'dhm_status' && 'klip-op-col--dhm-sticky cursor-default',
                         dragColId === col.id && 'opacity-60',
                       )}
                     >
@@ -225,8 +234,12 @@ export function MasterVesselTable({
                               opColClass,
                               'align-middle uppercase',
                               CONTRACT_PERF_TABLE_CELL_PAD,
-                              VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
-                              col.id === 'dhm_status' && 'klip-op-col--dhm-sticky text-center',
+                              ICON_COLUMN_IDS.has(col.id)
+                                ? 'klip-op-col--icon'
+                                : VESSEL_HUG_COLUMN_IDS.has(col.id)
+                                  ? 'klip-master-col-hug'
+                                  : 'klip-master-col-grow',
+                              col.id === 'dhm_status' && 'klip-op-col--dhm-sticky',
                               stripe,
                               'group-hover:bg-blue-50',
                             )}
