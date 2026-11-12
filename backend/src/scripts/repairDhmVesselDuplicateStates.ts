@@ -1,5 +1,5 @@
 /**
- * Turn the "DHM unavailable" vessel push failures that are really duplicates into named CONFLICTs, WITHOUT calling DHM.
+ * Turn the "DHM unavailable" vessel push failures that are really DHM matches into "Waiting for DHM approval" rows (stored as CONFLICT, which is never auto-retried), WITHOUT calling DHM.
  *
  * 47 numbered barges ("BG. MAKMUR ABADI IV", "... VI", "BG. ILIR JAYA II" ...) were answered by DHM with the record of the fleet's base vessel, which another KLIP vessel is already linked to.
  * Saving that link fails on uq_master_vessels_dhm_id, which was recorded as "DHM unavailable" and retried 11 times. The Integrations page's "Kirim ulang sekarang" would send them again, and a POST
@@ -36,7 +36,7 @@ const FOUND = `
   }
   let done = 0;
   for (const r of rows) {
-    const message = `DHM treats this as "${r.holder_name}"${r.dhm_code ? ` (${r.dhm_code})` : ''}, which is already linked to another KLIP vessel. If it is a different ship, ask DHM to register it separately.`;
+    const message = `Waiting for DHM approval: DHM matched this to "${r.holder_name}"${r.dhm_code ? ` (${r.dhm_code})` : ''}, which is already linked to another KLIP vessel. If it is a different ship, a DHM user approves it as a new vessel.`;
     const res = await query(
       `UPDATE dhm_push_state SET status = 'CONFLICT', error = $2, next_attempt_at = NULL WHERE entity_kind = 'vessel' AND entity_id = $1::uuid AND status = 'FAILED'`,
       [r.entity_id, message],

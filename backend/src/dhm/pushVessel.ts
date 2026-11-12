@@ -38,7 +38,7 @@ async function linkDhmRecord(localId: string, record: DhmRecord, code: string | 
       dhmStatus: 'duplicate',
       dhmCode,
       dhmRecord: record,
-      dhmError: `DHM treats this as "${name}"${dhmCode ? ` (${dhmCode})` : ''}, which is already linked to another KLIP vessel. If it is a different ship, ask DHM to register it separately.${updated}`,
+      dhmError: `Waiting for DHM approval: DHM matched this to "${name}"${dhmCode ? ` (${dhmCode})` : ''}, which is already linked to another KLIP vessel. If it is a different ship, a DHM user approves it as a new vessel.${updated}`,
     };
   }
 }
