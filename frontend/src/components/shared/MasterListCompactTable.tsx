@@ -293,7 +293,8 @@ export function MasterListCompactTable<T>({
                               ) : masterCodeKind(col.id) ? (
                                 <MasterCodeBadge kind={masterCodeKind(col.id)!} value={text} fit={fitContent} />
                               ) : fitContent ? (
-                                <span className="whitespace-nowrap text-sm">{text || '-'}</span>
+                                // one line while it fits; a long list (a company's sites, a port's SAP names) wraps at 28rem instead of pushing the columns after it off screen
+                                <span className="block max-w-[28rem] whitespace-normal text-sm leading-snug">{text || '-'}</span>
                               ) : tooltip ? (
                                 <ContractPerfTruncatedCell tooltip={tooltip} className="w-full">
                                   <span className="text-sm">{text}</span>
