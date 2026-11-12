@@ -42,6 +42,9 @@ type UserLite = {
   role?: string
 }
 
+/** The App tour button in the header is hidden for now. Set to true to show it again; the tour itself is untouched. */
+const SHOW_APP_TOUR_BUTTON = false
+
 function NavGroupList({
   items,
   pathname,
@@ -186,24 +189,26 @@ function LayoutChrome({
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
               {!isAdminRole(user.role) && <HeaderMissingEtaAlertBell />}
               <HeaderFilterSlotTarget className="flex items-center gap-2" />
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => startTour()}
-                    aria-label="App tour"
-                    className={cn(
-                      'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-blue-200/90 shadow-sm transition-all',
-                      'bg-gradient-to-r from-blue-50 to-indigo-50',
-                      'hover:border-blue-300 hover:from-blue-100 hover:to-indigo-100',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2',
-                    )}
-                  >
-                    <BookOpen className="h-4 w-4 text-blue-700" aria-hidden />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">App tour</TooltipContent>
-              </Tooltip>
+              {SHOW_APP_TOUR_BUTTON ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => startTour()}
+                      aria-label="App tour"
+                      className={cn(
+                        'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-blue-200/90 shadow-sm transition-all',
+                        'bg-gradient-to-r from-blue-50 to-indigo-50',
+                        'hover:border-blue-300 hover:from-blue-100 hover:to-indigo-100',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2',
+                      )}
+                    >
+                      <BookOpen className="h-4 w-4 text-blue-700" aria-hidden />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">App tour</TooltipContent>
+                </Tooltip>
+              ) : null}
               {/* Downstream Hub bug report. Absent unless the Hub SDK is configured at build time. */}
               {isHubSdkEnabled() && (
                 <Tooltip>

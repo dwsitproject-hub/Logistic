@@ -33,7 +33,7 @@ describe('Commercial Documents go-live switch', () => {
     expect(left).not.toContain('/commercial-dashboard')
     expect(left).toContain('/commercial-documents')
     expect(left).toHaveLength(ALL_NAV_ITEMS.length - 1)
-    expect(left).toContain('/documents')
+    expect(left).toContain('/users')
   })
 
   it('address set, second step on: both Commercial menus leave KLIP', () => {
