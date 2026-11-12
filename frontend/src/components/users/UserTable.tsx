@@ -33,11 +33,11 @@ const STATUS_CHIP: Record<UserStatus, { label: string; chip: string; dot: string
 
 const ICON_BUTTON = 'h-8 w-8 border-transparent bg-transparent'
 
-function ScopeCell({ user }: { user: DirectoryUser }) {
+/** The Region/Site the user's pages open filtered on (up to two, then "+N"); "-" when the user has no default. */
+function RegionSiteCell({ user }: { user: DirectoryUser }) {
   const places = userRegionPlants(user)
   const shown = places.slice(0, 2).join(', ')
   const more = places.length - 2
-  const transport = String(user.transport_type ?? '').trim()
   return (
     <div className="min-w-0 text-sm">
       {places.length ? (
@@ -46,14 +46,13 @@ function ScopeCell({ user }: { user: DirectoryUser }) {
           {more > 0 ? <span className="text-gray-500"> +{more}</span> : null}
         </div>
       ) : (
-        <div className="text-gray-400">No Region/Plant default</div>
+        <div className="text-gray-400">-</div>
       )}
-      {transport ? <div className="text-xs text-gray-500">Transport {transport}</div> : null}
     </div>
   )
 }
 
-/** The user list: avatar, name and e-mail, role and level, scope, status and quick actions. Clicking a row opens it for editing. */
+/** The user list: avatar, name and e-mail, role and level, Region/Site, status and quick actions. Clicking a row opens it for editing. */
 export function UserTable<T extends DirectoryUser>({
   users,
   currentUserId,
@@ -74,7 +73,7 @@ export function UserTable<T extends DirectoryUser>({
           <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-medium text-gray-500">
             <th scope="col" className="px-4 py-2.5">User</th>
             <th scope="col" className="px-4 py-2.5">Role and level</th>
-            <th scope="col" className="px-4 py-2.5">Scope</th>
+            <th scope="col" className="px-4 py-2.5">Region/Site</th>
             <th scope="col" className="px-4 py-2.5">Status</th>
             <th scope="col" className="w-[7.5rem] px-2 py-2.5">
               <span className="sr-only">Actions</span>
@@ -127,7 +126,7 @@ export function UserTable<T extends DirectoryUser>({
                   <div className="mt-0.5 text-xs text-gray-500">{user.level || '-'}</div>
                 </td>
                 <td className="max-w-[16rem] px-4 py-3">
-                  <ScopeCell user={user} />
+                  <RegionSiteCell user={user} />
                 </td>
                 <td className="px-4 py-3">
                   <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${status.chip}`}>

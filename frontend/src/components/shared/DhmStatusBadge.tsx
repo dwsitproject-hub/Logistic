@@ -1,5 +1,7 @@
 'use client'
 
+import { AlertTriangle, CheckCircle2, CircleOff, GitCompareArrows, type LucideIcon } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   dhmStatusHint,
   masterVesselDhmStatusLabel,
@@ -7,23 +9,36 @@ import {
   type DhmStatusRow,
 } from '@/lib/masterVesselDhmStatus'
 
-const TONE: Record<DhmStatusLabel, string> = {
-  Sync: 'bg-blue-100 text-blue-800',
-  'Not Sync': 'bg-red-100 text-red-800',
+const LOOK: Record<DhmStatusLabel, { Icon: LucideIcon; tone: string }> = {
+  Sync: { Icon: CheckCircle2, tone: 'bg-emerald-50 text-emerald-600' },
+  'Not Sync': { Icon: CircleOff, tone: 'bg-red-50 text-red-600' },
   // Linked to DHM, but the last change did not reach it: the row differs from DHM until the retry succeeds.
-  'Sync Failed': 'bg-amber-100 text-amber-900',
+  'Sync Failed': { Icon: AlertTriangle, tone: 'bg-amber-50 text-amber-600' },
   // DHM already holds something different under this name or code; a person has to choose.
-  Conflict: 'bg-orange-100 text-orange-900',
+  Conflict: { Icon: GitCompareArrows, tone: 'bg-orange-50 text-orange-600' },
 }
 
+/** The DHM status of a master row as one coloured icon; the word and the reason (if the push failed) show on hover. */
 export function DhmStatusBadge({ row }: { row: DhmStatusRow }) {
   const label = masterVesselDhmStatusLabel(row)
+  const hint = dhmStatusHint(row)
+  const { Icon, tone } = LOOK[label]
   return (
-    <span
-      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${TONE[label]}`}
-      title={dhmStatusHint(row) || undefined}
-    >
-      {label}
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          role="img"
+          aria-label={hint ? `DHM ${label}: ${hint}` : `DHM ${label}`}
+          tabIndex={0}
+          className={`inline-flex h-7 w-7 shrink-0 cursor-help items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${tone}`}
+        >
+          <Icon className="h-4 w-4" aria-hidden />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="left" className="max-w-xs text-xs normal-case leading-relaxed">
+        <div className="font-semibold">DHM: {label}</div>
+        {hint ? <div className="mt-0.5 text-gray-600">{hint}</div> : null}
+      </TooltipContent>
+    </Tooltip>
   )
 }

@@ -3,7 +3,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { PerformanceStatusCard } from '@/components/performance/PerformanceStatusCard'
+import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import { RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatProductList, topGroupVendorRollups } from '@/lib/claimGroupVendorRollup'
@@ -260,61 +260,48 @@ export function ClaimMutuSection1Dashboard({
   return (
     <div className="space-y-4">
       <div
-        className={`grid grid-cols-1 gap-3 sm:grid-cols-2 transition-opacity duration-200 ${
+        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 transition-opacity duration-200 ${
           loading ? 'opacity-65' : 'opacity-100'
         }`}
       >
-        <PerformanceStatusCard
-          variant="open"
-          title="Outstanding Quality Claim"
-          selected
-          label="Claim Value (IDR)"
-          value={formatClaimMutuIdr(os.amount)}
-          groups={[
-            {
-              stats: [
-                { label: 'Qty', value: `${formatClaimMutuKg(os.qty)} kg` },
-                { label: 'Claims', value: os.claims.toLocaleString('en-US') },
-                { label: 'Scope', value: scope },
-              ],
-            },
-          ]}
-        />
+        <PerformanceSection1CardShell variant="open" title="Outstanding Quality Claim" selected onClick={() => undefined}>
+          <div className="mb-1 text-sm text-gray-500">Claim Value (IDR)</div>
+          <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimMutuIdr(os.amount)}</div>
+          <div className="text-xs text-gray-500">
+            Qty: <span className="font-semibold tabular-nums text-gray-900">{formatClaimMutuKg(os.qty)} kg</span>
+          </div>
+          <div className="mt-0.5 text-xs text-gray-500">
+            <span className="font-semibold tabular-nums text-gray-900">{os.claims.toLocaleString('en-US')}</span> claims ·{' '}
+            {scope}
+          </div>
+        </PerformanceSection1CardShell>
 
-        {dashboard?.realAvailable ? (
-          <PerformanceStatusCard
-            variant="completed"
-            title="Realised Quality Claim"
-            selected
-            label="Claim Value (IDR)"
-            value={formatClaimMutuIdr(real.amount)}
-            groups={[
-              {
-                stats: [
-                  { label: 'Qty', value: `${formatClaimMutuKg(real.qty)} kg` },
-                  { label: 'Claims', value: real.claims.toLocaleString('en-US') },
-                  { label: 'CR date', value: crDateLabel },
-                ],
-              },
-            ]}
-            footer={osOnlyFilterActive ? 'Not narrowed by the Group / Payment Method filters.' : undefined}
-          />
-        ) : (
-          <PerformanceStatusCard
-            variant="completed"
-            title="Realised Quality Claim"
-            selected
-            label={
-              loading
+        <PerformanceSection1CardShell variant="completed" title="Realised Quality Claim" selected onClick={() => undefined}>
+          {dashboard?.realAvailable ? (
+            <>
+              <div className="mb-1 text-sm text-gray-500">Claim Value (IDR)</div>
+              <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimMutuIdr(real.amount)}</div>
+              <div className="text-xs text-gray-500">
+                Qty: <span className="font-semibold tabular-nums text-gray-900">{formatClaimMutuKg(real.qty)} kg</span>
+              </div>
+              <div className="mt-0.5 text-xs text-gray-500">
+                <span className="font-semibold tabular-nums text-gray-900">{real.claims.toLocaleString('en-US')}</span> claims
+                {' '}· CR date {crDateLabel}
+              </div>
+              {osOnlyFilterActive ? (
+                <div className="mt-1 text-[0.6875rem] text-amber-700">Not narrowed by the Group / Payment Method filters.</div>
+              ) : null}
+            </>
+          ) : (
+            <div className="text-xs text-gray-500">
+              {loading
                 ? 'Loading…'
                 : hasImport
                   ? 'No realised claims imported yet.'
-                  : 'Import claim data to see realised claims.'
-            }
-            value="-"
-            groups={[]}
-          />
-        )}
+                  : 'Import claim data to see realised claims.'}
+            </div>
+          )}
+        </PerformanceSection1CardShell>
       </div>
 
       <Card>

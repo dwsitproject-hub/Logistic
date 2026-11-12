@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Ship } from 'lucide-react'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -61,6 +61,11 @@ export function MasterVesselTable({
   const bottomScrollRef = useRef<HTMLDivElement>(null)
   const isSyncingScroll = useRef(false)
   const [tableScrollWidth, setTableScrollWidth] = useState(sumMasterVesselTableWidthPx())
+  // The DHM status icon is frozen on the right edge, so it always stays last, whatever order the user dragged the others into.
+  const orderedColumnIds = useMemo(
+    () => [...columnIds.filter((id) => id !== 'dhm_status'), ...columnIds.filter((id) => id === 'dhm_status')],
+    [columnIds],
+  )
 
   useEffect(() => {
     const el = bottomScrollRef.current?.querySelector('table')
@@ -111,7 +116,7 @@ export function MasterVesselTable({
             className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols klip-master-vessel-table`}
           >
             <colgroup>
-              {columnIds.map((id) => {
+              {orderedColumnIds.map((id) => {
                 const col = MASTER_VESSEL_COLUMNS.find((item) => item.id === id)
                 if (!col) return null
                 const hugs = VESSEL_HUG_COLUMN_IDS.has(col.id)
@@ -126,7 +131,7 @@ export function MasterVesselTable({
             </colgroup>
             <thead>
               <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
-                {columnIds.map((id) => {
+                {orderedColumnIds.map((id) => {
                   const col = MASTER_VESSEL_COLUMNS.find((item) => item.id === id)
                   if (!col) return null
                   const columnLayout = getOperationalColumnLayout('master_vessel', col.id)
@@ -135,7 +140,7 @@ export function MasterVesselTable({
                     <th
                       key={col.id}
                       scope="col"
-                      draggable
+                      draggable={col.id !== 'dhm_status'}
                       onDragStart={(event) => {
                         onColumnDragStart(col.id)
                         event.dataTransfer.setData('text/plain', col.id)
@@ -155,6 +160,7 @@ export function MasterVesselTable({
                         CONTRACT_PERF_TABLE_CELL_PAD,
                         opColClass,
                         VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
+                        col.id === 'dhm_status' && 'right-0 z-30 cursor-default text-center',
                         dragColId === col.id && 'opacity-60',
                       )}
                     >
@@ -200,12 +206,13 @@ export function MasterVesselTable({
                         if (event.key === 'Enter' && event.target === event.currentTarget) onEdit(row)
                       }}
                     >
-                      {columnIds.map((id) => {
+                      {orderedColumnIds.map((id) => {
                         const col = MASTER_VESSEL_COLUMNS.find((item) => item.id === id)
                         if (!col) return null
                         const columnLayout = getOperationalColumnLayout('master_vessel', col.id)
                         const opColClass = operationalTableColumnClass(columnLayout)
-                        const useTruncate = columnLayout === 'truncate' || columnLayout === 'token'
+                        // the DHM status icon brings its own tooltip
+                        const useTruncate = (columnLayout === 'truncate' || columnLayout === 'token') && col.id !== 'dhm_status'
                         const rendered = col.render(row)
                         const cellText = col.getCellText(row)
                         const tooltip =
@@ -219,6 +226,7 @@ export function MasterVesselTable({
                               'align-middle uppercase',
                               CONTRACT_PERF_TABLE_CELL_PAD,
                               VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
+                              col.id === 'dhm_status' && 'sticky right-0 z-10 text-center',
                               stripe,
                               'group-hover:bg-blue-50',
                             )}

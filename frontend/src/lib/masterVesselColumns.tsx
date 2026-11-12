@@ -124,7 +124,7 @@ const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
   vessel_hull_type: 120,
   vessel_registration_year: 120,
   vessel_codes_sap: 168,
-  dhm_status: 108,
+  dhm_status: 56,
 }
 
 export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 128
@@ -186,7 +186,7 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
   },
   {
     id: 'dhm_status',
-    label: 'DHM Status',
+    label: 'DHM',
     getCellText: (row) => getMasterVesselCellText('dhm_status', row),
     render: (row) => masterVesselCell(<DhmStatusBadge row={row} />),
   },
