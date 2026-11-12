@@ -160,7 +160,7 @@ export function MasterVesselTable({
                         CONTRACT_PERF_TABLE_CELL_PAD,
                         opColClass,
                         VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
-                        col.id === 'dhm_status' && 'right-0 z-30 cursor-default text-center',
+                        col.id === 'dhm_status' && 'klip-op-col--dhm-sticky cursor-default text-center',
                         dragColId === col.id && 'opacity-60',
                       )}
                     >
@@ -211,8 +211,8 @@ export function MasterVesselTable({
                         if (!col) return null
                         const columnLayout = getOperationalColumnLayout('master_vessel', col.id)
                         const opColClass = operationalTableColumnClass(columnLayout)
-                        // the DHM status icon brings its own tooltip
-                        const useTruncate = (columnLayout === 'truncate' || columnLayout === 'token') && col.id !== 'dhm_status'
+                        // the DHM status and Klip transaction icons bring their own tooltip
+                        const useTruncate = (columnLayout === 'truncate' || columnLayout === 'token') && col.id !== 'dhm_status' && col.id !== 'klip_transaction'
                         const rendered = col.render(row)
                         const cellText = col.getCellText(row)
                         const tooltip =
@@ -226,7 +226,7 @@ export function MasterVesselTable({
                               'align-middle uppercase',
                               CONTRACT_PERF_TABLE_CELL_PAD,
                               VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
-                              col.id === 'dhm_status' && 'sticky right-0 z-10 text-center',
+                              col.id === 'dhm_status' && 'klip-op-col--dhm-sticky text-center',
                               stripe,
                               'group-hover:bg-blue-50',
                             )}

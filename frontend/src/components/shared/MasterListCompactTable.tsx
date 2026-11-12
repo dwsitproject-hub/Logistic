@@ -222,7 +222,7 @@ export function MasterListCompactTable<T>({
                       'relative text-left font-semibold cursor-move align-top sticky top-0 z-20 bg-slate-50',
                       CONTRACT_PERF_TABLE_CELL_PAD,
                       masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
-                      col.id === 'dhm_status' && 'right-0 z-30 cursor-default text-center',
+                      col.id === 'dhm_status' && 'klip-op-col--dhm-sticky cursor-default text-center',
                       dragColId === col.id && 'opacity-60',
                     )}
                   >
@@ -290,7 +290,7 @@ export function MasterListCompactTable<T>({
                             className={cn(
                               COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
                               'align-middle uppercase',
-                              col.id === 'dhm_status' && 'sticky right-0 z-10 text-center',
+                              col.id === 'dhm_status' && 'klip-op-col--dhm-sticky text-center',
                               CONTRACT_PERF_TABLE_CELL_PAD,
                               masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                               col.id === 'dhm_status' && 'klip-op-col--token',

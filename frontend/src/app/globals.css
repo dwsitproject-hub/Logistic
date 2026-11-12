@@ -436,6 +436,22 @@
     max-width: 92px;
   }
 
+  /* The DHM status icon of the master tables is frozen on the right edge (just left of Actions when there is one: the page sets 'right' inline). */
+  .klip-compact-table--operational th.klip-op-col--dhm-sticky,
+  .klip-compact-table--operational td.klip-op-col--dhm-sticky {
+    position: sticky;
+    right: 0;
+  }
+
+  .klip-compact-table--operational th.klip-op-col--dhm-sticky {
+    top: 0;
+    z-index: 30;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--dhm-sticky {
+    z-index: 10;
+  }
+
   .klip-compact-table--operational thead th.klip-op-col--actions {
     top: 0;
     z-index: 40;
