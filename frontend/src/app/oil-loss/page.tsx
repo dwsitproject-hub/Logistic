@@ -269,7 +269,7 @@ function renderLossPctCell(pct: number | null): ReactNode {
 }
 
 /** One icon. Other pages use 112px because Actions holds two buttons. */
-const OIL_LOSS_ACTIONS_COL_WIDTH_PX = 76
+const OIL_LOSS_ACTIONS_COL_WIDTH_PX = 120
 
 function firstOilLossToken(value: string | null | undefined): string {
   return String(value ?? '').split(',')[0]?.trim() ?? ''
@@ -2493,7 +2493,7 @@ export default function OilLossPage() {
                               CONTRACT_PERF_TABLE_CELL_PAD,
                             )}
                           >
-                            Actions
+                            <span className="sr-only">Actions</span>
                           </th>
                         </tr>
                       </thead>

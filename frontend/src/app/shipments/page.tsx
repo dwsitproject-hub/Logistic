@@ -7664,9 +7664,9 @@ function ShipmentsPageContent() {
                         })}
                         <th
                           scope="col"
-                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} border-l text-center align-bottom font-semibold whitespace-nowrap shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} text-center align-bottom font-semibold whitespace-nowrap ${CONTRACT_PERF_TABLE_CELL_PAD}`}
                         >
-                          Actions
+                          <span className="sr-only">Actions</span>
                         </th>
                         </tr>
                         </thead>
@@ -7722,7 +7722,7 @@ function ShipmentsPageContent() {
                                     )
                                   })}
                                   <td
-                                    className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}
+                                    className={`sticky right-0 z-10 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}
                                   >
                                     <ShipmentViewTableRowActions
                                       shipment={{
@@ -7800,7 +7800,7 @@ function ShipmentsPageContent() {
                                     )
                                   })}
                                   <td
-                                    className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
+                                    className={`sticky right-0 z-10 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
                                   />
                                 </tr>,
                               )
@@ -8008,7 +8008,7 @@ function ShipmentsPageContent() {
                                     )
                                   })}
 
-                                  <td className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
+                                  <td className={`sticky right-0 z-10 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
                                     {tableInlineEditActive ? (
                                       <div className="hidden">
                                         <>

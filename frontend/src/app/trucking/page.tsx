@@ -142,7 +142,7 @@ import {
 } from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 
-const TRUCKING_ACTIONS_COL_WIDTH = 140
+const TRUCKING_ACTIONS_COL_WIDTH = 120
 
 /** Hide header Upload CSV + Create New above Global Filters — set true to restore. */
 const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false
@@ -312,10 +312,7 @@ function TruckTableAddTruckingButton({ onAdd }: { onAdd: () => void }) {
           className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
           aria-label="Add Trucking"
         >
-          <span className="relative inline-flex h-4 w-4 items-center justify-center">
-            <Truck className="h-4 w-4" />
-            <Plus className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
-          </span>
+          <Truck className="h-4 w-4" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">Add Trucking</TooltipContent>
@@ -343,14 +340,11 @@ function TruckTableEditTruckingButton({
       className={
         disabled
           ? 'h-8 w-8 border-transparent bg-transparent text-gray-300 cursor-not-allowed hover:bg-transparent'
-          : 'h-8 w-8 border-transparent bg-transparent text-amber-600 hover:bg-amber-50'
+          : 'h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50'
       }
       aria-label={tooltip ?? (disabled ? disabledReason : 'Edit Trucking')}
     >
-      <span className="relative inline-flex h-4 w-4 items-center justify-center">
-        <Truck className="h-4 w-4" />
-        <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
-      </span>
+      <Truck className="h-4 w-4" />
     </Button>
   )
 
@@ -4989,10 +4983,10 @@ function TruckingPageContent() {
                         })}
                         <th
                           scope="col"
-                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} text-center align-bottom font-semibold border-l border-gray-200 ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} text-center align-bottom font-semibold ${CONTRACT_PERF_TABLE_CELL_PAD}`}
                           style={{ width: TRUCKING_ACTIONS_COL_WIDTH }}
                         >
-                          Actions
+                          <span className="sr-only">Actions</span>
                         </th>
                       </tr>
                       </thead>
@@ -5070,9 +5064,9 @@ function TruckingPageContent() {
                                   )
                                 })}
                                 <td
-                                  className={`sticky right-0 z-10 border-l border-gray-200 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
+                                  className={`sticky right-0 z-10 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
                                 >
-                                  <div className="flex items-center justify-end gap-2">
+                                  <div className="flex items-center justify-center gap-1">
                                     {isEditing ? (
                                       <>
                                         <Button

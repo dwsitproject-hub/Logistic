@@ -2,7 +2,7 @@
 
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { FileText, Pencil, Ship, Ban } from 'lucide-react'
+import { FileText, Ship, Ban } from 'lucide-react'
 import { normalizeShipmentStatusKey } from '@/lib/shipmentStatusDisplay'
 import { useDocumentPresence } from '@/lib/documentPresence'
 import {
@@ -132,10 +132,7 @@ export function ShipmentViewTableRowActions({
             {primaryActionLoading ? (
               <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-300 border-t-blue-700" />
             ) : (
-              <span className="relative inline-flex h-4 w-4 items-center justify-center">
-                <Ship className="h-4 w-4" />
-                <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
-              </span>
+              <Ship className="h-4 w-4" />
             )}
           </Button>
         </TooltipTrigger>
@@ -145,7 +142,7 @@ export function ShipmentViewTableRowActions({
   })()
 
   return (
-    <div className="flex items-center justify-end gap-1 min-h-[40px]">
+    <div className="flex items-center justify-center gap-1 min-h-[40px]">
       {primaryButton}
       {showCancel ? (
         <Tooltip>

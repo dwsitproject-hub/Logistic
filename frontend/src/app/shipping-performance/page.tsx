@@ -3265,7 +3265,7 @@ function ShippingPerformancePageContent() {
                       })}
                       {showTableActionsColumn ? (
                         <th scope="col" className={COMPACT_TABLE_ACTIONS_HEADER_CLASS}>
-                          Actions
+                          <span className="sr-only">Actions</span>
                         </th>
                       ) : null}
                     </tr>
@@ -3503,7 +3503,7 @@ function ShippingPerformancePageContent() {
                           })}
                           {showTableActionsColumn ? (
                             <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
-                              <div className="flex items-center justify-center gap-2">
+                              <div className="flex items-center justify-center gap-1">
                                 {String(row.id || '').trim() ? (
                                   <>
                                     <Button

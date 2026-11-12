@@ -22,7 +22,7 @@ export const COMPACT_TABLE_HEADER_ROW_OPERATIONAL_CLASS = COMPACT_TABLE_HEADER_R
 /** Actions <th> only — sticky right + top corner cell (body <td> unchanged). */
 export const COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS = 'klip-op-col--actions-header'
 
-export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = 112
+export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = 120
 
 export const COMPACT_TABLE_ACTIONS_HEADER_CLASS =
   'klip-op-col--actions text-center align-middle font-semibold whitespace-nowrap px-2 py-1.5'

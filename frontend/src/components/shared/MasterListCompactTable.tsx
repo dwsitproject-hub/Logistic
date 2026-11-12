@@ -35,7 +35,7 @@ export type MasterListTableColumn<T> = {
 }
 
 /** Two 32px icon buttons, 4px gap, and 14px of space on each side. */
-const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 96
+const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 120
 
 const MASTER_LIST_NAME_COLUMN_IDS = new Set([
   'product_name',
@@ -228,7 +228,7 @@ export function MasterListCompactTable<T>({
                 ))}
                 {renderActions ? (
                   <th scope="col" className={cn(COMPACT_TABLE_ACTIONS_HEADER_CLASS, CONTRACT_PERF_TABLE_CELL_PAD)}>
-                    <span className={COMPACT_TABLE_HEADER_LABEL_CLASS}>Actions</span>
+                    <span className="sr-only">Actions</span>
                   </th>
                 ) : null}
               </tr>

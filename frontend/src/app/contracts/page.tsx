@@ -5221,7 +5221,7 @@ function ContractsPageContent() {
                             contractPerfTableCellPad,
                           )}
                         >
-                          Actions
+                          <span className="sr-only">Actions</span>
                         </th>
                       </tr>
                       </thead>
@@ -5304,7 +5304,7 @@ function ContractsPageContent() {
                                     !isContractPerformance && contractPerfTableCellPad,
                                   )}
                                 >
-                                  <div className="flex items-center justify-center gap-1.5">
+                                  <div className="flex items-center justify-center gap-1">
                                   <Button variant="outline" size="icon" onClick={() => setSelectedContract(contract)} title="View Contract" className="h-8 w-8 border-transparent bg-transparent text-green-600 hover:bg-green-50">
                                     <Eye className="h-4 w-4" />
                                   </Button>
