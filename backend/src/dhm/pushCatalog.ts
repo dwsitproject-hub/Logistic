@@ -16,6 +16,11 @@ export interface DhmCatalogSyncResult {
   conflicts: number;
   disabled: boolean;
   errors: Array<{ name: string; error: string }>;
+  /** DHM answered "too many requests": the run stopped there instead of sending the rest into the limit. Run it again after retryAfterSeconds. */
+  throttled?: boolean;
+  retryAfterSeconds?: number | null;
+  /** Rows left out because KLIP has no transaction on them (product only), so there was nothing to send. */
+  skippedUnused?: number;
 }
 
 function isSyncMaster(value: string): value is DhmSyncMaster {
@@ -60,13 +65,36 @@ function vesselForDhm(row: Record<string, unknown>): KlipVesselForDhm & { dhm_co
   };
 }
 
+/**
+ * The products worth sending in a bulk Sync: the ones a KLIP contract uses (its SAP material_code, or a product of that name) and the ones DHM never received (no dhm_id: made in KLIP,
+ * possibly not delivered yet). The other ~3,400 are DHM's own catalog coming back: pushing them again changes nothing in DHM and, one request each, runs into its rate limit.
+ */
+export const USED_OR_UNDELIVERED_PRODUCTS_SQL = `
+  WITH used AS (
+    SELECT upper(trim(material_code)) AS material_code, NULL::text AS product FROM contracts WHERE NULLIF(trim(material_code), '') IS NOT NULL
+    UNION
+    SELECT NULL::text, upper(trim(product)) FROM contracts WHERE NULLIF(trim(product), '') IS NOT NULL
+  )
+  SELECT p.* FROM products p
+   WHERE p.dhm_id IS NULL
+      OR EXISTS (SELECT 1 FROM used u WHERE u.material_code IS NOT NULL AND u.material_code = upper(trim(p.material_code)))
+      OR EXISTS (SELECT 1 FROM used u WHERE u.product IS NOT NULL AND u.product = upper(trim(p.product_name)))
+   ORDER BY p.product_name`;
+
+/** DHM's rate limit says "Too many requests (integration API); retry in 40s". */
+export function readDhmThrottle(error: unknown): { throttled: boolean; retryAfterSeconds: number | null } {
+  const text = String(error ?? '');
+  if (!/too many requests/i.test(text)) return { throttled: false, retryAfterSeconds: null };
+  const seconds = /retry in\s+(\d+)\s*s/i.exec(text);
+  return { throttled: true, retryAfterSeconds: seconds ? Number(seconds[1]) : null };
+}
+
 async function loadRows(master: DhmSyncMaster): Promise<Record<string, unknown>[]> {
+  if (master === 'product') return (await query(USED_OR_UNDELIVERED_PRODUCTS_SQL)).rows as Record<string, unknown>[];
   const sql =
     master === 'vessel'
       ? `SELECT * FROM master_vessels ORDER BY vessel_name`
-      : master === 'product'
-        ? `SELECT * FROM products ORDER BY product_name`
-        : master === 'port'
+      : master === 'port'
           ? `SELECT * FROM master_loading_ports ORDER BY port`
           : master === 'plant'
             ? `SELECT * FROM master_plants ORDER BY plant_name`
@@ -141,9 +169,18 @@ export async function pushMasterCatalogToDhm(master: DhmSyncMaster, overwrite: b
   let synced = 0;
   let failed = 0;
   let conflicts = 0;
+  let throttle: { throttled: boolean; retryAfterSeconds: number | null } = { throttled: false, retryAfterSeconds: null };
   const errors: Array<{ name: string; error: string }> = [];
   for (const row of rows) {
     const result = await pushRow(master, row, overwrite);
+    const limit = readDhmThrottle(result.dhmError);
+    if (limit.throttled) {
+      // not a problem with this row: DHM asks to slow down, so stop here and report it once (the rows after it would only fail the same way)
+      throttle = limit;
+      failed += 1;
+      errors.push({ name: rowName(master, row), error: String(result.dhmError) });
+      break;
+    }
     if (result.dhmConflict) {
       conflicts += 1;
       continue;
@@ -160,5 +197,15 @@ export async function pushMasterCatalogToDhm(master: DhmSyncMaster, overwrite: b
     failed += 1;
     if (errors.length < 8) errors.push({ name: rowName(master, row), error: 'DHM did not confirm the row' });
   }
-  return { total: rows.length, synced, failed, conflicts, disabled: false, errors };
+  const skippedUnused = master === 'product' ? Math.max(0, Number((await query('SELECT COUNT(*)::int AS n FROM products')).rows[0]?.n ?? 0) - rows.length) : 0;
+  return {
+    total: rows.length,
+    synced,
+    failed,
+    conflicts,
+    disabled: false,
+    errors,
+    ...(throttle.throttled ? { throttled: true, retryAfterSeconds: throttle.retryAfterSeconds } : {}),
+    ...(master === 'product' ? { skippedUnused } : {}),
+  };
 }

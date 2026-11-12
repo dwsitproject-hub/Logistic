@@ -12,6 +12,9 @@ interface SyncPayload {
   conflicts?: number
   disabled?: boolean
   errors?: Array<{ name?: string; error?: string }>
+  throttled?: boolean
+  retryAfterSeconds?: number | null
+  skippedUnused?: number
 }
 
 function summary(data: SyncPayload | undefined): string {
@@ -23,8 +26,15 @@ function summary(data: SyncPayload | undefined): string {
   const parts = [`Synced ${synced} of ${total} to DHM`]
   if (conflicts > 0) parts.push(`${conflicts} already exist in DHM`)
   if (failed > 0) parts.push(`${failed} failed`)
-  const first = String(data?.errors?.[0]?.error || '').trim()
-  if (first) parts.push(first)
+  if (data?.throttled) {
+    const wait = Number(data.retryAfterSeconds || 0)
+    parts.push(`DHM asked to slow down, so the Sync stopped here. Run it again${wait > 0 ? ` in ${wait} seconds` : ' in a minute'}`)
+  } else {
+    const first = String(data?.errors?.[0]?.error || '').trim()
+    if (first) parts.push(first)
+  }
+  const skipped = Number(data?.skippedUnused || 0)
+  if (skipped > 0) parts.push(`${skipped.toLocaleString('en-US')} catalog products with no KLIP contract were not sent`)
   return parts.join('. ')
 }
 
