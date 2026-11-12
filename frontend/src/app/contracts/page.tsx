@@ -4109,7 +4109,7 @@ function ContractsPageContent() {
             closeStatusContractCount > 0 ? statusCardSummary.closeAvgDays : null
           return (
             <div className={`transition-opacity duration-200 ${latePerfSummaryLoading ? 'opacity-65' : 'opacity-100'}`}>
-              <div className="grid grid-cols-1 gap-2">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <PerformanceStatusCard
                   variant="open"
                   title="OPEN"

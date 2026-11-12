@@ -89,7 +89,7 @@ import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
-import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
+import { COMPACT_TABLE_ACTIONS_COL_WIDTH_PX, LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
@@ -142,7 +142,7 @@ import {
 } from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 
-const TRUCKING_ACTIONS_COL_WIDTH = 120
+const TRUCKING_ACTIONS_COL_WIDTH = COMPACT_TABLE_ACTIONS_COL_WIDTH_PX
 
 /** Hide header Upload CSV + Create New above Global Filters — set true to restore. */
 const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false

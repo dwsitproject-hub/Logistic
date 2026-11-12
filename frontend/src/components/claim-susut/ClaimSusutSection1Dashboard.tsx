@@ -184,7 +184,7 @@ export function ClaimSusutSection1Dashboard({
   return (
     <div className="space-y-4">
       <div
-        className={`grid grid-cols-1 gap-2 transition-opacity duration-200 ${
+        className={`grid grid-cols-1 gap-3 sm:grid-cols-2 transition-opacity duration-200 ${
           summaryLoading || groupLoading ? 'opacity-65' : 'opacity-100'
         }`}
       >

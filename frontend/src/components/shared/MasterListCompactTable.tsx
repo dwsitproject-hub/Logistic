@@ -35,7 +35,7 @@ export type MasterListTableColumn<T> = {
 }
 
 /** Two 32px icon buttons, 4px gap, and 14px of space on each side. */
-const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 120
+const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 128
 
 const MASTER_LIST_NAME_COLUMN_IDS = new Set([
   'product_name',

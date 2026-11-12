@@ -38,7 +38,8 @@ export interface PerformanceStatusCardProps {
 
 /**
  * Section 1 status card of Contract and Shipping Performance (Open / Close, On Going / Completed), laid out in ONE row so it stays flat:
- * icon and title, the big number, an optional middle block, and the averages. The row wraps on a narrow screen instead of clipping.
+ * icon and title, the big number, an optional middle block, and the averages. When the card itself is narrow (two cards side by side on a small screen)
+ * the averages drop to a second row under the title instead of clipping; the cards keep their left / right places.
  * The whole card is the filter button, as before. The averages are neutral; their meaning is in the label.
  */
 export function PerformanceStatusCard({
@@ -77,9 +78,9 @@ export function PerformanceStatusCard({
 
       <div className="whitespace-nowrap text-2xl font-semibold tabular-nums leading-none text-gray-900">{value}</div>
 
-      {middle ? <div className="shrink-0">{middle}</div> : null}
+      {middle ? <div className="klip-statcard__middle shrink-0">{middle}</div> : null}
 
-      <div className="ml-auto flex flex-wrap items-start gap-x-5 gap-y-2">
+      <div className="klip-statcard__stats flex flex-wrap items-start gap-x-5 gap-y-2">
         {groups.map((group, groupIndex) => (
           <div key={group.heading ?? groupIndex}>
             {group.heading ? (
@@ -104,11 +105,17 @@ export function PerformanceStatusCard({
     </>
   )
 
-  if (!onClick) return <div className={chrome}>{body}</div>
+  // The wrapper is the size container: see .klip-statcard in globals.css (one row when the card is wide, two rows when it is narrow).
   return (
-    <button type="button" onClick={onClick} aria-pressed={selected} className={chrome}>
-      {body}
-    </button>
+    <div className="klip-statcard min-w-0">
+      {onClick ? (
+        <button type="button" onClick={onClick} aria-pressed={selected} className={chrome}>
+          {body}
+        </button>
+      ) : (
+        <div className={chrome}>{body}</div>
+      )}
+    </div>
   )
 }
 

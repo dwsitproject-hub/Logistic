@@ -2677,7 +2677,7 @@ function ShippingPerformancePageContent() {
                 (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
               }`}
             >
-              <div className="grid grid-cols-1 gap-2">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <PerformanceStatusCard
                   variant="ongoing"
                   title="ON GOING"

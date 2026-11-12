@@ -23,12 +23,12 @@ export const COMPACT_TABLE_HEADER_ROW_OPERATIONAL_CLASS = COMPACT_TABLE_HEADER_R
 export const COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS = 'klip-op-col--actions-header'
 
 /**
- * Width of an Actions column that holds `iconCount` 32px icon buttons: 4px between them and 8px between the outer icons and the column edge.
- * Shipments and Trucking (three icons) set the standard: 120px. A table with fewer icons gets a narrower column, with the SAME space to the edge.
+ * Width of an Actions column that holds `iconCount` 32px icon buttons: 4px between them and 12px on EACH side (8px left the icons crowding the value of the column
+ * before, and the icons stay centered). Three icons (Shipments, Trucking) make 128px; a table with fewer icons gets a narrower column with the SAME space around the icons.
  */
 export function compactTableActionsColWidthPx(iconCount: number): number {
   const n = Math.max(1, Math.round(iconCount))
-  return n * 32 + (n - 1) * 4 + 16
+  return n * 32 + (n - 1) * 4 + 24
 }
 
 export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = compactTableActionsColWidthPx(3)

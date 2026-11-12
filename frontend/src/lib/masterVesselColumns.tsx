@@ -127,7 +127,7 @@ const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
   dhm_status: 108,
 }
 
-export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 120
+export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 128
 
 const textColumn = (id: MasterVesselColumnId, label: string): MasterVesselColumnMeta => ({
   id,
