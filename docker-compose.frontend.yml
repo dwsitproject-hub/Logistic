@@ -24,6 +24,7 @@ services:
         NEXT_PUBLIC_GIT_SHA: ${NEXT_PUBLIC_GIT_SHA:-}
         # Commercial Documents go-live: the new app's origin. Empty = KLIP keeps both Commercial menus.
         NEXT_PUBLIC_COMMDOCS_URL: ${NEXT_PUBLIC_COMMDOCS_URL:-}
+        NEXT_PUBLIC_COMMDOCS_DOCUMENTS_MOVED: ${NEXT_PUBLIC_COMMDOCS_DOCUMENTS_MOVED:-}
     container_name: klip-frontend
     environment:
       NODE_ENV: production
