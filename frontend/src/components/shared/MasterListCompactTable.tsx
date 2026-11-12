@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
@@ -57,7 +57,7 @@ function masterListColumnWidthPx(col: Pick<MasterListTableColumn<unknown>, 'id' 
   const base = masterCodeKind(col.id)
     ? 168
     : col.id === 'dhm_status'
-      ? 128
+      ? 64
       : MASTER_LIST_NAME_COLUMN_IDS.has(col.id)
         ? 200
         : (col.widthPx ?? 148)
@@ -112,6 +112,13 @@ export function MasterListCompactTable<T>({
   const isSyncingScroll = useRef(false)
   const [tableScrollWidth, setTableScrollWidth] = useState(0)
   const colSpan = columns.length + (renderActions ? 1 : 0)
+  // The DHM status icon is frozen on the right edge like the Actions column, so it always stays last, whatever order the user dragged the others into.
+  const orderedColumns = useMemo(
+    () => [...columns.filter((col) => col.id !== 'dhm_status'), ...columns.filter((col) => col.id === 'dhm_status')],
+    [columns],
+  )
+  // When an Actions column is also frozen, the DHM status sits just left of it.
+  const dhmStickyRight = renderActions ? (tightActions ? MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX : MASTER_VESSEL_ACTIONS_COL_WIDTH_PX) : 0
 
   useEffect(() => {
     const table = bottomScrollRef.current?.querySelector('table')
@@ -164,7 +171,7 @@ export function MasterListCompactTable<T>({
             )}
           >
             <colgroup>
-              {columns.map((col) => {
+              {orderedColumns.map((col) => {
                 const hugs = masterListColumnHugsContent(col.id)
                 return (
                   <col
@@ -191,11 +198,12 @@ export function MasterListCompactTable<T>({
             </colgroup>
             <thead>
               <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
-                {columns.map((col) => (
+                {orderedColumns.map((col) => (
                   <th
                     key={col.id}
                     scope="col"
-                    draggable
+                    style={col.id === 'dhm_status' ? { right: dhmStickyRight } : undefined}
+                    draggable={col.id !== 'dhm_status'}
                     onDragStart={(event) => {
                       onDragStart(col.id)
                       event.dataTransfer.setData('text/plain', col.id)
@@ -214,6 +222,7 @@ export function MasterListCompactTable<T>({
                       'relative text-left font-semibold cursor-move align-top sticky top-0 z-20 bg-slate-50',
                       CONTRACT_PERF_TABLE_CELL_PAD,
                       masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
+                      col.id === 'dhm_status' && 'right-0 z-30 cursor-default text-center',
                       dragColId === col.id && 'opacity-60',
                     )}
                   >
@@ -271,15 +280,17 @@ export function MasterListCompactTable<T>({
                           : undefined
                       }
                     >
-                      {columns.map((col) => {
+                      {orderedColumns.map((col) => {
                         const text = col.getText(row)
                         const tooltip = text && text !== '-' ? text.toUpperCase() : null
                         return (
                           <td
                             key={col.id}
+                            style={col.id === 'dhm_status' ? { right: dhmStickyRight } : undefined}
                             className={cn(
                               COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
                               'align-middle uppercase',
+                              col.id === 'dhm_status' && 'sticky right-0 z-10 text-center',
                               CONTRACT_PERF_TABLE_CELL_PAD,
                               masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                               col.id === 'dhm_status' && 'klip-op-col--token',

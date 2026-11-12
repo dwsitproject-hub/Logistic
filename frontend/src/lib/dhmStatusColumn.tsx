@@ -11,8 +11,8 @@ export function dhmStatusListColumn<T extends DhmStatusRow>(): {
 } {
   return {
     id: 'dhm_status',
-    label: 'DHM Status',
-    widthPx: 108,
+    label: 'DHM',
+    widthPx: 56,
     getText: (row) => masterVesselDhmStatusLabel(row),
     render: (row) => <DhmStatusBadge row={row} />,
   }
