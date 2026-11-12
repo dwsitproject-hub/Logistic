@@ -64,6 +64,8 @@ export interface JpsCargoSource {
   sto_no?: string | null;
   /** contracts.product */
   product: string | null;
+  /** contracts.material_code: the SAP material of the PO line, the key of its DHM commodity (product_materials). Named in the hold's reason when no code could be found. */
+  material_code?: string | null;
   /** products.code_dhm of that product, the DataHub code JPS takes as cargo_hub_code. Empty until Master Product is synced. */
   product_hub_code?: string | null;
   /** The product's Master Product was deleted in DHM: no code is sent for it, and the hold says why. */
@@ -253,11 +255,21 @@ export function buildJpsSubmitPayload(
     const cargoHubCode = String(line.product_hub_code ?? '').trim();
     if (!cargoHubCode) {
       const productName = String(line.product ?? '').trim();
-      problems.push(
-        line.product_deleted
-          ? `Master Product "${productName}" was deleted in DHM`
-          : `no DHM code on Master Product for "${productName}"`,
-      );
+      const materialCode = String(line.material_code ?? '').trim();
+      // The material is named when the contract has one: "CPO" alone does not say which of its commodities has no code.
+      if (line.product_deleted) {
+        problems.push(
+          materialCode
+            ? `Master Product "${productName}" (material ${materialCode}) was deleted in DHM`
+            : `Master Product "${productName}" was deleted in DHM`,
+        );
+      } else {
+        problems.push(
+          materialCode
+            ? `no DHM code for material ${materialCode}, nor on Master Product "${productName}"`
+            : `no DHM code on Master Product for "${productName}"`,
+        );
+      }
       continue;
     }
     const kg = Number(line.sto_quantity_kg ?? 0);

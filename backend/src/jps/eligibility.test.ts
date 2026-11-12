@@ -146,8 +146,30 @@ describe('findEligibleStos: masters deleted in DHM give no code', () => {
     const sql = await sqlOf();
     const cargo = sql.slice(sql.indexOf('cargo AS ('), sql.indexOf('docs AS ('));
     expect(cargo).toContain('ORDER BY COALESCE(p.dhm_is_deleted, FALSE), p.code_dhm');
-    expect(cargo).toContain("'product_hub_code', CASE WHEN COALESCE(pc.dhm_is_deleted, FALSE) THEN NULL ELSE pc.code_dhm END");
+    // the broad product's code is still the fallback, with its deleted flag respected
+    expect(cargo).toContain('ELSE (CASE WHEN COALESCE(pc.dhm_is_deleted, FALSE) THEN NULL ELSE pc.code_dhm END) END');
     expect(cargo).toContain("'product_deleted'");
+  });
+
+  it('material: the contract\'s SAP material is looked up first (product_materials), a deleted one gives no code, and the product is the fallback', async () => {
+    const sql = await sqlOf();
+    const cargo = sql.slice(sql.indexOf('cargo AS ('), sql.indexOf('docs AS ('));
+    // every cargo line carries the contract's material, in both arms of the UNION and in the GROUP BY of the first
+    expect(cargo.match(/NULLIF\(TRIM\(c\.material_code\), ''\) AS material_code/g)).toHaveLength(2);
+    expect(cargo).toContain("GROUP BY c.contract_id, c.po_number, c.product, NULLIF(TRIM(c.material_code), '')");
+    expect(cargo).toContain("'material_code', x.material_code");
+    // matched by material_code, only a row that HAS a DHM code counts, a live one first
+    expect(cargo).toContain('FROM product_materials m');
+    expect(cargo).toContain('UPPER(TRIM(m.material_code)) = UPPER(TRIM(x.material_code))');
+    expect(cargo).toContain("NULLIF(TRIM(m.code_dhm), '') IS NOT NULL");
+    expect(cargo).toContain('ORDER BY COALESCE(m.dhm_is_deleted, FALSE), m.code_dhm');
+    // the material's code wins whenever it has one; its deleted flag then decides, not the product's
+    expect(cargo).toContain("'product_hub_code', CASE WHEN pm.code_dhm IS NOT NULL");
+    expect(cargo).toContain('THEN (CASE WHEN COALESCE(pm.dhm_is_deleted, FALSE) THEN NULL ELSE pm.code_dhm END)');
+    expect(cargo).toContain("'product_deleted', CASE WHEN pm.code_dhm IS NOT NULL THEN COALESCE(pm.dhm_is_deleted, FALSE) ELSE COALESCE(pc.dhm_is_deleted, FALSE) END");
+    // the material lookup comes before the product's in the FROM
+    expect(cargo.indexOf(') pm ON TRUE')).toBeGreaterThan(-1);
+    expect(cargo.indexOf(') pm ON TRUE')).toBeLessThan(cargo.indexOf(') pc ON TRUE'));
   });
 
   it('the final SELECT hands the flags to the mapper', async () => {

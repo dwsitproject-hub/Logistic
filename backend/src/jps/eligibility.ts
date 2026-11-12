@@ -291,8 +291,13 @@ export async function findEligibleStos(
                'contract_no', x.contract_no,
                'po_no', x.po_no,
                'product', x.product,
-               'product_hub_code', CASE WHEN COALESCE(pc.dhm_is_deleted, FALSE) THEN NULL ELSE pc.code_dhm END,
-               'product_deleted', COALESCE(pc.dhm_is_deleted, FALSE),
+               'material_code', x.material_code,
+               -- The commodity of the contract's MATERIAL first (product_materials: SAP material -> its own DHM commodity), then the broad Master Product's. A material whose
+               -- commodity DHM has not given a code yet falls back to the product's, as before.
+               'product_hub_code', CASE WHEN pm.code_dhm IS NOT NULL
+                                        THEN (CASE WHEN COALESCE(pm.dhm_is_deleted, FALSE) THEN NULL ELSE pm.code_dhm END)
+                                        ELSE (CASE WHEN COALESCE(pc.dhm_is_deleted, FALSE) THEN NULL ELSE pc.code_dhm END) END,
+               'product_deleted', CASE WHEN pm.code_dhm IS NOT NULL THEN COALESCE(pm.dhm_is_deleted, FALSE) ELSE COALESCE(pc.dhm_is_deleted, FALSE) END,
                'sto_quantity_kg', x.sto_quantity_kg,
                'contract_quantity_kg', x.contract_quantity_kg,
                'sto_no', x.sto_no
@@ -302,6 +307,7 @@ export async function findEligibleStos(
         SELECT c.contract_id AS contract_no,
                c.po_number AS po_no,
                c.product AS product,
+               NULLIF(TRIM(c.material_code), '') AS material_code,
                SUM(cs.sto_quantity) AS sto_quantity_kg,
                MAX(c.quantity_ordered) AS contract_quantity_kg,
                -- JPS 5.6 cargo-line sto_no: the STO number of this line. Only a real SAP STO is named here; the arm below has none and sends nothing.
@@ -309,7 +315,7 @@ export async function findEligibleStos(
         FROM contract_stos cs
         INNER JOIN contracts c ON c.id = cs.contract_id
         WHERE UPPER(TRIM(cs.sto_number)) = UPPER(e.sto_key)
-        GROUP BY c.contract_id, c.po_number, c.product
+        GROUP BY c.contract_id, c.po_number, c.product, NULLIF(TRIM(c.material_code), '')
 
         UNION ALL
 
@@ -328,6 +334,7 @@ export async function findEligibleStos(
         SELECT c.contract_id AS contract_no,
                c.po_number AS po_no,
                c.product AS product,
+               NULLIF(TRIM(c.material_code), '') AS material_code,
                c.quantity_ordered AS sto_quantity_kg,
                c.quantity_ordered AS contract_quantity_kg,
                -- No STO yet (manual shipment, or a transaction that has none, like CIF): no sto_no, and no other identifier is sent in its place.
@@ -341,8 +348,17 @@ export async function findEligibleStos(
             SELECT 1 FROM contract_stos cs3 WHERE cs3.contract_id = c.id
           )
       ) x ON TRUE
-      -- cargo_hub_code is the DataHub code of the product, matched by name; NULL (no such product, or one not yet synced)
-      -- holds the STO with a reason instead of sending a guess.
+      -- cargo_hub_code is the DataHub code of the commodity: the contract's MATERIAL's own (product_materials, matched by material_code), else the broad
+      -- product's, matched by name; NULL (no such material or product, or one not yet synced) holds the STO with a reason instead of sending a guess.
+      LEFT JOIN LATERAL (
+        SELECT m.code_dhm, m.dhm_is_deleted
+        FROM product_materials m
+        WHERE x.material_code IS NOT NULL
+          AND UPPER(TRIM(m.material_code)) = UPPER(TRIM(x.material_code))
+          AND NULLIF(TRIM(m.code_dhm), '') IS NOT NULL
+        ORDER BY COALESCE(m.dhm_is_deleted, FALSE), m.code_dhm
+        LIMIT 1
+      ) pm ON TRUE
       LEFT JOIN LATERAL (
         SELECT p.code_dhm, p.dhm_is_deleted
         FROM products p
@@ -433,6 +449,7 @@ export async function findEligibleStos(
       contract_no: line.contract_no ?? null,
       po_no: line.po_no ?? null,
       product: line.product ?? null,
+      material_code: String(line.material_code ?? '').trim() || null,
       product_hub_code: line.product_hub_code ?? null,
       product_deleted: line.product_deleted === true,
       sto_no: String(line.sto_no ?? '').trim() || null,

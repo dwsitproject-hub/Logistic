@@ -37,3 +37,14 @@ export function canonicalProductName<T>(value: T): T | string {
   if (typeof value !== 'string') return value;
   return PRODUCT_ALIASES[value.trim().toUpperCase()] ?? value;
 }
+
+/**
+ * The same normalisation as canonicalProductName, as an SQL expression over a text column / expression: UPPER(TRIM(x)) is looked up in PRODUCT_ALIASES, and anything without an
+ * alias comes back as it is. Generated from PRODUCT_ALIASES, so the SQL and the TypeScript cannot drift apart.
+ */
+export function sqlCanonicalProductName(expr: string): string {
+  const arms = Object.entries(PRODUCT_ALIASES)
+    .map(([from, to]) => `WHEN '${from.replace(/'/g, "''")}' THEN '${to.replace(/'/g, "''")}'`)
+    .join(' ');
+  return `COALESCE(CASE UPPER(TRIM(${expr})) ${arms} END, ${expr})`;
+}
