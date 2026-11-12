@@ -53,6 +53,7 @@ import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import { CommercialDocumentsSummaryCards } from '@/components/commercial-documents/CommercialDocumentsSummaryCards'
+import { CommdocsMovingNotice } from '@/components/commercial-documents/CommdocsMovingNotice'
 import { DocumentCheckingModal } from '@/components/commercial-documents/DocumentCheckingModal'
 import { DocumentViewModal, type DocumentViewTarget } from '@/components/commercial-documents/DocumentViewModal'
 import { TandaTerimaDownloadModal } from '@/components/commercial-documents/TandaTerimaDownloadModal'
@@ -607,6 +608,7 @@ function CommercialDocumentsPageContent() {
   return (
     <StitchFields>
     <div className="space-y-6">
+      <CommdocsMovingNotice />
       <HeaderFilterSlot>
         <PerformanceContractDateControl
           header

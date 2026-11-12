@@ -22,7 +22,16 @@ export const COMPACT_TABLE_HEADER_ROW_OPERATIONAL_CLASS = COMPACT_TABLE_HEADER_R
 /** Actions <th> only — sticky right + top corner cell (body <td> unchanged). */
 export const COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS = 'klip-op-col--actions-header'
 
-export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = 112
+/**
+ * Width of an Actions column that holds `iconCount` 32px icon buttons: 4px between them and 12px on EACH side (8px left the icons crowding the value of the column
+ * before, and the icons stay centered). Three icons (Shipments, Trucking) make 128px; a table with fewer icons gets a narrower column with the SAME space around the icons.
+ */
+export function compactTableActionsColWidthPx(iconCount: number): number {
+  const n = Math.max(1, Math.round(iconCount))
+  return n * 32 + (n - 1) * 4 + 24
+}
+
+export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = compactTableActionsColWidthPx(3)
 
 export const COMPACT_TABLE_ACTIONS_HEADER_CLASS =
   'klip-op-col--actions text-center align-middle font-semibold whitespace-nowrap px-2 py-1.5'

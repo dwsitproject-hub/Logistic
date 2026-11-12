@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Ship, X } from 'lucide-react'
+import { Ship, X, Loader2, Save } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -416,6 +416,7 @@ export function EditVesselModal({
             </Button>
             {isAdmin ? (
               <Button onClick={handleSubmit} disabled={saving}>
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Save className="mr-2 h-4 w-4" aria-hidden />}
                 {saving ? 'Saving...' : 'Save'}
               </Button>
             ) : null}

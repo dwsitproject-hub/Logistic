@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2 } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2, Ban } from 'lucide-react'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -115,6 +115,8 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { refreshDocumentPresence } from '@/lib/documentPresence'
+import { ListPager } from '@/components/performance/ListPager'
 import { compareByStack, sortEntryFor, sortPriority, type SortEntry, type SortValue } from '@/lib/sortStack'
 import { nextShipmentsSortStack, shipmentsSortStackParam } from '@/lib/shipmentsSortStack'
 import {
@@ -749,8 +751,8 @@ function ShipmentRowEditButton({
       aria-disabled={!hasShipmentEditData}
       className={
         hasShipmentEditData
-          ? undefined
-          : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-300 opacity-60 shadow-none hover:bg-gray-100 hover:text-gray-300'
+          ? 'h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50'
+          : 'h-8 w-8 cursor-not-allowed border-transparent bg-transparent text-gray-300 shadow-none hover:bg-transparent hover:text-gray-300'
       }
     >
       <Pencil className="h-4 w-4" />
@@ -6006,6 +6008,7 @@ function ShipmentsPageContent() {
         const docId = res.data?.data?.id ? String(res.data.data.id) : null
         setDocId(docId)
         setUploaded(true)
+        refreshDocumentPresence()
         if (showDocs && selectedShipment) {
           await fetchShipmentDocuments(selectedShipment)
         }
@@ -6292,6 +6295,7 @@ function ShipmentsPageContent() {
       })
       if (res.data?.success) {
         alert('Document uploaded successfully!')
+        refreshDocumentPresence()
         if (selectedShipment && selectedShipment.id === shipment.id) {
           await fetchShipmentDocuments(shipment)
         }
@@ -7345,14 +7349,6 @@ function ShipmentsPageContent() {
                       </>
                     ) : null}
                   </p>
-                <SortStackSummary
-                  stack={sortStack}
-                  labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
-                  onReset={() => {
-                    setSortStack(defaultSortStack)
-                    setPage(1)
-                  }}
-                />
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {statusFilter === 'UNPLANNED' && selectedManualGroupContractIds.size > 0 ? (
@@ -7387,6 +7383,14 @@ function ShipmentsPageContent() {
                     </Button>
                   </div>
                 ) : null}
+                <SortStackSummary
+                  stack={sortStack}
+                  labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+                  onReset={() => {
+                    setSortStack(defaultSortStack)
+                    setPage(1)
+                  }}
+                />
                 <Button
                   variant="outline"
                   size="sm"
@@ -7546,52 +7550,6 @@ function ShipmentsPageContent() {
                     )}
                   </Button>
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(page - 1)}
-                      disabled={page <= 1 || listFetching || section3TableLoading}
-                    >
-                      Previous
-                    </Button>
-                    <div className="flex items-center gap-1">
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let pageNum: number
-                        if (totalPages <= 5) {
-                          pageNum = i + 1
-                        } else if (page <= 3) {
-                          pageNum = i + 1
-                        } else if (page >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i
-                        } else {
-                          pageNum = page - 2 + i
-                        }
-                        return (
-                          <Button
-                            key={pageNum}
-                            variant={page === pageNum ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => handlePageChange(pageNum)}
-                            disabled={listFetching || section3TableLoading}
-                            className="min-w-[40px]"
-                          >
-                            {pageNum}
-                          </Button>
-                        )
-                      })}
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(page + 1)}
-                      disabled={page >= totalPages || listFetching || section3TableLoading}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                )}
               </div>
             </div>
           </CardHeader>
@@ -7706,9 +7664,9 @@ function ShipmentsPageContent() {
                         })}
                         <th
                           scope="col"
-                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} border-l text-center align-bottom font-semibold whitespace-nowrap shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} text-center align-bottom font-semibold whitespace-nowrap ${CONTRACT_PERF_TABLE_CELL_PAD}`}
                         >
-                          Actions
+                          <span className="sr-only">Actions</span>
                         </th>
                         </tr>
                         </thead>
@@ -7764,7 +7722,7 @@ function ShipmentsPageContent() {
                                     )
                                   })}
                                   <td
-                                    className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}
+                                    className={`sticky right-0 z-10 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}
                                   >
                                     <ShipmentViewTableRowActions
                                       shipment={{
@@ -7842,7 +7800,7 @@ function ShipmentsPageContent() {
                                     )
                                   })}
                                   <td
-                                    className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
+                                    className={`sticky right-0 z-10 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
                                   />
                                 </tr>,
                               )
@@ -8050,7 +8008,7 @@ function ShipmentsPageContent() {
                                     )
                                   })}
 
-                                  <td className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
+                                  <td className={`sticky right-0 z-10 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
                                     {tableInlineEditActive ? (
                                       <div className="hidden">
                                         <>
@@ -8533,64 +8491,15 @@ function ShipmentsPageContent() {
                   )}
                   </div>
 
-                {totalPages > 1 && (
-                  <div className="mt-6 flex items-center justify-between border-t pt-4">
-                    <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} (
-                      {tableShipmentCount}{' '}
-                      {statusFilter === 'PREPLANNED'
-                        ? tableShipmentCount === 1
-                          ? 'grouping'
-                          : 'groupings'
-                        : 'total shipments'}
-                      )
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(page - 1)}
-                        disabled={page <= 1 || listFetching || section3TableLoading}
-                      >
-                        Previous
-                      </Button>
-                      <div className="flex items-center gap-1">
-                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                          let pageNum: number
-                          if (totalPages <= 5) {
-                            pageNum = i + 1
-                          } else if (page <= 3) {
-                            pageNum = i + 1
-                          } else if (page >= totalPages - 2) {
-                            pageNum = totalPages - 4 + i
-                          } else {
-                            pageNum = page - 2 + i
-                          }
-                          return (
-                            <Button
-                              key={pageNum}
-                              variant={page === pageNum ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => handlePageChange(pageNum)}
-                              disabled={listFetching || section3TableLoading}
-                              className="min-w-[40px]"
-                            >
-                              {pageNum}
-                            </Button>
-                          )
-                        })}
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(page + 1)}
-                        disabled={page >= totalPages || listFetching || section3TableLoading}
-                      >
-                        Next
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                <ListPager
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={handlePageChange}
+                  disabled={listFetching || section3TableLoading}
+                  summary={`Showing page ${page} of ${totalPages} (${tableShipmentCount.toLocaleString('en-US')} ${
+                    statusFilter === 'PREPLANNED' ? (tableShipmentCount === 1 ? 'grouping' : 'groupings') : 'total shipments'
+                  })`}
+                />
             </div>
           </CardContent>
         </Card>
@@ -9836,6 +9745,7 @@ function ShipmentsPageContent() {
               onClick={handleConfirmCancelLoadingPort}
               disabled={cancelPortSubmitting || !cancelPortRemark.trim()}
             >
+              {cancelPortSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Ban className="mr-2 h-4 w-4" aria-hidden />}
               {cancelPortSubmitting ? 'Cancelling...' : 'Confirm Cancel'}
             </Button>
           </DialogFooter>

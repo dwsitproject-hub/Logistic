@@ -2,7 +2,7 @@ import express from 'express';
 import { authenticateToken, authorizePermission } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import multer from 'multer';
-import { downloadDocument, viewDocument, listDocuments, uploadDocumentHandler, deleteShipmentDocument, ensureUploadDir } from '../controllers/document.controller';
+import { downloadDocument, viewDocument, listDocuments, documentPresence, uploadDocumentHandler, deleteShipmentDocument, ensureUploadDir } from '../controllers/document.controller';
 import { buildUniqueStoredFilename } from '../utils/fileUpload';
 
 const router = express.Router();
@@ -53,6 +53,9 @@ const upload = multer({
 
 // List documents (filter by contractId/shipmentId)
 router.get('/', listDocuments);
+
+// Which of these shipments / contracts have a document (the Shipments Docs button is off for the ones that have none)
+router.get('/presence', documentPresence);
 
 // Upload document
 router.post('/upload', upload.single('file'), auditLog('CREATE', 'DOCUMENT'), uploadDocumentHandler);

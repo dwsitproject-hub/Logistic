@@ -19,10 +19,9 @@ import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
 import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
 import { useListColumnLayout } from '@/lib/listColumnLayout'
-import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
-import { Plus } from 'lucide-react'
+import { Plus, Save } from 'lucide-react'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 
 interface Product {
@@ -31,6 +30,9 @@ interface Product {
   long_name?: string | null
   commodity_type?: string | null
   material_code?: string | null
+  /** Derived on read: the product (SAP text) contracts carry for this material_code, and how many contracts use it. */
+  klip_product?: string | null
+  klip_contracts?: number | null
   material_group?: string | null
   hs_code?: string | null
   uom?: string | null
@@ -48,14 +50,16 @@ const COMMODITY_TYPES = ['liquid', 'solid', 'Fuel, Greases, & Lub', 'Chemical', 
 
 const PRODUCT_COLUMNS: MasterListTableColumn<Product>[] = [
   { id: 'code_klip', label: 'Product Code (KLIP)', getText: (row) => row.code_klip || '-' },
-  { id: 'code_dhm', label: 'Product Code (DHM)', getText: (row) => row.code_dhm || '-' },
+  { id: 'code_dhm', label: 'Code (DHM)', getText: (row) => row.code_dhm || '-' },
   { id: 'material_code', label: 'Material Code (SAP)', getText: (row) => row.material_code || '-' },
-  { id: 'product_name', label: 'Product', getText: (row) => row.product_name || '-' },
-  { id: 'long_name', label: 'Long Name', getText: (row) => row.long_name || '-' },
-  { id: 'commodity_type', label: 'Type', getText: (row) => row.commodity_type || '-' },
-  { id: 'material_group', label: 'Material Group', getText: (row) => row.material_group || '-' },
-  { id: 'hs_code', label: 'HS Code', getText: (row) => row.hs_code || '-' },
-  { id: 'uom', label: 'UoM', getText: (row) => row.uom || '-' },
+  { id: 'klip_product', label: 'KLIP Product (SAP)', getText: (row) => row.klip_product || '-' },
+  { id: 'klip_contracts', label: 'Contracts', getText: (row) => (row.klip_contracts ? String(row.klip_contracts) : '-') },
+  { id: 'product_name', label: 'Short Name (DHM)', getText: (row) => row.product_name || '-' },
+  { id: 'long_name', label: 'Long Name (DHM)', getText: (row) => row.long_name || '-' },
+  { id: 'commodity_type', label: 'Type (DHM)', getText: (row) => row.commodity_type || '-' },
+  { id: 'material_group', label: 'Material Group (DHM)', getText: (row) => row.material_group || '-' },
+  { id: 'hs_code', label: 'HS Code (DHM)', getText: (row) => row.hs_code || '-' },
+  { id: 'uom', label: 'UoM (DHM)', getText: (row) => row.uom || '-' },
   dhmStatusListColumn<Product>(),
 ]
 
@@ -73,6 +77,7 @@ export default function MasterProductConfigurationPage() {
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
   const [form, setForm] = useState<any>({ product_name: '', percent_produce: '', working_hours_per_day: '', working_days_per_month: '', working_days_per_year: '' })
+  const [usedOnly, setUsedOnly] = useState(true)
   const [sortKey, setSortKey] = useState('product_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [isAdmin, setIsAdmin] = useState(false)
@@ -91,7 +96,7 @@ export default function MasterProductConfigurationPage() {
     }
   }, [router])
 
-  const fetchData = useCallback(async (pageNum: number, searchQuery: string) => {
+  const fetchData = useCallback(async (pageNum: number, searchQuery: string, onlyUsed: boolean) => {
     setLoading(true)
     setError('')
     try {
@@ -99,6 +104,8 @@ export default function MasterProductConfigurationPage() {
       params.append('page', String(pageNum))
       params.append('limit', String(limit))
       if (searchQuery) params.append('search', searchQuery)
+      params.append('withUsage', 'true')
+      if (onlyUsed) params.append('usedInKlip', 'true')
       const res = await api.get(`/products?${params.toString()}`)
       setItems(res.data.data.items)
       setTotal(res.data.data.total)
@@ -116,11 +123,11 @@ export default function MasterProductConfigurationPage() {
       return
     }
     setPage(1)
-  }, [debouncedSearch])
+  }, [debouncedSearch, usedOnly])
 
   useEffect(() => {
-    void fetchData(page, debouncedSearch)
-  }, [page, debouncedSearch, fetchData])
+    void fetchData(page, debouncedSearch, usedOnly)
+  }, [page, debouncedSearch, usedOnly, fetchData])
 
   const openAdd = () => { setEditing(null); setForm({ product_name: '' }); setShowModal(true) }
   const openEdit = (p: Product) => { setEditing(p); setForm({ ...p }); setShowModal(true) }
@@ -146,7 +153,7 @@ export default function MasterProductConfigurationPage() {
         await saveWithDhmConfirm((overwrite) => api.post(`/products${overwrite ? '?dhmOverwrite=true' : ''}`, payload), noun)
         setSuccess('Product created')
       }
-      setShowModal(false); void fetchData(page, debouncedSearch)
+      setShowModal(false); void fetchData(page, debouncedSearch, usedOnly)
     } catch (err: any) {
       const msg = err?.response?.data?.error?.message 
         || (err?.response ? `${err.response.status} ${err.response.statusText}` : '')
@@ -178,7 +185,7 @@ export default function MasterProductConfigurationPage() {
             <div className="relative">
               <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input
-                placeholder="Product name"
+                placeholder="Short name, long name, material code or DHM code"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
@@ -190,7 +197,7 @@ export default function MasterProductConfigurationPage() {
                 <Plus className="h-4 w-4 mr-2" />
                 New Product
               </Button>
-              {isAdmin ? <MasterDhmSyncButton master="product" onDone={() => void fetchData(page, debouncedSearch)} /> : null}
+              {isAdmin ? <MasterDhmSyncButton master="product" onDone={() => void fetchData(page, debouncedSearch, usedOnly)} /> : null}
             </div>
           </div>
       </ListFilterPanel>
@@ -213,6 +220,10 @@ export default function MasterProductConfigurationPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none" title="On: only products whose Material Code is on at least one KLIP contract. Off: the whole DHM catalog.">
+                <input type="checkbox" className="h-3.5 w-3.5" checked={usedOnly} onChange={(e) => setUsedOnly(e.target.checked)} />
+                Used in KLIP only
+              </label>
               <ListPageColumnsMenu
                 columns={productColumns.menuColumns}
                 visibleIds={productColumns.visibleIds}
@@ -235,6 +246,9 @@ export default function MasterProductConfigurationPage() {
         <CardContent>
           <MasterListCompactTable
             tightActions
+            fitContent
+            onRowClick={openEdit}
+            rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
             rows={[...items].sort((a, b) => {
               const col = PRODUCT_COLUMNS.find((item) => item.id === sortKey)
               const left = col?.getText(a) ?? ''
@@ -261,12 +275,6 @@ export default function MasterProductConfigurationPage() {
               if (productColumns.dragColId) productColumns.reorder(productColumns.dragColId, id)
               productColumns.setDragColId(null)
             }}
-            renderActions={(row) => (
-              <MasterRowActions
-                editLabel={isAdmin ? 'Edit product' : 'View product'}
-                onEdit={() => openEdit(row)}
-              />
-            )}
           />
         </CardContent>
       </Card>
@@ -281,11 +289,11 @@ export default function MasterProductConfigurationPage() {
                 <Input value={editing?.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
               </div>
               <div className="space-y-1">
-                <Label>Product Code (DHM)</Label>
+                <Label>Code (DHM)</Label>
                 <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
               </div>
               <div className="space-y-1 md:col-span-2">
-                <Label>Product</Label>
+                <Label>Short Name (DHM)</Label>
                 <Input
                   value={form.product_name ?? ''}
                   onChange={(e) => setForm((f: { product_name?: string }) => ({ ...f, product_name: e.target.value }))}
@@ -293,14 +301,14 @@ export default function MasterProductConfigurationPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>Long Name</Label>
+                <Label>Long Name (DHM)</Label>
                 <Input
                   value={form.long_name ?? ''}
                   onChange={(e) => setForm((f: Product) => ({ ...f, long_name: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
-                <Label>Type</Label>
+                <Label>Type (DHM)</Label>
                 <select
                   className="w-full rounded-md border px-3 py-2 text-sm"
                   value={form.commodity_type ?? ''}
@@ -324,21 +332,21 @@ export default function MasterProductConfigurationPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>Material Group</Label>
+                <Label>Material Group (DHM)</Label>
                 <Input
                   value={form.material_group ?? ''}
                   onChange={(e) => setForm((f: Product) => ({ ...f, material_group: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
-                <Label>HS Code</Label>
+                <Label>HS Code (DHM)</Label>
                 <Input
                   value={form.hs_code ?? ''}
                   onChange={(e) => setForm((f: Product) => ({ ...f, hs_code: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
-                <Label>UoM</Label>
+                <Label>UoM (DHM)</Label>
                 <Input
                   value={form.uom ?? ''}
                   onChange={(e) => setForm((f: Product) => ({ ...f, uom: e.target.value }))}
@@ -346,7 +354,7 @@ export default function MasterProductConfigurationPage() {
               </div>
               <div className="col-span-full flex justify-end gap-2 mt-2">
                 <Button type="button" variant="outline" onClick={() => setShowModal(false)}>Cancel</Button>
-                <Button type="submit">Save</Button>
+                <Button type="submit"><Save className="mr-2 h-4 w-4" aria-hidden />Save</Button>
               </div>
             </form>
           </div>

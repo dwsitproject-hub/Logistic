@@ -342,6 +342,30 @@ function UserModal({
   const [busy, setBusy] = useState(false)
   const [addingRole, setAddingRole] = useState(false)
   const [error, setError] = useState('')
+  // The SAP user (NIK) of this account, which decides the "Created by" the Documents page opens with. '' = Auto (the name is matched). Existing users only.
+  const [sapUser, setSapUser] = useState('')
+  const [sapUserInit, setSapUserInit] = useState('')
+  const [sapAuto, setSapAuto] = useState<string | null>(null)
+  const [sapChoices, setSapChoices] = useState<Array<{ userId: string; name: string }>>([])
+  const [sapLoaded, setSapLoaded] = useState(!user)
+  useEffect(() => {
+    if (!user) return
+    const ctrl = new AbortController()
+    Promise.all([
+      apiData<{ mapped: string | null; auto: { userId: string; name: string } | null }>(`/commercial-documents/users/${user.id}/creator`, { signal: ctrl.signal }),
+      apiData<{ creators: Array<{ userId: string; name: string }> }>('/commercial-documents/filter-options/creators', { signal: ctrl.signal }),
+    ])
+      .then(([setting, list]) => {
+        setSapUser(setting?.mapped || '')
+        setSapUserInit(setting?.mapped || '')
+        setSapAuto(setting?.auto?.name ?? null)
+        setSapChoices(list?.creators || [])
+        setSapLoaded(true)
+      })
+      .catch(() => undefined)
+    return () => ctrl.abort()
+  }, [user])
+  const sapChanged = Boolean(user) && sapLoaded && sapUser !== sapUserInit
 
   const roleRow = roles.find((r) => r.role_name === role)
   const usesRegion = Boolean(roleRow?.uses_region_scope)
@@ -382,11 +406,12 @@ function UserModal({
           changed.plants = body.plants
           changed.products = user.products || []
         }
-        if (!Object.keys(changed).length) {
+        if (!Object.keys(changed).length && !sapChanged) {
           onSaved('No changes')
           return
         }
-        await apiJson(`/users/${user.id}`, { method: 'PUT', body: changed })
+        if (Object.keys(changed).length) await apiJson(`/users/${user.id}`, { method: 'PUT', body: changed })
+        if (sapChanged) await apiJson(`/commercial-documents/users/${user.id}/creator`, { method: 'PUT', body: { sapUserId: sapUser || null } })
         onSaved('User saved')
       } else {
         const res = await apiJson<{ invitation_sent: boolean }>('/users', { method: 'POST', body: { ...body, app: 'commdocs' } })
@@ -464,6 +489,20 @@ function UserModal({
           </select>
         </div>
       </div>
+      {user ? (
+        <div className="field">
+          <label htmlFor="u-sap">SAP user (Created by)</label>
+          <select className="select" id="u-sap" value={sapUser} onChange={(e) => setSapUser(e.target.value)} disabled={!sapLoaded}>
+            <option value="">{sapAuto ? `Auto: ${sapAuto} (matched by name)` : 'Auto: no match by name'}</option>
+            {(sapUser && !sapChoices.some((c) => c.userId === sapUser) ? [...sapChoices, { userId: sapUser, name: sapUser }] : sapChoices).map((c) => (
+              <option key={c.userId} value={c.userId}>
+                {c.name === c.userId ? c.userId : `${c.name} (${c.userId})`}
+              </option>
+            ))}
+          </select>
+          <span className="hint">The Documents page opens with this person pre-selected in Created by. Leave Auto to match by name.</span>
+        </div>
+      ) : null}
       {role === 'LOGISTICS' ? (
         <div className="field">
           <label htmlFor="u-transport">Transport type</label>

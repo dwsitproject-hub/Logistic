@@ -10,7 +10,6 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
-import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { ListFilterPanel, LIST_FILTER_FIELD_LABEL_CLASS, LIST_FILTER_FIELDS_ROW_CLASS } from '@/components/shared/ListFilterPanel'
@@ -162,6 +161,16 @@ export default function MasterSitePage() {
               <MasterListCompactTable
                 tightActions
                 fitContent
+                rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
+                onRowClick={(row) => {
+                  setEditing(row)
+                  setForm({
+                    site_name: row.site_name || '',
+                    city: row.city || '',
+                    postal_code: row.postal_code || '',
+                  })
+                  setOpen(true)
+                }}
                 rows={[...items].sort((a, b) => {
                   const col = COLUMNS.find((item) => item.id === sortKey)
                   const left = col?.getText(a) ?? ''
@@ -188,20 +197,6 @@ export default function MasterSitePage() {
                   if (layout.dragColId) layout.reorder(layout.dragColId, id)
                   layout.setDragColId(null)
                 }}
-                renderActions={(row) => (
-                  <MasterRowActions
-                    editLabel={isAdmin ? 'Edit site' : 'View site'}
-                    onEdit={() => {
-                      setEditing(row)
-                      setForm({
-                        site_name: row.site_name || '',
-                        city: row.city || '',
-                        postal_code: row.postal_code || '',
-                      })
-                      setOpen(true)
-                    }}
-                  />
-                )}
               />
               {totalPages > 1 ? (
                 <div className="mt-3 flex justify-end gap-2">

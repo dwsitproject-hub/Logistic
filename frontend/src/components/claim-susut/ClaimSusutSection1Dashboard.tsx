@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
+import { PerformanceStatusCard } from '@/components/performance/PerformanceStatusCard'
 import { RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
 import { formatProductList, topGroupVendorRollups } from '@/lib/claimGroupVendorRollup'
 import { CLAIM_SUSUT_BLANK, formatClaimSusutIdr } from '@/lib/claimSusutView'
@@ -184,48 +184,59 @@ export function ClaimSusutSection1Dashboard({
   return (
     <div className="space-y-4">
       <div
-        className={`grid grid-cols-1 gap-4 sm:grid-cols-2 transition-opacity duration-200 ${
+        className={`grid grid-cols-1 gap-3 sm:grid-cols-2 transition-opacity duration-200 ${
           summaryLoading || groupLoading ? 'opacity-65' : 'opacity-100'
         }`}
       >
-        <PerformanceSection1CardShell variant="open" title="Outstanding Shortage Claim" selected onClick={() => undefined}>
-          <div className="mb-1 text-sm text-gray-500">Claim Qty (Kg)</div>
-          <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatKg(summary.qtyClaim)}</div>
-          <div className="text-xs text-gray-500">
-            Amount:{' '}
-            <span className="font-semibold tabular-nums text-gray-900">{formatClaimSusutIdr(summary.amountAfterTax)} IDR</span>
-          </div>
-          <div className="mt-0.5 text-xs text-gray-500">
-            <span className="font-semibold tabular-nums text-gray-900">{summary.rowCount.toLocaleString('en-US')}</span> claims
-          </div>
-        </PerformanceSection1CardShell>
+        <PerformanceStatusCard
+          variant="open"
+          title="Outstanding Shortage Claim"
+          selected
+          label="Claim Qty (Kg)"
+          value={formatKg(summary.qtyClaim)}
+          groups={[
+            {
+              stats: [
+                { label: 'Amount', value: `${formatClaimSusutIdr(summary.amountAfterTax)} IDR` },
+                { label: 'Claims', value: summary.rowCount.toLocaleString('en-US') },
+              ],
+            },
+          ]}
+        />
 
-        <PerformanceSection1CardShell variant="completed" title="Realised Shortage Claim" selected onClick={() => undefined}>
-          {realizedAvailable ? (
-            <>
-              <div className="mb-1 text-sm text-gray-500">Approved Qty (Kg)</div>
-              <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">
-                {formatKg(realized?.totals?.qty ?? 0)}
-              </div>
-              <div className="text-xs text-gray-500">
-                Amount:{' '}
-                <span className="font-semibold tabular-nums text-gray-900">{formatClaimSusutIdr(realTotalAmount)} IDR</span>
-              </div>
-              <div className="mt-0.5 text-xs text-gray-500">
-                <span className="font-semibold tabular-nums text-gray-900">{realized?.totals?.claims ?? 0}</span> claims
-                {' '}· CR date {crDateLabel}
-              </div>
-            </>
-          ) : (
-            <div className="text-xs text-gray-500">
-              {realizedLoading
+        {realizedAvailable ? (
+          <PerformanceStatusCard
+            variant="completed"
+            title="Realised Shortage Claim"
+            selected
+            label="Approved Qty (Kg)"
+            value={formatKg(realized?.totals?.qty ?? 0)}
+            groups={[
+              {
+                stats: [
+                  { label: 'Amount', value: `${formatClaimSusutIdr(realTotalAmount)} IDR` },
+                  { label: 'Claims', value: String(realized?.totals?.claims ?? 0) },
+                  { label: 'CR date', value: crDateLabel },
+                ],
+              },
+            ]}
+          />
+        ) : (
+          <PerformanceStatusCard
+            variant="completed"
+            title="Realised Shortage Claim"
+            selected
+            label={
+              realizedLoading
                 ? 'Loading…'
                 : hasImport
                   ? 'No realised claims imported yet.'
-                  : 'Import claim data to see realised claims.'}
-            </div>
-          )}
-        </PerformanceSection1CardShell>
+                  : 'Import claim data to see realised claims.'
+            }
+            value="-"
+            groups={[]}
+          />
+        )}
       </div>
 
       <Card>

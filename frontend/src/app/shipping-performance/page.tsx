@@ -17,7 +17,11 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Eye, GripVertical, Loader2, MessageSquare, Package, SlidersHorizontal, X } from 'lucide-react'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
-import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
+import {
+  PerformanceStatusCard,
+  type PerformanceStatCell,
+  type PerformanceStatGroup,
+} from '@/components/performance/PerformanceStatusCard'
 import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
@@ -104,6 +108,8 @@ import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerf
 import { operationalTableColumnClass } from '@/lib/operationalTableLayout'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { ListPager } from '@/components/performance/ListPager'
+import { compactTableActionsColWidthPx } from '@/lib/compactTableUi'
 import {
   clickSortStack,
   serializeSortStack,
@@ -2236,72 +2242,33 @@ function ShippingPerformancePageContent() {
     setCurrentPage(1)
   }, [])
 
-  const renderSummaryPrimaryTotals = (summary: PerVesselPerfSummary) => {
-    return (
-      <>
-        <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
-        <div className="text-xl font-bold text-gray-900 mb-3 tabular-nums">
-          {summary.vesselCount.toLocaleString('en-US')}
-        </div>
-      </>
-    )
-  }
-
-  const renderSummaryGapMetrics = (summary: PerVesselPerfSummary, card: ShippingPerfCardFilter) => {
+  /** Section 1 averages: Loading (three) and Discharge (two). Neutral numbers; the formula is in each label's tooltip. */
+  const shippingSummaryGroups = (
+    card: ShippingPerfCardFilter,
+    summary: PerVesselPerfSummary,
+  ): PerformanceStatGroup[] => {
     const labelMode = card === 'close' ? 'actual' : 'estimated'
     const fmt = (days: number | null) =>
       formatAvgDays(days == null || !Number.isFinite(days) ? null : Math.abs(days))
-    const loadMetrics: { key: ShippingSummaryMetricKey; value: number | null }[] = [
-      { key: 'loadingEtr', value: summary.avgLoadingEtaEtr },
-      { key: 'loadingEtb', value: summary.avgLoadingEtaEtb },
-      { key: 'loadingEtc', value: summary.avgLoadingEtbEtc },
+    const cell = (key: ShippingSummaryMetricKey, value: number | null): PerformanceStatCell => ({
+      label: getShippingSummaryMetricLabel(key, labelMode, 'short'),
+      value: fmt(value),
+      title: getShippingSummaryMetricFormula(key, labelMode),
+    })
+    return [
+      {
+        heading: 'Loading',
+        stats: [
+          cell('loadingEtr', summary.avgLoadingEtaEtr),
+          cell('loadingEtb', summary.avgLoadingEtaEtb),
+          cell('loadingEtc', summary.avgLoadingEtbEtc),
+        ],
+      },
+      {
+        heading: 'Discharge',
+        stats: [cell('dischargeEtb', summary.avgDischargeEtaEtb), cell('dischargeEtc', summary.avgDischargeEtbEtc)],
+      },
     ]
-    const discMetrics: { key: ShippingSummaryMetricKey; value: number | null }[] = [
-      { key: 'dischargeEtb', value: summary.avgDischargeEtaEtb },
-      { key: 'dischargeEtc', value: summary.avgDischargeEtbEtc },
-    ]
-
-    const renderMetricRow = (metrics: { key: ShippingSummaryMetricKey; value: number | null }[]) => (
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        {metrics.map(({ key, value }) => {
-          const shortLabel = getShippingSummaryMetricLabel(key, labelMode, 'short')
-          const formula = getShippingSummaryMetricFormula(key, labelMode)
-          return (
-            <span key={key} className="shrink-0 cursor-help" title={formula}>
-              {shortLabel}:{' '}
-              <span
-                className={cn(
-                  'font-semibold tabular-nums',
-                  key === 'loadingEtr' ? signedCycleDaysClass(value) : 'text-gray-900',
-                )}
-              >
-                {fmt(value)}
-              </span>
-            </span>
-          )
-        })}
-      </div>
-    )
-
-    return (
-      <div className="space-y-1 text-xs text-gray-500">
-        {renderMetricRow(loadMetrics)}
-        {renderMetricRow(discMetrics)}
-      </div>
-    )
-  }
-
-  /** Section 1 body — Total Vessels; Avg Load on row 1, Avg Disc on row 2. */
-  const renderShippingSummaryCardBody = (
-    card: ShippingPerfCardFilter,
-    summary: PerVesselPerfSummary,
-  ) => {
-    return (
-      <div className="w-full min-w-0 text-left">
-        {renderSummaryPrimaryTotals(summary)}
-        {renderSummaryGapMetrics(summary, card)}
-      </div>
-    )
   }
 
   /** Section 3 column headers — recompute when Close/Open card or global status filter changes. */
@@ -2424,7 +2391,7 @@ function ShippingPerformancePageContent() {
   const showTableActionsColumn = tableViewMode !== 'by_vessel'
   const showTopRankColumn = tableViewMode === 'by_vessel'
   const tableColSpan =
-    (tableColumnKeys.length || 0) + (showTableActionsColumn ? 1 : 0) + (showTopRankColumn ? 1 : 0)
+    (tableColumnKeys.length || 0) + (showTableActionsColumn ? 2 : 0) + (showTopRankColumn ? 1 : 0)
 
   const totalPages = Math.max(1, Math.ceil(tableRows.length / pageSize))
   const paginatedRows = useMemo(
@@ -2710,30 +2677,28 @@ function ShippingPerformancePageContent() {
                 (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
               }`}
             >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <PerformanceSection1CardShell
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <PerformanceStatusCard
                   variant="ongoing"
                   title="ON GOING"
-                  titleSize="base"
                   selected={perfCardFilter === 'ongoing'}
                   onClick={() => togglePerfCardFilter('ongoing')}
-                  className="min-w-0 flex-1 border-2 shadow-sm"
-                  headerEnd={<ShippingPerfContractsBadge count={ongoingPerformanceSummary.contractCount} />}
-                >
-                  {renderShippingSummaryCardBody('ongoing', ongoingPerformanceSummary)}
-                </PerformanceSection1CardShell>
+                  label="Total Vessels"
+                  value={ongoingPerformanceSummary.vesselCount.toLocaleString('en-US')}
+                  middle={<ShippingPerfContractsBadge count={ongoingPerformanceSummary.contractCount} />}
+                  groups={shippingSummaryGroups('ongoing', ongoingPerformanceSummary)}
+                />
 
-                <PerformanceSection1CardShell
+                <PerformanceStatusCard
                   variant="completed"
                   title="COMPLETED"
-                  titleSize="base"
                   selected={perfCardFilter === 'close'}
                   onClick={() => togglePerfCardFilter('close')}
-                  className="min-w-0 flex-1 border-2 shadow-sm"
-                  headerEnd={<ShippingPerfContractsBadge count={closePerformanceSummary.contractCount} />}
-                >
-                  {renderShippingSummaryCardBody('close', closePerformanceSummary)}
-                </PerformanceSection1CardShell>
+                  label="Total Vessels"
+                  value={closePerformanceSummary.vesselCount.toLocaleString('en-US')}
+                  middle={<ShippingPerfContractsBadge count={closePerformanceSummary.contractCount} />}
+                  groups={shippingSummaryGroups('close', closePerformanceSummary)}
+                />
               </div>
             </div>
           )
@@ -3019,18 +2984,6 @@ function ShippingPerformancePageContent() {
                     </>
                   )}
                 </p>
-              <SortStackSummary
-                stack={sortStack}
-                labelFor={(key) => {
-                  const col = COLUMN_MAP[String(key)]
-                  return col ? getColumnHeaderLabel(col) : String(key)
-                }}
-                onReset={() => {
-                  setSortStack(DEFAULT_SHIPPING_PERF_SORT)
-                  setUseTopRankSort(false)
-                  setCurrentPage(1)
-                }}
-              />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="inline-flex rounded-lg border bg-white p-1">
@@ -3050,6 +3003,18 @@ function ShippingPerformancePageContent() {
                 </button>
               </div>
               <div className="flex flex-wrap items-center gap-2 ml-auto">
+              <SortStackSummary
+                stack={sortStack}
+                labelFor={(key) => {
+                  const col = COLUMN_MAP[String(key)]
+                  return col ? getColumnHeaderLabel(col) : String(key)
+                }}
+                onReset={() => {
+                  setSortStack(DEFAULT_SHIPPING_PERF_SORT)
+                  setUseTopRankSort(false)
+                  setCurrentPage(1)
+                }}
+              />
               <div ref={columnsMenuRef} className="relative">
                 <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)} disabled={summaryFetching || section3TableLoading}>
                   <SlidersHorizontal className="h-4 w-4 mr-2" />
@@ -3136,31 +3101,6 @@ function ShippingPerformancePageContent() {
                   </div>
                 )}
               </div>
-              {totalPages > 1 && (
-                <div className="flex flex-wrap items-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1 || summaryFetching || section3TableLoading}>
-                    Previous
-                  </Button>
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum: number
-                    if (totalPages <= 5) { pageNum = i + 1 }
-                    else if (currentPage <= 3) { pageNum = i + 1 }
-                    else if (currentPage >= totalPages - 2) { pageNum = totalPages - 4 + i }
-                    else { pageNum = currentPage - 2 + i }
-                    return (
-                      <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} disabled={summaryFetching || section3TableLoading} className="min-w-[36px]">
-                        {pageNum}
-                      </Button>
-                    )
-                  })}
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages || summaryFetching || section3TableLoading}>
-                    Next
-                  </Button>
-                  <span className="text-xs text-gray-500 ml-1 tabular-nums">
-                    Page {currentPage} of {totalPages}
-                  </span>
-                </div>
-              )}
               </div>
             </div>
           </CardHeader>
@@ -3204,6 +3144,7 @@ function ShippingPerformancePageContent() {
                     COMPACT_OPERATIONAL_TABLE_CLASS,
                     COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                     'klip-compact-table--perf-narrow-cols',
+                    showTableActionsColumn && 'klip-actions-w-2',
                   )}
                 >
                   <colgroup>
@@ -3222,9 +3163,9 @@ function ShippingPerformancePageContent() {
                         />
                       )
                     })}
-                    {showTableActionsColumn ? (
-                      <col style={{ width: 120 }} />
-                    ) : null}
+                    {/* An empty column with no width takes the slack, so Actions keeps its own width on a wide screen. */}
+                    {showTableActionsColumn ? <col /> : null}
+                    {showTableActionsColumn ? <col style={{ width: compactTableActionsColWidthPx(2) }} /> : null}
                   </colgroup>
                   <thead>
                     <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
@@ -3287,9 +3228,10 @@ function ShippingPerformancePageContent() {
                           </th>
                         )
                       })}
+                      {showTableActionsColumn ? <th aria-hidden="true" className="sticky top-0 z-20 bg-gray-50 p-0" /> : null}
                       {showTableActionsColumn ? (
                         <th scope="col" className={COMPACT_TABLE_ACTIONS_HEADER_CLASS}>
-                          Actions
+                          <span className="sr-only">Actions</span>
                         </th>
                       ) : null}
                     </tr>
@@ -3525,9 +3467,10 @@ function ShippingPerformancePageContent() {
                               </td>
                             )
                           })}
+                          {showTableActionsColumn ? <td aria-hidden="true" className={cn('p-0', stripeClass)} /> : null}
                           {showTableActionsColumn ? (
                             <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
-                              <div className="flex items-center justify-center gap-2">
+                              <div className="flex items-center justify-center gap-1">
                                 {String(row.id || '').trim() ? (
                                   <>
                                     <Button
@@ -3535,7 +3478,7 @@ function ShippingPerformancePageContent() {
                                       size="icon"
                                       onClick={() => openViewShipmentFromRow(row)}
                                       title="View shipment"
-                                      className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                      className="h-8 w-8 border-transparent bg-transparent text-green-600 hover:bg-green-50"
                                     >
                                       <Eye className="h-4 w-4" />
                                     </Button>
@@ -3561,7 +3504,7 @@ function ShippingPerformancePageContent() {
                                               '',
                                           })
                                         }
-                                        className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 disabled:opacity-40"
+                                        className="h-8 w-8 border-transparent bg-transparent text-orange-600 hover:bg-orange-50 disabled:opacity-40"
                                       >
                                         <MessageSquare className="h-4 w-4" />
                                       </Button>
@@ -3580,6 +3523,14 @@ function ShippingPerformancePageContent() {
                 </div>
               </div>
             </div>
+
+            <ListPager
+              page={currentPage}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
+              disabled={summaryFetching || section3TableLoading}
+              summary={`Page ${currentPage} of ${totalPages}`}
+            />
 
             <p className="text-xs text-gray-500 mt-3">
               Delta unit is day difference. Records include transport mode SEA or MIX only.

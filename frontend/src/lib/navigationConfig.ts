@@ -103,8 +103,34 @@ export const ALL_NAV_ITEMS: NavItem[] = [
     group: 'master',
   },
   { name: 'Master Company (External)', href: '/master-company-ext', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers', group: 'master' },
+  { name: 'Users', href: '/users', icon: StitchNavIcons.users, roles: ['ALL'], permissionKey: 'page.users', group: 'system' },
   { name: 'Logistics Data', href: '/sap-imports', icon: StitchNavIcons.sapData, roles: ['ALL'], permissionKey: 'page.sap', group: 'system' },
   { name: 'Claim Data', href: '/claim-data', icon: FileSpreadsheet, roles: ['ADMIN'], permissionKey: 'page.claim_data', group: 'system' },
+  // Holds the credentials KLIP uses on other systems - ADMIN only, and no read-only tier (migration 189).
+  {
+    name: 'Integrations',
+    href: '/integrations',
+    icon: Plug,
+    roles: ['ADMIN'],
+    permissionKey: 'page.integrations',
+    group: 'system',
+  },
+  {
+    name: 'Audit Logs',
+    href: '/audit',
+    icon: StitchNavIcons.audit,
+    roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT'],
+    permissionKey: 'page.audit',
+    group: 'system',
+  },
+  {
+    name: 'AI Agent Activity Log',
+    href: '/ai-klip-agent-activity',
+    icon: StitchNavIcons.activity,
+    roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT', 'MANAGEMENT', 'LOGISTICS'],
+    permissionKey: 'page.ai_klip_agent_activity',
+    group: 'system',
+  },
   { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360', group: 'system' },
   {
     name: 'Customer 360',
@@ -123,33 +149,6 @@ export const ALL_NAV_ITEMS: NavItem[] = [
     group: 'system',
   },
   { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Bot, roles: ['ALL'], permissionKey: 'page.klip_agent_ai', group: 'system' },
-  {
-    name: 'AI Agent Activity Log',
-    href: '/ai-klip-agent-activity',
-    icon: StitchNavIcons.activity,
-    roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT', 'MANAGEMENT', 'LOGISTICS'],
-    permissionKey: 'page.ai_klip_agent_activity',
-    group: 'system',
-  },
-  { name: 'Documents', href: '/documents', icon: StitchNavIcons.documents, roles: ['ALL'], permissionKey: 'page.documents', group: 'system' },
-  { name: 'Users', href: '/users', icon: StitchNavIcons.users, roles: ['ALL'], permissionKey: 'page.users', group: 'system' },
-  {
-    name: 'Audit Logs',
-    href: '/audit',
-    icon: StitchNavIcons.audit,
-    roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT'],
-    permissionKey: 'page.audit',
-    group: 'system',
-  },
-  // Holds the credentials KLIP uses on other systems - ADMIN only, and no read-only tier (migration 189).
-  {
-    name: 'Integrations',
-    href: '/integrations',
-    icon: Plug,
-    roles: ['ADMIN'],
-    permissionKey: 'page.integrations',
-    group: 'system',
-  },
 ]
 
 /** What KLIP shows: without Commercial Documents / Commercial Dashboard once they live in their own app. */

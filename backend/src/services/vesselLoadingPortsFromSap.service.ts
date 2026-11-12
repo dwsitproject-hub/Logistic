@@ -650,9 +650,37 @@ function emptyLoadingPortRow(sequence: number, portName: string): SapPortRow {
 export async function buildVesselLoadingPortsPlanForShipment(
   shipmentId: string,
 ): Promise<SapPortRow[]> {
-  const latest = await resolveLatestSapParsedDataForShipment(shipmentId);
-  if (!latest) return [];
+  const resolved = await resolveLatestSapRowForShipment(shipmentId);
+  if (!resolved) return [];
+  const plan = await buildPlanFromSapRow(shipmentId, resolved.data);
+  // A row that is not the shipment's OWN STO's (a manual / operation shipment, whose STO SAP does not know, falls back to a row of the same contract) may name the
+  // ports, but its dates and readings belong to another voyage of the PO: it must not date this one.
+  return resolved.ownStoMatch ? plan : plan.map(keepOnlyPortNames);
+}
 
+/**
+ * A port plan row reduced to what is true of the PORT whichever STO the SAP row belongs to: its name and its place in the sequence. Every date, quantity and reading becomes null.
+ *
+ * Found on operation OP-1004030473-49138234 (2026-11-12): five shipments of a manual STO showed an ATC (2026-09-15) nobody typed, copied from the finished voyage (STO 1006019867) of
+ * the same POs. See resolveLatestSapRowForShipment.
+ */
+export function keepOnlyPortNames(row: SapPortRow): SapPortRow {
+  const out: SapPortRow = {};
+  for (const [key, value] of Object.entries(row)) {
+    const isDateOrReading =
+      /^(ata|eta)_/.test(key) ||
+      /^(quality|sap_quality|sap_ata)_/.test(key) ||
+      key === 'loading_rate' ||
+      key === 'quantity_at_loading_port';
+    out[key] = isDateOrReading ? null : value;
+  }
+  return out;
+}
+
+async function buildPlanFromSapRow(
+  shipmentId: string,
+  latest: Record<string, unknown>,
+): Promise<SapPortRow[]> {
   const classic = buildVesselLoadingPortsFromSapParsedData(latest);
   const classicLoading = classic.filter((p) => p.is_discharge_port !== true);
   const discharge = classic.find((p) => p.is_discharge_port === true);
@@ -706,11 +734,19 @@ export async function buildVesselLoadingPortsPlanForShipment(
   return classic;
 }
 
-async function resolveLatestSapParsedDataForShipment(
-  shipmentId: string,
-): Promise<Record<string, unknown> | null> {
-  const result = await query(
-    `WITH ship AS (
+/**
+ * The SAP row that supplies a shipment's ports and their DATES, with a flag for whether it is the shipment's OWN.
+ *
+ * Own (rank 0) is a SAP row whose STO is the shipment's shipment_id or operation_id. contracts.sto_number is NOT the shipment's: it is the contract's STO, and one contract carries
+ * several (migrations 169 / 170 / 173 cleared dates written from it before). It counts only for a shipment with no STO reference of its own at all.
+ *
+ * Everything else is the fallback, kept because SAP carries the PO's ports on rows with no STO and a shipment made in KLIP has none of its own (see
+ * resolveSapParsedDataForGroupContracts): a row of the same contract, newest first. The caller keeps its PORT NAMES and nothing else (keepOnlyPortNames).
+ *
+ * Before 2026-11-12 the exact branch also matched contracts.sto_number, and the fallback's rows were used whole. A manual operation (STO MNL-50527716-..., vessel
+ * MT. MULIA KARSA 2) was given the ATA / ATC of the PO's finished voyage on another STO: opening Edit Shipment wrote it into the discharge-port row of all five of its POs.
+ */
+export const SQL_RESOLVE_LATEST_SAP_ROW_FOR_SHIPMENT = `WITH ship AS (
        SELECT s.id, s.shipment_id, s.operation_id, c.contract_id, c.sto_number
        FROM shipments s
        LEFT JOIN contracts c ON c.id = s.contract_id
@@ -718,42 +754,40 @@ async function resolveLatestSapParsedDataForShipment(
      )
      SELECT
        spd.data,
-       /*
-        * Rank an exact STO match ahead of the contract-wide fallback.
-        *
-        * A contract can carry many STOs, each with its own SAP row. Ordering purely by
-        * created_at let a NEWER SIBLING STO of the same contract outrank the shipment's own
-        * STO, so the shipment inherited that sibling's vessel and quality values — e.g. STO
-        * 1016010973 showed FFA 0.000 because sibling 1016010976 was imported a day later,
-        * while SAP reported FFA 4.841 for 1016010973 itself.
-        *
-        * The fallback is kept for shipments that carry no usable STO reference at all; it is
-        * just no longer allowed to beat a direct hit.
-        */
        CASE
          WHEN NULLIF(TRIM(spd.sto_number::text), '') IS NOT NULL AND (
-           TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.sto_number::text), '')
-           OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.shipment_id::text), '')
+           TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.shipment_id::text), '')
            OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.operation_id::text), '')
          ) THEN 0
+         WHEN NULLIF(TRIM(sh.shipment_id::text), '') IS NULL AND NULLIF(TRIM(sh.operation_id::text), '') IS NULL
+          AND NULLIF(TRIM(spd.sto_number::text), '') IS NOT NULL
+          AND TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.sto_number::text), '') THEN 0
          ELSE 1
        END AS sto_match_rank
      FROM sap_processed_data spd
      CROSS JOIN ship sh
      WHERE (
        NULLIF(TRIM(spd.sto_number::text), '') IS NOT NULL AND (
-         TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.sto_number::text), '')
-         OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.shipment_id::text), '')
+         TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.shipment_id::text), '')
          OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.operation_id::text), '')
+         OR (
+           NULLIF(TRIM(sh.shipment_id::text), '') IS NULL AND NULLIF(TRIM(sh.operation_id::text), '') IS NULL
+           AND TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.sto_number::text), '')
+         )
        )
        OR (sh.contract_id IS NOT NULL AND spd.contract_number = sh.contract_id)
      )
      ORDER BY sto_match_rank ASC, spd.created_at DESC NULLS LAST, spd.updated_at DESC NULLS LAST
-     LIMIT 1`,
-    [shipmentId],
-  );
-  const data = result.rows[0]?.data;
-  return data && typeof data === 'object' ? (data as Record<string, unknown>) : null;
+     LIMIT 1`;
+
+export async function resolveLatestSapRowForShipment(
+  shipmentId: string,
+): Promise<{ data: Record<string, unknown>; ownStoMatch: boolean } | null> {
+  const result = await query(SQL_RESOLVE_LATEST_SAP_ROW_FOR_SHIPMENT, [shipmentId]);
+  const row = result.rows[0];
+  const data = row?.data;
+  if (!data || typeof data !== 'object') return null;
+  return { data: data as Record<string, unknown>, ownStoMatch: Number(row.sto_match_rank) === 0 };
 }
 
 async function upsertVesselLoadingPortRow(

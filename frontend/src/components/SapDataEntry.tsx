@@ -7,6 +7,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import api from '../lib/api';
+import { Loader2, Save } from 'lucide-react'
 
 interface FieldMapping {
   id: string;
@@ -237,6 +238,7 @@ const SapDataEntry: React.FC<SapDataEntryProps> = ({ userRole }) => {
                     disabled={saving}
                     className="w-full md:w-auto"
                   >
+                    {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Save className="mr-2 h-4 w-4" aria-hidden />}
                     {saving ? 'Saving...' : 'Save Data'}
                   </Button>
                   <Button

@@ -124,7 +124,8 @@ export default function OilLossDrilldownSection({
               isRefreshing ? 'opacity-65' : 'opacity-100'
             }`}
           >
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            {/* Always one row of four. Each column keeps at least 190px; on a narrow screen the row scrolls sideways instead of wrapping into two rows. */}
+            <div className="grid grid-cols-[repeat(4,minmax(190px,1fr))] gap-3 overflow-x-auto pb-1">
               {OIL_LOSS_DRILLDOWN_CATEGORIES.map(({ level, title }) => {
                 const style = OIL_LOSS_DRILLDOWN_LEVEL_STYLES[level]
                 const subtitle = oilLossDrilldownColumnSubtitle(level, filters)

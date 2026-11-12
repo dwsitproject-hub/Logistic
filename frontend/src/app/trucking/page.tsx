@@ -63,6 +63,9 @@ import {
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { ListPager } from '@/components/performance/ListPager'
+import { TruckingDocumentsButton } from '@/components/trucking/TruckingDocumentsButton'
+import { refreshDocumentPresence } from '@/lib/documentPresence'
 import {
   clickSortStack,
   compareByStack,
@@ -86,7 +89,7 @@ import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
-import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
+import { COMPACT_TABLE_ACTIONS_COL_WIDTH_PX, LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
@@ -139,7 +142,7 @@ import {
 } from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 
-const TRUCKING_ACTIONS_COL_WIDTH = 140
+const TRUCKING_ACTIONS_COL_WIDTH = COMPACT_TABLE_ACTIONS_COL_WIDTH_PX
 
 /** Hide header Upload CSV + Create New above Global Filters — set true to restore. */
 const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false
@@ -306,13 +309,10 @@ function TruckTableAddTruckingButton({ onAdd }: { onAdd: () => void }) {
           variant="outline"
           size="icon"
           onClick={onAdd}
-          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+          className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
           aria-label="Add Trucking"
         >
-          <span className="relative inline-flex h-4 w-4 items-center justify-center">
-            <Truck className="h-4 w-4" />
-            <Plus className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
-          </span>
+          <Truck className="h-4 w-4" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">Add Trucking</TooltipContent>
@@ -339,15 +339,12 @@ function TruckTableEditTruckingButton({
       disabled={disabled}
       className={
         disabled
-          ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed hover:bg-gray-50'
-          : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+          ? 'h-8 w-8 border-transparent bg-transparent text-gray-300 cursor-not-allowed hover:bg-transparent'
+          : 'h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50'
       }
       aria-label={tooltip ?? (disabled ? disabledReason : 'Edit Trucking')}
     >
-      <span className="relative inline-flex h-4 w-4 items-center justify-center">
-        <Truck className="h-4 w-4" />
-        <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
-      </span>
+      <Truck className="h-4 w-4" />
     </Button>
   )
 
@@ -2691,6 +2688,7 @@ function TruckingPageContent() {
       })
       if (res.data?.success) {
         alert('Document uploaded successfully!')
+        refreshDocumentPresence()
         if (selectedOperation && selectedOperation.id === operation.id) {
           await fetchOperationDocuments(operation)
         }
@@ -4709,6 +4707,14 @@ function TruckingPageContent() {
               </CardTitle>
               {truckingViewToggle}
               <div className="flex flex-wrap items-center gap-2 ml-auto">
+                <SortStackSummary
+                  stack={sortStack}
+                  labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+                  onReset={() => {
+                    setSortStack(defaultSortStack)
+                    setPage(1)
+                  }}
+                />
                 <Button
                   variant="outline"
                   size="sm"
@@ -4841,52 +4847,6 @@ function TruckingPageContent() {
                     </div>
                   )}
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(page - 1)}
-                      disabled={page <= 1 || listFetching}
-                    >
-                      Previous
-                    </Button>
-                    <div className="flex items-center gap-1">
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let pageNum: number
-                        if (totalPages <= 5) {
-                          pageNum = i + 1
-                        } else if (page <= 3) {
-                          pageNum = i + 1
-                        } else if (page >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i
-                        } else {
-                          pageNum = page - 2 + i
-                        }
-                        return (
-                          <Button
-                            key={pageNum}
-                            variant={page === pageNum ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => handlePageChange(pageNum)}
-                            disabled={listFetching}
-                            className="min-w-[40px]"
-                          >
-                            {pageNum}
-                          </Button>
-                        )
-                      })}
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(page + 1)}
-                      disabled={page >= totalPages || listFetching}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                )}
               </div>
             </div>
             <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
@@ -4911,14 +4871,6 @@ function TruckingPageContent() {
                 </>
               ) : null}
             </p>
-            <SortStackSummary
-              stack={sortStack}
-              labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
-              onReset={() => {
-                setSortStack(defaultSortStack)
-                setPage(1)
-              }}
-            />
           </CardHeader>
           <CardContent>
             {showCreateForm ? (
@@ -5031,10 +4983,10 @@ function TruckingPageContent() {
                         })}
                         <th
                           scope="col"
-                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} text-center align-bottom font-semibold border-l border-gray-200 ${CONTRACT_PERF_TABLE_CELL_PAD}`}
+                          className={`${COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS} text-center align-bottom font-semibold ${CONTRACT_PERF_TABLE_CELL_PAD}`}
                           style={{ width: TRUCKING_ACTIONS_COL_WIDTH }}
                         >
-                          Actions
+                          <span className="sr-only">Actions</span>
                         </th>
                       </tr>
                       </thead>
@@ -5112,9 +5064,9 @@ function TruckingPageContent() {
                                   )
                                 })}
                                 <td
-                                  className={`sticky right-0 z-10 border-l border-gray-200 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
+                                  className={`sticky right-0 z-10 align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
                                 >
-                                  <div className="flex items-center justify-end gap-2">
+                                  <div className="flex items-center justify-center gap-1">
                                     {isEditing ? (
                                       <>
                                         <Button
@@ -5148,7 +5100,7 @@ function TruckingPageContent() {
                                             size="icon"
                                             onClick={() => handleEdit(operation)}
                                             title="Edit"
-                                            className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                            className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
                                           >
                                             <Pencil className="h-4 w-4" />
                                           </Button>
@@ -5165,19 +5117,12 @@ function TruckingPageContent() {
                                             tooltip={truckingEditTooltip(operation)}
                                           />
                                         )}
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
+                                        <TruckingDocumentsButton
+                                          operationId={operation.id}
+                                          contractId={resolveTruckingDocumentContractId(operation)}
+                                          backlog={isTruckingContractBacklogRow(operation)}
                                           onClick={() => handleViewDocuments(operation)}
-                                          title={
-                                            isTruckingContractBacklogRow(operation)
-                                              ? 'Contract documents'
-                                              : 'Documents'
-                                          }
-                                          className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                        >
-                                          <FileText className="h-4 w-4" />
-                                        </Button>
+                                        />
                                         <input
                                           id={`trucking-file-${operation.id}`}
                                           type="file"
@@ -5195,7 +5140,7 @@ function TruckingPageContent() {
                                               ? 'Upload contract document'
                                               : 'Upload'
                                           }
-                                          className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+                                          className="h-8 w-8 border-transparent bg-transparent text-red-600 hover:bg-red-50"
                                         >
                                           {uploadingId === operation.id ? (
                                             <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
@@ -5288,7 +5233,7 @@ function TruckingPageContent() {
                                     size="icon"
                                     onClick={() => handleEdit(operation)}
                                     title="Edit"
-                                    className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                    className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
                                   >
                                     <Pencil className="h-4 w-4" />
                                   </Button>
@@ -5305,19 +5250,12 @@ function TruckingPageContent() {
                                     tooltip={truckingEditTooltip(operation)}
                                   />
                                 )}
-                                <Button
-                                  variant="outline"
-                                  size="icon"
+                                <TruckingDocumentsButton
+                                  operationId={operation.id}
+                                  contractId={resolveTruckingDocumentContractId(operation)}
+                                  backlog={isTruckingContractBacklogRow(operation)}
                                   onClick={() => handleViewDocuments(operation)}
-                                  title={
-                                    isTruckingContractBacklogRow(operation)
-                                      ? 'Contract documents'
-                                      : 'Documents'
-                                  }
-                                  className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                >
-                                  <FileText className="h-4 w-4" />
-                                </Button>
+                                />
                                 <input
                                   id={`trucking-file-mobile-${operation.id}`}
                                   type="file"
@@ -5335,7 +5273,7 @@ function TruckingPageContent() {
                                       ? 'Upload contract document'
                                       : 'Upload'
                                   }
-                                  className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+                                  className="h-8 w-8 border-transparent bg-transparent text-red-600 hover:bg-red-50"
                                 >
                                   {uploadingId === operation.id ? (
                                     <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
@@ -5530,57 +5468,13 @@ function TruckingPageContent() {
                 })}
               </div>
 
-                {totalPages > 1 && (
-                  <div className="flex items-center justify-between pt-4 border-t mt-2">
-                    <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} ({tableHeaderCount.value.toLocaleString('en-US')} total {tableHeaderCount.noun})
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(page - 1)}
-                        disabled={page <= 1 || listFetching}
-                      >
-                        Previous
-                      </Button>
-                      <div className="flex items-center gap-1">
-                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                          let pageNum: number
-                          if (totalPages <= 5) {
-                            pageNum = i + 1
-                          } else if (page <= 3) {
-                            pageNum = i + 1
-                          } else if (page >= totalPages - 2) {
-                            pageNum = totalPages - 4 + i
-                          } else {
-                            pageNum = page - 2 + i
-                          }
-                          return (
-                            <Button
-                              key={pageNum}
-                              variant={page === pageNum ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => handlePageChange(pageNum)}
-                              disabled={listFetching}
-                              className="min-w-[40px]"
-                            >
-                              {pageNum}
-                            </Button>
-                          )
-                        })}
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(page + 1)}
-                        disabled={page >= totalPages || listFetching}
-                      >
-                        Next
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                <ListPager
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={handlePageChange}
+                  disabled={listFetching}
+                  summary={`Showing page ${page} of ${totalPages} (${tableHeaderCount.value.toLocaleString('en-US')} total ${tableHeaderCount.noun})`}
+                />
               </div>
             )}
           </CardContent>

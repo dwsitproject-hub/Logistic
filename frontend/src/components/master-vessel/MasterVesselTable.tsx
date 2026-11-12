@@ -1,9 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Edit2, Ship } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Ship } from 'lucide-react'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
@@ -17,13 +15,9 @@ import {
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
-  COMPACT_TABLE_ACTIONS_CELL_CLASS,
-  COMPACT_TABLE_ACTIONS_HEADER_CLASS,
-  COMPACT_TABLE_HEADER_LABEL_CLASS,
   LIST_PAGE_TABLE_HEADER_ROW_CLASS,
 } from '@/lib/compactTableUi'
 import {
-  MASTER_VESSEL_ACTIONS_COL_WIDTH_PX,
   MASTER_VESSEL_COLUMNS,
   sumMasterVesselTableWidthPx,
   type MasterVesselColumnId,
@@ -79,6 +73,7 @@ export function MasterVesselTable({
 
   return (
     <div className={loading && items.length === 0 ? 'min-h-[480px]' : undefined}>
+      <p className="mb-1.5 text-xs text-gray-500">Click a row to {isAdmin ? 'edit' : 'view'} it</p>
       <div className="border rounded-lg overflow-hidden">
         <div
           ref={topScrollRef}
@@ -128,7 +123,6 @@ export function MasterVesselTable({
                 />
                 )
               })}
-              <col style={{ width: MASTER_VESSEL_ACTIONS_COL_WIDTH_PX }} />
             </colgroup>
             <thead>
               <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
@@ -174,21 +168,15 @@ export function MasterVesselTable({
                     </th>
                   )
                 })}
-                <th
-                  scope="col"
-                  className={cn(COMPACT_TABLE_ACTIONS_HEADER_CLASS, CONTRACT_PERF_TABLE_CELL_PAD)}
-                >
-                  <span className={COMPACT_TABLE_HEADER_LABEL_CLASS}>Actions</span>
-                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {loading && items.length === 0 ? (
-                <TableInitialLoadPlaceholder colSpan={columnIds.length + 1} icon={Ship} />
+                <TableInitialLoadPlaceholder colSpan={columnIds.length} icon={Ship} />
               ) : items.length === 0 ? (
                 <tr className="bg-white">
                   <td
-                    colSpan={columnIds.length + 1}
+                    colSpan={columnIds.length}
                     className="px-4 py-10 text-center text-gray-500"
                   >
                     <Ship className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -199,7 +187,19 @@ export function MasterVesselTable({
                 items.map((row, idx) => {
                   const stripe = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                   return (
-                    <tr key={row.id} className={stripe}>
+                    <tr
+                      key={row.id}
+                      className={cn(stripe, 'group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500')}
+                      tabIndex={0}
+                      onClick={() => {
+                        // a drag over the text is a selection, not a click on the row
+                        if (typeof window !== 'undefined' && window.getSelection()?.toString()) return
+                        onEdit(row)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && event.target === event.currentTarget) onEdit(row)
+                      }}
+                    >
                       {columnIds.map((id) => {
                         const col = MASTER_VESSEL_COLUMNS.find((item) => item.id === id)
                         if (!col) return null
@@ -220,6 +220,7 @@ export function MasterVesselTable({
                               CONTRACT_PERF_TABLE_CELL_PAD,
                               VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                               stripe,
+                              'group-hover:bg-blue-50',
                             )}
                           >
                             <div
@@ -239,24 +240,6 @@ export function MasterVesselTable({
                           </td>
                         )
                       })}
-                      <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripe)}>
-                        <div className="inline-flex items-center justify-center gap-1">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                onClick={() => onEdit(row)}
-                                className="h-8 w-8 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
-                                aria-label={isAdmin ? 'Edit vessel' : 'View vessel'}
-                              >
-                                <Edit2 className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">{isAdmin ? 'Edit vessel' : 'View vessel'}</TooltipContent>
-                          </Tooltip>
-                        </div>
-                      </td>
                     </tr>
                   )
                 })

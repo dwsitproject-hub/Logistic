@@ -197,6 +197,26 @@ describe('buildJpsSubmitPayload', () => {
     expect(problems[problems.length - 1]).toBe('no cargo line could be built');
   });
 
+  // The commodity is the SAP MATERIAL (smallest unit, products.material_code): "CPO" alone does not say which of its three commodities has no code.
+  it('names the material when the contract has one and no code could be found for it or for the product', () => {
+    const line = { contract_no: 'C1', po_no: 'P1', product: 'CPO', material_code: '8010-10.11121', product_hub_code: null, sto_quantity_kg: 1000, contract_quantity_kg: 1000 };
+    const { payload, problems } = buildJpsSubmitPayload(source({ cargo: [line] }));
+    expect(payload).toBeUndefined();
+    expect(problems).toContain('no DHM code for material 8010-10.11121, nor on Master Product "CPO"');
+  });
+
+  it('says a material that was deleted in DHM, and names it', () => {
+    const line = { contract_no: 'C1', po_no: 'P1', product: 'CPO', material_code: '8010-10.11121', product_hub_code: null, product_deleted: true, sto_quantity_kg: 1000, contract_quantity_kg: 1000 };
+    expect(buildJpsSubmitPayload(source({ cargo: [line] })).problems).toContain('Master Product "CPO" (material 8010-10.11121) was deleted in DHM');
+  });
+
+  it('sends the code of the material as cargo_hub_code when the line carries it, and keeps the old text for a contract without a material', () => {
+    const withCode = { contract_no: 'C1', po_no: 'P1', product: 'CPO', material_code: '8010-10.11121', product_hub_code: 'CMD-0100', sto_quantity_kg: 1000, contract_quantity_kg: 1000 };
+    expect(buildJpsSubmitPayload(source({ cargo: [withCode] })).payload?.cargo[0].cargo_hub_code).toBe('CMD-0100');
+    const noMaterial = { contract_no: 'C1', po_no: 'P1', product: 'CPO', material_code: null, product_hub_code: null, sto_quantity_kg: 1000, contract_quantity_kg: 1000 };
+    expect(buildJpsSubmitPayload(source({ cargo: [noMaterial] })).problems).toContain('no DHM code on Master Product for "CPO"');
+  });
+
   it('holds the STO rather than guessing a cargo type', () => {
     const { payload, problems } = buildJpsSubmitPayload(
       source({ cargo: [{ contract_no: 'C1', po_no: 'P1', product: 'GULA', sto_quantity_kg: 1000, contract_quantity_kg: 1000 }] })

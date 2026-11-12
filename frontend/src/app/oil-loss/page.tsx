@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Droplets, Eye, GripVertical, Loader2, Ship, SlidersHorizontal, X } from 'lucide-react'
+import { Anchor, Droplets, Eye, GripVertical, Loader2, PackageCheck, Ship, SlidersHorizontal, X, type LucideIcon } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
@@ -66,6 +66,7 @@ import {
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
+import { compactTableActionsColWidthPx } from '@/lib/compactTableUi'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
@@ -168,25 +169,34 @@ type ViewColumnPrefs = {
   sortDir: 'asc' | 'desc'
 }
 
-const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; formula: string }> = [
+// icon + chip colour: where on the voyage the figure is taken (R1 loading, R2 at sea, R3 discharge, Loss the whole trip)
+const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; formula: string; icon: LucideIcon; chip: string }> = [
   {
     key: 'r1',
     label: 'R1',
+    icon: Anchor,
+    chip: 'bg-sky-50 text-sky-600',
     formula: '(Quantity SFAL − Quantity Delivery) / Quantity Delivery × 100%',
   },
   {
     key: 'r2',
     label: 'R2',
+    icon: Ship,
+    chip: 'bg-indigo-50 text-indigo-600',
     formula: '(Quantity SFBD − Quantity SFAL) / Quantity SFAL × 100%',
   },
   {
     key: 'r3',
     label: 'R3',
+    icon: PackageCheck,
+    chip: 'bg-emerald-50 text-emerald-600',
     formula: '(Quantity Receive − Quantity SFBD) / Quantity SFBD × 100%',
   },
   {
     key: 'r4',
     label: 'Loss',
+    icon: Droplets,
+    chip: 'bg-rose-50 text-rose-600',
     formula: '(Quantity Receive − Quantity Delivery) / Quantity Delivery × 100%',
   },
 ]
@@ -260,7 +270,7 @@ function renderLossPctCell(pct: number | null): ReactNode {
 }
 
 /** One icon. Other pages use 112px because Actions holds two buttons. */
-const OIL_LOSS_ACTIONS_COL_WIDTH_PX = 76
+const OIL_LOSS_ACTIONS_COL_WIDTH_PX = compactTableActionsColWidthPx(1)
 
 function firstOilLossToken(value: string | null | undefined): string {
   return String(value ?? '').split(',')[0]?.trim() ?? ''
@@ -2093,7 +2103,13 @@ export default function OilLossPage() {
                   cardDisabled ? 'border-gray-200 bg-gray-50' : 'bg-white'
                 }`}
               >
-                <div className="mb-2 flex items-center gap-1.5">
+                <div className="mb-2 flex items-center gap-2">
+                  <span
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${cardDisabled ? 'bg-gray-100 text-gray-400' : card.chip}`}
+                    aria-hidden
+                  >
+                    <card.icon className="h-4 w-4" />
+                  </span>
                   <span
                     className={`text-lg font-bold leading-none tracking-tight ${
                       cardDisabled ? 'text-gray-400' : 'text-gray-900'
@@ -2116,24 +2132,23 @@ export default function OilLossPage() {
                     {showBlockingLoad ? '…' : cardDisabled ? '-' : formatOilLossAvgPct(avgPct)}
                   </div>
                 </div>
-                {card.key === 'r4' ? (
-                  <div className="mt-2 min-w-0">
-                    <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-400 leading-none">
-                      Avg MT
-                    </div>
-                    <div
-                      className={`mt-1 text-sm font-medium leading-tight tabular-nums ${
-                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgMt, 'secondary')
-                      }`}
-                    >
-                      {showBlockingLoad
-                        ? '…'
-                        : avgMt == null
-                          ? '-'
-                          : `${formatOilLossAvgMt(avgMt)} MT`}
-                    </div>
+                {/* R1-R3 show Avg MT like Loss: the same mean of the per-voyage loss in MT (ROilLossSummary.avgMt, computed for every R). */}
+                <div className="mt-2 min-w-0">
+                  <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-400 leading-none">
+                    Avg MT
                   </div>
-                ) : null}
+                  <div
+                    className={`mt-1 text-sm font-medium leading-tight tabular-nums ${
+                      showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgMt, 'secondary')
+                    }`}
+                  >
+                    {showBlockingLoad
+                      ? '…'
+                      : avgMt == null
+                        ? '-'
+                        : `${formatOilLossAvgMt(avgMt)} MT`}
+                  </div>
+                </div>
               </div>
             )
           })}
@@ -2405,6 +2420,7 @@ export default function OilLossPage() {
                         COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                         'klip-compact-table--perf-narrow-cols',
                         'klip-oil-loss-table',
+                        'klip-actions-w-1',
                       )}
                     >
                       <colgroup>
@@ -2428,6 +2444,8 @@ export default function OilLossPage() {
                             />
                           )
                         })}
+                        {/* An empty column with no width takes the slack, so Actions keeps its own width on a wide screen. */}
+                        <col />
                         <col style={{ width: compactTableColWidthCss(OIL_LOSS_ACTIONS_COL_WIDTH_PX) }} />
                       </colgroup>
                       <thead>
@@ -2471,6 +2489,7 @@ export default function OilLossPage() {
                               </th>
                             )
                           })}
+                          <th aria-hidden="true" className="sticky top-0 z-20 bg-gray-50 p-0" />
                           <th
                             scope="col"
                             className={cn(
@@ -2479,7 +2498,7 @@ export default function OilLossPage() {
                               CONTRACT_PERF_TABLE_CELL_PAD,
                             )}
                           >
-                            Actions
+                            <span className="sr-only">Actions</span>
                           </th>
                         </tr>
                       </thead>
@@ -2490,13 +2509,13 @@ export default function OilLossPage() {
                       >
                         {(loading || dataFetching) && rows.length === 0 ? (
                           <TableInitialLoadPlaceholder
-                            colSpan={visibleColumns.length + 1 || 1}
+                            colSpan={visibleColumns.length + 2}
                             icon={Droplets}
                           />
                         ) : !dataFetching && !viewTransitionLoading && filteredRows.length === 0 ? (
                           <tr className="bg-white">
                             <td
-                              colSpan={visibleColumns.length + 1 || 1}
+                              colSpan={visibleColumns.length + 2}
                               className="px-4 py-10 text-center text-gray-500"
                             >
                               <Droplets className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -2543,6 +2562,7 @@ export default function OilLossPage() {
                                     </td>
                                   )
                                 })}
+                                <td aria-hidden="true" className={cn('p-0', stripeClass)} />
                                 <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
                                   <div className="flex items-center justify-center">
                                     {viewMode === 'all_contract' ? (
@@ -2557,7 +2577,7 @@ export default function OilLossPage() {
                                                 size="icon"
                                                 disabled={!canOpen}
                                                 onClick={() => openVesselFromOilLossRow(contractRow)}
-                                                className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                                className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
                                                 aria-label="View shipment"
                                               >
                                                 <Ship className="h-4 w-4" />
@@ -2581,7 +2601,7 @@ export default function OilLossPage() {
                                                   if (isTransporter) openTransporterModal(row as OilLossByTransporterRow)
                                                   else openSupplierModal(row as OilLossBySupplierRow)
                                                 }}
-                                                className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                                className="h-8 w-8 border-transparent bg-transparent text-green-600 hover:bg-green-50"
                                                 aria-label={label}
                                               >
                                                 <Eye className="h-4 w-4" />

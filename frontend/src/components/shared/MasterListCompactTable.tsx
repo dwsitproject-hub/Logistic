@@ -35,7 +35,7 @@ export type MasterListTableColumn<T> = {
 }
 
 /** Two 32px icon buttons, 4px gap, and 14px of space on each side. */
-const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 96
+const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 128
 
 const MASTER_LIST_NAME_COLUMN_IDS = new Set([
   'product_name',
@@ -82,6 +82,10 @@ type MasterListCompactTableProps<T> = {
   tightActions?: boolean
   /** Size each column to its longest value so the text stays on one line. */
   fitContent?: boolean
+  /** Make the whole row the click target (and Enter on a focused row), instead of an Actions column. Selecting text in a row does not open it. */
+  onRowClick?: (row: T) => void
+  /** One quiet line above the table that says the rows are clickable (shown only with onRowClick). */
+  rowClickHint?: string
 }
 
 export function MasterListCompactTable<T>({
@@ -100,6 +104,8 @@ export function MasterListCompactTable<T>({
   renderActions,
   tightActions = false,
   fitContent = false,
+  onRowClick,
+  rowClickHint,
 }: MasterListCompactTableProps<T>) {
   const topScrollRef = useRef<HTMLDivElement>(null)
   const bottomScrollRef = useRef<HTMLDivElement>(null)
@@ -114,6 +120,7 @@ export function MasterListCompactTable<T>({
 
   return (
     <div className={loading && rows.length === 0 ? 'min-h-[240px]' : undefined}>
+      {onRowClick && rowClickHint ? <p className="mb-1.5 text-xs text-gray-500">{rowClickHint}</p> : null}
       <div className="border rounded-lg overflow-hidden">
         <div
           ref={topScrollRef}
@@ -221,7 +228,7 @@ export function MasterListCompactTable<T>({
                 ))}
                 {renderActions ? (
                   <th scope="col" className={cn(COMPACT_TABLE_ACTIONS_HEADER_CLASS, CONTRACT_PERF_TABLE_CELL_PAD)}>
-                    <span className={COMPACT_TABLE_HEADER_LABEL_CLASS}>Actions</span>
+                    <span className="sr-only">Actions</span>
                   </th>
                 ) : null}
               </tr>
@@ -243,7 +250,27 @@ export function MasterListCompactTable<T>({
                 rows.map((row, index) => {
                   const stripe = index % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                   return (
-                    <tr key={getRowId(row)} className={stripe}>
+                    <tr
+                      key={getRowId(row)}
+                      className={cn(stripe, onRowClick && 'group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500')}
+                      tabIndex={onRowClick ? 0 : undefined}
+                      onClick={
+                        onRowClick
+                          ? () => {
+                              // a drag over the text is a selection, not a click on the row
+                              if (typeof window !== 'undefined' && window.getSelection()?.toString()) return
+                              onRowClick(row)
+                            }
+                          : undefined
+                      }
+                      onKeyDown={
+                        onRowClick
+                          ? (event) => {
+                              if (event.key === 'Enter' && event.target === event.currentTarget) onRowClick(row)
+                            }
+                          : undefined
+                      }
+                    >
                       {columns.map((col) => {
                         const text = col.getText(row)
                         const tooltip = text && text !== '-' ? text.toUpperCase() : null
@@ -257,6 +284,7 @@ export function MasterListCompactTable<T>({
                               masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                               col.id === 'dhm_status' && 'klip-op-col--token',
                               stripe,
+                              onRowClick && 'group-hover:bg-blue-50',
                             )}
                           >
                             <div className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, CONTRACT_PERF_TABLE_ROW_MIN_H)}>
@@ -265,7 +293,8 @@ export function MasterListCompactTable<T>({
                               ) : masterCodeKind(col.id) ? (
                                 <MasterCodeBadge kind={masterCodeKind(col.id)!} value={text} fit={fitContent} />
                               ) : fitContent ? (
-                                <span className="whitespace-nowrap text-sm">{text || '-'}</span>
+                                // one line while it fits; a long list (a company's sites, a port's SAP names) wraps at 28rem instead of pushing the columns after it off screen
+                                <span className="block max-w-[28rem] whitespace-normal text-sm leading-snug">{text || '-'}</span>
                               ) : tooltip ? (
                                 <ContractPerfTruncatedCell tooltip={tooltip} className="w-full">
                                   <span className="text-sm">{text}</span>

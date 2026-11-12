@@ -8,11 +8,11 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
-import { 
-  TrendingUp, 
-  Package, 
-  DollarSign, 
-  AlertTriangle, 
+import {
+  TrendingUp,
+  Package,
+  DollarSign,
+  AlertTriangle,
   Truck,
   Eye,
   Users,
@@ -28,7 +28,8 @@ import {
   MapPin,
   Filter,
   ChevronDown,
-  Sparkles
+  Sparkles,
+  FilterX,
 } from 'lucide-react'
 import api from '@/lib/api'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -2157,6 +2158,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   variant="outline"
                   className="text-gray-600"
                 >
+                  <FilterX className="mr-2 h-4 w-4" aria-hidden />
                   Clear Filters
                 </Button>
               </div>
@@ -2171,6 +2173,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               No data matches your current filters. Try clearing filters to see all data.
             </p>
             <Button variant="outline" size="sm" onClick={clearFilters} className="shrink-0">
+              <FilterX className="mr-2 h-4 w-4" aria-hidden />
               Clear Filters
             </Button>
           </div>

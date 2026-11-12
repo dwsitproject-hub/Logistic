@@ -13,7 +13,6 @@ import { StitchFields } from '@/components/shared/stitchField'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
 import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
-import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
@@ -258,6 +257,9 @@ export function ReferenceMasterPage({
             <CardContent>
               <MasterListCompactTable
                 tightActions
+                fitContent
+                onRowClick={openEdit}
+                rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
                 rows={[...items].sort((a, b) => {
                   const column = columns.find((item) => item.id === sortKey)
                   const cmp = (column?.getText(a) ?? '').localeCompare(column?.getText(b) ?? '', undefined, { numeric: true })
@@ -282,12 +284,6 @@ export function ReferenceMasterPage({
                   if (layout.dragColId) layout.reorder(layout.dragColId, id)
                   layout.setDragColId(null)
                 }}
-                renderActions={(row) => (
-                  <MasterRowActions
-                    editLabel={isAdmin ? 'Edit' : 'View'}
-                    onEdit={() => openEdit(row)}
-                  />
-                )}
               />
             </CardContent>
           </Card>

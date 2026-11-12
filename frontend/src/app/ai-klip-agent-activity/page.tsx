@@ -10,6 +10,7 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
 import { AI_KLIP_AGENT_ACTIVITY_PAGE_PERMISSION } from '@/lib/aiKlipAgentActivity'
 import { formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { RotateCcw } from 'lucide-react'
 
 type ActivityLogRow = {
   id: string
@@ -164,6 +165,7 @@ function AiKlipAgentActivityPageContent() {
               </select>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={handleResetFilters}>
+              <RotateCcw className="mr-2 h-4 w-4" aria-hidden />
               Reset filters
             </Button>
           </div>

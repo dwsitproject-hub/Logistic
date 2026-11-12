@@ -49,6 +49,70 @@ export const listDocuments = async (req: Request, res: Response) => {
   }
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PRESENCE_MAX_IDS = 100;
+
+function presenceIds(raw: unknown): string[] {
+  return Array.from(
+    new Set(
+      String(raw ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => UUID_RE.test(s)),
+    ),
+  ).slice(0, PRESENCE_MAX_IDS);
+}
+
+/**
+ * GET /documents/presence?shipmentIds=a,b&contractIds=c,d&truckingOperationIds=e - which of these shipments / contracts / trucking operations have at least one document. The Shipments page asks for the rows it shows
+ * and turns the Docs button off for the ones that have none, so nobody opens an empty "No documents uploaded" dialog. A contract's documents are counted the way
+ * listDocuments counts them for the Documents dialog (its own file or one filed on its trucking operations), so the button and the dialog never disagree.
+ */
+export const documentPresence = async (req: Request, res: Response) => {
+  try {
+    const shipmentIds = presenceIds(req.query.shipmentIds);
+    const contractIds = presenceIds(req.query.contractIds);
+    const truckingOperationIds = presenceIds(req.query.truckingOperationIds);
+    const withDocs = { shipmentIds: [] as string[], contractIds: [] as string[], truckingOperationIds: [] as string[] };
+    if (shipmentIds.length > 0) {
+      const r = await query(
+        `SELECT DISTINCT d.shipment_id::text AS id
+           FROM documents d
+          WHERE d.deleted_at IS NULL AND d.shipment_id = ANY($1::uuid[])`,
+        [shipmentIds],
+      );
+      withDocs.shipmentIds = r.rows.map((row: { id: string }) => row.id);
+    }
+    if (contractIds.length > 0) {
+      const r = await query(
+        `SELECT c.id::text AS id
+           FROM unnest($1::uuid[]) AS c(id)
+          WHERE EXISTS (
+            SELECT 1 FROM documents d
+             WHERE d.deleted_at IS NULL
+               AND (d.contract_id = c.id
+                    OR d.trucking_operation_id IN (SELECT t.id FROM trucking_operations t WHERE t.contract_id = c.id))
+          )`,
+        [contractIds],
+      );
+      withDocs.contractIds = r.rows.map((row: { id: string }) => row.id);
+    }
+    if (truckingOperationIds.length > 0) {
+      const r = await query(
+        `SELECT DISTINCT d.trucking_operation_id::text AS id
+           FROM documents d
+          WHERE d.deleted_at IS NULL AND d.trucking_operation_id = ANY($1::uuid[])`,
+        [truckingOperationIds],
+      );
+      withDocs.truckingOperationIds = r.rows.map((row: { id: string }) => row.id);
+    }
+    return res.json({ success: true, data: withDocs });
+  } catch (error) {
+    logger.error('Document presence error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to check documents' } });
+  }
+};
+
 export const uploadDocumentHandler = async (req: Request, res: Response) => {
   try {
     // Multer attaches file and fields

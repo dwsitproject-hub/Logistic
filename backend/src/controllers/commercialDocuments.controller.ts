@@ -45,7 +45,7 @@ import {
   upsertPoCreators,
 } from '../services/poCreators.service';
 import { listCreatorOptions, listSapUsers, upsertSapUsers, type SapUserRow } from '../services/sapUsers.service';
-import { matchCreatorForUser } from '../utils/creatorMatch';
+import { getUserCreatorMapping, matchCreatorByName, resolveCreatorForUser, setUserCreatorMapping } from '../services/userCreators.service';
 
 /**
  * One audit_logs row per upload, view, download, delete and Tanda Terima - the Audit trail page of the Commercial Documents app.
@@ -377,12 +377,54 @@ export const getMyCommercialCreator = async (req: AuthRequest, res: Response) =>
   try {
     const me = req.user?.id ? await query('SELECT email, full_name FROM users WHERE id = $1::uuid', [req.user.id]) : { rows: [] as Array<Record<string, unknown>> };
     const row = me.rows[0];
-    const options = (await listCreatorOptions()).filter((o) => o.name !== o.userId);
-    const hit = row ? matchCreatorForUser({ email: String(row.email || ''), fullName: String(row.full_name || '') }, options) : null;
-    return res.json({ success: true, data: { creator: hit } });
+    const hit = row ? await resolveCreatorForUser(String(req.user?.id), { email: String(row.email || ''), fullName: String(row.full_name || '') }) : { creator: null, source: null };
+    return res.json({ success: true, data: { creator: hit.creator, source: hit.source } });
   } catch (err) {
     logger.error('getMyCommercialCreator error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to read your creator' } });
+  }
+};
+
+/**
+ * The SAP user of one COD account (GET /api/commercial-documents/users/:id/creator, ADMIN), for Users > Edit user: the administrator's mapping, and what the
+ * name match would give without it (so the admin sees what "Auto" means for this person).
+ */
+export const getUserCreatorSetting = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id || '');
+    if (!UUID_RE.test(id)) return res.status(400).json({ success: false, error: { message: 'Invalid user id' } });
+    const u = await query('SELECT email, full_name FROM users WHERE id = $1::uuid', [id]);
+    if (!u.rows[0]) return res.status(404).json({ success: false, error: { message: 'User not found' } });
+    const mapped = await getUserCreatorMapping(id);
+    const auto = await matchCreatorByName({ email: String(u.rows[0].email || ''), fullName: String(u.rows[0].full_name || '') });
+    return res.json({ success: true, data: { mapped, auto } });
+  } catch (err) {
+    logger.error('getUserCreatorSetting error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to read the SAP user of this account' } });
+  }
+};
+
+/**
+ * Set or clear the SAP user of one COD account (PUT /api/commercial-documents/users/:id/creator, ADMIN). Body: { sapUserId: string | null }.
+ * It must be one of the SAP users who created POs (the Created by choices); null goes back to matching by name.
+ */
+export const setUserCreatorSetting = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = String(req.params.id || '');
+    if (!UUID_RE.test(id)) return res.status(400).json({ success: false, error: { message: 'Invalid user id' } });
+    const raw = (req.body || {}).sapUserId;
+    const sapUserId = raw == null || String(raw).trim() === '' ? null : String(raw).trim();
+    const u = await query('SELECT email FROM users WHERE id = $1::uuid', [id]);
+    if (!u.rows[0]) return res.status(404).json({ success: false, error: { message: 'User not found' } });
+    if (sapUserId && !(await listCreatorOptions()).some((o) => o.userId === sapUserId)) {
+      return res.status(400).json({ success: false, error: { message: 'That SAP user has not created any PO in the ME2N report' } });
+    }
+    await setUserCreatorMapping(id, sapUserId, req.user?.id ?? null);
+    logger.info(`COD Created-by mapping ${sapUserId ? 'set' : 'cleared'} for ${String(u.rows[0].email)} by ${req.user?.username}`);
+    return res.json({ success: true, data: { mapped: sapUserId } });
+  } catch (err) {
+    logger.error('setUserCreatorSetting error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to save the SAP user of this account' } });
   }
 };
 

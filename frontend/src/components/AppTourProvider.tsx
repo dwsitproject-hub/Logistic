@@ -318,9 +318,12 @@ function TourOverlay({
 export function AppTourProvider({
   children,
   userId,
+  autoStart = true,
 }: {
   children: React.ReactNode
   userId: string | null
+  /** Open the tour on its own the first time a user reaches the Dashboard. The button is a separate switch (Layout). */
+  autoStart?: boolean
 }) {
   const pathname = usePathname()
   const storageKey = userId ? `klip_app_tour_v1_${userId}` : null
@@ -338,6 +341,7 @@ export function AppTourProvider({
   }, [])
 
   useEffect(() => {
+    if (!autoStart) return
     if (!storageKey) return
     if (pathname !== '/dashboard') return
     if (localStorage.getItem(storageKey)) return
@@ -345,7 +349,7 @@ export function AppTourProvider({
     autoStarted.current = true
     const t = window.setTimeout(() => startTour(), 1200)
     return () => window.clearTimeout(t)
-  }, [storageKey, pathname, startTour])
+  }, [autoStart, storageKey, pathname, startTour])
 
   const value = useMemo(() => ({ startTour }), [startTour])
 

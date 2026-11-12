@@ -412,15 +412,28 @@
   .klip-compact-table--operational td.klip-op-col--actions {
     position: sticky;
     right: 0;
-    /* Fits two size=icon buttons (View + Remarks) with gap + compact padding */
-    width: 112px;
-    min-width: 112px;
-    max-width: 112px;
+    /* Room for three 32px icon buttons with their gaps and 12px on each side, so the icons stay centered and clear of the previous column's value. No divider line and no edge shadow. */
+    width: 128px;
+    min-width: 128px;
+    max-width: 128px;
     box-sizing: border-box;
-    border-left: 1px solid rgb(229 231 235);
-    box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.08);
-    padding-left: 0.5rem;
-    padding-right: 0.5rem;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  /* Fewer icons, narrower column, the same 12px on each side of the icons (see compactTableActionsColWidthPx). */
+  .klip-compact-table--operational.klip-actions-w-1 th.klip-op-col--actions,
+  .klip-compact-table--operational.klip-actions-w-1 td.klip-op-col--actions {
+    width: 56px;
+    min-width: 56px;
+    max-width: 56px;
+  }
+
+  .klip-compact-table--operational.klip-actions-w-2 th.klip-op-col--actions,
+  .klip-compact-table--operational.klip-actions-w-2 td.klip-op-col--actions {
+    width: 92px;
+    min-width: 92px;
+    max-width: 92px;
   }
 
   .klip-compact-table--operational thead th.klip-op-col--actions {
@@ -446,11 +459,11 @@
   .klip-compact-table--operational.klip-master-list-table td.klip-op-col--actions,
   .klip-compact-table--operational.klip-master-vessel-table th.klip-op-col--actions,
   .klip-compact-table--operational.klip-master-vessel-table td.klip-op-col--actions {
-    width: 112px;
-    min-width: 112px;
-    max-width: 112px;
-    padding-left: 12px;
-    padding-right: 12px;
+    width: 128px;
+    min-width: 128px;
+    max-width: 128px;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
   }
 
   /*
@@ -522,22 +535,12 @@
 
   .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions th.klip-op-col--actions,
   .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions td.klip-op-col--actions {
-    width: 96px;
-    min-width: 96px;
-    max-width: 96px;
-    padding-left: 14px;
-    padding-right: 14px;
+    width: 128px;
+    min-width: 128px;
+    max-width: 128px;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
     white-space: nowrap;
-  }
-
-  /* Oil Loss has one action icon. 112px is the two-button width used on other pages. */
-  .klip-compact-table--operational.klip-oil-loss-table th.klip-op-col--actions,
-  .klip-compact-table--operational.klip-oil-loss-table td.klip-op-col--actions {
-    width: 76px;
-    min-width: 76px;
-    max-width: 76px;
-    padding-left: 0.375rem;
-    padding-right: 0.375rem;
   }
 
   /*
@@ -588,3 +591,27 @@
   }
 }
 
+/*
+ * Status cards (Contract / Shipping Performance, Shortage / Quality Claim): the wrapper is a size container, so the layout follows the CARD's width, not the screen's.
+ * Wide: one row (title, number, middle block, averages pushed right). Narrow: the averages move to a second row under a hairline.
+ */
+.klip-statcard {
+  container: klip-statcard / inline-size;
+}
+
+.klip-statcard__stats {
+  margin-left: auto;
+}
+
+@container klip-statcard (max-width: 820px) {
+  .klip-statcard__middle {
+    margin-left: auto;
+  }
+
+  .klip-statcard__stats {
+    flex-basis: 100%;
+    margin-left: 0;
+    padding-top: 0.375rem;
+    border-top: 1px solid rgb(229 231 235);
+  }
+}

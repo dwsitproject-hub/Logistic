@@ -54,8 +54,9 @@ const EMPTY: PartnerRefreshResult = { refreshed: false, records: 0, created: 0, 
  * Which rules turn the tables into records. Part of the signature: a deploy that changes WHAT is sent (not the data) must make the next run rebuild, or the
  * records already stored keep the old answer until some source row happens to change. Raise it with every change of the rules in recordSql / recordBuilder.
  *   2026-11-11  a shipment is sent only with a vessel AND some schedule (partnerIneligibleReason)
+ *   2026-11-12  the product's DHM code is the code of the Master Product row carrying the contract's SAP material_code first, the product named like the contract's second
  */
-export const PARTNER_RULES_VERSION = '2026-11-11-eligibility';
+export const PARTNER_RULES_VERSION = '2026-11-12-material-product-code';
 
 /** One text per run that changes whenever any table the records are built from changes (or the date does), or the rules do. */
 export async function partnerSourceSignature(): Promise<string> {

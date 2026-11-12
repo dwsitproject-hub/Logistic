@@ -1,4 +1,5 @@
 import logger from '../utils/logger';
+import { dhmUnavailableError } from './unavailable';
 import { query } from '../database/connection';
 import { getDhmCatalogEntity, resolveDhmSlug } from './catalog';
 import { isDhmEnabled } from './config';
@@ -114,7 +115,7 @@ export async function pushNamedMasterToDhm(
     });
   } catch (error) {
     logger.warn('DHM inbound unavailable; local master saved', { slug, localId, error });
-    return { dhmError: 'DHM unavailable' };
+    return { dhmError: dhmUnavailableError(error) };
   }
 }
 
@@ -186,7 +187,7 @@ export async function pushMasterPlantToDhm(
     });
   } catch (error) {
     logger.warn('DHM inbound unavailable; local plant saved', { localId, error });
-    return { dhmError: 'DHM unavailable' };
+    return { dhmError: dhmUnavailableError(error) };
   }
 }
 
@@ -214,7 +215,7 @@ export async function pushMasterExternalPartyToDhm(
     );
   } catch (error) {
     logger.warn('DHM inbound unavailable; local external party saved', { localId, error });
-    return { dhmError: 'DHM unavailable' };
+    return { dhmError: dhmUnavailableError(error) };
   }
 }
 
@@ -260,7 +261,7 @@ export async function pushMasterCompanyToDhm(
     );
   } catch (error) {
     logger.warn('DHM inbound unavailable; local company saved', { localId, error });
-    return { dhmError: 'DHM unavailable' };
+    return { dhmError: dhmUnavailableError(error) };
   }
 }
 
@@ -320,7 +321,7 @@ export async function pushMasterSiteToDhm(
     );
   } catch (error) {
     logger.warn('DHM inbound unavailable; local site saved', { localId, error });
-    return { dhmError: 'DHM unavailable' };
+    return { dhmError: dhmUnavailableError(error) };
   }
 }
 

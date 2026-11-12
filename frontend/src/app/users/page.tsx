@@ -3,11 +3,9 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
   DialogContent,
@@ -24,32 +22,30 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
   UserPlus,
-  Edit2,
-  Trash2,
-  Key,
-  Search,
   Shield,
   Settings,
   CheckCircle,
-  XCircle,
   AlertCircle,
-  Mail,
   Activity,
+  Save,
+  Loader2,
+  Send,
 } from 'lucide-react'
 import api from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { alignSelectedToRegionSiteOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import { formatRoleLabel } from '@/lib/userRoles'
+import { UserKpis } from '@/components/users/UserKpis'
+import { UserFilterBar, type RoleFilterOption } from '@/components/users/UserFilterBar'
+import { UserTable } from '@/components/users/UserTable'
+import {
+  countUsersByRole,
+  filterDirectoryUsers,
+  summarizeUsers,
+  type UserStatusFilter,
+} from '@/lib/userDirectory'
 
 interface User {
   id: string
@@ -85,6 +81,8 @@ export default function UsersPage() {
   const [roles, setRoles] = useState<Role[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [roleFilter, setRoleFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState<UserStatusFilter>('all')
   const [showAddModal, setShowAddModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [showResetModal, setShowResetModal] = useState(false)
@@ -93,7 +91,6 @@ export default function UsersPage() {
   const [success, setSuccess] = useState('')
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [plantOptions, setPlantOptions] = useState<string[]>([])
-  const [productOptions, setProductOptions] = useState<string[]>([])
 
   const emptyFormData = {
     email: '',
@@ -102,7 +99,6 @@ export default function UsersPage() {
     level: 'Staff',
     transport_type: '',
     plants: [] as string[],
-    products: [] as string[],
     phone: '',
     department: '',
   }
@@ -113,11 +109,10 @@ export default function UsersPage() {
   /** A reset link or an invitation is being sent (the request waits for the SMTP server). */
   const [sendingLink, setSendingLink] = useState(false)
   const showTransportType = formData.role === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(formData.level)
-  // Region/Plant follows the role's own flag (roles.uses_region_scope, set on the Roles page); Product stays LOGISTICS / TRADING only.
+  // Region/Plant follows the role's own flag (roles.uses_region_scope, set on the Roles page). Users no longer carry a product: the product default filter is retired.
   const showRegion =
     roles.find((role) => role.role_name === formData.role)?.uses_region_scope ??
     ['LOGISTICS', 'TRADING'].includes(formData.role)
-  const showProducts = ['LOGISTICS', 'TRADING'].includes(formData.role)
 
   useEffect(() => {
     // Check if user is admin
@@ -139,33 +134,16 @@ export default function UsersPage() {
 
   const fetchData = async () => {
     try {
-      const [usersRes, rolesRes, groupPlantsRes, dashboardProductsRes, masterProductsRes] = await Promise.all([
+      const [usersRes, rolesRes, groupPlantsRes] = await Promise.all([
         api.get('/users'),
         api.get('/roles'),
         api.get('/contracts/filter-options/group-plants'),
-        api.get('/dashboard/filter-options/products'),
-        api.get('/products', { params: { page: 1, limit: 500 } }),
       ])
 
       setUsers(usersRes.data.data)
       setRoles(rolesRes.data.data)
       const groupPlants = (groupPlantsRes.data?.data?.groupPlants ?? []) as string[]
       setPlantOptions(filterRegionSiteOptions(Array.isArray(groupPlants) ? groupPlants : []))
-
-      const productNames = new Set<string>()
-      const dashboardProducts = dashboardProductsRes.data?.data
-      if (Array.isArray(dashboardProducts)) {
-        dashboardProducts.forEach((name) => {
-          const trimmed = String(name).trim()
-          if (trimmed) productNames.add(trimmed)
-        })
-      }
-      const masterItems = (masterProductsRes.data?.data?.items ?? []) as Array<{ product_name: string }>
-      masterItems.forEach((row) => {
-        const trimmed = String(row.product_name ?? '').trim()
-        if (trimmed) productNames.add(trimmed)
-      })
-      setProductOptions([...productNames].sort())
     } catch (err) {
       console.error('Error fetching data:', err)
       setError('Failed to load users')
@@ -181,9 +159,11 @@ export default function UsersPage() {
 
     try {
       const response = await api.post('/users', {
-        ...formData,
+        email: formData.email,
+        full_name: formData.full_name,
+        role: formData.role,
+        level: formData.level,
         plants: showRegion ? formData.plants : [],
-        products: showProducts ? formData.products : [],
       })
       const created = response.data?.data
       // The account exists either way; the message says whether the invitation went out, so the admin knows to resend it.
@@ -215,7 +195,6 @@ export default function UsersPage() {
         level: formData.level,
         transport_type: showTransportType ? formData.transport_type : null,
         plants: showRegion ? formData.plants : [],
-        products: showProducts ? formData.products : [],
         phone: formData.phone,
         department: formData.department,
         is_active: selectedUser.is_active,
@@ -298,7 +277,6 @@ export default function UsersPage() {
               : [],
         plantOptions,
       ),
-      products: user.products ?? [],
       phone: user.phone || '',
       department: user.department || '',
     })
@@ -310,23 +288,16 @@ export default function UsersPage() {
     setShowResetModal(true)
   }
 
-  const filteredUsers = users.filter((user) =>
-    user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.full_name.toLowerCase().includes(searchTerm.toLowerCase())
-  )
-
-  const getRoleBadgeColor = (role: string) => {
-    const colors: Record<string, string> = {
-      ADMIN: 'bg-red-500',
-      TRADING: 'bg-blue-500',
-      LOGISTICS: 'bg-green-500',
-      FINANCE: 'bg-yellow-500',
-      MANAGEMENT: 'bg-purple-500',
-      SUPPORT: 'bg-gray-500',
-      ADMIN_SUPPORT: 'bg-orange-500',
-    }
-    return colors[role] || 'bg-gray-500'
-  }
+  const filteredUsers = filterDirectoryUsers(users, { search: searchTerm, role: roleFilter, status: statusFilter })
+  const userSummary = summarizeUsers(users)
+  const roleCounts = countUsersByRole(users)
+  // Every role with its head count; a role code on a user but missing from the roles list (a deactivated role) still gets an entry.
+  const roleFilterOptions: RoleFilterOption[] = [
+    ...roles.map((role) => ({ value: role.role_name, label: role.display_name, count: roleCounts[role.role_name] ?? 0 })),
+    ...Object.keys(roleCounts)
+      .filter((code) => !roles.some((role) => role.role_name === code))
+      .map((code) => ({ value: code, label: formatRoleLabel(code), count: roleCounts[code] })),
+  ]
 
   if (loading) {
     return (
@@ -342,32 +313,37 @@ export default function UsersPage() {
     <Layout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-gray-600">Manage system users and their roles</p>
-          </div>
-          <div className="flex gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-gray-500">Manage accounts, roles and what each person can see.</p>
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
+              size="sm"
+              className="border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
               onClick={() => router.push('/users/activity-log')}
             >
-              <Activity className="h-4 w-4 mr-2" />
+              <Activity className="mr-2 h-4 w-4 text-gray-500" aria-hidden />
               User Activity Log
             </Button>
             <Button
               variant="outline"
+              size="sm"
+              className="border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
               onClick={() => router.push('/users/roles')}
             >
-              <Settings className="h-4 w-4 mr-2" />
+              <Settings className="mr-2 h-4 w-4 text-gray-500" aria-hidden />
               Manage Roles
             </Button>
-            <Button onClick={() => {
-              setFormData(emptyFormData)
-              setError('')
-              setSuccess('')
-              setShowAddModal(true)
-            }}>
-              <UserPlus className="h-4 w-4 mr-2" />
+            <Button
+              size="sm"
+              onClick={() => {
+                setFormData(emptyFormData)
+                setError('')
+                setSuccess('')
+                setShowAddModal(true)
+              }}
+            >
+              <UserPlus className="mr-2 h-4 w-4" aria-hidden />
               Add User
             </Button>
           </div>
@@ -388,182 +364,46 @@ export default function UsersPage() {
           </Alert>
         )}
 
-        <Card className="border-slate-200 bg-slate-50">
-          <CardContent className="pt-6">
-            <div className="flex gap-3">
-              <Shield className="h-5 w-5 text-slate-600 shrink-0 mt-0.5" />
-              <div className="text-sm text-slate-800">
-                <p className="font-semibold mb-1">Page access &amp; activity monitoring</p>
-                <p>
-                  User menu visibility and page access are controlled by role permissions. Use{' '}
-                  <strong>Manage Roles</strong> → <strong>Page Access</strong> to grant page permissions (e.g.{' '}
-                  <code className="text-xs">page.commercial_documents</code>). Admins can review daily user
-                  activity (clicks, edits, active time) via <strong>User Activity Log</strong>.
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <p className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-700">
+          <Shield className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+          <span>
+            Menu and page access come from role permissions: open <strong>Manage Roles</strong> and use the Pages tab. Daily
+            activity (clicks, edits, active time) is in the <strong>User Activity Log</strong>.
+          </span>
+        </p>
 
-        {/* Search */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Users</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="mb-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                <Input
-                  placeholder="Search users..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
+        <UserKpis summary={userSummary} />
 
-            {/* Users Table */}
-            <div className="border rounded-lg">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>User</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Level</TableHead>
-                    <TableHead>Transport Type</TableHead>
-                    <TableHead>Region/Plant</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead>Department</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>First Login</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredUsers.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={11} className="text-center text-gray-500 py-8">
-                        No users found
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filteredUsers.map((user) => (
-                      <TableRow key={user.id}>
-                        <TableCell>
-                          <div className="font-medium">{user.full_name}</div>
-                        </TableCell>
-                        <TableCell>{user.email}</TableCell>
-                        <TableCell>
-                          <Badge className={`${getRoleBadgeColor(user.role)} text-white`}>
-                            {formatRoleLabel(user.role)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm text-gray-600">
-                            {user.level || '-'}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm text-gray-600">
-                            {user.transport_type || '-'}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm text-gray-600">
-                            {(user.group_plants?.length
-                              ? user.group_plants.join(', ')
-                              : user.plants?.length
-                                ? user.plants.join(', ')
-                                : user.plant) || '-'}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm text-gray-600">
-                            {user.products?.length ? user.products.join(', ') : '-'}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm text-gray-600">
-                            {user.department || '-'}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          {user.is_active ? (
-                            <Badge className="bg-green-100 text-green-800">
-                              <CheckCircle className="h-3 w-3 mr-1" />
-                              Active
-                            </Badge>
-                          ) : (
-                            <Badge className="bg-gray-100 text-gray-800">
-                              <XCircle className="h-3 w-3 mr-1" />
-                              Inactive
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {user.is_first_login ? (
-                            <Badge variant="outline" className="border-orange-500 text-orange-700">
-                              Pending
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="border-gray-300 text-gray-600">
-                              Completed
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => openEditModal(user)}
-                            >
-                              <Edit2 className="h-3 w-3" />
-                            </Button>
-                            {user.is_first_login && user.is_active ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                title="Resend invitation e-mail"
-                                aria-label={`Resend invitation to ${user.email}`}
-                                disabled={sendingLink}
-                                onClick={() => sendPasswordLink(user, 'invitation')}
-                              >
-                                <Mail className="h-3 w-3" />
-                              </Button>
-                            ) : (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                title="Send password reset link"
-                                aria-label={`Send password reset link to ${user.email}`}
-                                onClick={() => openResetModal(user)}
-                              >
-                                <Key className="h-3 w-3" />
-                              </Button>
-                            )}
-                            {user.id !== currentUser?.id && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleDeleteUser(user.id)}
-                                className="text-red-600 hover:text-red-700"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </Button>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <UserFilterBar
+            search={searchTerm}
+            onSearch={setSearchTerm}
+            role={roleFilter}
+            onRole={setRoleFilter}
+            roleOptions={roleFilterOptions}
+            totalCount={users.length}
+            status={statusFilter}
+            onStatus={setStatusFilter}
+          />
+          {filteredUsers.length === 0 ? (
+            <div className="px-4 py-12 text-center text-sm text-gray-500">No users match these filters</div>
+          ) : (
+            <UserTable
+              users={filteredUsers}
+              currentUserId={currentUser?.id}
+              sendingLink={sendingLink}
+              roleLabel={formatRoleLabel}
+              onEdit={openEditModal}
+              onResendInvitation={(user) => void sendPasswordLink(user, 'invitation')}
+              onResetPassword={openResetModal}
+              onDeactivate={(user) => void handleDeleteUser(user.id)}
+              onFilterRole={setRoleFilter}
+            />
+          )}
+          <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
+            Showing {filteredUsers.length.toLocaleString('en-US')} of {users.length.toLocaleString('en-US')} users · click a row to edit
+          </div>
+        </div>
 
         {/* Add User Modal */}
         <Dialog open={showAddModal} onOpenChange={setShowAddModal}>
@@ -620,7 +460,6 @@ export default function UsersPage() {
                         role: value,
                         transport_type: value === 'LOGISTICS' ? formData.transport_type : '',
                         plants: ['LOGISTICS', 'TRADING'].includes(value) ? formData.plants : [],
-                        products: ['LOGISTICS', 'TRADING'].includes(value) ? formData.products : [],
                       })
                     }
                   >
@@ -637,54 +476,19 @@ export default function UsersPage() {
                   </Select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="level">Level *</Label>
-                    <Select
-                      value={formData.level}
-                      onValueChange={(value) =>
-                        setFormData({
-                          ...formData,
-                          level: value,
-                          transport_type:
-                            formData.role === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(value)
-                              ? formData.transport_type
-                              : '',
-                        })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Dept Head">Dept Head</SelectItem>
-                        <SelectItem value="Section Head">Section Head</SelectItem>
-                        <SelectItem value="Staff">Staff</SelectItem>
-                        <SelectItem value="Admin">Admin</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="transport_type">Transport Type {showTransportType ? '*' : ''}</Label>
-                    <Select
-                      value={formData.transport_type || 'none'}
-                      onValueChange={(value) =>
-                        setFormData({ ...formData, transport_type: value === 'none' ? '' : value })
-                      }
-                      disabled={!showTransportType}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={showTransportType ? 'Select transport type' : '-'} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">-</SelectItem>
-                        <SelectItem value="ALL">ALL</SelectItem>
-                        <SelectItem value="SEA">SEA</SelectItem>
-                        <SelectItem value="LAND">LAND</SelectItem>
-                        <SelectItem value="MIX">MIX</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                <div className="space-y-2">
+                  <Label htmlFor="level">Level *</Label>
+                  <Select value={formData.level} onValueChange={(value) => setFormData({ ...formData, level: value })}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Dept Head">Dept Head</SelectItem>
+                      <SelectItem value="Section Head">Section Head</SelectItem>
+                      <SelectItem value="Staff">Staff</SelectItem>
+                      <SelectItem value="Admin">Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className={showRegion ? '' : 'opacity-50 pointer-events-none'}>
@@ -699,42 +503,13 @@ export default function UsersPage() {
                   />
                 </div>
 
-                <div className={showProducts ? '' : 'opacity-50 pointer-events-none'}>
-                  <SearchableMultiSelect
-                    label="Product"
-                    options={productOptions}
-                    selected={formData.products}
-                    onChange={(products) => setFormData({ ...formData, products })}
-                    placeholder="Select products"
-                    emptyMessage="No products found"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="phone">Phone</Label>
-                    <Input
-                      id="phone"
-                      value={formData.phone}
-                      onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="department">Department</Label>
-                    <Input
-                      id="department"
-                      value={formData.department}
-                      onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                    />
-                  </div>
-                </div>
               </div>
 
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setShowAddModal(false)}>
                   Cancel
                 </Button>
-                <Button type="submit">Create User</Button>
+                <Button type="submit"><UserPlus className="mr-2 h-4 w-4" aria-hidden />Create User</Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -789,7 +564,6 @@ export default function UsersPage() {
                         role: value,
                         transport_type: value === 'LOGISTICS' ? formData.transport_type : '',
                         plants: ['LOGISTICS', 'TRADING'].includes(value) ? formData.plants : [],
-                        products: ['LOGISTICS', 'TRADING'].includes(value) ? formData.products : [],
                       })
                     }
                   >
@@ -868,17 +642,6 @@ export default function UsersPage() {
                   />
                 </div>
 
-                <div className={showProducts ? '' : 'opacity-50 pointer-events-none'}>
-                  <SearchableMultiSelect
-                    label="Product"
-                    options={productOptions}
-                    selected={formData.products}
-                    onChange={(products) => setFormData({ ...formData, products })}
-                    placeholder="Select products"
-                    emptyMessage="No products found"
-                  />
-                </div>
-
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="edit_phone">Phone</Label>
@@ -903,7 +666,7 @@ export default function UsersPage() {
                 <Button type="button" variant="outline" onClick={() => setShowEditModal(false)}>
                   Cancel
                 </Button>
-                <Button type="submit">Update User</Button>
+                <Button type="submit"><Save className="mr-2 h-4 w-4" aria-hidden />Update User</Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -931,6 +694,7 @@ export default function UsersPage() {
                   Cancel
                 </Button>
                 <Button type="submit" disabled={sendingLink}>
+                  {sendingLink ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Send className="mr-2 h-4 w-4" aria-hidden />}
                   {sendingLink ? 'Sending...' : 'Send reset link'}
                 </Button>
               </DialogFooter>

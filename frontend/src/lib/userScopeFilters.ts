@@ -18,15 +18,17 @@ export type StoredAuthUser = {
 
 const CLEARED_KEY_PREFIX = 'klip.userScopeFilters.cleared.'
 
+/**
+ * The filters a page opens with for the signed-in user. Only the Region/Plant is a default now: the product default is retired (the Users page no longer assigns products),
+ * so `products` is always empty even for an account that still has a product list stored. The shape stays so the six pages that read it need no change.
+ */
 export function getInitialUserScopeFilters(): { products: string[]; groupPlants: string[] } {
   if (typeof window === 'undefined') return { products: [], groupPlants: [] }
   try {
     const raw = localStorage.getItem('user')
     if (!raw) return { products: [], groupPlants: [] }
     const user = JSON.parse(raw) as StoredAuthUser
-    const products = Array.isArray(user.products)
-      ? user.products.map((value) => String(value).trim()).filter(Boolean)
-      : []
+    const products: string[] = []
     const groupPlants = Array.isArray(user.group_plants)
       ? user.group_plants.map((value) => String(value).trim()).filter(Boolean)
       : []

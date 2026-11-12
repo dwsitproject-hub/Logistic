@@ -34,7 +34,7 @@ function commodityText(data: Record<string, unknown> | null | undefined, key: st
 }
 
 async function applyCommodity(record: DhmRecord): Promise<void> {
-  const name = commodityText(record.data, 'short_name') || dhmDataName(record.data);
+  let name = commodityText(record.data, 'short_name') || dhmDataName(record.data);
   const longName = commodityText(record.data, 'long_name');
   const commodityType = commodityText(record.data, 'type');
   const materialCodeRaw = commodityText(record.data, 'material_code');
@@ -43,13 +43,29 @@ async function applyCommodity(record: DhmRecord): Promise<void> {
   const uom = commodityText(record.data, 'uom');
   const code = replicaCode(record, null);
   const dhmId = asDhmUuid(record.id);
-  const existing =
+  const byIdentity =
     (dhmId && (await findId(`SELECT id FROM products WHERE dhm_id = $1::uuid LIMIT 1`, [dhmId]))) ||
     (code && (await findId(`SELECT id FROM products WHERE code_dhm = $1 LIMIT 1`, [code]))) ||
     // The SAP material number is the stable identity of a product, so it comes before the name.
     (materialCodeRaw &&
-      (await findId(`SELECT id FROM products WHERE upper(trim(material_code)) = upper(trim($1)) LIMIT 1`, [materialCodeRaw]))) ||
-    (name && (await findId(`SELECT id FROM products WHERE upper(trim(product_name)) = upper(trim($1)) LIMIT 1`, [name])));
+      (await findId(`SELECT id FROM products WHERE upper(trim(material_code)) = upper(trim($1)) LIMIT 1`, [materialCodeRaw])));
+  // A Master Product row is ONE DHM commodity, and DHM may hold several under one short_name (the same name is allowed there; the material_code tells them apart). A record that is
+  // none of the row's linked commodity, yet shares its name with a row linked to ANOTHER commodity, would be matched by name and take that row's dhm_id, code and material_code, then
+  // hand them back on the next record, every sync. It gets a row of its own, named with its material code.
+  if (!byIdentity && materialCodeRaw && name) {
+    const sibling = await findId(
+      `SELECT id FROM products
+        WHERE upper(trim(product_name)) = upper(trim($1)) AND dhm_id IS NOT NULL AND ($2::uuid IS NULL OR dhm_id <> $2::uuid) AND COALESCE(dhm_is_deleted, false) = false
+        LIMIT 1`,
+      [name, dhmId],
+    );
+    if (sibling) {
+      logger.info('DHM commodity shares its short_name with another commodity: it gets a Master Product row of its own', { code, materialCode: materialCodeRaw, name });
+      name = `${name} (${materialCodeRaw})`;
+    }
+  }
+  const existing =
+    byIdentity || (name && (await findId(`SELECT id FROM products WHERE upper(trim(product_name)) = upper(trim($1)) LIMIT 1`, [name])));
   // material_code is unique in KLIP. A record whose code another product already holds must not make the record fail
   // (the sync would skip it and the DHM link would never be stored): keep the other product's code, drop this one.
   let materialCode = materialCodeRaw;

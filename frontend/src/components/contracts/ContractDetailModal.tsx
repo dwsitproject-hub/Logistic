@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { X } from 'lucide-react'
+import { X, Loader2, Send } from 'lucide-react'
 import { drawnPortLabel } from '@/lib/dischargePortFilter'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
 import api from '@/lib/api'
@@ -1749,6 +1749,7 @@ export function ContractDetailModal({
                         onClick={saveNewRemark}
                         disabled={newRemarkSaving || !newRemarkText.trim()}
                       >
+                        {newRemarkSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Send className="mr-2 h-4 w-4" aria-hidden />}
                         {newRemarkSaving ? 'Saving...' : 'Post'}
                       </Button>
                     </div>

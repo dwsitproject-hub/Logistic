@@ -12,7 +12,7 @@ import {
   BulkUploadStatusModal,
   type BulkUploadStatusResult,
 } from '@/components/BulkUploadStatusModal'
-import { Plus, Upload, Download, X, Eye, Loader2 } from 'lucide-react'
+import { Plus, Upload, Download, X, Loader2, Save } from 'lucide-react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
@@ -519,6 +519,9 @@ export default function SupplierPage() {
           </CardHeader>
           <CardContent>
             <MasterListCompactTable
+              fitContent
+              onRowClick={setViewingSupplier}
+              rowClickHint="Click a row to view it"
               rows={items}
               columns={SUPPLIER_TABLE_COLUMNS.filter((col) => supplierColumns.orderedVisibleIds.includes(col.id)).sort(
                 (a, b) => supplierColumns.orderedVisibleIds.indexOf(a.id) - supplierColumns.orderedVisibleIds.indexOf(b.id),
@@ -536,13 +539,6 @@ export default function SupplierPage() {
                 if (supplierColumns.dragColId) supplierColumns.reorder(supplierColumns.dragColId, id)
                 supplierColumns.setDragColId(null)
               }}
-              renderActions={(row) => (
-                <div className="inline-flex items-center justify-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => setViewingSupplier(row)} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
-                    <Eye className="h-4 w-4 mr-1" />View
-                  </Button>
-                </div>
-              )}
             />
           </CardContent>
         </Card>
@@ -612,7 +608,7 @@ export default function SupplierPage() {
                 ))}
                 <div className="col-span-full flex justify-end gap-2 mt-2">
                   <Button type="button" variant="ghost" onClick={() => { setEditing(null); setForm(emptyForm); setShowModal(false) }}>Cancel</Button>
-                  <Button type="submit">Save</Button>
+                  <Button type="submit"><Save className="mr-2 h-4 w-4" aria-hidden />Save</Button>
                 </div>
               </form>
               </div>
