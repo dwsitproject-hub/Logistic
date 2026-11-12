@@ -50,16 +50,16 @@ const COMMODITY_TYPES = ['liquid', 'solid', 'Fuel, Greases, & Lub', 'Chemical', 
 
 const PRODUCT_COLUMNS: MasterListTableColumn<Product>[] = [
   { id: 'code_klip', label: 'Product Code (KLIP)', getText: (row) => row.code_klip || '-' },
-  { id: 'code_dhm', label: 'Product Code (DHM)', getText: (row) => row.code_dhm || '-' },
+  { id: 'code_dhm', label: 'Code (DHM)', getText: (row) => row.code_dhm || '-' },
   { id: 'material_code', label: 'Material Code (SAP)', getText: (row) => row.material_code || '-' },
   { id: 'klip_product', label: 'KLIP Product (SAP)', getText: (row) => row.klip_product || '-' },
   { id: 'klip_contracts', label: 'Contracts', getText: (row) => (row.klip_contracts ? String(row.klip_contracts) : '-') },
-  { id: 'product_name', label: 'Product', getText: (row) => row.product_name || '-' },
-  { id: 'long_name', label: 'Long Name', getText: (row) => row.long_name || '-' },
-  { id: 'commodity_type', label: 'Type', getText: (row) => row.commodity_type || '-' },
-  { id: 'material_group', label: 'Material Group', getText: (row) => row.material_group || '-' },
-  { id: 'hs_code', label: 'HS Code', getText: (row) => row.hs_code || '-' },
-  { id: 'uom', label: 'UoM', getText: (row) => row.uom || '-' },
+  { id: 'product_name', label: 'Short Name (DHM)', getText: (row) => row.product_name || '-' },
+  { id: 'long_name', label: 'Long Name (DHM)', getText: (row) => row.long_name || '-' },
+  { id: 'commodity_type', label: 'Type (DHM)', getText: (row) => row.commodity_type || '-' },
+  { id: 'material_group', label: 'Material Group (DHM)', getText: (row) => row.material_group || '-' },
+  { id: 'hs_code', label: 'HS Code (DHM)', getText: (row) => row.hs_code || '-' },
+  { id: 'uom', label: 'UoM (DHM)', getText: (row) => row.uom || '-' },
   dhmStatusListColumn<Product>(),
 ]
 
@@ -185,7 +185,7 @@ export default function MasterProductConfigurationPage() {
             <div className="relative">
               <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input
-                placeholder="Product, long name, material code or DHM code"
+                placeholder="Short name, long name, material code or DHM code"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
@@ -217,8 +217,6 @@ export default function MasterProductConfigurationPage() {
                 <span className="whitespace-nowrap tabular-nums">
                   Page {page}/{totalPages} · {items.length} rows
                 </span>
-                <span className="text-gray-400" aria-hidden>·</span>
-                <span className="whitespace-nowrap">Click a row to {isAdmin ? 'edit' : 'view'} it</span>
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -250,6 +248,7 @@ export default function MasterProductConfigurationPage() {
             tightActions
             fitContent
             onRowClick={openEdit}
+            rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
             rows={[...items].sort((a, b) => {
               const col = PRODUCT_COLUMNS.find((item) => item.id === sortKey)
               const left = col?.getText(a) ?? ''
@@ -290,11 +289,11 @@ export default function MasterProductConfigurationPage() {
                 <Input value={editing?.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
               </div>
               <div className="space-y-1">
-                <Label>Product Code (DHM)</Label>
+                <Label>Code (DHM)</Label>
                 <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
               </div>
               <div className="space-y-1 md:col-span-2">
-                <Label>Product</Label>
+                <Label>Short Name (DHM)</Label>
                 <Input
                   value={form.product_name ?? ''}
                   onChange={(e) => setForm((f: { product_name?: string }) => ({ ...f, product_name: e.target.value }))}
@@ -302,14 +301,14 @@ export default function MasterProductConfigurationPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>Long Name</Label>
+                <Label>Long Name (DHM)</Label>
                 <Input
                   value={form.long_name ?? ''}
                   onChange={(e) => setForm((f: Product) => ({ ...f, long_name: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
-                <Label>Type</Label>
+                <Label>Type (DHM)</Label>
                 <select
                   className="w-full rounded-md border px-3 py-2 text-sm"
                   value={form.commodity_type ?? ''}
@@ -333,21 +332,21 @@ export default function MasterProductConfigurationPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label>Material Group</Label>
+                <Label>Material Group (DHM)</Label>
                 <Input
                   value={form.material_group ?? ''}
                   onChange={(e) => setForm((f: Product) => ({ ...f, material_group: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
-                <Label>HS Code</Label>
+                <Label>HS Code (DHM)</Label>
                 <Input
                   value={form.hs_code ?? ''}
                   onChange={(e) => setForm((f: Product) => ({ ...f, hs_code: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
-                <Label>UoM</Label>
+                <Label>UoM (DHM)</Label>
                 <Input
                   value={form.uom ?? ''}
                   onChange={(e) => setForm((f: Product) => ({ ...f, uom: e.target.value }))}

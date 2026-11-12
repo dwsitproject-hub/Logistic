@@ -20,7 +20,6 @@ import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { Plus } from 'lucide-react'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
-import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import {
@@ -431,6 +430,9 @@ export default function MasterLoadingPortPage() {
           <CardContent>
             <MasterListCompactTable
               tightActions
+              fitContent
+              onRowClick={openEdit}
+              rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
               rows={[...items].sort((a, b) => {
                 const col = PORT_COLUMNS.find((item) => item.id === sortKey)
                 const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })
@@ -455,12 +457,6 @@ export default function MasterLoadingPortPage() {
                 if (portColumns.dragColId) portColumns.reorder(portColumns.dragColId, id)
                 portColumns.setDragColId(null)
               }}
-              renderActions={(p) => (
-                <MasterRowActions
-                  editLabel={isAdmin ? 'Edit port' : 'View port'}
-                  onEdit={() => openEdit(p)}
-                />
-              )}
             />
           </CardContent>
         </Card>

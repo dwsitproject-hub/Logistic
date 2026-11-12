@@ -11,7 +11,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
-import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
@@ -186,6 +185,16 @@ export default function MasterCompanyPage() {
               <MasterListCompactTable
                 tightActions
                 fitContent
+                rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
+                onRowClick={(row) => {
+                  setEditing(row)
+                  setForm({
+                    company_code: row.company_code || '',
+                    company_name: row.company_name || '',
+                    site_ids: row.site_ids || [],
+                  })
+                  setOpen(true)
+                }}
                 rows={[...items].sort((a, b) => {
                   const col = COLUMNS.find((item) => item.id === sortKey)
                   const left = col?.getText(a) ?? ''
@@ -212,20 +221,6 @@ export default function MasterCompanyPage() {
                   if (layout.dragColId) layout.reorder(layout.dragColId, id)
                   layout.setDragColId(null)
                 }}
-                renderActions={(row) => (
-                  <MasterRowActions
-                    editLabel={isAdmin ? 'Edit company' : 'View company'}
-                    onEdit={() => {
-                      setEditing(row)
-                      setForm({
-                        company_code: row.company_code || '',
-                        company_name: row.company_name || '',
-                        site_ids: row.site_ids || [],
-                      })
-                      setOpen(true)
-                    }}
-                  />
-                )}
               />
               {totalPages > 1 ? (
                 <div className="mt-3 flex justify-end gap-2">

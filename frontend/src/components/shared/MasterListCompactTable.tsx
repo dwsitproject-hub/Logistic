@@ -84,6 +84,8 @@ type MasterListCompactTableProps<T> = {
   fitContent?: boolean
   /** Make the whole row the click target (and Enter on a focused row), instead of an Actions column. Selecting text in a row does not open it. */
   onRowClick?: (row: T) => void
+  /** One quiet line above the table that says the rows are clickable (shown only with onRowClick). */
+  rowClickHint?: string
 }
 
 export function MasterListCompactTable<T>({
@@ -103,6 +105,7 @@ export function MasterListCompactTable<T>({
   tightActions = false,
   fitContent = false,
   onRowClick,
+  rowClickHint,
 }: MasterListCompactTableProps<T>) {
   const topScrollRef = useRef<HTMLDivElement>(null)
   const bottomScrollRef = useRef<HTMLDivElement>(null)
@@ -117,6 +120,7 @@ export function MasterListCompactTable<T>({
 
   return (
     <div className={loading && rows.length === 0 ? 'min-h-[240px]' : undefined}>
+      {onRowClick && rowClickHint ? <p className="mb-1.5 text-xs text-gray-500">{rowClickHint}</p> : null}
       <div className="border rounded-lg overflow-hidden">
         <div
           ref={topScrollRef}

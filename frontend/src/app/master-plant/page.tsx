@@ -19,7 +19,6 @@ import { Input } from '@/components/ui/input'
 import api from '@/lib/api'
 import { Plus } from 'lucide-react'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
-import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import * as XLSX from 'xlsx'
@@ -442,6 +441,8 @@ export default function MasterPlantPage() {
             <MasterListCompactTable
               tightActions
               fitContent
+              onRowClick={openEdit}
+              rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
               rows={[...items].sort((a, b) => {
                 const col = PLANT_COLUMNS.find((item) => item.id === sortKey)
                 const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })
@@ -466,12 +467,6 @@ export default function MasterPlantPage() {
                 if (plantColumns.dragColId) plantColumns.reorder(plantColumns.dragColId, id)
                 plantColumns.setDragColId(null)
               }}
-              renderActions={(p) => (
-                <MasterRowActions
-                  editLabel={isAdmin ? 'Edit company' : 'View company'}
-                  onEdit={() => openEdit(p)}
-                />
-              )}
             />
           </CardContent>
         </Card>
