@@ -104,6 +104,7 @@ import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerf
 import { operationalTableColumnClass } from '@/lib/operationalTableLayout'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { ListPager } from '@/components/performance/ListPager'
 import {
   clickSortStack,
   serializeSortStack,
@@ -3019,18 +3020,6 @@ function ShippingPerformancePageContent() {
                     </>
                   )}
                 </p>
-              <SortStackSummary
-                stack={sortStack}
-                labelFor={(key) => {
-                  const col = COLUMN_MAP[String(key)]
-                  return col ? getColumnHeaderLabel(col) : String(key)
-                }}
-                onReset={() => {
-                  setSortStack(DEFAULT_SHIPPING_PERF_SORT)
-                  setUseTopRankSort(false)
-                  setCurrentPage(1)
-                }}
-              />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="inline-flex rounded-lg border bg-white p-1">
@@ -3136,33 +3125,20 @@ function ShippingPerformancePageContent() {
                   </div>
                 )}
               </div>
-              {totalPages > 1 && (
-                <div className="flex flex-wrap items-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage - 1)} disabled={currentPage === 1 || summaryFetching || section3TableLoading}>
-                    Previous
-                  </Button>
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum: number
-                    if (totalPages <= 5) { pageNum = i + 1 }
-                    else if (currentPage <= 3) { pageNum = i + 1 }
-                    else if (currentPage >= totalPages - 2) { pageNum = totalPages - 4 + i }
-                    else { pageNum = currentPage - 2 + i }
-                    return (
-                      <Button key={pageNum} variant={currentPage === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} disabled={summaryFetching || section3TableLoading} className="min-w-[36px]">
-                        {pageNum}
-                      </Button>
-                    )
-                  })}
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(currentPage + 1)} disabled={currentPage === totalPages || summaryFetching || section3TableLoading}>
-                    Next
-                  </Button>
-                  <span className="text-xs text-gray-500 ml-1 tabular-nums">
-                    Page {currentPage} of {totalPages}
-                  </span>
-                </div>
-              )}
               </div>
             </div>
+            <SortStackSummary
+              stack={sortStack}
+              labelFor={(key) => {
+                const col = COLUMN_MAP[String(key)]
+                return col ? getColumnHeaderLabel(col) : String(key)
+              }}
+              onReset={() => {
+                setSortStack(DEFAULT_SHIPPING_PERF_SORT)
+                setUseTopRankSort(false)
+                setCurrentPage(1)
+              }}
+            />
           </CardHeader>
           <CardContent>
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
@@ -3580,6 +3556,14 @@ function ShippingPerformancePageContent() {
                 </div>
               </div>
             </div>
+
+            <ListPager
+              page={currentPage}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
+              disabled={summaryFetching || section3TableLoading}
+              summary={`Page ${currentPage} of ${totalPages}`}
+            />
 
             <p className="text-xs text-gray-500 mt-3">
               Delta unit is day difference. Records include transport mode SEA or MIX only.

@@ -22,6 +22,7 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { ListPager } from '@/components/performance/ListPager'
 import { contractsSortStackParam, nextContractsSortStack } from '@/lib/contractsSortStack'
 import { sortEntryFor, sortPriority, type SortEntry } from '@/lib/sortStack'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -4641,14 +4642,6 @@ function ContractsPageContent() {
                       </span>
                     </p>
                   )}
-                  <SortStackSummary
-                    stack={sortStack}
-                    labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
-                    onReset={() => {
-                      setSortStack(defaultSortStack)
-                      setCurrentPage(1)
-                    }}
-                  />
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -4769,58 +4762,16 @@ function ContractsPageContent() {
                     </div>
                   )}
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(currentPage - 1)}
-                      disabled={currentPage === 1 || listFetching || section3TableLoading}
-                    >
-                      Previous
-                    </Button>
-
-                    {/* Page Numbers */}
-                    <div className="flex items-center gap-1">
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let pageNum: number
-                        if (totalPages <= 5) {
-                          pageNum = i + 1
-                        } else if (currentPage <= 3) {
-                          pageNum = i + 1
-                        } else if (currentPage >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i
-                        } else {
-                          pageNum = currentPage - 2 + i
-                        }
-
-                        return (
-                          <Button
-                            key={pageNum}
-                            variant={currentPage === pageNum ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => handlePageChange(pageNum)}
-                            disabled={listFetching || section3TableLoading}
-                            className="min-w-[40px]"
-                          >
-                            {pageNum}
-                          </Button>
-                        )
-                      })}
-                    </div>
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(currentPage + 1)}
-                      disabled={currentPage === totalPages || listFetching || section3TableLoading}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                )}
               </div>
             </div>
+            <SortStackSummary
+              stack={sortStack}
+              labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+              onReset={() => {
+                setSortStack(defaultSortStack)
+                setCurrentPage(1)
+              }}
+            />
           </CardHeader>
           <CardContent>
               <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
@@ -5552,62 +5503,14 @@ function ContractsPageContent() {
               </>
               </div>
             
-            {/* Pagination Controls */}
-            {totalPages > 1 && (
-              <div className="mt-6 flex items-center justify-between border-t pt-4">
-                <div className="text-xs text-gray-500 tabular-nums">
-                  Page {currentPage}/{totalPages} · {displayTotalContracts.toLocaleString('en-US')} contracts
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handlePageChange(currentPage - 1)}
-                    disabled={currentPage === 1 || listFetching || section3TableLoading}
-                  >
-                    Previous
-                  </Button>
-                  
-                  {/* Page Numbers */}
-                  <div className="flex items-center gap-1">
-                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                      let pageNum: number
-                      if (totalPages <= 5) {
-                        pageNum = i + 1
-                      } else if (currentPage <= 3) {
-                        pageNum = i + 1
-                      } else if (currentPage >= totalPages - 2) {
-                        pageNum = totalPages - 4 + i
-                      } else {
-                        pageNum = currentPage - 2 + i
-                      }
-                      
-                      return (
-                        <Button
-                          key={pageNum}
-                          variant={currentPage === pageNum ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => handlePageChange(pageNum)}
-                          disabled={listFetching || section3TableLoading}
-                          className="min-w-[40px]"
-                        >
-                          {pageNum}
-                        </Button>
-                      )
-                    })}
-                  </div>
-                  
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handlePageChange(currentPage + 1)}
-                    disabled={currentPage === totalPages || listFetching || section3TableLoading}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            )}
+            {/* Pagination */}
+            <ListPager
+              page={currentPage}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
+              disabled={listFetching || section3TableLoading}
+              summary={`Page ${currentPage}/${totalPages} · ${displayTotalContracts.toLocaleString('en-US')} contracts`}
+            />
           </CardContent>
         </Card>
 

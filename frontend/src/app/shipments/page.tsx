@@ -115,6 +115,7 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { ListPager } from '@/components/performance/ListPager'
 import { compareByStack, sortEntryFor, sortPriority, type SortEntry, type SortValue } from '@/lib/sortStack'
 import { nextShipmentsSortStack, shipmentsSortStackParam } from '@/lib/shipmentsSortStack'
 import {
@@ -7345,14 +7346,6 @@ function ShipmentsPageContent() {
                       </>
                     ) : null}
                   </p>
-                <SortStackSummary
-                  stack={sortStack}
-                  labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
-                  onReset={() => {
-                    setSortStack(defaultSortStack)
-                    setPage(1)
-                  }}
-                />
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {statusFilter === 'UNPLANNED' && selectedManualGroupContractIds.size > 0 ? (
@@ -7546,54 +7539,16 @@ function ShipmentsPageContent() {
                     )}
                   </Button>
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(page - 1)}
-                      disabled={page <= 1 || listFetching || section3TableLoading}
-                    >
-                      Previous
-                    </Button>
-                    <div className="flex items-center gap-1">
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let pageNum: number
-                        if (totalPages <= 5) {
-                          pageNum = i + 1
-                        } else if (page <= 3) {
-                          pageNum = i + 1
-                        } else if (page >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i
-                        } else {
-                          pageNum = page - 2 + i
-                        }
-                        return (
-                          <Button
-                            key={pageNum}
-                            variant={page === pageNum ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => handlePageChange(pageNum)}
-                            disabled={listFetching || section3TableLoading}
-                            className="min-w-[40px]"
-                          >
-                            {pageNum}
-                          </Button>
-                        )
-                      })}
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(page + 1)}
-                      disabled={page >= totalPages || listFetching || section3TableLoading}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                )}
               </div>
             </div>
+            <SortStackSummary
+              stack={sortStack}
+              labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+              onReset={() => {
+                setSortStack(defaultSortStack)
+                setPage(1)
+              }}
+            />
           </CardHeader>
           <CardContent>
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
@@ -8533,64 +8488,15 @@ function ShipmentsPageContent() {
                   )}
                   </div>
 
-                {totalPages > 1 && (
-                  <div className="mt-6 flex items-center justify-between border-t pt-4">
-                    <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} (
-                      {tableShipmentCount}{' '}
-                      {statusFilter === 'PREPLANNED'
-                        ? tableShipmentCount === 1
-                          ? 'grouping'
-                          : 'groupings'
-                        : 'total shipments'}
-                      )
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(page - 1)}
-                        disabled={page <= 1 || listFetching || section3TableLoading}
-                      >
-                        Previous
-                      </Button>
-                      <div className="flex items-center gap-1">
-                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                          let pageNum: number
-                          if (totalPages <= 5) {
-                            pageNum = i + 1
-                          } else if (page <= 3) {
-                            pageNum = i + 1
-                          } else if (page >= totalPages - 2) {
-                            pageNum = totalPages - 4 + i
-                          } else {
-                            pageNum = page - 2 + i
-                          }
-                          return (
-                            <Button
-                              key={pageNum}
-                              variant={page === pageNum ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => handlePageChange(pageNum)}
-                              disabled={listFetching || section3TableLoading}
-                              className="min-w-[40px]"
-                            >
-                              {pageNum}
-                            </Button>
-                          )
-                        })}
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(page + 1)}
-                        disabled={page >= totalPages || listFetching || section3TableLoading}
-                      >
-                        Next
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                <ListPager
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={handlePageChange}
+                  disabled={listFetching || section3TableLoading}
+                  summary={`Showing page ${page} of ${totalPages} (${tableShipmentCount.toLocaleString('en-US')} ${
+                    statusFilter === 'PREPLANNED' ? (tableShipmentCount === 1 ? 'grouping' : 'groupings') : 'total shipments'
+                  })`}
+                />
             </div>
           </CardContent>
         </Card>

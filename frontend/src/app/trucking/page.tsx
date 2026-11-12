@@ -63,6 +63,7 @@ import {
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { ListPager } from '@/components/performance/ListPager'
 import {
   clickSortStack,
   compareByStack,
@@ -4841,52 +4842,6 @@ function TruckingPageContent() {
                     </div>
                   )}
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(page - 1)}
-                      disabled={page <= 1 || listFetching}
-                    >
-                      Previous
-                    </Button>
-                    <div className="flex items-center gap-1">
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let pageNum: number
-                        if (totalPages <= 5) {
-                          pageNum = i + 1
-                        } else if (page <= 3) {
-                          pageNum = i + 1
-                        } else if (page >= totalPages - 2) {
-                          pageNum = totalPages - 4 + i
-                        } else {
-                          pageNum = page - 2 + i
-                        }
-                        return (
-                          <Button
-                            key={pageNum}
-                            variant={page === pageNum ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => handlePageChange(pageNum)}
-                            disabled={listFetching}
-                            className="min-w-[40px]"
-                          >
-                            {pageNum}
-                          </Button>
-                        )
-                      })}
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(page + 1)}
-                      disabled={page >= totalPages || listFetching}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                )}
               </div>
             </div>
             <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
@@ -5530,57 +5485,13 @@ function TruckingPageContent() {
                 })}
               </div>
 
-                {totalPages > 1 && (
-                  <div className="flex items-center justify-between pt-4 border-t mt-2">
-                    <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} ({tableHeaderCount.value.toLocaleString('en-US')} total {tableHeaderCount.noun})
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(page - 1)}
-                        disabled={page <= 1 || listFetching}
-                      >
-                        Previous
-                      </Button>
-                      <div className="flex items-center gap-1">
-                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                          let pageNum: number
-                          if (totalPages <= 5) {
-                            pageNum = i + 1
-                          } else if (page <= 3) {
-                            pageNum = i + 1
-                          } else if (page >= totalPages - 2) {
-                            pageNum = totalPages - 4 + i
-                          } else {
-                            pageNum = page - 2 + i
-                          }
-                          return (
-                            <Button
-                              key={pageNum}
-                              variant={page === pageNum ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => handlePageChange(pageNum)}
-                              disabled={listFetching}
-                              className="min-w-[40px]"
-                            >
-                              {pageNum}
-                            </Button>
-                          )
-                        })}
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(page + 1)}
-                        disabled={page >= totalPages || listFetching}
-                      >
-                        Next
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                <ListPager
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={handlePageChange}
+                  disabled={listFetching}
+                  summary={`Showing page ${page} of ${totalPages} (${tableHeaderCount.value.toLocaleString('en-US')} total ${tableHeaderCount.noun})`}
+                />
               </div>
             )}
           </CardContent>
