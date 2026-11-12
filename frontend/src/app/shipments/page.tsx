@@ -115,6 +115,7 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
+import { refreshDocumentPresence } from '@/lib/documentPresence'
 import { ListPager } from '@/components/performance/ListPager'
 import { compareByStack, sortEntryFor, sortPriority, type SortEntry, type SortValue } from '@/lib/sortStack'
 import { nextShipmentsSortStack, shipmentsSortStackParam } from '@/lib/shipmentsSortStack'
@@ -750,8 +751,8 @@ function ShipmentRowEditButton({
       aria-disabled={!hasShipmentEditData}
       className={
         hasShipmentEditData
-          ? undefined
-          : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-300 opacity-60 shadow-none hover:bg-gray-100 hover:text-gray-300'
+          ? 'h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50'
+          : 'h-8 w-8 cursor-not-allowed border-transparent bg-transparent text-gray-300 shadow-none hover:bg-transparent hover:text-gray-300'
       }
     >
       <Pencil className="h-4 w-4" />
@@ -6007,6 +6008,7 @@ function ShipmentsPageContent() {
         const docId = res.data?.data?.id ? String(res.data.data.id) : null
         setDocId(docId)
         setUploaded(true)
+        refreshDocumentPresence()
         if (showDocs && selectedShipment) {
           await fetchShipmentDocuments(selectedShipment)
         }
@@ -6293,6 +6295,7 @@ function ShipmentsPageContent() {
       })
       if (res.data?.success) {
         alert('Document uploaded successfully!')
+        refreshDocumentPresence()
         if (selectedShipment && selectedShipment.id === shipment.id) {
           await fetchShipmentDocuments(shipment)
         }

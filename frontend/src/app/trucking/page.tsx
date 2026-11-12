@@ -64,6 +64,8 @@ import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { ListPager } from '@/components/performance/ListPager'
+import { TruckingDocumentsButton } from '@/components/trucking/TruckingDocumentsButton'
+import { refreshDocumentPresence } from '@/lib/documentPresence'
 import {
   clickSortStack,
   compareByStack,
@@ -307,7 +309,7 @@ function TruckTableAddTruckingButton({ onAdd }: { onAdd: () => void }) {
           variant="outline"
           size="icon"
           onClick={onAdd}
-          className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+          className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
           aria-label="Add Trucking"
         >
           <span className="relative inline-flex h-4 w-4 items-center justify-center">
@@ -340,8 +342,8 @@ function TruckTableEditTruckingButton({
       disabled={disabled}
       className={
         disabled
-          ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed hover:bg-gray-50'
-          : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+          ? 'h-8 w-8 border-transparent bg-transparent text-gray-300 cursor-not-allowed hover:bg-transparent'
+          : 'h-8 w-8 border-transparent bg-transparent text-amber-600 hover:bg-amber-50'
       }
       aria-label={tooltip ?? (disabled ? disabledReason : 'Edit Trucking')}
     >
@@ -2692,6 +2694,7 @@ function TruckingPageContent() {
       })
       if (res.data?.success) {
         alert('Document uploaded successfully!')
+        refreshDocumentPresence()
         if (selectedOperation && selectedOperation.id === operation.id) {
           await fetchOperationDocuments(operation)
         }
@@ -5103,7 +5106,7 @@ function TruckingPageContent() {
                                             size="icon"
                                             onClick={() => handleEdit(operation)}
                                             title="Edit"
-                                            className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                            className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
                                           >
                                             <Pencil className="h-4 w-4" />
                                           </Button>
@@ -5120,19 +5123,12 @@ function TruckingPageContent() {
                                             tooltip={truckingEditTooltip(operation)}
                                           />
                                         )}
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
+                                        <TruckingDocumentsButton
+                                          operationId={operation.id}
+                                          contractId={resolveTruckingDocumentContractId(operation)}
+                                          backlog={isTruckingContractBacklogRow(operation)}
                                           onClick={() => handleViewDocuments(operation)}
-                                          title={
-                                            isTruckingContractBacklogRow(operation)
-                                              ? 'Contract documents'
-                                              : 'Documents'
-                                          }
-                                          className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                        >
-                                          <FileText className="h-4 w-4" />
-                                        </Button>
+                                        />
                                         <input
                                           id={`trucking-file-${operation.id}`}
                                           type="file"
@@ -5150,7 +5146,7 @@ function TruckingPageContent() {
                                               ? 'Upload contract document'
                                               : 'Upload'
                                           }
-                                          className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+                                          className="h-8 w-8 border-transparent bg-transparent text-red-600 hover:bg-red-50"
                                         >
                                           {uploadingId === operation.id ? (
                                             <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
@@ -5243,7 +5239,7 @@ function TruckingPageContent() {
                                     size="icon"
                                     onClick={() => handleEdit(operation)}
                                     title="Edit"
-                                    className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                    className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
                                   >
                                     <Pencil className="h-4 w-4" />
                                   </Button>
@@ -5260,19 +5256,12 @@ function TruckingPageContent() {
                                     tooltip={truckingEditTooltip(operation)}
                                   />
                                 )}
-                                <Button
-                                  variant="outline"
-                                  size="icon"
+                                <TruckingDocumentsButton
+                                  operationId={operation.id}
+                                  contractId={resolveTruckingDocumentContractId(operation)}
+                                  backlog={isTruckingContractBacklogRow(operation)}
                                   onClick={() => handleViewDocuments(operation)}
-                                  title={
-                                    isTruckingContractBacklogRow(operation)
-                                      ? 'Contract documents'
-                                      : 'Documents'
-                                  }
-                                  className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                >
-                                  <FileText className="h-4 w-4" />
-                                </Button>
+                                />
                                 <input
                                   id={`trucking-file-mobile-${operation.id}`}
                                   type="file"
@@ -5290,7 +5279,7 @@ function TruckingPageContent() {
                                       ? 'Upload contract document'
                                       : 'Upload'
                                   }
-                                  className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
+                                  className="h-8 w-8 border-transparent bg-transparent text-red-600 hover:bg-red-50"
                                 >
                                   {uploadingId === operation.id ? (
                                     <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />

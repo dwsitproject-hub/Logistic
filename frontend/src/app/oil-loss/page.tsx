@@ -2571,7 +2571,7 @@ export default function OilLossPage() {
                                                 size="icon"
                                                 disabled={!canOpen}
                                                 onClick={() => openVesselFromOilLossRow(contractRow)}
-                                                className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+                                                className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
                                                 aria-label="View shipment"
                                               >
                                                 <Ship className="h-4 w-4" />
@@ -2595,7 +2595,7 @@ export default function OilLossPage() {
                                                   if (isTransporter) openTransporterModal(row as OilLossByTransporterRow)
                                                   else openSupplierModal(row as OilLossBySupplierRow)
                                                 }}
-                                                className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                                className="h-8 w-8 border-transparent bg-transparent text-green-600 hover:bg-green-50"
                                                 aria-label={label}
                                               >
                                                 <Eye className="h-4 w-4" />

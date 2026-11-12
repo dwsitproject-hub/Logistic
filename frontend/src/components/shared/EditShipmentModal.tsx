@@ -58,6 +58,7 @@ import {
 } from 'lucide-react'
 import { MasterVesselCombobox, type MasterVesselOption } from '@/components/MasterVesselCombobox'
 import { charterTypeFromMasterTerms } from '@/lib/masterVesselTerms'
+import { refreshDocumentPresence } from '@/lib/documentPresence'
 import {
   firstNonEmptyVesselField,
   hasKlipVesselNameOverride,
@@ -1976,6 +1977,7 @@ export function EditShipmentModal({
         setDeleteDocTarget(null)
         setDeleteDocReason('')
         setDeleteDocJpsWarning(false)
+        refreshDocumentPresence()
         if (shipmentId) {
           void loadShipmentDocuments(shipmentId)
           void loadActivityLog(shipmentId)
@@ -2026,6 +2028,7 @@ export function EditShipmentModal({
         }
       }
       await loadShipmentDocuments(shipmentId)
+      refreshDocumentPresence()
       setNotification({
         type: 'success',
         message: pdfs.length === 1 ? 'Document uploaded.' : `${pdfs.length} documents uploaded.`,

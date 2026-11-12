@@ -3511,7 +3511,7 @@ function ShippingPerformancePageContent() {
                                       size="icon"
                                       onClick={() => openViewShipmentFromRow(row)}
                                       title="View shipment"
-                                      className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                      className="h-8 w-8 border-transparent bg-transparent text-green-600 hover:bg-green-50"
                                     >
                                       <Eye className="h-4 w-4" />
                                     </Button>
@@ -3537,7 +3537,7 @@ function ShippingPerformancePageContent() {
                                               '',
                                           })
                                         }
-                                        className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 disabled:opacity-40"
+                                        className="h-8 w-8 border-transparent bg-transparent text-orange-600 hover:bg-orange-50 disabled:opacity-40"
                                       >
                                         <MessageSquare className="h-4 w-4" />
                                       </Button>

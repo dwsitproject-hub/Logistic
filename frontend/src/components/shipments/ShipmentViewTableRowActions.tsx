@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FileText, Pencil, Ship, Ban } from 'lucide-react'
 import { normalizeShipmentStatusKey } from '@/lib/shipmentStatusDisplay'
+import { useDocumentPresence } from '@/lib/documentPresence'
 import {
   cancelKlipShipmentDisabledReason,
   cancelPrePlannedGroupDisabledReason,
@@ -46,6 +47,9 @@ export function ShipmentViewTableRowActions({
   primaryActionLoading = false,
   onViewDocs,
 }: ShipmentViewTableRowActionsProps) {
+  // A backlog row's documents hang on its contract; every other row's on its shipment. Unknown (not answered yet) keeps the button on.
+  const hasDocs = useDocumentPresence(String(shipment.row_kind ?? '').trim() === 'contract_backlog' ? 'contract' : 'shipment', shipment.id)
+  const docsDisabled = hasDocs === false
   const primary = resolveShipmentTablePrimaryAction(shipment.status)
   const cancelKind = resolveShipmentViewTableCancelKind(shipment)
   const canCancel = cancelKind != null
@@ -75,7 +79,7 @@ export function ShipmentViewTableRowActions({
               size="icon"
               onClick={onAddShipment}
               disabled={primaryActionLoading}
-              className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+              className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
               aria-label="Add shipment"
             >
               {primaryActionLoading ? (
@@ -99,7 +103,7 @@ export function ShipmentViewTableRowActions({
               size="icon"
               onClick={onViewShipment}
               disabled={primaryActionLoading}
-              className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+              className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
               aria-label="View shipment"
             >
               {primaryActionLoading ? (
@@ -122,7 +126,7 @@ export function ShipmentViewTableRowActions({
             size="icon"
             onClick={onEditShipment}
             disabled={primaryActionLoading}
-            className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
+            className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
             aria-label="Edit shipment"
           >
             {primaryActionLoading ? (
@@ -141,7 +145,7 @@ export function ShipmentViewTableRowActions({
   })()
 
   return (
-    <div className="flex items-center justify-end gap-2 min-h-[40px]">
+    <div className="flex items-center justify-end gap-1 min-h-[40px]">
       {primaryButton}
       {showCancel ? (
         <Tooltip>
@@ -155,8 +159,8 @@ export function ShipmentViewTableRowActions({
                 disabled={cancelDisabled}
                 className={
                   cancelDisabled
-                    ? 'border-gray-200 bg-gray-50 text-gray-400'
-                    : 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'
+                    ? 'h-8 w-8 border-transparent bg-transparent text-gray-300'
+                    : 'h-8 w-8 border-transparent bg-transparent text-red-600 hover:bg-red-50'
                 }
                 aria-label={cancelAriaLabel}
               >
@@ -175,18 +179,21 @@ export function ShipmentViewTableRowActions({
       ) : null}
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={onViewDocs}
-            title="Docs"
-            className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-            aria-label="View documents"
-          >
-            <FileText className="h-4 w-4" />
-          </Button>
+          <span className="inline-flex">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={onViewDocs}
+              disabled={docsDisabled}
+              title={docsDisabled ? undefined : 'Docs'}
+              className="h-8 w-8 border-transparent bg-transparent text-violet-600 hover:bg-violet-50 disabled:opacity-40 disabled:pointer-events-none"
+              aria-label="View documents"
+            >
+              <FileText className="h-4 w-4" />
+            </Button>
+          </span>
         </TooltipTrigger>
-        <TooltipContent side="top">View documents</TooltipContent>
+        <TooltipContent side="top">{docsDisabled ? 'No documents uploaded yet' : 'View documents'}</TooltipContent>
       </Tooltip>
     </div>
   )

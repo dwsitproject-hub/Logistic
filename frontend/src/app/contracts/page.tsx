@@ -23,6 +23,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { ListPager } from '@/components/performance/ListPager'
+import { refreshDocumentPresence } from '@/lib/documentPresence'
 import { contractsSortStackParam, nextContractsSortStack } from '@/lib/contractsSortStack'
 import { sortEntryFor, sortPriority, type SortEntry } from '@/lib/sortStack'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -2589,6 +2590,7 @@ function ContractsPageContent() {
       })
       if (res.data?.success) {
         alert('Document uploaded successfully!')
+        refreshDocumentPresence()
         // If the uploaded doc is for the currently opened contract, refresh docs list
         if (selectedContract && selectedContract.id === contract.id) {
           setDetailDocsRefreshKey((k) => k + 1)
@@ -5303,7 +5305,7 @@ function ContractsPageContent() {
                                   )}
                                 >
                                   <div className="flex items-center justify-center gap-1.5">
-                                  <Button variant="outline" size="icon" onClick={() => setSelectedContract(contract)} title="View Contract" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
+                                  <Button variant="outline" size="icon" onClick={() => setSelectedContract(contract)} title="View Contract" className="h-8 w-8 border-transparent bg-transparent text-green-600 hover:bg-green-50">
                                     <Eye className="h-4 w-4" />
                                   </Button>
 
@@ -5328,7 +5330,7 @@ function ContractsPageContent() {
                                             contract.contract_id,
                                         })
                                       }
-                                      className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 disabled:opacity-40"
+                                      className="h-8 w-8 border-transparent bg-transparent text-orange-600 hover:bg-orange-50 disabled:opacity-40"
                                     >
                                       <MessageSquare className="h-4 w-4" />
                                     </Button>
@@ -5428,7 +5430,7 @@ function ContractsPageContent() {
                             variant="outline"
                             size="sm"
                             onClick={() => setSelectedContract(contract)}
-                            className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                            className="h-8 w-8 border-transparent bg-transparent text-green-600 hover:bg-green-50"
                           >
                             <Eye className="h-4 w-4 mr-2" />
                             View
@@ -5454,7 +5456,7 @@ function ContractsPageContent() {
                                     contract.contract_id,
                                 })
                               }
-                              className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 disabled:opacity-40"
+                              className="h-8 w-8 border-transparent bg-transparent text-orange-600 hover:bg-orange-50 disabled:opacity-40"
                             >
                               <MessageSquare className="h-4 w-4 mr-2" />
                               Remarks
