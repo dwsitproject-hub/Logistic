@@ -49,11 +49,9 @@ export function UserFilterBar({ search, onSearch, role, onRole, roleOptions, tot
       </div>
 
       <Select value={role || ALL_ROLES} onValueChange={(value) => onRole(value === ALL_ROLES ? '' : value)}>
-        <SelectTrigger className="h-9 w-[220px]" aria-label="Filter by role">
-          <span className="flex min-w-0 items-center gap-2">
-            <Shield className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
-            <SelectValue />
-          </span>
+        <SelectTrigger className="h-9 w-[230px] gap-2 [&>span]:flex-1 [&>span]:text-left" aria-label="Filter by role">
+          <Shield className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+          <SelectValue />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ALL_ROLES}>All roles ({totalCount.toLocaleString('en-US')})</SelectItem>

@@ -313,33 +313,37 @@ export default function UsersPage() {
     <Layout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Users</h2>
-            <p className="mt-0.5 text-sm text-gray-500">Manage accounts, roles and what each person can see.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-gray-500">Manage accounts, roles and what each person can see.</p>
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
+              size="sm"
+              className="border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
               onClick={() => router.push('/users/activity-log')}
             >
-              <Activity className="h-4 w-4 mr-2" />
+              <Activity className="mr-2 h-4 w-4 text-gray-500" aria-hidden />
               User Activity Log
             </Button>
             <Button
               variant="outline"
+              size="sm"
+              className="border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
               onClick={() => router.push('/users/roles')}
             >
-              <Settings className="h-4 w-4 mr-2" />
+              <Settings className="mr-2 h-4 w-4 text-gray-500" aria-hidden />
               Manage Roles
             </Button>
-            <Button onClick={() => {
-              setFormData(emptyFormData)
-              setError('')
-              setSuccess('')
-              setShowAddModal(true)
-            }}>
-              <UserPlus className="h-4 w-4 mr-2" />
+            <Button
+              size="sm"
+              onClick={() => {
+                setFormData(emptyFormData)
+                setError('')
+                setSuccess('')
+                setShowAddModal(true)
+              }}
+            >
+              <UserPlus className="mr-2 h-4 w-4" aria-hidden />
               Add User
             </Button>
           </div>

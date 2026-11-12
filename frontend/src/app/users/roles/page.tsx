@@ -338,8 +338,8 @@ export default function RolesPage() {
               Pick a role, then choose what it can view, create, edit and delete.
             </p>
           </div>
-          <Button onClick={() => setShowAddRole(true)}>
-            <Plus className="h-4 w-4 mr-2" />
+          <Button size="sm" onClick={() => setShowAddRole(true)}>
+            <Plus className="mr-2 h-4 w-4" aria-hidden />
             Add Role
           </Button>
         </div>
