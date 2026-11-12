@@ -42,7 +42,7 @@ type UserLite = {
   role?: string
 }
 
-/** The App tour button in the header is hidden for now. Set to true to show it again; the tour itself is untouched. */
+/** The App tour is switched off for now: no header button and no automatic start on the Dashboard. Set to true to bring both back; the tour itself is untouched. */
 const SHOW_APP_TOUR_BUTTON = false
 
 function NavGroupList({
@@ -342,7 +342,7 @@ function LayoutWithPermissions({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <AppTourProvider userId={user.id ?? null}>
+      <AppTourProvider userId={user.id ?? null} autoStart={SHOW_APP_TOUR_BUTTON}>
         <PageHeaderBusyProvider>
           <LayoutChrome
             user={user}
