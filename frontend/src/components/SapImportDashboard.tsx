@@ -2,11 +2,13 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
-import { Badge } from './ui/badge';
-import { Progress } from './ui/progress';
 import { Loader2, Upload } from 'lucide-react';
+import { SapImportKpis } from '@/components/sap-import/SapImportKpis';
+import { SapImportDropZone } from '@/components/sap-import/SapImportDropZone';
+import { SapImportProgressPanel } from '@/components/sap-import/SapImportProgressPanel';
+import { SapImportHistory } from '@/components/sap-import/SapImportHistory';
+import { summarizeSapImports } from '@/lib/sapImportSummary';
 import {
   BulkUploadStatusModal,
   type BulkUploadStatusResult,
@@ -87,14 +89,6 @@ interface SapImport {
   file_name?: string | null;
   /** Who started it: the user's full name, or null for scheduled runs and imports made before the column existed. */
   imported_by_name?: string | null;
-}
-
-/** History display: "CPO 3 Sep 2026.xlsx" → "CPO 3 Sep 2026". */
-function displayImportFileName(fileName: string | null | undefined): string {
-  const raw = String(fileName || '').trim();
-  if (!raw) return '—';
-  const withoutExt = raw.replace(/\.(xlsx|xlsm|xlsb|xls)$/i, '').trim();
-  return withoutExt || raw;
 }
 
 type UploadPhase = 'idle' | 'uploading' | 'processing';
@@ -275,20 +269,24 @@ const SapImportDashboard: React.FC = () => {
     }
   };
 
+  const isExcelFile = (file: File): boolean => {
+    const name = (file.name || '').trim();
+    const extOk = /\.xls(x|m|b)?$/i.test(name);
+    const mime = (file.type || '').toLowerCase();
+    const mimeOk = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'application/vnd.ms-excel.sheet.macroenabled.12',
+      'application/vnd.ms-excel.sheet.binary.macroenabled.12'
+    ].includes(mime);
+    return extOk || mimeOk;
+  };
+
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       // Verify it's an Excel file
-      const name = (file.name || '').trim();
-      const extOk = /\.xls(x|m|b)?$/i.test(name);
-      const mime = (file.type || '').toLowerCase();
-      const mimeOk = [
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'application/vnd.ms-excel',
-        'application/vnd.ms-excel.sheet.macroenabled.12',
-        'application/vnd.ms-excel.sheet.binary.macroenabled.12'
-      ].includes(mime);
-      if (!extOk && !mimeOk) {
+      if (!isExcelFile(file)) {
         alert('Please select an Excel file (.xlsx, .xlsm, .xlsb, or .xls)');
         return;
       }
@@ -296,6 +294,16 @@ const SapImportDashboard: React.FC = () => {
         event.target.value = '';
       });
     }
+  };
+
+  /** A file dropped on the drop zone goes through the same check and the same import as one picked with the button. */
+  const handleFileDropped = (file: File) => {
+    if (!canUploadSap || importing) return;
+    if (!isExcelFile(file)) {
+      alert('Please select an Excel file (.xlsx, .xlsm, .xlsb, or .xls)');
+      return;
+    }
+    void handleStartImportWithFile(file);
   };
 
   const handleStartImportWithFile = async (file: File) => {
@@ -451,19 +459,7 @@ const SapImportDashboard: React.FC = () => {
     document.getElementById('file-upload-input')?.click();
   };
 
-  const getStatusBadge = (status: string) => {
-    const statusMap: { [key: string]: { variant: any; label: string } } = {
-      'pending': { variant: 'secondary', label: 'Pending' },
-      'processing': { variant: 'default', label: 'Processing' },
-      'completed': { variant: 'default', label: 'Completed' },
-      'completed_with_errors': { variant: 'destructive', label: 'Completed with Errors' },
-      'cancelled': { variant: 'secondary', label: 'Cancelled' },
-      'failed': { variant: 'destructive', label: 'Failed' }
-    };
-
-    const statusInfo = statusMap[status] || { variant: 'secondary', label: status };
-    return <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>;
-  };
+  const summary = useMemo(() => summarizeSapImports(imports), [imports]);
 
   if (loading) {
     return (
@@ -474,7 +470,7 @@ const SapImportDashboard: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Hidden File Input */}
       <input
         id="file-upload-input"
@@ -485,281 +481,67 @@ const SapImportDashboard: React.FC = () => {
         style={{ display: 'none' }}
       />
 
-      {/* Header with Action Button */}
-      <Card>
-        <CardHeader>
-          <div className="flex justify-between items-center">
-            <div>
-              <CardTitle>Logistics Data Imports</CardTitle>
-              <CardDescription>
-                Monitor and manage SAP MASTER v2 data imports
-              </CardDescription>
-            </div>
-            <div className="flex items-start gap-3">
-            <SapFolderSyncControl canSync={canUploadSap} onTick={() => void loadImports(true)} />
-            {canUploadSap ? (
-              <Button size="sm" onClick={handleStartImport} disabled={importing}>
-                {importing ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {uploadPhase === 'processing' ? 'Processing...' : 'Uploading...'}
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    Import Logistics Data
-                  </>
-                )}
-              </Button>
-            ) : (
-              <p className="text-sm text-muted-foreground max-w-xs text-right">
-                View only — you do not have permission to upload SAP files.
-              </p>
-            )}
-            </div>
-          </div>
-        </CardHeader>
-      </Card>
-
-      {showProgressBar && (
-        <Card className="border-blue-200 bg-blue-50/50">
-          <CardContent className="pt-6 space-y-3">
-            {showUploadingCard && (
-              <>
-                <div className="flex items-center justify-between gap-3 text-sm">
-                  <span className="font-medium text-blue-900 flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                    Uploading file to server...
-                  </span>
-                  <span className="tabular-nums text-blue-800">{uploadProgress}%</span>
-                </div>
-                <Progress value={uploadProgress} className="h-2" />
-                <p className="text-xs text-blue-800/80">
-                  Please keep this page open until the upload completes.
-                </p>
-                {canUploadSap && (
-                  <div className="flex justify-end">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handleCancelUpload()}
-                      disabled={cancelling}
-                    >
-                      {cancelling ? 'Cancelling...' : 'Cancel upload'}
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-
-            {showProcessingCard && activeImport && (
-              <>
-                <div className="flex items-center justify-between gap-3 text-sm">
-                  <span className="font-medium text-blue-900 flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                    Processing SAP data...
-                  </span>
-                  <span className="tabular-nums text-blue-800">{processingProgress}%</span>
-                </div>
-                <Progress value={processingProgress} className="h-2" />
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-blue-800/80">
-                  <span>
-                    <span className="font-semibold text-blue-900">
-                      {doneCount.toLocaleString()}
-                    </span>
-                    {' / '}
-                    {(Number(activeImport.total_records) || 0).toLocaleString()} rows processed
-                  </span>
-                  <span>Elapsed: {formatDuration(elapsedSeconds)}</span>
-                  {rowsPerSecond > 0 && (
-                    <span>
-                      ~{rowsPerSecond >= 1 ? Math.round(rowsPerSecond) : rowsPerSecond.toFixed(1)} rows/sec
-                    </span>
-                  )}
-                  {etaSeconds != null && remainingRows > 0 && (
-                    <span>Est. remaining: {formatDuration(etaSeconds)}</span>
-                  )}
-                  {(Number(activeImport.failed_records) || 0) > 0 && (
-                    <span className="text-red-700">
-                      {(Number(activeImport.failed_records) || 0).toLocaleString()} failed
-                    </span>
-                  )}
-                </div>
-                {doneCount === 0 && elapsedSeconds < 20 ? (
-                  <p className="text-xs text-blue-800/80">
-                    Reading the file and starting the first rows — this usually takes a few seconds.
-                  </p>
-                ) : doneCount === 0 && elapsedSeconds >= 20 ? (
-                  <p className="text-xs text-amber-800">
-                    Still starting up after {formatDuration(elapsedSeconds)} — large files can take a little
-                    longer. If this doesn&apos;t move for several minutes, refresh the page or re-upload.
-                  </p>
-                ) : (
-                  <p className="text-xs text-blue-800/80">
-                    Large files can take several minutes. You can leave this page — progress is saved on the
-                    server and Import History will update when it&apos;s done.
-                  </p>
-                )}
-                {canUploadSap && (
-                  <div className="flex justify-end">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void handleCancelUpload()}
-                      disabled={cancelling}
-                    >
-                      {cancelling ? 'Cancelling...' : 'Cancel upload'}
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Import History */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Import History</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left p-3">Import Date</th>
-                  <th className="text-left p-3">File Name</th>
-                  <th className="text-left p-3">Status</th>
-                  <th className="text-left p-3">Source</th>
-                  <th className="text-left p-3">Imported By</th>
-                  <th className="text-right p-3">Total Records</th>
-                  <th className="text-right p-3">Processed</th>
-                  <th className="text-right p-3">Failed</th>
-                  <th className="text-right p-3">Success Rate</th>
-                  <th className="text-right p-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {imports.map((imp) => {
-                  const successRate = imp.total_records > 0
-                    ? ((imp.processed_records / imp.total_records) * 100).toFixed(1)
-                    : '0.0';
-
-                  return (
-                    <tr key={imp.id} className="border-b hover:bg-gray-50">
-                      <td className="p-3">
-                        <div className="font-medium">
-                          {new Date(imp.import_timestamp).toLocaleString()}
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <div className="font-medium" title={imp.file_name || undefined}>
-                          {displayImportFileName(imp.file_name)}
-                        </div>
-                      </td>
-                      <td className="p-3">{getStatusBadge(imp.status)}</td>
-                      <td className="p-3">
-                        <Badge variant="secondary">
-                          {imp.source === 'scheduler' ? 'Scheduler' : 'Manual'}
-                        </Badge>
-                      </td>
-                      <td className="p-3">{imp.imported_by_name || (imp.source === 'scheduler' ? 'Scheduler' : '—')}</td>
-                      <td className="p-3 text-right">{imp.total_records.toLocaleString()}</td>
-                      <td className="p-3 text-right text-green-600 font-medium">
-                        {imp.processed_records.toLocaleString()}
-                      </td>
-                      <td className="p-3 text-right text-red-600 font-medium">
-                        {imp.failed_records.toLocaleString()}
-                      </td>
-                      <td className="p-3 text-right">
-                        <Badge variant={parseFloat(successRate) >= 95 ? 'default' : 'destructive'}>
-                          {successRate}%
-                        </Badge>
-                      </td>
-                      <td className="p-3 text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => openImportDetail(imp.id)}
-                        >
-                          View Details
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-
-            {imports.length === 0 && importsError && (
-              <div className="text-center text-red-600 py-12">{importsError}</div>
-            )}
-
-            {imports.length === 0 && !importsError && (
-              <div className="text-center text-gray-500 py-12">
-                {canUploadSap
-                  ? 'No import history available. Start your first import above.'
-                  : 'No import history available.'}
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Summary Statistics */}
-      {imports.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Imports</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{imports.length}</div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Records Processed</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold text-green-600">
-                {imports.reduce((sum, imp) => sum + imp.processed_records, 0).toLocaleString()}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Failures</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold text-red-600">
-                {imports.reduce((sum, imp) => sum + imp.failed_records, 0).toLocaleString()}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Avg Success Rate</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">
-                {(imports.reduce((sum, imp) => {
-                  const rate = imp.total_records > 0
-                    ? (imp.processed_records / imp.total_records) * 100
-                    : 0;
-                  return sum + rate;
-                }, 0) / imports.length).toFixed(1)}%
-              </div>
-            </CardContent>
-          </Card>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900">Logistics data imports</h2>
+          <p className="mt-0.5 text-sm text-gray-500">
+            SAP MASTER v2: upload a file, or let the schedule pull it from the SAP folder.
+          </p>
         </div>
-      )}
+        <div className="flex items-start gap-2">
+          <SapFolderSyncControl canSync={canUploadSap} onTick={() => void loadImports(true)} />
+          {canUploadSap ? (
+            <Button size="sm" onClick={handleStartImport} disabled={importing}>
+              {importing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  {uploadPhase === 'processing' ? 'Processing...' : 'Uploading...'}
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Import Logistics Data
+                </>
+              )}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {!canUploadSap ? (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-600">
+          View only: you do not have permission to upload SAP files.
+        </p>
+      ) : null}
+
+      <SapImportKpis summary={summary} />
+
+      {showProgressBar ? (
+        <SapImportProgressPanel
+          phase={showUploadingCard ? 'uploading' : 'processing'}
+          uploadProgress={uploadProgress}
+          processingProgress={processingProgress}
+          doneCount={doneCount}
+          totalCount={Number(activeImport?.total_records) || 0}
+          failedCount={Number(activeImport?.failed_records) || 0}
+          elapsed={formatDuration(elapsedSeconds)}
+          elapsedSeconds={elapsedSeconds}
+          rowsPerSecond={rowsPerSecond}
+          eta={etaSeconds != null && remainingRows > 0 ? formatDuration(etaSeconds) : null}
+          canCancel={canUploadSap}
+          cancelling={cancelling}
+          onCancel={() => void handleCancelUpload()}
+        />
+      ) : canUploadSap ? (
+        <SapImportDropZone onFile={handleFileDropped} onBrowse={handleStartImport} disabled={importing} />
+      ) : null}
+
+      <SapImportHistory
+        imports={imports}
+        error={importsError}
+        canUpload={canUploadSap}
+        onOpen={openImportDetail}
+      />
 
       <BulkUploadStatusModal
         open={!!bulkUploadResult}
