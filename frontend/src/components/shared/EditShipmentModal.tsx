@@ -173,7 +173,6 @@ import {
   SectionActionGroup,
   SectionAddButton,
   SectionCancelButton,
-  SectionEditButton,
 } from '@/components/shared/ShipmentModalSectionActions'
 import {
   ataFieldsFromShipmentInfo,
@@ -986,7 +985,6 @@ export function EditShipmentModal({
   const [loadingPorts, setLoadingPorts] = useState<LoadingPortRef[]>([])
   const [etaBlocks, setEtaBlocks] = useState<EtaBlock[]>([])
   const [dischargeEtaFields, setDischargeEtaFields] = useState<DischargeEtaFields>(emptyDischargeEtaFields)
-  const [etaSectionEditing, setEtaSectionEditing] = useState(false)
   const [isMultiPortLoading, setIsMultiPortLoading] = useState(false)
   const [shipmentInfo, setShipmentInfo] = useState<Record<string, unknown>>({})
   const [jettyStatus, setJettyStatus] = useState<JettyStatusFields | null>(null)
@@ -998,12 +996,10 @@ export function EditShipmentModal({
   const [ataFields, setAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [originalAtaFields, setOriginalAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [ataSapReference, setAtaSapReference] = useState<ShipmentAtaFields>(emptyAtaFields)
-  const [ataIsEditing, setAtaIsEditing] = useState(false)
   const [loadingPortAtaByKey, setLoadingPortAtaByKey] = useState<Record<string, LoadingAtaFields>>({})
   const [originalLoadingPortAtaByKey, setOriginalLoadingPortAtaByKey] = useState<
     Record<string, LoadingAtaFields>
   >({})
-  const [qualityIsEditing, setQualityIsEditing] = useState(false)
   const [klipFieldHistory, setKlipFieldHistory] = useState<Record<string, KlipFieldEditInfo>>({})
   const [showAtaDifferencesOnly, setShowAtaDifferencesOnly] = useState(false)
   const [showQualityDifferencesOnly, setShowQualityDifferencesOnly] = useState(false)
@@ -1355,7 +1351,6 @@ export function EditShipmentModal({
     setOriginalShortage(null)
     setEtaBlocks([])
     setDischargeEtaFields(emptyDischargeEtaFields())
-    setEtaSectionEditing(false)
     setIsMultiPortLoading(false)
     setActivityLog([])
     setShipmentRemarks([])
@@ -1365,9 +1360,7 @@ export function EditShipmentModal({
     setAtaFields(emptyAtaFields())
     setOriginalAtaFields(emptyAtaFields())
     setAtaSapReference(emptyAtaFields())
-    setAtaIsEditing(false)
     setOriginalLoadingPortAtaByKey({})
-    setQualityIsEditing(false)
     setShowAtaDifferencesOnly(false)
     setShowQualityDifferencesOnly(false)
     setQualityEditsByPortKey({})
@@ -1518,7 +1511,6 @@ export function EditShipmentModal({
         setAtaFields(loadedAta)
         setOriginalAtaFields(loadedAta)
         setAtaSapReference(ataSapReferenceFromShipmentInfo(info))
-        setAtaIsEditing(false)
 
         setEditContext(editContext)
         setSelectedAddPoOption(null)
@@ -1702,7 +1694,6 @@ export function EditShipmentModal({
         const poLabels = contractDetails.map((d) => d.po_number || d.contract_number).filter(Boolean)
         const multiPort = loadingPortRows.length > 1
         setIsMultiPortLoading(multiPort)
-        setEtaSectionEditing(false)
 
         if (multiPort) {
           // Multi-contract STO group: each loading port belongs to one contract's shipment
@@ -1789,8 +1780,6 @@ export function EditShipmentModal({
           buildQualityBaselineFromPorts(loadingPortRows, dischargePortForQuality, info, sid),
         )
         setQualityEditsByPortKey({})
-        setQualityIsEditing(false)
-        setAtaIsEditing(false)
         setEditRemark('')
 
         const plantCode = String(row.plant_code ?? '').trim()
@@ -2200,8 +2189,6 @@ export function EditShipmentModal({
               ? 'Shipment updated successfully.'
               : 'ATA and Quality updated successfully.'
         setNotification({ type: 'success', message })
-        setAtaIsEditing(false)
-        setQualityIsEditing(false)
         setEditRemark('')
         const contractId = editContractId?.trim()
         const directId = editShipmentIdProp?.trim()
@@ -2329,7 +2316,6 @@ export function EditShipmentModal({
           }),
         )
       }
-      setEtaSectionEditing(false)
       return
     }
 
@@ -2353,17 +2339,6 @@ export function EditShipmentModal({
           : b,
       ),
     )
-  }
-
-  const handleCancelAtaEdit = () => {
-    setAtaFields({ ...originalAtaFields })
-    setLoadingPortAtaByKey({ ...originalLoadingPortAtaByKey })
-    setAtaIsEditing(false)
-  }
-
-  const handleCancelQualityEdit = () => {
-    setQualityEditsByPortKey({})
-    setQualityIsEditing(false)
   }
 
   const qualityFieldsForPortKey = (portKey: string): ShipmentQualityFields =>
@@ -2443,9 +2418,6 @@ export function EditShipmentModal({
 
   const activeEtaBlock = etaBlocks.find((b) => b.status === 'active')
   const historicalEtaBlocks = etaBlocks.filter((b) => b.status === 'historical')
-  const etaSectionIsEditing = isMultiPortLoading
-    ? etaSectionEditing
-    : Boolean(activeEtaBlock?.isEditing || activeEtaBlock?.isDraft)
 
   const step1Done = Boolean(vesselName.trim())
   const step2Done = detailRows.length > 0 || Boolean(stoNumber.trim())
@@ -3465,29 +3437,12 @@ export function EditShipmentModal({
                   <h4 className="text-sm font-semibold text-gray-800">3. Estimation + Loading Port</h4>
                   {step3Done && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
-                {canModifyCoreSections && (
+                {canModifyCoreSections && !isMultiPortLoading && activeEtaBlock && (
                   <SectionActionGroup>
-                    {!etaSectionIsEditing ? (
-                      <>
-                        <SectionEditButton
-                          onClick={() => {
-                            if (isMultiPortLoading) {
-                              setEtaSectionEditing(true)
-                              return
-                            }
-                            setEtaBlocks((prev) =>
-                              prev.map((b) =>
-                                b.status === 'active' ? { ...b, isEditing: true } : b,
-                              ),
-                            )
-                          }}
-                        />
-                        {!isMultiPortLoading && !activeEtaBlock?.isDraft ? (
-                          <SectionAddButton onClick={handleAddEta} />
-                        ) : null}
-                      </>
-                    ) : (
+                    {activeEtaBlock.isDraft ? (
                       <SectionCancelButton onClick={handleCancelEtaEdit} />
+                    ) : (
+                      <SectionAddButton onClick={handleAddEta} />
                     )}
                   </SectionActionGroup>
                 )}
@@ -3522,7 +3477,7 @@ export function EditShipmentModal({
                               <label className="mb-1 block text-[0.625rem] font-medium text-gray-600">
                                 {label}
                               </label>
-                              {etaSectionEditing && canModifyCoreSections ? (
+                              {canModifyCoreSections ? (
                                 <DateInputDdMmYyyy
                                   valueIso={block.fields[key]}
                                   onChangeIso={(iso) => updateMultiPortEtaField(block.id, key, iso)}
@@ -3552,7 +3507,7 @@ export function EditShipmentModal({
                             <label className="mb-1 block text-[0.625rem] font-medium text-gray-600">
                               {label}
                             </label>
-                            {etaSectionEditing && canModifyCoreSections ? (
+                            {canModifyCoreSections ? (
                               <DateInputDdMmYyyy
                                 valueIso={dischargeEtaFields[key]}
                                 onChangeIso={(iso) => updateDischargeEtaField(key, iso)}
@@ -3596,7 +3551,7 @@ export function EditShipmentModal({
                         )}
                         format="text"
                         klipEdited={isKlipEditedField(loadingPortRows[0]?.klip_edited_fields, 'port_name')}
-                        editing={activeEtaBlock.isEditing && canModifyCoreSections}
+                        editing={canModifyCoreSections}
                         editControl={
                           <Input
                             value={activeEtaBlock.loadingPort}
@@ -3622,7 +3577,7 @@ export function EditShipmentModal({
                       {ETA_FIELD_ROWS.map(({ key, label }) => (
                         <div key={key}>
                           <label className="mb-1 block text-[0.625rem] font-medium text-gray-600">{label}</label>
-                          {activeEtaBlock.isEditing && canModifyCoreSections ? (
+                          {canModifyCoreSections ? (
                             <DateInputDdMmYyyy
                               valueIso={activeEtaBlock.fields[key]}
                               onChangeIso={(iso) => updateActiveEtaField(key, iso)}
@@ -3679,26 +3634,7 @@ export function EditShipmentModal({
                   <h4 className="text-sm font-semibold text-gray-800">4. ATA Vessel Information</h4>
                   {step4Done && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
-                {canEditAtaQuality && (
-                  <SectionActionGroup>
-                    <KlipSapCompareLegend showJps={jpsCoversShipment} />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => setShowAtaDifferencesOnly((v) => !v)}
-                    >
-                      {showAtaDifferencesOnly ? 'Show all' : 'Diffs only'}
-                    </Button>
-                    {!ataIsEditing ? (
-                      <SectionEditButton onClick={() => setAtaIsEditing(true)} />
-                    ) : (
-                      <SectionCancelButton onClick={() => void handleCancelAtaEdit()} />
-                    )}
-                  </SectionActionGroup>
-                )}
-                {!canEditAtaQuality ? <KlipSapCompareLegend className="ml-auto" showJps={jpsCoversShipment} /> : null}
+                <KlipSapCompareLegend className="ml-auto" showJps={jpsCoversShipment} />
               </div>
               <div className="space-y-4 p-4">
                 {isMultiPortLoading ? (
@@ -3756,7 +3692,7 @@ export function EditShipmentModal({
                                     showAtaDifferencesOnly &&
                                     !hasKlipSapMismatch(klipVal, sapVal, 'date')
                                   }
-                                  editing={ataIsEditing && canEditAtaQuality}
+                                  editing={canEditAtaQuality}
                                   editControl={
                                     <DateInputDdMmYyyy
                                       valueIso={klipVal}
@@ -3821,7 +3757,7 @@ export function EditShipmentModal({
                                 showAtaDifferencesOnly &&
                                 !hasKlipSapMismatch(klipVal, sapRef, 'date')
                               }
-                              editing={ataIsEditing && canEditAtaQuality && !jpsHeld}
+                              editing={canEditAtaQuality && !jpsHeld}
                               editControl={
                                 <DateInputDdMmYyyy
                                   valueIso={klipVal}
@@ -3835,8 +3771,7 @@ export function EditShipmentModal({
                           )
                         })}
                       </div>
-                      {ataIsEditing &&
-                      canEditAtaQuality &&
+                      {canEditAtaQuality &&
                       DISCHARGE_ATA_FIELD_ROWS.some(
                         ({ key }) =>
                           Boolean(jettyStatus?.jps_ata?.[key]) &&
@@ -3871,7 +3806,7 @@ export function EditShipmentModal({
                             showAtaDifferencesOnly &&
                             !hasKlipSapMismatch(klipVal, sapRef, 'date')
                           }
-                          editing={ataIsEditing && canEditAtaQuality}
+                          editing={canEditAtaQuality}
                           editControl={
                             <DateInputDdMmYyyy
                               valueIso={ataFields[key]}
@@ -3899,26 +3834,7 @@ export function EditShipmentModal({
                   <h4 className="text-sm font-semibold text-gray-800">5. Quality Vessel Information</h4>
                   {step5Done && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
-                {canEditAtaQuality && (
-                  <SectionActionGroup>
-                    <KlipSapCompareLegend />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs"
-                      onClick={() => setShowQualityDifferencesOnly((v) => !v)}
-                    >
-                      {showQualityDifferencesOnly ? 'Show all' : 'Diffs only'}
-                    </Button>
-                    {!qualityIsEditing ? (
-                      <SectionEditButton onClick={() => setQualityIsEditing(true)} />
-                    ) : (
-                      <SectionCancelButton onClick={handleCancelQualityEdit} />
-                    )}
-                  </SectionActionGroup>
-                )}
-                {!canEditAtaQuality ? <KlipSapCompareLegend className="ml-auto" /> : null}
+                <KlipSapCompareLegend className="ml-auto" />
               </div>
               <div className="space-y-4 p-4">
                 {loadingPortRows.map((portRow, portIndex) => {
@@ -3969,7 +3885,7 @@ export function EditShipmentModal({
                               showQualityDifferencesOnly &&
                               !hasKlipSapMismatch(klipVal, sapVal, 'number')
                             }
-                            editing={qualityIsEditing && canEditAtaQuality}
+                            editing={canEditAtaQuality}
                             editControl={
                               <DecimalDotInput
                                 value={klipVal ?? null}
@@ -4015,7 +3931,7 @@ export function EditShipmentModal({
                             showQualityDifferencesOnly &&
                             !hasKlipSapMismatch(klipVal, sapVal, 'number')
                           }
-                          editing={qualityIsEditing && canEditAtaQuality}
+                          editing={canEditAtaQuality}
                           editControl={
                             <DecimalDotInput
                               value={klipVal ?? null}
