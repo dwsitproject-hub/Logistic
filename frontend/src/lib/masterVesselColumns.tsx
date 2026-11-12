@@ -204,6 +204,6 @@ export function sumMasterVesselTableWidthPx(): number {
     MASTER_VESSEL_COLUMNS.reduce(
       (sum, col) => sum + masterVesselTableColumnWidthPx(col.id, col.label),
       0,
-    ) + MASTER_VESSEL_ACTIONS_COL_WIDTH_PX
+    )
   )
 }
