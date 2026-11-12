@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Droplets, Eye, GripVertical, Loader2, Ship, SlidersHorizontal, X } from 'lucide-react'
+import { Anchor, Droplets, Eye, GripVertical, Loader2, PackageCheck, Ship, SlidersHorizontal, X, type LucideIcon } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
@@ -168,25 +168,34 @@ type ViewColumnPrefs = {
   sortDir: 'asc' | 'desc'
 }
 
-const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; formula: string }> = [
+// icon + chip colour: where on the voyage the figure is taken (R1 loading, R2 at sea, R3 discharge, Loss the whole trip)
+const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; formula: string; icon: LucideIcon; chip: string }> = [
   {
     key: 'r1',
     label: 'R1',
+    icon: Anchor,
+    chip: 'bg-sky-50 text-sky-600',
     formula: '(Quantity SFAL − Quantity Delivery) / Quantity Delivery × 100%',
   },
   {
     key: 'r2',
     label: 'R2',
+    icon: Ship,
+    chip: 'bg-indigo-50 text-indigo-600',
     formula: '(Quantity SFBD − Quantity SFAL) / Quantity SFAL × 100%',
   },
   {
     key: 'r3',
     label: 'R3',
+    icon: PackageCheck,
+    chip: 'bg-emerald-50 text-emerald-600',
     formula: '(Quantity Receive − Quantity SFBD) / Quantity SFBD × 100%',
   },
   {
     key: 'r4',
     label: 'Loss',
+    icon: Droplets,
+    chip: 'bg-rose-50 text-rose-600',
     formula: '(Quantity Receive − Quantity Delivery) / Quantity Delivery × 100%',
   },
 ]
@@ -2093,7 +2102,13 @@ export default function OilLossPage() {
                   cardDisabled ? 'border-gray-200 bg-gray-50' : 'bg-white'
                 }`}
               >
-                <div className="mb-2 flex items-center gap-1.5">
+                <div className="mb-2 flex items-center gap-2">
+                  <span
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${cardDisabled ? 'bg-gray-100 text-gray-400' : card.chip}`}
+                    aria-hidden
+                  >
+                    <card.icon className="h-4 w-4" />
+                  </span>
                   <span
                     className={`text-lg font-bold leading-none tracking-tight ${
                       cardDisabled ? 'text-gray-400' : 'text-gray-900'
@@ -2116,24 +2131,23 @@ export default function OilLossPage() {
                     {showBlockingLoad ? '…' : cardDisabled ? '-' : formatOilLossAvgPct(avgPct)}
                   </div>
                 </div>
-                {card.key === 'r4' ? (
-                  <div className="mt-2 min-w-0">
-                    <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-400 leading-none">
-                      Avg MT
-                    </div>
-                    <div
-                      className={`mt-1 text-sm font-medium leading-tight tabular-nums ${
-                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgMt, 'secondary')
-                      }`}
-                    >
-                      {showBlockingLoad
-                        ? '…'
-                        : avgMt == null
-                          ? '-'
-                          : `${formatOilLossAvgMt(avgMt)} MT`}
-                    </div>
+                {/* R1-R3 show Avg MT like Loss: the same mean of the per-voyage loss in MT (ROilLossSummary.avgMt, computed for every R). */}
+                <div className="mt-2 min-w-0">
+                  <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-400 leading-none">
+                    Avg MT
                   </div>
-                ) : null}
+                  <div
+                    className={`mt-1 text-sm font-medium leading-tight tabular-nums ${
+                      showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgMt, 'secondary')
+                    }`}
+                  >
+                    {showBlockingLoad
+                      ? '…'
+                      : avgMt == null
+                        ? '-'
+                        : `${formatOilLossAvgMt(avgMt)} MT`}
+                  </div>
+                </div>
               </div>
             )
           })}
