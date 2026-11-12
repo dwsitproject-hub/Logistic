@@ -39,7 +39,7 @@ async function pushProduct(row: Record<string, unknown>, overwrite: boolean) {
 
 export const listProducts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { page = '1', limit = '100', search = '', excludeDeleted } = req.query as Record<string, string>;
+    const { page = '1', limit = '100', search = '', excludeDeleted, withUsage, usedInKlip } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page as string, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit as string, 10) || 100, 1), 500);
     const offset = (pageNum - 1) * limitNum;
@@ -52,13 +52,28 @@ export const listProducts = async (req: AuthRequest, res: Response): Promise<voi
       params.push(`%${search}%`);
       where.push(`(product_name ILIKE $${params.length} OR long_name ILIKE $${params.length} OR commodity_type ILIKE $${params.length} OR material_code ILIKE $${params.length} OR code_klip ILIKE $${params.length} OR code_dhm ILIKE $${params.length})`);
     }
+    // The Master Product table asks for withUsage: the KLIP product (contracts.product, the SAP text) that contracts carry for each row's material_code, and how many contracts use it. Derived on read,
+    // nothing is stored; pickers do not ask, so their query is unchanged. usedInKlip keeps only the rows some contract uses.
+    const usageOn = /^(true|1)$/i.test(String(withUsage ?? '')) || /^(true|1)$/i.test(String(usedInKlip ?? ''));
+    if (/^(true|1)$/i.test(String(usedInKlip ?? ''))) where.push('u.contracts IS NOT NULL');
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const usageCte = usageOn
+      ? `WITH usage AS (
+           SELECT upper(trim(material_code)) AS mc, mode() WITHIN GROUP (ORDER BY product) AS klip_product, COUNT(*)::int AS contracts
+             FROM contracts
+            WHERE NULLIF(trim(material_code), '') IS NOT NULL
+            GROUP BY 1
+         )`
+      : '';
+    const fromSql = usageOn ? `${TABLE} p LEFT JOIN usage u ON u.mc = upper(trim(p.material_code))` : TABLE;
+    const selectSql = usageOn ? 'p.*, u.klip_product, COALESCE(u.contracts, 0) AS klip_contracts' : '*';
+    const orderSql = usageOn ? 'p.updated_at DESC NULLS LAST, p.created_at DESC' : 'updated_at DESC NULLS LAST, created_at DESC';
 
     const dataRes = await query(
-      `SELECT * FROM ${TABLE} ${whereSql} ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      `${usageCte} SELECT ${selectSql} FROM ${fromSql} ${whereSql} ORDER BY ${orderSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, limitNum, offset]
     );
-    const countRes = await query(`SELECT COUNT(*)::int AS count FROM ${TABLE} ${whereSql}`, params);
+    const countRes = await query(`${usageCte} SELECT COUNT(*)::int AS count FROM ${fromSql} ${whereSql}`, params);
     res.json({ success: true, data: { items: await attachDhmPushState('product', dataRes.rows), total: countRes.rows[0].count, page: pageNum, limit: limitNum } });
   } catch (error) {
     logger.error('Error listing products:', error);

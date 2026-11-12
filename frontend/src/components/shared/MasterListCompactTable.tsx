@@ -82,6 +82,8 @@ type MasterListCompactTableProps<T> = {
   tightActions?: boolean
   /** Size each column to its longest value so the text stays on one line. */
   fitContent?: boolean
+  /** Make the whole row the click target (and Enter on a focused row), instead of an Actions column. Selecting text in a row does not open it. */
+  onRowClick?: (row: T) => void
 }
 
 export function MasterListCompactTable<T>({
@@ -100,6 +102,7 @@ export function MasterListCompactTable<T>({
   renderActions,
   tightActions = false,
   fitContent = false,
+  onRowClick,
 }: MasterListCompactTableProps<T>) {
   const topScrollRef = useRef<HTMLDivElement>(null)
   const bottomScrollRef = useRef<HTMLDivElement>(null)
@@ -243,7 +246,27 @@ export function MasterListCompactTable<T>({
                 rows.map((row, index) => {
                   const stripe = index % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                   return (
-                    <tr key={getRowId(row)} className={stripe}>
+                    <tr
+                      key={getRowId(row)}
+                      className={cn(stripe, onRowClick && 'group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500')}
+                      tabIndex={onRowClick ? 0 : undefined}
+                      onClick={
+                        onRowClick
+                          ? () => {
+                              // a drag over the text is a selection, not a click on the row
+                              if (typeof window !== 'undefined' && window.getSelection()?.toString()) return
+                              onRowClick(row)
+                            }
+                          : undefined
+                      }
+                      onKeyDown={
+                        onRowClick
+                          ? (event) => {
+                              if (event.key === 'Enter' && event.target === event.currentTarget) onRowClick(row)
+                            }
+                          : undefined
+                      }
+                    >
                       {columns.map((col) => {
                         const text = col.getText(row)
                         const tooltip = text && text !== '-' ? text.toUpperCase() : null
@@ -257,6 +280,7 @@ export function MasterListCompactTable<T>({
                               masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                               col.id === 'dhm_status' && 'klip-op-col--token',
                               stripe,
+                              onRowClick && 'group-hover:bg-blue-50',
                             )}
                           >
                             <div className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, CONTRACT_PERF_TABLE_ROW_MIN_H)}>
