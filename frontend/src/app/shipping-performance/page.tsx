@@ -17,11 +17,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Eye, GripVertical, Loader2, MessageSquare, Package, SlidersHorizontal, X } from 'lucide-react'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
-import {
-  PerformanceStatusCard,
-  type PerformanceStatCell,
-  type PerformanceStatGroup,
-} from '@/components/performance/PerformanceStatusCard'
+import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
@@ -2242,33 +2238,72 @@ function ShippingPerformancePageContent() {
     setCurrentPage(1)
   }, [])
 
-  /** Section 1 averages: Loading (three) and Discharge (two). Neutral numbers; the formula is in each label's tooltip. */
-  const shippingSummaryGroups = (
-    card: ShippingPerfCardFilter,
-    summary: PerVesselPerfSummary,
-  ): PerformanceStatGroup[] => {
+  const renderSummaryPrimaryTotals = (summary: PerVesselPerfSummary) => {
+    return (
+      <>
+        <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
+        <div className="text-xl font-bold text-gray-900 mb-3 tabular-nums">
+          {summary.vesselCount.toLocaleString('en-US')}
+        </div>
+      </>
+    )
+  }
+
+  const renderSummaryGapMetrics = (summary: PerVesselPerfSummary, card: ShippingPerfCardFilter) => {
     const labelMode = card === 'close' ? 'actual' : 'estimated'
     const fmt = (days: number | null) =>
       formatAvgDays(days == null || !Number.isFinite(days) ? null : Math.abs(days))
-    const cell = (key: ShippingSummaryMetricKey, value: number | null): PerformanceStatCell => ({
-      label: getShippingSummaryMetricLabel(key, labelMode, 'short'),
-      value: fmt(value),
-      title: getShippingSummaryMetricFormula(key, labelMode),
-    })
-    return [
-      {
-        heading: 'Loading',
-        stats: [
-          cell('loadingEtr', summary.avgLoadingEtaEtr),
-          cell('loadingEtb', summary.avgLoadingEtaEtb),
-          cell('loadingEtc', summary.avgLoadingEtbEtc),
-        ],
-      },
-      {
-        heading: 'Discharge',
-        stats: [cell('dischargeEtb', summary.avgDischargeEtaEtb), cell('dischargeEtc', summary.avgDischargeEtbEtc)],
-      },
+    const loadMetrics: { key: ShippingSummaryMetricKey; value: number | null }[] = [
+      { key: 'loadingEtr', value: summary.avgLoadingEtaEtr },
+      { key: 'loadingEtb', value: summary.avgLoadingEtaEtb },
+      { key: 'loadingEtc', value: summary.avgLoadingEtbEtc },
     ]
+    const discMetrics: { key: ShippingSummaryMetricKey; value: number | null }[] = [
+      { key: 'dischargeEtb', value: summary.avgDischargeEtaEtb },
+      { key: 'dischargeEtc', value: summary.avgDischargeEtbEtc },
+    ]
+
+    const renderMetricRow = (metrics: { key: ShippingSummaryMetricKey; value: number | null }[]) => (
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        {metrics.map(({ key, value }) => {
+          const shortLabel = getShippingSummaryMetricLabel(key, labelMode, 'short')
+          const formula = getShippingSummaryMetricFormula(key, labelMode)
+          return (
+            <span key={key} className="shrink-0 cursor-help" title={formula}>
+              {shortLabel}:{' '}
+              <span
+                className={cn(
+                  'font-semibold tabular-nums',
+                  key === 'loadingEtr' ? signedCycleDaysClass(value) : 'text-gray-900',
+                )}
+              >
+                {fmt(value)}
+              </span>
+            </span>
+          )
+        })}
+      </div>
+    )
+
+    return (
+      <div className="space-y-1 text-xs text-gray-500">
+        {renderMetricRow(loadMetrics)}
+        {renderMetricRow(discMetrics)}
+      </div>
+    )
+  }
+
+  /** Section 1 body — Total Vessels; Avg Load on row 1, Avg Disc on row 2. */
+  const renderShippingSummaryCardBody = (
+    card: ShippingPerfCardFilter,
+    summary: PerVesselPerfSummary,
+  ) => {
+    return (
+      <div className="w-full min-w-0 text-left">
+        {renderSummaryPrimaryTotals(summary)}
+        {renderSummaryGapMetrics(summary, card)}
+      </div>
+    )
   }
 
   /** Section 3 column headers — recompute when Close/Open card or global status filter changes. */
@@ -2677,28 +2712,30 @@ function ShippingPerformancePageContent() {
                 (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
               }`}
             >
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <PerformanceStatusCard
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <PerformanceSection1CardShell
                   variant="ongoing"
                   title="ON GOING"
+                  titleSize="base"
                   selected={perfCardFilter === 'ongoing'}
                   onClick={() => togglePerfCardFilter('ongoing')}
-                  label="Total Vessels"
-                  value={ongoingPerformanceSummary.vesselCount.toLocaleString('en-US')}
-                  middle={<ShippingPerfContractsBadge count={ongoingPerformanceSummary.contractCount} />}
-                  groups={shippingSummaryGroups('ongoing', ongoingPerformanceSummary)}
-                />
+                  className="min-w-0 flex-1 border-2 shadow-sm"
+                  headerEnd={<ShippingPerfContractsBadge count={ongoingPerformanceSummary.contractCount} />}
+                >
+                  {renderShippingSummaryCardBody('ongoing', ongoingPerformanceSummary)}
+                </PerformanceSection1CardShell>
 
-                <PerformanceStatusCard
+                <PerformanceSection1CardShell
                   variant="completed"
                   title="COMPLETED"
+                  titleSize="base"
                   selected={perfCardFilter === 'close'}
                   onClick={() => togglePerfCardFilter('close')}
-                  label="Total Vessels"
-                  value={closePerformanceSummary.vesselCount.toLocaleString('en-US')}
-                  middle={<ShippingPerfContractsBadge count={closePerformanceSummary.contractCount} />}
-                  groups={shippingSummaryGroups('close', closePerformanceSummary)}
-                />
+                  className="min-w-0 flex-1 border-2 shadow-sm"
+                  headerEnd={<ShippingPerfContractsBadge count={closePerformanceSummary.contractCount} />}
+                >
+                  {renderShippingSummaryCardBody('close', closePerformanceSummary)}
+                </PerformanceSection1CardShell>
               </div>
             </div>
           )
