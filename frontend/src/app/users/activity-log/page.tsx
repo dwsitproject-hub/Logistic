@@ -30,7 +30,7 @@ import {
   USER_ACTIVITY_IDLE_MINUTES,
   eventTypeLabel,
 } from '@/lib/userActivityLog'
-import { ArrowLeft, Activity, Clock, MousePointerClick, Pencil, Plus, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Activity, Clock, MousePointerClick, Pencil, Plus, RefreshCw, RotateCcw } from 'lucide-react'
 
 function defaultDateRange(): { dateFrom: string; dateTo: string } {
   const d = new Date()
@@ -186,6 +186,7 @@ function UserActivityLogPageContent() {
               <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-[160px]" />
             </div>
             <Button type="button" variant="outline" size="sm" onClick={handleResetFilters}>
+              <RotateCcw className="mr-2 h-4 w-4" aria-hidden />
               Reset filters
             </Button>
           </div>

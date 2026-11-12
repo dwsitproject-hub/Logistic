@@ -201,6 +201,7 @@ export default function SapDataImport() {
             
             {importResult && (
               <Button variant="outline" onClick={resetImport}>
+                <Upload className="mr-2 h-4 w-4" aria-hidden />
                 Import New File
               </Button>
             )}

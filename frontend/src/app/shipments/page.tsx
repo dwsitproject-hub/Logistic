@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2 } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2, Ban } from 'lucide-react'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -7380,6 +7380,14 @@ function ShipmentsPageContent() {
                     </Button>
                   </div>
                 ) : null}
+                <SortStackSummary
+                  stack={sortStack}
+                  labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+                  onReset={() => {
+                    setSortStack(defaultSortStack)
+                    setPage(1)
+                  }}
+                />
                 <Button
                   variant="outline"
                   size="sm"
@@ -7541,14 +7549,6 @@ function ShipmentsPageContent() {
                 </div>
               </div>
             </div>
-            <SortStackSummary
-              stack={sortStack}
-              labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
-              onReset={() => {
-                setSortStack(defaultSortStack)
-                setPage(1)
-              }}
-            />
           </CardHeader>
           <CardContent>
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
@@ -9742,6 +9742,7 @@ function ShipmentsPageContent() {
               onClick={handleConfirmCancelLoadingPort}
               disabled={cancelPortSubmitting || !cancelPortRemark.trim()}
             >
+              {cancelPortSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Ban className="mr-2 h-4 w-4" aria-hidden />}
               {cancelPortSubmitting ? 'Cancelling...' : 'Confirm Cancel'}
             </Button>
           </DialogFooter>

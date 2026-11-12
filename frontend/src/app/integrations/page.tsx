@@ -10,7 +10,7 @@ import { DhmFailedPushButton } from '@/components/integrations/DhmPushPanel'
 import { KmapsWebhookButton } from '@/components/integrations/KmapsWebhookPanel'
 import { JpsPortsEditor, JpsPortsSummary } from '@/components/integrations/JpsPortsField'
 import api from '@/lib/api'
-import { AlertTriangle, CheckCircle2, History, Loader2, Plug, RotateCcw, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, History, Loader2, Plug, RotateCcw, XCircle, Pencil } from 'lucide-react'
 
 /**
  * Integrations (ADMIN only): DHM and JPS settings and credentials.
@@ -192,6 +192,7 @@ function IntegrationCard({
           </Button>
           {!editing ? (
             <Button size="sm" onClick={startEdit}>
+              <Pencil className="mr-2 h-4 w-4" aria-hidden />
               Edit
             </Button>
           ) : (

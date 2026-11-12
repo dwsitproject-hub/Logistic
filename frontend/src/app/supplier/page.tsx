@@ -12,7 +12,7 @@ import {
   BulkUploadStatusModal,
   type BulkUploadStatusResult,
 } from '@/components/BulkUploadStatusModal'
-import { Plus, Upload, Download, X, Loader2 } from 'lucide-react'
+import { Plus, Upload, Download, X, Loader2, Save } from 'lucide-react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
@@ -608,7 +608,7 @@ export default function SupplierPage() {
                 ))}
                 <div className="col-span-full flex justify-end gap-2 mt-2">
                   <Button type="button" variant="ghost" onClick={() => { setEditing(null); setForm(emptyForm); setShowModal(false) }}>Cancel</Button>
-                  <Button type="submit">Save</Button>
+                  <Button type="submit"><Save className="mr-2 h-4 w-4" aria-hidden />Save</Button>
                 </div>
               </form>
               </div>

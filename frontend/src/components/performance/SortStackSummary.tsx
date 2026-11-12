@@ -19,8 +19,8 @@ function DirIcon({ dir }: { dir: 'asc' | 'desc' }) {
 }
 
 /**
- * A multi-column sort in one short line: "Urutan: [1 STO ↑ +2 ▾]  Reset". It never wraps, so the card header keeps the same
- * height however many columns are sorted. The pill opens the full order (primary first, the order the rows are compared) in a
+ * A multi-column sort in one short piece: "Urutan: [1 STO ↑ +2 ▾]  Reset". It sits in the card header's action group, just before
+ * the Download Data button, and never wraps, so the header keeps the same height however many columns are sorted. The pill opens the full order (primary first, the order the rows are compared) in a
  * small list; Reset goes back to the table's default sort.
  */
 export function SortStackSummary<K extends string>({ stack, labelFor, onReset, minKeys = 2 }: Props<K>) {
@@ -48,7 +48,7 @@ export function SortStackSummary<K extends string>({ stack, labelFor, onReset, m
   return (
     <div
       ref={rootRef}
-      className="relative flex w-full items-center gap-2 border-t border-gray-100 pt-2 text-xs text-gray-600"
+      className="relative flex max-w-full items-center gap-2 text-xs text-gray-600"
       aria-label="Urutan kolom"
     >
       <span className="font-medium">Urutan:</span>

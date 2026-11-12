@@ -3039,6 +3039,18 @@ function ShippingPerformancePageContent() {
                 </button>
               </div>
               <div className="flex flex-wrap items-center gap-2 ml-auto">
+              <SortStackSummary
+                stack={sortStack}
+                labelFor={(key) => {
+                  const col = COLUMN_MAP[String(key)]
+                  return col ? getColumnHeaderLabel(col) : String(key)
+                }}
+                onReset={() => {
+                  setSortStack(DEFAULT_SHIPPING_PERF_SORT)
+                  setUseTopRankSort(false)
+                  setCurrentPage(1)
+                }}
+              />
               <div ref={columnsMenuRef} className="relative">
                 <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)} disabled={summaryFetching || section3TableLoading}>
                   <SlidersHorizontal className="h-4 w-4 mr-2" />
@@ -3127,18 +3139,6 @@ function ShippingPerformancePageContent() {
               </div>
               </div>
             </div>
-            <SortStackSummary
-              stack={sortStack}
-              labelFor={(key) => {
-                const col = COLUMN_MAP[String(key)]
-                return col ? getColumnHeaderLabel(col) : String(key)
-              }}
-              onReset={() => {
-                setSortStack(DEFAULT_SHIPPING_PERF_SORT)
-                setUseTopRankSort(false)
-                setCurrentPage(1)
-              }}
-            />
           </CardHeader>
           <CardContent>
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>

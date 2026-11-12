@@ -54,6 +54,7 @@ import {
   Upload,
   Download,
   X,
+  Save,
 } from 'lucide-react'
 import { MasterVesselCombobox, type MasterVesselOption } from '@/components/MasterVesselCombobox'
 import { charterTypeFromMasterTerms } from '@/lib/masterVesselTerms'
@@ -4162,7 +4163,7 @@ export function EditShipmentModal({
                   Saving…
                 </>
               ) : (
-                'Save Changes'
+                <><Save className="mr-2 h-4 w-4" aria-hidden />Save Changes</>
               )}
             </Button>
           ) : null}
@@ -4181,6 +4182,7 @@ export function EditShipmentModal({
                       : 'Check what JPS needs for this STO and send it to the Jetty Planning System'
               }
             >
+              <Anchor className="mr-2 h-4 w-4" aria-hidden />
               {jettySubmitMode(jettyStatus) === 'resubmit' ? 'Resubmit to Jetty' : 'Submit to Jetty'}
             </Button>
           ) : null}

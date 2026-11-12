@@ -44,6 +44,9 @@ import {
   AlertCircle,
   Mail,
   Activity,
+  Save,
+  Loader2,
+  Send,
 } from 'lucide-react'
 import api from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -734,7 +737,7 @@ export default function UsersPage() {
                 <Button type="button" variant="outline" onClick={() => setShowAddModal(false)}>
                   Cancel
                 </Button>
-                <Button type="submit">Create User</Button>
+                <Button type="submit"><UserPlus className="mr-2 h-4 w-4" aria-hidden />Create User</Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -903,7 +906,7 @@ export default function UsersPage() {
                 <Button type="button" variant="outline" onClick={() => setShowEditModal(false)}>
                   Cancel
                 </Button>
-                <Button type="submit">Update User</Button>
+                <Button type="submit"><Save className="mr-2 h-4 w-4" aria-hidden />Update User</Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -931,6 +934,7 @@ export default function UsersPage() {
                   Cancel
                 </Button>
                 <Button type="submit" disabled={sendingLink}>
+                  {sendingLink ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Send className="mr-2 h-4 w-4" aria-hidden />}
                   {sendingLink ? 'Sending...' : 'Send reset link'}
                 </Button>
               </DialogFooter>

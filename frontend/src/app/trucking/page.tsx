@@ -4710,6 +4710,14 @@ function TruckingPageContent() {
               </CardTitle>
               {truckingViewToggle}
               <div className="flex flex-wrap items-center gap-2 ml-auto">
+                <SortStackSummary
+                  stack={sortStack}
+                  labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+                  onReset={() => {
+                    setSortStack(defaultSortStack)
+                    setPage(1)
+                  }}
+                />
                 <Button
                   variant="outline"
                   size="sm"
@@ -4866,14 +4874,6 @@ function TruckingPageContent() {
                 </>
               ) : null}
             </p>
-            <SortStackSummary
-              stack={sortStack}
-              labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
-              onReset={() => {
-                setSortStack(defaultSortStack)
-                setPage(1)
-              }}
-            />
           </CardHeader>
           <CardContent>
             {showCreateForm ? (

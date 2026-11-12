@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { X, Pencil } from 'lucide-react'
+import { X, Pencil, Loader2, Save } from 'lucide-react'
 import api from '@/lib/api'
 import { drawnPortLabel } from '@/lib/dischargePortFilter'
 import { useDischargePortResolver } from '@/lib/useDischargePortResolver'
@@ -185,6 +185,7 @@ export function ContractTruckingDetailModal({
               <>
                 <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={saving}>Cancel</Button>
                 <Button size="sm" onClick={saveEdit} disabled={saving}>
+                  {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Save className="mr-2 h-4 w-4" aria-hidden />}
                   {saving ? 'Saving…' : 'Save'}
                 </Button>
               </>
@@ -388,6 +389,7 @@ export function ContractShipmentDetailModal({
               <>
                 <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={saving}>Cancel</Button>
                 <Button size="sm" onClick={saveEdit} disabled={saving}>
+                  {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Save className="mr-2 h-4 w-4" aria-hidden />}
                   {saving ? 'Saving…' : 'Save'}
                 </Button>
               </>

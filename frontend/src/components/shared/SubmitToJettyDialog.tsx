@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Info, Loader2, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Info, Loader2, XCircle, RefreshCw, ArrowLeft, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import api from '@/lib/api'
 import {
@@ -234,6 +234,7 @@ export function SubmitToJettyDialog({
           <div className="flex gap-2">
             {!sentNow && !confirming && (
               <Button variant="outline" onClick={() => void check()} disabled={loading || sending || refreshing}>
+                <RefreshCw className="mr-2 h-4 w-4" aria-hidden />
                 Check again
               </Button>
             )}
@@ -245,15 +246,23 @@ export function SubmitToJettyDialog({
                     Asking JPS…
                   </>
                 ) : (
-                  'Refresh from JPS'
+                  <><RefreshCw className="mr-2 h-4 w-4" aria-hidden />Refresh from JPS</>
                 )}
               </Button>
             )}
             <Button variant="outline" onClick={confirming && !sentNow ? () => setConfirming(false) : onClose} disabled={sending}>
-              {confirming && !sentNow ? 'Back' : 'Close'}
+              {confirming && !sentNow ? (
+                <>
+                  <ArrowLeft className="mr-2 h-4 w-4" aria-hidden />
+                  Back
+                </>
+              ) : (
+                'Close'
+              )}
             </Button>
             {!sentNow && readiness?.canSubmit && !confirming && (
               <Button className="h-9 bg-orange-500 text-white hover:bg-orange-600" onClick={() => setConfirming(true)} disabled={loading || sending}>
+                <Send className="mr-2 h-4 w-4" aria-hidden />
                 {verb} to JPS
               </Button>
             )}
@@ -265,12 +274,13 @@ export function SubmitToJettyDialog({
                     Sending…
                   </>
                 ) : (
-                  `Confirm and ${verb.toLowerCase()}`
+                  <><Send className="mr-2 h-4 w-4" aria-hidden />{`Confirm and ${verb.toLowerCase()}`}</>
                 )}
               </Button>
             )}
             {sentNow && result?.outcome?.kind === 'failed' && (
               <Button variant="outline" onClick={() => { setResult(null); void check() }}>
+                <RefreshCw className="mr-2 h-4 w-4" aria-hidden />
                 Check again
               </Button>
             )}

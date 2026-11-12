@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Plus } from 'lucide-react'
+import { Plus, Save } from 'lucide-react'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
@@ -392,7 +392,7 @@ export default function MasterLoadingPortPage() {
                 >
                   Cancel
                 </Button>
-                <Button onClick={handleSubmit}>Save</Button>
+                <Button onClick={handleSubmit}><Save className="mr-2 h-4 w-4" aria-hidden />Save</Button>
               </div>
             </CardContent>
           </Card>

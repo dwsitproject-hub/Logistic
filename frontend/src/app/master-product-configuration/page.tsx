@@ -21,7 +21,7 @@ import { MasterListCompactTable, type MasterListTableColumn } from '@/components
 import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
-import { Plus } from 'lucide-react'
+import { Plus, Save } from 'lucide-react'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 
 interface Product {
@@ -354,7 +354,7 @@ export default function MasterProductConfigurationPage() {
               </div>
               <div className="col-span-full flex justify-end gap-2 mt-2">
                 <Button type="button" variant="outline" onClick={() => setShowModal(false)}>Cancel</Button>
-                <Button type="submit">Save</Button>
+                <Button type="submit"><Save className="mr-2 h-4 w-4" aria-hidden />Save</Button>
               </div>
             </form>
           </div>

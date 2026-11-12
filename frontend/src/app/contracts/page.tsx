@@ -4644,7 +4644,15 @@ function ContractsPageContent() {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <SortStackSummary
+                  stack={sortStack}
+                  labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
+                  onReset={() => {
+                    setSortStack(defaultSortStack)
+                    setCurrentPage(1)
+                  }}
+                />
                 {isContractPerformance && (
                   <Button
                     variant="outline"
@@ -4764,14 +4772,6 @@ function ContractsPageContent() {
                 </div>
               </div>
             </div>
-            <SortStackSummary
-              stack={sortStack}
-              labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
-              onReset={() => {
-                setSortStack(defaultSortStack)
-                setCurrentPage(1)
-              }}
-            />
           </CardHeader>
           <CardContent>
               <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>

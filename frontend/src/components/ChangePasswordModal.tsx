@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Lock, AlertCircle, CheckCircle } from 'lucide-react'
+import { Lock, AlertCircle, CheckCircle, Loader2, KeyRound } from 'lucide-react'
 import api from '@/lib/api'
 
 interface ChangePasswordModalProps {
@@ -174,6 +174,7 @@ export default function ChangePasswordModal({
               disabled={loading}
               className={isFirstLogin ? 'w-full' : 'flex-1'}
             >
+              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <KeyRound className="mr-2 h-4 w-4" aria-hidden />}
               {loading ? 'Changing...' : isFirstLogin ? 'Set Password' : 'Change Password'}
             </Button>
           </div>
