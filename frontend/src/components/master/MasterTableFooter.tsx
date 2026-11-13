@@ -1,7 +1,7 @@
 'use client'
 
-import { Button } from '@/components/ui/button'
-import { pagerWindow } from '@/components/performance/ListPager'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { pagerItems } from '@/components/performance/ListPager'
 import type { MasterCodeKind } from '@/components/shared/MasterCodeBadge'
 
 const LEGEND_LABEL: Record<MasterCodeKind, string> = {
@@ -41,43 +41,69 @@ interface Pager {
   disabled?: boolean
 }
 
+const PAGE_BUTTON = 'inline-flex h-8 min-w-[2rem] items-center justify-center rounded-lg px-2 text-sm transition-colors disabled:pointer-events-none'
+
+/** Previous / next as chevrons, page numbers as soft rounded squares (the current one filled blue), an ellipsis where pages are left out. */
+function PagerNav({ pager }: { pager: Pager }) {
+  const { page, totalPages, onPageChange, disabled } = pager
+  return (
+    <nav className="flex items-center gap-1" aria-label="Pagination">
+      <button
+        type="button"
+        onClick={() => onPageChange(page - 1)}
+        disabled={page <= 1 || disabled}
+        aria-label="Previous page"
+        title="Previous page"
+        className={`${PAGE_BUTTON} text-gray-600 hover:bg-gray-100 disabled:text-gray-300`}
+      >
+        <ChevronLeft className="h-4 w-4" aria-hidden />
+      </button>
+      {pagerItems(page, totalPages).map((item, index) =>
+        item === 'gap' ? (
+          <span key={`gap-${index}`} className="px-1 text-sm text-gray-400" aria-hidden>
+            &hellip;
+          </span>
+        ) : (
+          <button
+            key={item}
+            type="button"
+            onClick={() => onPageChange(item)}
+            disabled={disabled}
+            aria-current={page === item ? 'page' : undefined}
+            className={`${PAGE_BUTTON} ${page === item ? 'bg-blue-600 font-medium text-white' : 'text-gray-700 hover:bg-gray-100'}`}
+          >
+            {item}
+          </button>
+        ),
+      )}
+      <button
+        type="button"
+        onClick={() => onPageChange(page + 1)}
+        disabled={page >= totalPages || disabled}
+        aria-label="Next page"
+        title="Next page"
+        className={`${PAGE_BUTTON} text-gray-600 hover:bg-gray-100 disabled:text-gray-300`}
+      >
+        <ChevronRight className="h-4 w-4" aria-hidden />
+      </button>
+    </nav>
+  )
+}
+
 /**
  * The strip under a Master table: on the left how many rows there are and the legend of the code chips, on the right the pagination, all on one line
- * (they wrap on a narrow screen). The pager shows only when there is more than one page; the count and the legend always do.
+ * (they wrap on a narrow screen). The pager shows only when there is more than one page; the count and the legend always do. With a pager the
+ * right edge keeps 4rem free, so the round assistant button floating over the bottom-right corner never covers Next.
  */
 export function MasterTableFooter({ countText, kinds, pager }: { countText: string; kinds: readonly MasterCodeKind[]; pager?: Pager }) {
   const paged = pager != null && pager.totalPages > 1
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-gray-100 px-4 py-2.5">
+    <div className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-gray-100 py-2.5 pl-4 ${paged ? 'pr-16' : 'pr-4'}`}>
       <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-gray-500">
         <span>{countText}</span>
         <MasterCodeLegend kinds={kinds} />
       </div>
-      {paged ? (
-        <nav className="flex items-center gap-2" aria-label="Pagination">
-          <Button variant="outline" size="sm" onClick={() => pager.onPageChange(pager.page - 1)} disabled={pager.page <= 1 || pager.disabled}>
-            Previous
-          </Button>
-          <div className="flex items-center gap-1">
-            {pagerWindow(pager.page, pager.totalPages).map((pageNum) => (
-              <Button
-                key={pageNum}
-                variant={pager.page === pageNum ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => pager.onPageChange(pageNum)}
-                disabled={pager.disabled}
-                aria-current={pager.page === pageNum ? 'page' : undefined}
-                className="min-w-[40px]"
-              >
-                {pageNum}
-              </Button>
-            ))}
-          </div>
-          <Button variant="outline" size="sm" onClick={() => pager.onPageChange(pager.page + 1)} disabled={pager.page >= pager.totalPages || pager.disabled}>
-            Next
-          </Button>
-        </nav>
-      ) : null}
+      {paged ? <PagerNav pager={pager} /> : null}
     </div>
   )
 }

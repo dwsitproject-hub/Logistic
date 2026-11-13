@@ -3,7 +3,13 @@
 import { useState, type ReactNode } from 'react'
 import { Search, SlidersHorizontal, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { LIST_FILTER_FIELD_LABEL_CLASS } from '@/components/shared/ListFilterPanel'
+
+/** The look of a searchable multi-select button in the Contracts filters: 36px, round, blue when something is chosen. Pass it as `buttonClassName`. */
+export function contractFilterButtonClass(active: boolean): string {
+  return `flex h-9 w-full items-center gap-2 rounded-[10px] border px-2.5 text-left text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
+    active ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
+  }`
+}
 
 interface Props {
   /** The search box: the draft text, how it changes, and Enter (the search is applied on Enter, as before). */
@@ -32,6 +38,12 @@ function CountBadge({ value, className }: { value: number; className: string }) 
   return <span className={`rounded-full bg-blue-600 px-1.5 text-[0.6875rem] font-medium leading-4 text-white ${className}`}>{value}</span>
 }
 
+/** "2 filters active" for the panel footer; empty when none. */
+function activeText(count: number): string {
+  if (count <= 0) return 'No filters on'
+  return count === 1 ? '1 filter active' : `${count} filters active`
+}
+
 /**
  * The Contracts filter row: one line at every width. Search first, then the filters that fit (Status, Incoterm from `lg` up), a More filters
  * button for the rest with a count of the filters that are on, and the icon buttons at the right end. More filters opens a panel under the
@@ -52,6 +64,7 @@ export function ContractsFilterBar({
   actions,
 }: Props) {
   const [open, setOpen] = useState(false)
+  const anyFilterOn = activeAll > 0
   return (
     <section className="rounded-xl border border-gray-200 bg-white">
       <div className="flex flex-nowrap items-center gap-2 px-3 py-3 sm:px-4">
@@ -68,7 +81,7 @@ export function ContractsFilterBar({
             }}
             placeholder={placeholder}
             aria-label="Search contracts"
-            className="h-9 pl-9"
+            className="h-9 rounded-[10px] pl-9"
           />
         </div>
 
@@ -91,7 +104,9 @@ export function ContractsFilterBar({
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
           title="More filters"
-          className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-sm hover:bg-gray-50 ${open ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-700'}`}
+          className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] border px-2.5 text-sm ${
+            open || anyFilterOn ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+          }`}
         >
           <SlidersHorizontal className="h-4 w-4" aria-hidden />
           <span className="hidden sm:inline">More filters</span>
@@ -103,34 +118,38 @@ export function ContractsFilterBar({
       </div>
 
       {open ? (
-        <div className="border-t border-gray-100 px-3 py-3 sm:px-4">
+        <div className="rounded-b-xl border-t border-gray-100 bg-gray-50/70 px-3 py-4 sm:px-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 [&>*]:min-w-0">
             <div className="contents lg:hidden">{narrowOnly}</div>
             {more}
           </div>
-          {anyActive ? (
-            <div className="mt-3 flex justify-end">
+          <div className="mt-4 flex items-center justify-between gap-3 text-xs text-gray-500">
+            <span>
+              <span className="hidden lg:inline">{activeText(activeMore)}</span>
+              <span className="lg:hidden">{activeText(activeAll)}</span>
+            </span>
+            {anyActive ? (
               <button
                 type="button"
                 onClick={onReset}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium text-blue-700 hover:bg-blue-50"
               >
                 <X className="h-3.5 w-3.5" aria-hidden />
                 Reset filters
               </button>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </div>
       ) : null}
     </section>
   )
 }
 
-/** A label above a filter field inside More filters (the same small caps label the other filter panels use). */
+/** A label above a filter field inside More filters: sentence case, small and quiet. */
 export function ContractsFilterField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <label className={LIST_FILTER_FIELD_LABEL_CLASS}>{label}</label>
+      <label className="mb-1.5 block text-xs font-medium text-gray-600">{label}</label>
       {children}
     </div>
   )

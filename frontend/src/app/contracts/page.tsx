@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, CircleCheck, Clock, Columns3, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
+import { Anchor, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, CircleCheck, CircleDot, Clock, Columns3, Factory, Layers, Package, Tag, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
 import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
@@ -90,7 +90,7 @@ import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import { periodRangeMatchesDates } from '@/components/performance/PerformanceContractDateControl'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
-import { ContractsFilterBar, ContractsFilterField } from '@/components/contracts/ContractsFilterBar'
+import { ContractsFilterBar, ContractsFilterField, contractFilterButtonClass } from '@/components/contracts/ContractsFilterBar'
 import { MasterKpis } from '@/components/master/MasterKpis'
 import { MasterTableFooter } from '@/components/master/MasterTableFooter'
 import { iconButtonClass } from '@/lib/iconButton'
@@ -2623,6 +2623,9 @@ function ContractsPageContent() {
       ]}
       ariaLabel="Contract status filter"
       className={`${className} min-w-0`}
+      dense
+      icon={<CircleDot className="h-4 w-4" />}
+      active={statusFilter !== 'All Status'}
     />
   )
   const contractIncotermSelect = (className: string) => (
@@ -2638,8 +2641,20 @@ function ContractsPageContent() {
       ]}
       ariaLabel="Incoterm filter"
       className={`${className} min-w-0`}
+      dense
+      icon={<Anchor className="h-4 w-4" />}
+      active={selectedIncoterms.length > 0}
     />
   )
+
+  /** "1,240 contracts · 61–80": how many there are and which of them this page shows. */
+  const contractsRangeText = (page: number, perPage: number, total: number): string => {
+    const count = `${total.toLocaleString('en-US')} contracts`
+    if (total <= 0) return count
+    const from = (page - 1) * perPage + 1
+    const to = Math.min(page * perPage, total)
+    return `${count} · ${from.toLocaleString('en-US')}–${to.toLocaleString('en-US')}`
+  }
 
   const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
@@ -4545,56 +4560,72 @@ function ContractsPageContent() {
           }
           more={
             <>
-              <ContractsFilterField label="Contract Type">
+              <ContractsFilterField label="Contract type">
                 <FilterSingleSelect
                   value={b2bFlagFilter}
                   onChange={setB2bFlagFilter}
                   options={[
-                    { value: 'ALL', label: 'All' },
+                    { value: 'ALL', label: 'All types' },
                     ...availableB2bFlags.map((flag) => ({ value: flag, label: flag })),
                   ]}
                   ariaLabel="Contract type filter"
                   className="w-full min-w-0"
+                  dense
+                  icon={<Tag className="h-4 w-4" />}
+                  active={b2bFlagFilter !== 'ALL'}
                 />
               </ContractsFilterField>
-              <PerformanceScopeFilters
-                inlineRow
-                hideGroupPlantFilter
-                uppercaseGroupPlantLabels
-                microLabels
-                showIncoterm={false}
-                incotermOptions={availableIncoterms}
-                selectedIncoterms={selectedIncoterms}
-                onIncotermsChange={setSelectedIncoterms}
-                showProductFilter
-                productOptions={availableProducts}
-                selectedProducts={selectedProducts}
-                onProductsChange={handleProductsChange}
-                showGroupFilter
-                groupOptions={availableGroups}
-                selectedGroups={selectedGroups}
-                onGroupsChange={setSelectedGroups}
-                showSupplierFilter
-                supplierOptions={availableSuppliers}
-                selectedSuppliers={selectedSuppliers}
-                onSuppliersChange={setSelectedSuppliers}
-                groupPlantOptions={availableGroupPlants}
-                selectedGroupPlants={selectedGroupPlants}
-                onGroupPlantsChange={handleGroupPlantsChange}
-                dateFrom={dateFrom}
-                dateTo={dateTo}
-                onDateFromChange={setDateFrom}
-                onDateToChange={setDateTo}
-                showDateRange={false}
-                productPlaceholder="All"
-                groupPlaceholder="All"
-                supplierPlaceholder="All"
-                productEmptyMessage="Loading products..."
-                groupEmptyMessage="Loading groups..."
-                supplierEmptyMessage="Loading suppliers..."
-                groupPlantPlaceholder="All"
-                groupPlantEmptyMessage="No region/plant values"
-              />
+              <ContractsFilterField label="Product">
+                <SearchableMultiSelect
+                  label="Product"
+                  hideLabel
+                  portalMenu
+                  options={availableProducts}
+                  selected={selectedProducts}
+                  onChange={handleProductsChange}
+                  placeholder="All products"
+                  emptyMessage="Loading products..."
+                  pinSelectedToTop
+                  icon={<Package className="h-4 w-4" />}
+                  fieldStyle
+                  className="w-full"
+                  buttonClassName={contractFilterButtonClass(selectedProducts.length > 0)}
+                />
+              </ContractsFilterField>
+              <ContractsFilterField label="Group">
+                <SearchableMultiSelect
+                  label="Group"
+                  hideLabel
+                  portalMenu
+                  options={availableGroups}
+                  selected={selectedGroups}
+                  onChange={setSelectedGroups}
+                  placeholder="All groups"
+                  emptyMessage="Loading groups..."
+                  pinSelectedToTop
+                  icon={<Layers className="h-4 w-4" />}
+                  fieldStyle
+                  className="w-full"
+                  buttonClassName={contractFilterButtonClass(selectedGroups.length > 0)}
+                />
+              </ContractsFilterField>
+              <ContractsFilterField label="Supplier">
+                <SearchableMultiSelect
+                  label="Supplier"
+                  hideLabel
+                  portalMenu
+                  options={availableSuppliers}
+                  selected={selectedSuppliers}
+                  onChange={setSelectedSuppliers}
+                  placeholder="All suppliers"
+                  emptyMessage="Loading suppliers..."
+                  pinSelectedToTop
+                  icon={<Factory className="h-4 w-4" />}
+                  fieldStyle
+                  className="w-full"
+                  buttonClassName={contractFilterButtonClass(selectedSuppliers.length > 0)}
+                />
+              </ContractsFilterField>
             </>
           }
           activeMore={
@@ -5612,7 +5643,7 @@ function ContractsPageContent() {
               />
             ) : (
               <MasterTableFooter
-                countText={`${displayTotalContracts.toLocaleString('en-US')} contracts · page ${currentPage} of ${totalPages}`}
+                countText={contractsRangeText(currentPage, contractsPerPage, displayTotalContracts)}
                 kinds={[]}
                 pager={{ page: currentPage, totalPages, onPageChange: handlePageChange, disabled: listFetching || section3TableLoading }}
               />

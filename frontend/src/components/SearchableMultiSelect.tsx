@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import type { ReactNode } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { stitchControlClass, useStitchFields } from '@/components/shared/stitchField'
@@ -26,6 +27,8 @@ export function SearchableMultiSelect({
   buttonClassName,
   portalMenu: _portalMenu = false,
   className,
+  icon,
+  fieldStyle = false,
 }: {
   label: string
   options: string[]
@@ -41,6 +44,10 @@ export function SearchableMultiSelect({
   /** Kept for callers. Menus always render above clipping parents. */
   portalMenu?: boolean
   className?: string
+  /** A small icon in front of the text (the Contracts More filters panel). */
+  icon?: ReactNode
+  /** The field look of the Contracts More filters: the chosen value reads in blue, and several choices show as "first +n" instead of "n selected (OR)". */
+  fieldStyle?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -137,7 +144,9 @@ export function SearchableMultiSelect({
         ? uppercaseOptionLabels
           ? loneSelection.toUpperCase()
           : loneSelection
-        : `${selected.length} selected (OR)`
+        : fieldStyle
+          ? `${uppercaseOptionLabels ? selected[0].toUpperCase() : selected[0]} +${selected.length - 1}`
+          : `${selected.length} selected (OR)`
 
   const menuBody = (
     <>
@@ -203,7 +212,8 @@ export function SearchableMultiSelect({
           stitch,
         )}
       >
-        <span className={`truncate ${selected.length === 0 ? 'text-gray-500' : 'text-gray-900'}`}>{displayLabel}</span>
+        {icon ? <span className="shrink-0 text-gray-400" aria-hidden>{icon}</span> : null}
+        <span className={`min-w-0 flex-1 truncate ${selected.length === 0 ? 'text-gray-500' : fieldStyle ? 'text-blue-700' : 'text-gray-900'}`}>{displayLabel}</span>
         <ChevronDown className={`h-4 w-4 text-gray-500 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && menuBox
