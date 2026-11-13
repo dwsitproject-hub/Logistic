@@ -106,9 +106,11 @@ import { ContractPerfTableSortHeader } from '@/components/performance/ContractPe
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { ListPager } from '@/components/performance/ListPager'
 import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { ViewToggle } from '@/components/shared/ViewToggle'
 import { PerformanceHeaderFilters } from '@/components/performance/PerformanceHeaderFilters'
 import { PerformanceFiltersSection } from '@/components/performance/PerformanceFiltersSection'
 import { iconButtonClass } from '@/lib/iconButton'
+import { cycleDaysPillClass } from '@/lib/cycleDaysDisplay'
 import { listRangeText } from '@/lib/listRangeText'
 import { compactTableActionsColWidthPx } from '@/lib/compactTableUi'
 import {
@@ -1463,14 +1465,12 @@ function TopRankBadge({ rank }: { rank: number | null | undefined }) {
   )
 }
 
-/** Same chrome as Contract Performance On Time badge — headerEnd of On Going / Completed cards. */
+/** The contract count at the right of the On Going / Completed cards: the same soft chip as the On Time and Late chips of Contract Performance. */
 function ShippingPerfContractsBadge({ count }: { count: number }) {
   return (
-    <div className="flex flex-wrap gap-1.5 justify-end shrink-0">
-      <Badge className="bg-green-100 text-green-800 hover:bg-green-100 border-0 font-normal text-xs">
-        Contracts: {count.toLocaleString('en-US')}
-      </Badge>
-    </div>
+    <span className="whitespace-nowrap rounded-full bg-gray-100 px-2 py-0.5 text-[0.6875rem] font-medium text-gray-700">
+      Contracts {count.toLocaleString('en-US')}
+    </span>
   )
 }
 
@@ -2243,16 +2243,6 @@ function ShippingPerformancePageContent() {
     setCurrentPage(1)
   }, [])
 
-  const renderSummaryPrimaryTotals = (summary: PerVesselPerfSummary) => {
-    return (
-      <>
-        <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
-        <div className="text-xl font-bold text-gray-900 mb-3 tabular-nums">
-          {summary.vesselCount.toLocaleString('en-US')}
-        </div>
-      </>
-    )
-  }
 
   const renderSummaryGapMetrics = (summary: PerVesselPerfSummary, card: ShippingPerfCardFilter) => {
     const labelMode = card === 'close' ? 'actual' : 'estimated'
@@ -2268,32 +2258,40 @@ function ShippingPerformancePageContent() {
       { key: 'dischargeEtc', value: summary.avgDischargeEtbEtc },
     ]
 
-    const renderMetricRow = (metrics: { key: ShippingSummaryMetricKey; value: number | null }[]) => (
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        {metrics.map(({ key, value }) => {
-          const shortLabel = getShippingSummaryMetricLabel(key, labelMode, 'short')
-          const formula = getShippingSummaryMetricFormula(key, labelMode)
-          return (
-            <span key={key} className="shrink-0 cursor-help" title={formula}>
-              {shortLabel}:{' '}
-              <span
-                className={cn(
-                  'font-semibold tabular-nums',
-                  key === 'loadingEtr' ? signedCycleDaysClass(value) : 'text-gray-900',
-                )}
-              >
-                {fmt(value)}
-              </span>
-            </span>
-          )
-        })}
-      </div>
-    )
+    // The stage the label is about ("ETA-ETR"), written once above its column instead of in every cell; the full label and the formula stay in the tooltip.
+    const stageOf = (key: ShippingSummaryMetricKey) => getShippingSummaryMetricLabel(key, labelMode, 'short').match(/\(([^)]+)\)/)?.[1] ?? ''
+    const renderCell = ({ key, value }: { key: ShippingSummaryMetricKey; value: number | null }) => {
+      const days = value == null || !Number.isFinite(value) ? null : Math.abs(value)
+      return (
+        <span key={key} className="flex justify-end">
+          <span
+            className={cn(
+              'cursor-help whitespace-nowrap rounded-md px-1.5 py-0.5 font-medium tabular-nums',
+              key === 'loadingEtr' ? cycleDaysPillClass(signedCycleDaysClass(value)) : 'bg-gray-100 text-gray-700',
+            )}
+            title={`${getShippingSummaryMetricLabel(key, labelMode, 'short')}: ${getShippingSummaryMetricFormula(key, labelMode)}`}
+          >
+            {formatAvgDays(days)}
+          </span>
+        </span>
+      )
+    }
 
     return (
-      <div className="space-y-1 text-xs text-gray-500">
-        {renderMetricRow(loadMetrics)}
-        {renderMetricRow(discMetrics)}
+      <div className="grid grid-cols-[6.5rem_repeat(3,minmax(0,1fr))] items-center gap-x-2 gap-y-1 text-[0.6875rem] text-gray-500">
+        <span />
+        {loadMetrics.map(({ key }) => (
+          <span key={key} className="text-right text-[0.625rem] text-gray-400">
+            {stageOf(key)}
+          </span>
+        ))}
+        <span className="font-medium">Loading (Avg)</span>
+        {loadMetrics.map(renderCell)}
+        <span className="font-medium">Discharge (Avg)</span>
+        <span className="pr-2 text-right text-gray-300" aria-hidden>
+          -
+        </span>
+        {discMetrics.map(renderCell)}
       </div>
     )
   }
@@ -2304,10 +2302,7 @@ function ShippingPerformancePageContent() {
     summary: PerVesselPerfSummary,
   ) => {
     return (
-      <div className="w-full min-w-0 text-left">
-        {renderSummaryPrimaryTotals(summary)}
-        {renderSummaryGapMetrics(summary, card)}
-      </div>
+      <div className="w-full min-w-0 text-left">{renderSummaryGapMetrics(summary, card)}</div>
     )
   }
 
@@ -2601,27 +2596,29 @@ function ShippingPerformancePageContent() {
                 (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
               }`}
             >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <PerformanceSection1CardShell
                   variant="ongoing"
-                  title="ON GOING"
-                  titleSize="base"
+                  title="On Going"
                   selected={perfCardFilter === 'ongoing'}
                   onClick={() => togglePerfCardFilter('ongoing')}
-                  className="min-w-0 flex-1 border-2 shadow-sm"
+                  className="min-w-0 flex-1"
                   headerEnd={<ShippingPerfContractsBadge count={ongoingPerformanceSummary.contractCount} />}
+                  label="Total Vessels"
+                  value={ongoingPerformanceSummary.vesselCount.toLocaleString('en-US')}
                 >
                   {renderShippingSummaryCardBody('ongoing', ongoingPerformanceSummary)}
                 </PerformanceSection1CardShell>
 
                 <PerformanceSection1CardShell
                   variant="completed"
-                  title="COMPLETED"
-                  titleSize="base"
+                  title="Completed"
                   selected={perfCardFilter === 'close'}
                   onClick={() => togglePerfCardFilter('close')}
-                  className="min-w-0 flex-1 border-2 shadow-sm"
+                  className="min-w-0 flex-1"
                   headerEnd={<ShippingPerfContractsBadge count={closePerformanceSummary.contractCount} />}
+                  label="Total Vessels"
+                  value={closePerformanceSummary.vesselCount.toLocaleString('en-US')}
                 >
                   {renderShippingSummaryCardBody('close', closePerformanceSummary)}
                 </PerformanceSection1CardShell>
@@ -2871,64 +2868,15 @@ function ShippingPerformancePageContent() {
         {/* Section 3: View Table — scoped by Section 1 card + Section 2 drilldown */}
         <div>
         <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
-          <CardHeader className="space-y-3 border-b border-gray-200 px-4 py-3">
-            <div>
+          <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
               <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel'}</span>
                 {summaryFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
               </CardTitle>
-              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
-                  <span className="whitespace-nowrap tabular-nums text-gray-700">
-                    <span className="font-semibold">{scopedUniqueContractCount.toLocaleString('en-US')}</span>{' '}
-                    unique contracts
-                  </span>
-                  <span className="text-gray-400" aria-hidden>
-                    ·
-                  </span>
-                  <span className="whitespace-nowrap tabular-nums text-gray-700">
-                    <span className="font-semibold">
-                      {(tableViewMode === 'all' ? drilldownStoRows.length : tableRows.length).toLocaleString('en-US')}
-                    </span>{' '}
-                    {tableViewMode === 'all' ? 'shipments' : `vessel${tableRows.length === 1 ? '' : 's'}`}
-                  </span>
-                  <span className="text-gray-400" aria-hidden>
-                    ·
-                  </span>
-                  <span className="whitespace-nowrap tabular-nums">
-                    Page {currentPage}/{totalPages} · {paginatedRows.length} rows
-                  </span>
-                  {tableScopeParts.length > 0 && (
-                    <>
-                      <span className="text-gray-400" aria-hidden>
-                        ·
-                      </span>
-                      <span className="whitespace-nowrap text-gray-600 font-medium">
-                        {tableScopeParts.join(' · ')}
-                      </span>
-                    </>
-                  )}
-                </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="inline-flex rounded-lg border bg-white p-1">
-                <button
-                  type="button"
-                  onClick={() => switchTableViewMode('all')}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'all' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                >
-                  All Shipment
-                </button>
-                <button
-                  type="button"
-                  onClick={activateByVesselTableView}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tableViewMode === 'by_vessel' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                >
-                  By Vessel
-                </button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 ml-auto">
+              <div className="flex flex-wrap items-center gap-1.5 ml-auto sm:flex-nowrap">
               <SortStackSummary
                 stack={sortStack}
                 labelFor={(key) => {
@@ -2940,6 +2888,18 @@ function ShippingPerformancePageContent() {
                   setUseTopRankSort(false)
                   setCurrentPage(1)
                 }}
+              />
+              <ViewToggle
+                ariaLabel="Table view"
+                value={tableViewMode}
+                onChange={(mode) => {
+                  if (mode === 'all') switchTableViewMode('all')
+                  else activateByVesselTableView()
+                }}
+                options={[
+                  { value: 'all', label: 'All Shipment' },
+                  { value: 'by_vessel', label: 'By Vessel' },
+                ]}
               />
               <div ref={columnsMenuRef} className="relative">
                 <Button
@@ -3037,6 +2997,37 @@ function ShippingPerformancePageContent() {
               </div>
               </div>
             </div>
+            <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">{scopedUniqueContractCount.toLocaleString('en-US')}</span>{' '}
+                  unique contracts
+                </span>
+                <span className="text-gray-400" aria-hidden>
+                  ·
+                </span>
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">
+                    {(tableViewMode === 'all' ? drilldownStoRows.length : tableRows.length).toLocaleString('en-US')}
+                  </span>{' '}
+                  {tableViewMode === 'all' ? 'shipments' : `vessel${tableRows.length === 1 ? '' : 's'}`}
+                </span>
+                <span className="text-gray-400" aria-hidden>
+                  ·
+                </span>
+                <span className="whitespace-nowrap tabular-nums">
+                  Page {currentPage}/{totalPages} · {paginatedRows.length} rows
+                </span>
+                {tableScopeParts.length > 0 && (
+                  <>
+                    <span className="text-gray-400" aria-hidden>
+                      ·
+                    </span>
+                    <span className="whitespace-nowrap text-gray-600 font-medium">
+                      {tableScopeParts.join(' · ')}
+                    </span>
+                  </>
+                )}
+              </p>
           </CardHeader>
           <CardContent className="p-0">
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>

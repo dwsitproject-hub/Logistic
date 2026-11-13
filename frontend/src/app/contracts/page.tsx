@@ -43,6 +43,7 @@ import {
   contextPerformanceClass,
   formatAvgDays,
   statusCardAvgDaysClass,
+  cycleDaysPillClass,
   formatLogCycleDays,
   formatLogCycleDaysCompact,
   formatSignedCycleDays,
@@ -547,13 +548,9 @@ function contractPerfOnTimeLatePercents(
 function ContractPerfStatusPctBadges({ onTimeCount, lateCount }: { onTimeCount: number; lateCount: number }) {
   const { onTimeLabel, lateLabel } = contractPerfOnTimeLatePercents(onTimeCount, lateCount)
   return (
-    <div className="flex flex-wrap gap-1.5 justify-end shrink-0">
-      <Badge className="bg-green-100 text-green-800 hover:bg-green-100 border-0 font-normal text-xs">
-        On Time: {onTimeLabel}
-      </Badge>
-      <Badge className="bg-red-100 text-red-800 hover:bg-red-100 border-0 font-normal text-xs">
-        Late: {lateLabel}
-      </Badge>
+    <div className="flex flex-wrap items-center justify-end gap-1">
+      <span className="whitespace-nowrap rounded-full bg-green-50 px-2 py-0.5 text-[0.6875rem] font-medium text-green-700">On Time {onTimeLabel}</span>
+      <span className="whitespace-nowrap rounded-full bg-red-50 px-2 py-0.5 text-[0.6875rem] font-medium text-red-700">Late {lateLabel}</span>
     </div>
   )
 }
@@ -570,6 +567,16 @@ const CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP = {
   avgLog: 'ATA Completion vs Cargo Readiness Date',
 } as const
 
+/** One average of a status card: the label (with its hover help) and the value in a soft pill of the colour of the rule. */
+function ContractPerfStatusCardMetric({ label, help, value, textClass }: { label: string; help: string; value: string; textClass: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <ContractPerfStatusCardMetricLabel label={label} help={help} />
+      <span className={`rounded-md px-1.5 py-0.5 font-medium tabular-nums ${cycleDaysPillClass(textClass)}`}>{value}</span>
+    </span>
+  )
+}
+
 /** Hover help on Open/Close summary metric labels (Contract Performance only). */
 function ContractPerfStatusCardMetricLabel({
   label,
@@ -582,7 +589,7 @@ function ContractPerfStatusCardMetricLabel({
     <Tooltip delayDuration={200}>
       <TooltipTrigger asChild>
         <span
-          className="cursor-help border-b border-dotted border-gray-400"
+          className="cursor-help"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
@@ -4114,13 +4121,11 @@ function ContractsPageContent() {
             closeStatusContractCount > 0 ? statusCardSummary.closeAvgDays : null
           return (
             <div className={`transition-opacity duration-200 ${latePerfSummaryLoading ? 'opacity-65' : 'opacity-100'}`}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <PerformanceSection1CardShell
                   variant="open"
-                  title="OPEN"
-                  titleSize="base"
+                  title="Open"
                   selected={openSelected}
-                  className="border-2 shadow-sm"
                   onClick={() => applySummaryStatusCard('Open')}
                   headerEnd={
                     <ContractPerfStatusPctBadges
@@ -4128,51 +4133,41 @@ function ContractsPageContent() {
                       lateCount={statusCardSummary.openLateCount ?? 0}
                     />
                   }
+                  label={
+                    <>
+                      Outstanding Qty
+                      <FieldHelp text={FIELD_HELP.contractPerfOutstandingQty} />
+                    </>
+                  }
+                  value={formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
+                  unit="MT"
                 >
-                  <div className="text-sm text-gray-500 mb-1 flex items-center gap-1">
-                    Outstanding Qty (MT)
-                    <FieldHelp text={FIELD_HELP.contractPerfOutstandingQty} />
-                  </div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">
-                    {formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 items-center">
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Trade:"
-                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgTrade}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(openTradeAvgDays, statusCardSummary.openIsLateContext)}`}>
-                        {formatAvgDays(openTradeAvgDays)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg DP:"
-                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgDp}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.openAvgDpCycle, statusCardSummary.openIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.openAvgDpCycle)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Log:"
-                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgLog}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.openAvgLogCycle, statusCardSummary.openIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.openAvgLogCycle)}
-                      </span>
-                    </span>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.6875rem] text-gray-500">
+                    <ContractPerfStatusCardMetric
+                      label="Avg Trade"
+                      help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgTrade}
+                      value={formatAvgDays(openTradeAvgDays)}
+                      textClass={statusCardAvgDaysClass(openTradeAvgDays, statusCardSummary.openIsLateContext)}
+                    />
+                    <ContractPerfStatusCardMetric
+                      label="Avg DP"
+                      help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgDp}
+                      value={formatAvgDays(statusCardSummary.openAvgDpCycle)}
+                      textClass={statusCardAvgDaysClass(statusCardSummary.openAvgDpCycle, statusCardSummary.openIsLateContext)}
+                    />
+                    <ContractPerfStatusCardMetric
+                      label="Avg Log"
+                      help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgLog}
+                      value={formatAvgDays(statusCardSummary.openAvgLogCycle)}
+                      textClass={statusCardAvgDaysClass(statusCardSummary.openAvgLogCycle, statusCardSummary.openIsLateContext)}
+                    />
                   </div>
                 </PerformanceSection1CardShell>
 
                 <PerformanceSection1CardShell
                   variant="close"
-                  title="CLOSE"
-                  titleSize="base"
+                  title="Close"
                   selected={closeSelected}
-                  className="border-2 shadow-sm"
                   onClick={() => applySummaryStatusCard('Close')}
                   headerEnd={
                     <ContractPerfStatusPctBadges
@@ -4180,39 +4175,29 @@ function ContractsPageContent() {
                       lateCount={statusCardSummary.closeLateCount ?? 0}
                     />
                   }
+                  label="Contract Qty"
+                  value={formatContractPerfOutstandingMt(statusCardSummary.closeContractQty)}
+                  unit="MT"
                 >
-                  <div className="text-sm text-gray-500 mb-1">Contract Qty (MT)</div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">
-                    {formatContractPerfOutstandingMt(statusCardSummary.closeContractQty)}
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 items-center">
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Trade:"
-                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgTrade}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(closeTradeAvgDays, statusCardSummary.closeIsLateContext)}`}>
-                        {formatAvgDays(closeTradeAvgDays)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg DP:"
-                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgDp}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.closeAvgDpCycle, statusCardSummary.closeIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.closeAvgDpCycle)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Log:"
-                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgLog}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.closeAvgLogCycle, statusCardSummary.closeIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.closeAvgLogCycle)}
-                      </span>
-                    </span>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.6875rem] text-gray-500">
+                    <ContractPerfStatusCardMetric
+                      label="Avg Trade"
+                      help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgTrade}
+                      value={formatAvgDays(closeTradeAvgDays)}
+                      textClass={statusCardAvgDaysClass(closeTradeAvgDays, statusCardSummary.closeIsLateContext)}
+                    />
+                    <ContractPerfStatusCardMetric
+                      label="Avg DP"
+                      help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgDp}
+                      value={formatAvgDays(statusCardSummary.closeAvgDpCycle)}
+                      textClass={statusCardAvgDaysClass(statusCardSummary.closeAvgDpCycle, statusCardSummary.closeIsLateContext)}
+                    />
+                    <ContractPerfStatusCardMetric
+                      label="Avg Log"
+                      help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgLog}
+                      value={formatAvgDays(statusCardSummary.closeAvgLogCycle)}
+                      textClass={statusCardAvgDaysClass(statusCardSummary.closeAvgLogCycle, statusCardSummary.closeIsLateContext)}
+                    />
                   </div>
                 </PerformanceSection1CardShell>
               </div>
@@ -4677,6 +4662,7 @@ function ContractsPageContent() {
                     )}
                   </Button>
                 )}
+                {isContractPerformance && <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />}
                 <div className="relative">
                   <Button
                     variant="ghost"

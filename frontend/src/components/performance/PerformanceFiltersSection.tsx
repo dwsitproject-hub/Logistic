@@ -1,7 +1,8 @@
 'use client'
 
 import { Anchor, CircleDot, Database, Factory, Layers, Package } from 'lucide-react'
-import { ListFilterBar, ListFilterField } from '@/components/shared/ListFilterBar'
+import { FitFilterBar } from '@/components/shared/FitFilterBar'
+import { ListFilterField } from '@/components/shared/ListFilterBar'
 import { MultiValueField, SingleValueField } from '@/components/shared/ListFilterFields'
 import { PLANNING_STATUS_OPTIONS } from '@/lib/planningStatus'
 
@@ -31,8 +32,8 @@ const PLANNING_OPTIONS = [
 ]
 
 /**
- * The filter bar of Shipping Performance and Contract Performance: no search, so Product and Incoterm sit in the row from `lg` up and the rest
- * in More filters (everything in it below `lg`). The same fields as the other list pages.
+ * The filter bar of Shipping Performance and Contract Performance: no search, so the filters sit on the left in this order (Product, Incoterm, Source,
+ * Group Supplier, Supplier, Planning Status) and as many as really fit the width are shown; the rest are in More filters.
  */
 export function PerformanceFiltersSection({
   products,
@@ -45,107 +46,86 @@ export function PerformanceFiltersSection({
   anyActive,
   onReset,
 }: Props) {
-  const productField = (wrapper: string) => (
-    <div className={wrapper}>
-      <MultiValueField
-        label="Product"
-        options={products.options}
-        selected={products.selected}
-        onChange={products.onChange}
-        placeholder="All products"
-        emptyMessage="No products"
-        icon={<Package className="h-4 w-4" />}
-        uppercase
-      />
-    </div>
+  const productField = (
+    <MultiValueField
+      label="Product"
+      options={products.options}
+      selected={products.selected}
+      onChange={products.onChange}
+      placeholder="All products"
+      emptyMessage="No products"
+      icon={<Package className="h-4 w-4" />}
+      uppercase
+    />
   )
-  const incotermField = (wrapper: string) => (
-    <div className={wrapper}>
-      <MultiValueField
-        label="Incoterm"
-        options={incoterms.options}
-        selected={incoterms.selected}
-        onChange={incoterms.onChange}
-        placeholder="All incoterms"
-        emptyMessage="No incoterms"
-        icon={<Anchor className="h-4 w-4" />}
-        uppercase
-      />
-    </div>
+  const incotermField = (
+    <MultiValueField
+      label="Incoterm"
+      options={incoterms.options}
+      selected={incoterms.selected}
+      onChange={incoterms.onChange}
+      placeholder="All incoterms"
+      emptyMessage="No incoterms"
+      icon={<Anchor className="h-4 w-4" />}
+      uppercase
+    />
   )
-
-  const wideOn = (products.selected.length > 0 ? 1 : 0) + (incoterms.selected.length > 0 ? 1 : 0)
-  const moreOn =
-    (sources.selected.length > 0 ? 1 : 0) +
-    (supplierGroups.selected.length > 0 ? 1 : 0) +
-    (suppliers.selected.length > 0 ? 1 : 0) +
-    (planningStatuses.length > 0 ? 1 : 0)
+  const sourceField = (
+    <MultiValueField
+      label="Source"
+      options={sources.options}
+      selected={sources.selected}
+      onChange={sources.onChange}
+      placeholder="All sources"
+      emptyMessage="No sources"
+      icon={<Database className="h-4 w-4" />}
+      uppercase
+    />
+  )
+  const groupField = (
+    <MultiValueField
+      label="Group Supplier"
+      options={supplierGroups.options}
+      selected={supplierGroups.selected}
+      onChange={supplierGroups.onChange}
+      placeholder="All supplier groups"
+      emptyMessage="No supplier groups"
+      icon={<Layers className="h-4 w-4" />}
+      uppercase
+    />
+  )
+  const supplierField = (
+    <MultiValueField
+      label="Supplier"
+      options={suppliers.options}
+      selected={suppliers.selected}
+      onChange={suppliers.onChange}
+      placeholder="All suppliers"
+      emptyMessage="No suppliers"
+      icon={<Factory className="h-4 w-4" />}
+      uppercase
+    />
+  )
+  const planningField = (
+    <SingleValueField
+      label="Planning Status"
+      options={PLANNING_OPTIONS}
+      value={planningStatuses[0] ?? 'ALL'}
+      onChange={(value) => onPlanningStatusesChange(value === 'ALL' ? [] : [value])}
+      icon={<CircleDot className="h-4 w-4" />}
+    />
+  )
 
   return (
-    <ListFilterBar
-      wide={
-        <>
-          {productField('w-48 shrink-0')}
-          {incotermField('w-44 shrink-0')}
-        </>
-      }
-      narrowOnly={
-        <>
-          <ListFilterField label="Product">{productField('w-full')}</ListFilterField>
-          <ListFilterField label="Incoterm">{incotermField('w-full')}</ListFilterField>
-        </>
-      }
-      more={
-        <>
-          <ListFilterField label="Source">
-            <MultiValueField
-              label="Source"
-              options={sources.options}
-              selected={sources.selected}
-              onChange={sources.onChange}
-              placeholder="All sources"
-              emptyMessage="No sources"
-              icon={<Database className="h-4 w-4" />}
-              uppercase
-            />
-          </ListFilterField>
-          <ListFilterField label="Group supplier">
-            <MultiValueField
-              label="Group Supplier"
-              options={supplierGroups.options}
-              selected={supplierGroups.selected}
-              onChange={supplierGroups.onChange}
-              placeholder="All supplier groups"
-              emptyMessage="No supplier groups"
-              icon={<Layers className="h-4 w-4" />}
-              uppercase
-            />
-          </ListFilterField>
-          <ListFilterField label="Supplier">
-            <MultiValueField
-              label="Supplier"
-              options={suppliers.options}
-              selected={suppliers.selected}
-              onChange={suppliers.onChange}
-              placeholder="All suppliers"
-              emptyMessage="No suppliers"
-              icon={<Factory className="h-4 w-4" />}
-              uppercase
-            />
-          </ListFilterField>
-          <ListFilterField label="Planning status">
-            <SingleValueField
-              label="Planning Status"
-              options={PLANNING_OPTIONS}
-              value={planningStatuses[0] ?? 'ALL'}
-              onChange={(value) => onPlanningStatusesChange(value === 'ALL' ? [] : [value])}
-              icon={<CircleDot className="h-4 w-4" />}
-            />
-          </ListFilterField>
-        </>
-      }
-      activeMore={moreOn}
-      activeAll={moreOn + wideOn}
+    <FitFilterBar
+      items={[
+        { key: 'product', width: 10, row: productField, panel: <ListFilterField label="Product">{productField}</ListFilterField>, active: products.selected.length > 0 },
+        { key: 'incoterm', width: 9.5, row: incotermField, panel: <ListFilterField label="Incoterm">{incotermField}</ListFilterField>, active: incoterms.selected.length > 0 },
+        { key: 'source', width: 9, row: sourceField, panel: <ListFilterField label="Source">{sourceField}</ListFilterField>, active: sources.selected.length > 0 },
+        { key: 'group', width: 11, row: groupField, panel: <ListFilterField label="Group supplier">{groupField}</ListFilterField>, active: supplierGroups.selected.length > 0 },
+        { key: 'supplier', width: 11, row: supplierField, panel: <ListFilterField label="Supplier">{supplierField}</ListFilterField>, active: suppliers.selected.length > 0 },
+        { key: 'planning', width: 10, row: planningField, panel: <ListFilterField label="Planning status">{planningField}</ListFilterField>, active: planningStatuses.length > 0 },
+      ]}
       anyActive={anyActive}
       onReset={onReset}
     />

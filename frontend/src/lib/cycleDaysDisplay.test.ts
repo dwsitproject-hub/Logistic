@@ -32,3 +32,12 @@ describe('statusCardAvgDaysClass', () => {
     expect(statusCardAvgDaysClass(null, true)).toBe(CYCLE_DAYS_NEUTRAL_CLASS)
   })
 })
+
+describe('cycleDaysPillClass', () => {
+  it('turns a cycle-days text colour into the soft pill of the same colour', async () => {
+    const { cycleDaysPillClass, CYCLE_DAYS_LATE_CLASS, CYCLE_DAYS_ON_TIME_CLASS, CYCLE_DAYS_NEUTRAL_CLASS } = await import('./cycleDaysDisplay')
+    expect(cycleDaysPillClass(CYCLE_DAYS_LATE_CLASS)).toBe('bg-red-50 text-red-700')
+    expect(cycleDaysPillClass(CYCLE_DAYS_ON_TIME_CLASS)).toBe('bg-green-50 text-green-700')
+    expect(cycleDaysPillClass(CYCLE_DAYS_NEUTRAL_CLASS)).toBe('bg-gray-100 text-gray-600')
+  })
+})

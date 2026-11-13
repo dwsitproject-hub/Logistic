@@ -22,6 +22,7 @@ import {
 import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { ViewToggle } from '@/components/shared/ViewToggle'
 import { PerformanceHeaderFilters } from '@/components/performance/PerformanceHeaderFilters'
 import { ListFilterBar } from '@/components/shared/ListFilterBar'
 import { MultiValueField } from '@/components/shared/ListFilterFields'
@@ -2145,8 +2146,8 @@ export default function OilLossPage() {
         />
 
         <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
-          <CardHeader className="space-y-3 border-b border-gray-200 px-4 py-3">
-            <div>
+          <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
               <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>
                   {viewMode === 'all_contract'
@@ -2159,62 +2160,17 @@ export default function OilLossPage() {
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
               </CardTitle>
-              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
-                <span className="whitespace-nowrap tabular-nums text-gray-700">
-                  Showing{' '}
-                  <span className="font-semibold">
-                    {rangeStart.toLocaleString('en-US')} to {rangeEnd.toLocaleString('en-US')}
-                  </span>{' '}
-                  of <span className="font-semibold">{filteredRows.length.toLocaleString('en-US')}</span>{' '}
-                  entries
-                </span>
-                {totalPages > 1 ? (
-                  <>
-                    <span className="text-gray-400" aria-hidden>
-                      ·
-                    </span>
-                    <span className="whitespace-nowrap tabular-nums">
-                      Page {currentPage}/{totalPages}
-                    </span>
-                  </>
-                ) : null}
-                {hasActiveDrilldown ? (
-                  <>
-                    <span className="text-gray-400" aria-hidden>
-                      ·
-                    </span>
-                    <span className="whitespace-nowrap text-blue-700 font-medium">
-                      Drilldown: {drilldownPathLabel}
-                    </span>
-                  </>
-                ) : null}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="inline-flex rounded-lg border bg-white p-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => switchViewMode('all_contract')}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'all_contract' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                >
-                  All Oil Loss
-                </button>
-                <button
-                  type="button"
-                  onClick={() => switchViewMode('by_transporter')}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'by_transporter' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                >
-                  By Transporter
-                </button>
-                <button
-                  type="button"
-                  onClick={() => switchViewMode('by_supplier')}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'by_supplier' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-                >
-                  By Supplier
-                </button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 ml-auto shrink-0">
+              <div className="flex flex-wrap items-center gap-1.5 ml-auto sm:flex-nowrap shrink-0">
+                <ViewToggle
+                  ariaLabel="Table view"
+                  value={viewMode}
+                  onChange={(mode) => switchViewMode(mode)}
+                  options={[
+                    { value: 'all_contract', label: 'All Oil Loss' },
+                    { value: 'by_transporter', label: 'By Transporter' },
+                    { value: 'by_supplier', label: 'By Supplier' },
+                  ]}
+                />
                 <div ref={columnsMenuRef} className="relative">
                   <Button
                     variant="ghost"
@@ -2308,6 +2264,36 @@ export default function OilLossPage() {
                 </div>
               </div>
             </div>
+            <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
+              <span className="whitespace-nowrap tabular-nums text-gray-700">
+                Showing{' '}
+                <span className="font-semibold">
+                  {rangeStart.toLocaleString('en-US')} to {rangeEnd.toLocaleString('en-US')}
+                </span>{' '}
+                of <span className="font-semibold">{filteredRows.length.toLocaleString('en-US')}</span>{' '}
+                entries
+              </span>
+              {totalPages > 1 ? (
+                <>
+                  <span className="text-gray-400" aria-hidden>
+                    ·
+                  </span>
+                  <span className="whitespace-nowrap tabular-nums">
+                    Page {currentPage}/{totalPages}
+                  </span>
+                </>
+              ) : null}
+              {hasActiveDrilldown ? (
+                <>
+                  <span className="text-gray-400" aria-hidden>
+                    ·
+                  </span>
+                  <span className="whitespace-nowrap text-blue-700 font-medium">
+                    Drilldown: {drilldownPathLabel}
+                  </span>
+                </>
+              ) : null}
+            </p>
           </CardHeader>
           <CardContent className="p-0">
             <div className={tableLoading ? 'min-h-[480px]' : undefined}>

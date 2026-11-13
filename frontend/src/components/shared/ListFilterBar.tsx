@@ -31,7 +31,23 @@ interface Props {
   onReset: () => void
   /** The icon buttons at the right end of the row (Template, Upload). */
   actions?: ReactNode
+  /**
+   * More filters that move into the row on a wide screen: each tier shows `row` in the row from its breakpoint up (`xl` = 1280px, `2xl` = 1536px) and `panel`
+   * (the same fields, with labels) inside More filters below it, so the wider the screen, the fewer filters are left behind the button. `active` is how many
+   * of its filters are on. List the `xl` tier before the `2xl` one. With no `more` the button disappears from `2xl` up, where nothing is left in it.
+   */
+  tiers?: FilterTier[]
 }
+
+export interface FilterTier {
+  from: 'xl' | '2xl'
+  row: ReactNode
+  panel: ReactNode
+  active: number
+}
+
+const TIER_ROW_CLASS = { xl: 'hidden items-center gap-2 xl:flex', '2xl': 'hidden items-center gap-2 2xl:flex' } as const
+const TIER_PANEL_CLASS = { xl: 'contents xl:hidden', '2xl': 'contents 2xl:hidden' } as const
 
 function CountBadge({ value, className }: { value: number; className: string }) {
   if (value <= 0) return null
@@ -62,11 +78,27 @@ export function ListFilterBar({
   anyActive,
   onReset,
   actions,
+  tiers = [],
 }: Props) {
   const [open, setOpen] = useState(false)
-  const anyFilterOn = activeAll > 0
   const hasSearch = onSearchChange != null
-  const hasMore = more != null
+  const hasTiers = tiers.length > 0
+  const hasMore = more != null || narrowOnly != null || hasTiers
+  // how many filters are on behind the button at each width: all of them below lg, then fewer as the tiers move into the row
+  const tierXl = tiers.find((tier) => tier.from === 'xl')?.active ?? 0
+  const tier2xl = tiers.find((tier) => tier.from === '2xl')?.active ?? 0
+  const behindLgDown = activeAll + tierXl + tier2xl
+  const behindLg = activeMore + tierXl + tier2xl
+  const behindXl = activeMore + tier2xl
+  const behindWide = activeMore
+  const anyFilterOn = behindLgDown > 0
+  // with nothing of its own, the button has nothing left to open once the widest tier is in the row
+  const hideFrom2xl = more == null && hasTiers
+  const tierRows = tiers.map((tier) => (
+    <div key={tier.from} className={TIER_ROW_CLASS[tier.from]}>
+      {tier.row}
+    </div>
+  ))
   return (
     <section className="rounded-xl border border-gray-200 bg-white">
       <div className="flex flex-nowrap items-center gap-2 px-3 py-3 sm:px-4">
@@ -88,12 +120,18 @@ export function ListFilterBar({
                 className="h-9 rounded-[10px] pl-9"
               />
             </div>
-            <div className="hidden shrink-0 items-center gap-2 lg:flex">{wide}</div>
+            <div className="hidden shrink-0 items-center gap-2 lg:flex">
+              {wide}
+              {tierRows}
+            </div>
           </>
         ) : (
           hasMore ? (
             <>
-              <div className="hidden min-w-0 flex-1 items-center gap-2 lg:flex">{wide}</div>
+              <div className="hidden min-w-0 flex-1 items-center gap-2 lg:flex">
+                {wide}
+                {tierRows}
+              </div>
               <div className="min-w-0 flex-1 lg:hidden" />
             </>
           ) : (
@@ -119,14 +157,16 @@ export function ListFilterBar({
             onClick={() => setOpen((value) => !value)}
             aria-expanded={open}
             title="More filters"
-            className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] border px-2.5 text-sm ${
+            className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] border px-2.5 text-sm ${hideFrom2xl ? '2xl:hidden' : ''} ${
               open || anyFilterOn ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
             }`}
           >
             <SlidersHorizontal className="h-4 w-4" aria-hidden />
             <span className="hidden sm:inline">More filters</span>
-            <CountBadge value={activeMore} className="hidden lg:inline" />
-            <CountBadge value={activeAll} className="lg:hidden" />
+            <CountBadge value={behindLgDown} className="lg:hidden" />
+            <CountBadge value={behindLg} className="hidden lg:inline xl:hidden" />
+            <CountBadge value={behindXl} className="hidden xl:inline 2xl:hidden" />
+            <CountBadge value={behindWide} className="hidden 2xl:inline" />
           </button>
         ) : null}
 
@@ -134,15 +174,22 @@ export function ListFilterBar({
       </div>
 
       {hasMore && open ? (
-        <div className="rounded-b-xl border-t border-gray-100 bg-gray-50/70 px-3 py-4 sm:px-4">
+        <div className={`rounded-b-xl border-t border-gray-100 bg-gray-50/70 px-3 py-4 sm:px-4 ${hideFrom2xl ? '2xl:hidden' : ''}`}>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 [&>*]:min-w-0">
             <div className="contents lg:hidden">{narrowOnly}</div>
+            {tiers.map((tier) => (
+              <div key={tier.from} className={TIER_PANEL_CLASS[tier.from]}>
+                {tier.panel}
+              </div>
+            ))}
             {more}
           </div>
           <div className="mt-4 flex items-center justify-between gap-3 text-xs text-gray-500">
             <span>
-              <span className="hidden lg:inline">{activeText(activeMore)}</span>
-              <span className="lg:hidden">{activeText(activeAll)}</span>
+              <span className="lg:hidden">{activeText(behindLgDown)}</span>
+              <span className="hidden lg:inline xl:hidden">{activeText(behindLg)}</span>
+              <span className="hidden xl:inline 2xl:hidden">{activeText(behindXl)}</span>
+              <span className="hidden 2xl:inline">{activeText(behindWide)}</span>
             </span>
             {anyActive ? (
               <button

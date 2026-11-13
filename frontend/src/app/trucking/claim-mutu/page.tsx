@@ -6,7 +6,7 @@ import { StitchFields } from '@/components/shared/stitchField'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Loader2, SlidersHorizontal, GripVertical, X } from 'lucide-react'
+import { ArrowLeftRight, CircleDot, Columns3, Factory, GripVertical, Layers, Loader2, MapPin, Package, SlidersHorizontal, Wallet, X } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
@@ -34,6 +34,13 @@ import {
   LIST_FILTER_FIELDS_ROW_CLASS,
 } from '@/components/shared/ListFilterPanel'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { HeaderScopeField } from '@/components/shared/HeaderScopeField'
+import { ListFilterBar, ListFilterField } from '@/components/shared/ListFilterBar'
+import { FitFilterBar } from '@/components/shared/FitFilterBar'
+import { MultiValueField, SingleValueField } from '@/components/shared/ListFilterFields'
+import { iconButtonClass } from '@/lib/iconButton'
+import { listRangeText } from '@/lib/listRangeText'
 import {
   formatContractDateScopeLabel,
   PerformanceContractDateControl,
@@ -73,6 +80,10 @@ type ClaimMutuRow = Record<string, unknown> & { id: string; is_b2b?: boolean; b2
 type ClaimMutuImportItem = { id: string; file_name?: string | null }
 
 const columns = CLAIM_MUTU_COLUMNS
+const B2B_SCOPE_OPTIONS = [
+  { value: 'exclude', label: 'Exclude B2B' },
+  { value: 'include', label: 'Include B2B' },
+]
 const pageSize = 20
 
 function apiErrorMessage(e: unknown, fallback: string): string {
@@ -481,6 +492,31 @@ export default function ClaimMutuPage() {
   }, [period, dateFrom, dateTo])
   const selectedImport = imports.find((i) => i.id === selectedImportId)
 
+  // The new export has no METODE PAYMENT column: offer the filter only when a value exists.
+  const hasPaymentMethods = metodeOptions.some((o) => o !== '(Blank)')
+  const b2bStatusField = (
+    <MultiValueField label="B2B Status" options={[...CLAIM_B2B_FILTER_OPTIONS]} selected={selectedB2bStatuses} onChange={setSelectedB2bStatuses} placeholder="Scope above" emptyMessage="No values" icon={<ArrowLeftRight className="h-4 w-4" />} />
+  )
+  const vendorTypeField = (
+    <MultiValueField label="Vendor Type" options={vendorTypeOptions} selected={selectedVendorTypes} onChange={setSelectedVendorTypes} placeholder="All vendor types" emptyMessage="No vendor types" icon={<Factory className="h-4 w-4" />} uppercase />
+  )
+  const groupField = (
+    <MultiValueField label="Group (OS only)" options={groupOptions} selected={selectedGroups} onChange={setSelectedGroups} placeholder="All groups" emptyMessage="No groups" icon={<Layers className="h-4 w-4" />} uppercase />
+  )
+  const metodeField = (
+    <MultiValueField label="Payment Method (OS only)" options={metodeOptions} selected={selectedMetodes} onChange={setSelectedMetodes} placeholder="All payment methods" emptyMessage="No payment methods" icon={<Wallet className="h-4 w-4" />} uppercase />
+  )
+  const claimStatusField = (
+    <MultiValueField label="Claim Status" options={[...CLAIM_MUTU_CLAIM_STATUS_OPTIONS]} selected={selectedClaimStatuses} onChange={setSelectedClaimStatuses} placeholder="All statuses" emptyMessage="No statuses" icon={<CircleDot className="h-4 w-4" />} />
+  )
+
+  const b2bScopeField = (
+    <SingleValueField label="B2B" options={B2B_SCOPE_OPTIONS} value={b2b} onChange={(v) => setB2b(v === 'include' ? 'include' : 'exclude')} icon={<ArrowLeftRight className="h-4 w-4" />} />
+  )
+  const productField = (
+    <MultiValueField label="Product" options={commodityOptions} selected={selectedCommodities} onChange={setSelectedCommodities} placeholder="All products" emptyMessage="No products" icon={<Package className="h-4 w-4" />} uppercase />
+  )
+
   return (
     <Layout>
       <StitchFields>
@@ -511,145 +547,34 @@ export default function ClaimMutuPage() {
               onDateFromChange={setDateFrom}
               onDateToChange={setDateTo}
               resolvePeriodRange={resolveClaimSusutPeriodRange}
+              fieldStyle
+              active={!periodIsDefault}
             />
-            <SearchableMultiSelect
+            <HeaderScopeField
               label="Region/Plant"
-              hideLabel
-              portalMenu
-              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
               options={unitOptions}
               selected={selectedUnits}
               onChange={setSelectedUnits}
-              placeholder="Region/Plant"
               emptyMessage="No region/plant values"
+              icon={<MapPin className="h-4 w-4" />}
               uppercaseOptionLabels
-              pinSelectedToTop
             />
           </HeaderFilterSlot>
-          <ListFilterPanel
-            onReset={resetFilters}
-            showReset={!periodIsDefault || otherFilters}
-            chips={[
-              ...(periodFiltered
-                ? [
-                    {
-                      id: 'cr-date',
-                      label: formatContractDateScopeLabel(
-                        period,
-                        dateFrom,
-                        dateTo,
-                        (p) => resolveClaimSusutPeriodRange(p as ClaimSusutPeriodKey),
-                        { prefix: true },
-                      ).replace(/^Contract date:/, 'CR date:'),
-                      onRemove: () => {
-                        setPeriod('ALL')
-                        setDateFrom('')
-                        setDateTo('')
-                      },
-                    },
-                  ]
+          <FitFilterBar
+            items={[
+              { key: 'b2b', width: 11, row: b2bScopeField, panel: <ListFilterField label="B2B">{b2bScopeField}</ListFilterField>, active: b2b !== CLAIM_MUTU_DEFAULT_B2B },
+              { key: 'product', width: 12, row: productField, panel: <ListFilterField label="Product">{productField}</ListFilterField>, active: selectedCommodities.length > 0 },
+              { key: 'b2bStatus', width: 11, row: b2bStatusField, panel: <ListFilterField label="B2B status">{b2bStatusField}</ListFilterField>, active: selectedB2bStatuses.length > 0 },
+              { key: 'vendorType', width: 12, row: vendorTypeField, panel: <ListFilterField label="Vendor type">{vendorTypeField}</ListFilterField>, active: selectedVendorTypes.length > 0 },
+              { key: 'group', width: 12, row: groupField, panel: <ListFilterField label="Group (OS only)">{groupField}</ListFilterField>, active: selectedGroups.length > 0 },
+              ...(hasPaymentMethods
+                ? [{ key: 'metode', width: 13, row: metodeField, panel: <ListFilterField label="Payment method (OS only)">{metodeField}</ListFilterField>, active: selectedMetodes.length > 0 }]
                 : []),
-              ...(b2b !== CLAIM_MUTU_DEFAULT_B2B
-                ? [{ id: 'b2b', label: 'Include B2B', onRemove: () => setB2b(CLAIM_MUTU_DEFAULT_B2B) }]
-                : []),
-              ...selectionChips('Region/Plant', selectedUnits, setSelectedUnits),
-              ...selectionChips('Product', selectedCommodities, setSelectedCommodities),
-              ...selectionChips('Vendor Type', selectedVendorTypes, setSelectedVendorTypes),
-              ...selectionChips('Group', selectedGroups, setSelectedGroups),
-              ...selectionChips('Payment Method', selectedMetodes, setSelectedMetodes),
-              ...selectionChips('B2B Status', selectedB2bStatuses, setSelectedB2bStatuses),
-              ...selectionChips('Claim Status', selectedClaimStatuses, setSelectedClaimStatuses),
+              { key: 'status', width: 12, row: claimStatusField, panel: <ListFilterField label="Claim status">{claimStatusField}</ListFilterField>, active: selectedClaimStatuses.length > 0 },
             ]}
-          >
-            <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-              <div className="min-w-[8.5rem] flex-1">
-                <label className={LIST_FILTER_FIELD_LABEL_CLASS}>B2B</label>
-                <FilterSingleSelect
-                  value={b2b}
-                  onChange={(v) => setB2b(v === 'include' ? 'include' : 'exclude')}
-                  options={[
-                    { value: 'exclude', label: 'Exclude B2B' },
-                    { value: 'include', label: 'Include B2B' },
-                  ]}
-                  ariaLabel="B2B"
-                  className="w-full min-w-0"
-                />
-              </div>
-              <SearchableMultiSelect
-                label="B2B Status"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={CLAIM_B2B_FILTER_OPTIONS}
-                selected={selectedB2bStatuses}
-                onChange={setSelectedB2bStatuses}
-                placeholder="Scope above"
-                emptyMessage="No values"
-                pinSelectedToTop
-              />
-              <SearchableMultiSelect
-                label="Product"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={commodityOptions}
-                selected={selectedCommodities}
-                onChange={setSelectedCommodities}
-                placeholder="All"
-                emptyMessage="No products"
-                uppercaseOptionLabels
-                pinSelectedToTop
-              />
-              <SearchableMultiSelect
-                label="Vendor Type"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={vendorTypeOptions}
-                selected={selectedVendorTypes}
-                onChange={setSelectedVendorTypes}
-                placeholder="All"
-                emptyMessage="No vendor types"
-                uppercaseOptionLabels
-                pinSelectedToTop
-              />
-              <SearchableMultiSelect
-                label="Group (OS only)"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={groupOptions}
-                selected={selectedGroups}
-                onChange={setSelectedGroups}
-                placeholder="All"
-                emptyMessage="No groups"
-                uppercaseOptionLabels
-                pinSelectedToTop
-              />
-              {/* The new export has no METODE PAYMENT column: offer the filter only when a value exists. */}
-              {metodeOptions.some((o) => o !== '(Blank)') ? (
-                <SearchableMultiSelect
-                  label="Payment Method (OS only)"
-                  className="min-w-[7.5rem] flex-1"
-                  labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                  options={metodeOptions}
-                  selected={selectedMetodes}
-                  onChange={setSelectedMetodes}
-                  placeholder="All"
-                  emptyMessage="No payment methods"
-                  uppercaseOptionLabels
-                  pinSelectedToTop
-                />
-              ) : null}
-              <SearchableMultiSelect
-                label="Claim Status"
-                className="min-w-[8rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={CLAIM_MUTU_CLAIM_STATUS_OPTIONS}
-                selected={selectedClaimStatuses}
-                onChange={setSelectedClaimStatuses}
-                placeholder="All"
-                emptyMessage="No statuses"
-                pinSelectedToTop
-              />
-            </div>
-          </ListFilterPanel>
+            anyActive={!periodIsDefault || otherFilters}
+            onReset={resetFilters}
+          />
 
           <ClaimMutuSection1Dashboard
             crDateLabel={crDateLabel}
@@ -664,8 +589,8 @@ export default function ClaimMutuPage() {
             onToggleGroup={(group) => setSelectedGroups((prev) => (prev.length === 1 && prev[0] === group ? [] : [group]))}
           />
 
-          <Card>
-            <CardHeader>
+          <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+            <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <CardTitle className="text-base flex items-center gap-2 flex-wrap">
@@ -701,9 +626,18 @@ export default function ClaimMutuPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="relative" ref={columnsRef}>
-                    <Button type="button" variant="outline" size="sm" onClick={() => setColumnsOpen((o) => !o)} disabled={loading}>
-                      <SlidersHorizontal className="h-4 w-4 mr-2" />
-                      Columns
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className={iconButtonClass('neutral')}
+                      title="Columns"
+                      aria-label="Columns"
+                      aria-expanded={columnsOpen}
+                      onClick={() => setColumnsOpen((o) => !o)}
+                      disabled={loading}
+                    >
+                      <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                     </Button>
                     {columnsOpen && (
                       <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
@@ -761,47 +695,11 @@ export default function ClaimMutuPage() {
                       </div>
                     )}
                   </div>
-                  {totalPages > 1 && (
-                    <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                      <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}>
-                        Previous
-                      </Button>
-                      <div className="flex items-center gap-1">
-                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                          let pageNum: number
-                          if (totalPages <= 5) pageNum = i + 1
-                          else if (page <= 3) pageNum = i + 1
-                          else if (page >= totalPages - 2) pageNum = totalPages - 4 + i
-                          else pageNum = page - 2 + i
-                          return (
-                            <Button
-                              key={pageNum}
-                              variant={page === pageNum ? 'default' : 'outline'}
-                              size="sm"
-                              onClick={() => setPage(pageNum)}
-                              disabled={loading}
-                              className="min-w-[40px]"
-                            >
-                              {pageNum}
-                            </Button>
-                          )
-                        })}
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                        disabled={page >= totalPages || loading}
-                      >
-                        Next
-                      </Button>
-                    </div>
-                  )}
                 </div>
               </div>
             </CardHeader>
-            <CardContent>
-              <div className="border rounded-lg overflow-hidden">
+            <CardContent className="p-0">
+              <div className="overflow-hidden">
                 <div
                   ref={topScrollRef}
                   className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
@@ -834,7 +732,7 @@ export default function ClaimMutuPage() {
                     })
                   }}
                 >
-                  <table className={cn(COMPACT_OPERATIONAL_TABLE_CLASS, COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS, 'klip-compact-table--perf-narrow-cols')}>
+                  <table className={cn(COMPACT_OPERATIONAL_TABLE_CLASS, COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS, 'klip-compact-table--perf-narrow-cols', 'klip-table--directory')}>
                     <colgroup>
                       {visibleColumns.map((c) => (
                         <col key={c.id} style={{ width: compactTableColWidthCss(compactTableHeaderMinWidthPx(c.label, { hasSort: true })) }} />
@@ -883,7 +781,7 @@ export default function ClaimMutuPage() {
                         })}
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-200">
+                    <tbody className="divide-y divide-gray-100">
                       {loading ? (
                         <tr className="bg-white">
                           <td colSpan={Math.max(visibleColumns.length, 1)} className="px-4 py-10 text-center text-gray-500">
@@ -898,7 +796,7 @@ export default function ClaimMutuPage() {
                         </tr>
                       ) : (
                         rows.map((r, idx) => {
-                          const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                          const stripeClass = 'bg-white'
                           return (
                             <tr key={r.id} className={stripeClass}>
                               {visibleColumns.map((c) => {
@@ -925,6 +823,11 @@ export default function ClaimMutuPage() {
                   </table>
                 </div>
               </div>
+              <MasterTableFooter
+                countText={listRangeText(totalCount, page, pageSize, 'rows')}
+                kinds={[]}
+                pager={{ page, totalPages, onPageChange: setPage, disabled: loading }}
+              />
             </CardContent>
           </Card>
         </div>

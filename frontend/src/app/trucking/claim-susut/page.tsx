@@ -6,7 +6,7 @@ import { StitchFields } from '@/components/shared/stitchField'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Loader2, SlidersHorizontal, GripVertical, X } from 'lucide-react'
+import { Columns3, Factory, GripVertical, Layers, Loader2, MapPin, Package, SlidersHorizontal, Truck, X, CircleDot, ArrowLeftRight } from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
@@ -34,6 +34,13 @@ import {
 } from '@/components/shared/ListFilterPanel'
 import { periodRangeMatchesDates } from '@/components/performance/PerformanceContractDateControl'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { HeaderScopeField } from '@/components/shared/HeaderScopeField'
+import { ListFilterBar, ListFilterField } from '@/components/shared/ListFilterBar'
+import { FitFilterBar } from '@/components/shared/FitFilterBar'
+import { MultiValueField, SingleValueField } from '@/components/shared/ListFilterFields'
+import { iconButtonClass } from '@/lib/iconButton'
+import { listRangeText } from '@/lib/listRangeText'
 import {
   formatContractDateScopeLabel,
   PerformanceContractDateControl,
@@ -625,6 +632,23 @@ export default function ClaimSusutPage() {
     return period !== 'ALL' && periodRangeMatchesDates(preset, dateFrom, dateTo) ? `${preset.label} (${range})` : range
   }, [period, dateFrom, dateTo])
 
+  const claimStatusField = (
+    <MultiValueField label="Claim Status" options={[...CLAIM_SUSUT_CLAIM_STATUS_OPTIONS]} selected={selectedClaimStatuses} onChange={setSelectedClaimStatuses} placeholder="All statuses" emptyMessage="No statuses" icon={<CircleDot className="h-4 w-4" />} />
+  )
+  const b2bField = (
+    <MultiValueField label="B2B" options={[...CLAIM_B2B_FILTER_OPTIONS]} selected={selectedB2b} onChange={setSelectedB2b} placeholder="All B2B" emptyMessage="No values" icon={<ArrowLeftRight className="h-4 w-4" />} />
+  )
+  const transportField = (
+    <MultiValueField label="Filter by Transport" options={transportOptions} selected={selectedGroupsOfTransport} onChange={setSelectedGroupsOfTransport} placeholder="All transport" emptyMessage="No transport groups" icon={<Truck className="h-4 w-4" />} uppercase />
+  )
+
+  const productField = (
+    <MultiValueField label="Product" options={productOptions} selected={selectedProducts} onChange={setSelectedProducts} placeholder="All products" emptyMessage="No products" icon={<Package className="h-4 w-4" />} uppercase />
+  )
+  const vendorField = (
+    <MultiValueField label="Vendor Name" options={vendorOptions} selected={selectedVendors} onChange={setSelectedVendors} placeholder="All vendors" emptyMessage="No vendors" icon={<Factory className="h-4 w-4" />} uppercase />
+  )
+
   return (
     <Layout>
       <StitchFields>
@@ -647,24 +671,31 @@ export default function ClaimSusutPage() {
             onDateFromChange={setDateFrom}
             onDateToChange={setDateTo}
             resolvePeriodRange={resolveClaimSusutPeriodRange}
+            fieldStyle
+            active={
+              period !== CLAIM_SUSUT_DEFAULT_PERIOD ||
+              !periodRangeMatchesDates(resolveClaimSusutPeriodRange(CLAIM_SUSUT_DEFAULT_PERIOD), dateFrom, dateTo)
+            }
           />
-          <SearchableMultiSelect
+          <HeaderScopeField
             label="Region/Plant"
-            hideLabel
-            portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             options={plantOptions}
             selected={selectedPlants}
             onChange={setSelectedPlants}
-            placeholder="Region/Plant"
             emptyMessage="No region/plant values"
+            icon={<MapPin className="h-4 w-4" />}
             uppercaseOptionLabels
-            pinSelectedToTop
           />
         </HeaderFilterSlot>
-        <ListFilterPanel
-          onReset={resetFilters}
-          showReset={
+        <FitFilterBar
+          items={[
+            { key: 'product', width: 12, row: productField, panel: <ListFilterField label="Product">{productField}</ListFilterField>, active: selectedProducts.length > 0 },
+            { key: 'vendor', width: 14, row: vendorField, panel: <ListFilterField label="Vendor name">{vendorField}</ListFilterField>, active: selectedVendors.length > 0 },
+            { key: 'status', width: 12, row: claimStatusField, panel: <ListFilterField label="Claim status">{claimStatusField}</ListFilterField>, active: selectedClaimStatuses.length > 0 },
+            { key: 'b2b', width: 10, row: b2bField, panel: <ListFilterField label="B2B">{b2bField}</ListFilterField>, active: selectedB2b.length > 0 },
+            { key: 'transport', width: 13, row: transportField, panel: <ListFilterField label="Transport">{transportField}</ListFilterField>, active: selectedGroupsOfTransport.length > 0 },
+          ]}
+          anyActive={
             period !== CLAIM_SUSUT_DEFAULT_PERIOD ||
             !periodRangeMatchesDates(resolveClaimSusutPeriodRange(CLAIM_SUSUT_DEFAULT_PERIOD), dateFrom, dateTo) ||
             selectedPlants.length > 0 ||
@@ -674,97 +705,8 @@ export default function ClaimSusutPage() {
             selectedB2b.length > 0 ||
             selectedGroupsOfTransport.length > 0
           }
-          chips={[
-            ...(period !== 'ALL' ||
-            !periodRangeMatchesDates(resolveClaimSusutPeriodRange('ALL'), dateFrom, dateTo)
-              ? [
-                  {
-                    id: 'cr-date',
-                    label: formatContractDateScopeLabel(
-                      period,
-                      dateFrom,
-                      dateTo,
-                      (p) => resolveClaimSusutPeriodRange(p as ClaimSusutPeriodKey),
-                      { prefix: true },
-                    ).replace(/^Contract date:/, 'CR date:'),
-                    onRemove: () => {
-                      setPeriod('ALL')
-                      setDateFrom('')
-                      setDateTo('')
-                      setPage(1)
-                    },
-                  },
-                ]
-              : []),
-            ...selectionChips('Region/Plant', selectedPlants, setSelectedPlants),
-            ...selectionChips('Product', selectedProducts, setSelectedProducts),
-            ...selectionChips('Vendor Name', selectedVendors, setSelectedVendors),
-            ...selectionChips('Claim Status', selectedClaimStatuses, setSelectedClaimStatuses),
-            ...selectionChips('B2B', selectedB2b, setSelectedB2b),
-            ...selectionChips('Transport', selectedGroupsOfTransport, setSelectedGroupsOfTransport),
-          ]}
-        >
-          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-            <SearchableMultiSelect
-              label="Product"
-              className="min-w-[7.5rem] flex-1"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={productOptions}
-              selected={selectedProducts}
-              onChange={setSelectedProducts}
-              placeholder="All"
-              emptyMessage="No products"
-              uppercaseOptionLabels
-              pinSelectedToTop
-            />
-            <SearchableMultiSelect
-              label="Vendor Name"
-              className="min-w-[10rem] flex-[1.5]"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={vendorOptions}
-              selected={selectedVendors}
-              onChange={setSelectedVendors}
-              placeholder="All"
-              emptyMessage="No vendors"
-              uppercaseOptionLabels
-              pinSelectedToTop
-            />
-            <SearchableMultiSelect
-              label="Claim Status"
-              className="min-w-[8rem] flex-1"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={CLAIM_SUSUT_CLAIM_STATUS_OPTIONS}
-              selected={selectedClaimStatuses}
-              onChange={setSelectedClaimStatuses}
-              placeholder="All"
-              emptyMessage="No statuses"
-              pinSelectedToTop
-            />
-            <SearchableMultiSelect
-              label="B2B"
-              className="min-w-[7.5rem] flex-1"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={CLAIM_B2B_FILTER_OPTIONS}
-              selected={selectedB2b}
-              onChange={setSelectedB2b}
-              placeholder="All"
-              emptyMessage="No values"
-              pinSelectedToTop
-            />
-            <SearchableMultiSelect
-              label="Filter by Transport"
-              className="min-w-[7.5rem] flex-1"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={transportOptions}
-              selected={selectedGroupsOfTransport}
-              onChange={setSelectedGroupsOfTransport}
-              placeholder="All"
-              emptyMessage="No transport groups"
-              uppercaseOptionLabels
-              pinSelectedToTop
-            />
-          </div>
-        </ListFilterPanel>
+          onReset={resetFilters}
+        />
 
         <ClaimSusutSection1Dashboard
           crDateLabel={crDateLabel}
@@ -783,8 +725,8 @@ export default function ClaimSusutPage() {
           }
         />
 
-        <Card>
-          <CardHeader>
+        <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+          <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <CardTitle className="text-base flex items-center gap-2 flex-wrap">
@@ -824,13 +766,16 @@ export default function ClaimSusutPage() {
                 <div className="relative" ref={columnsRef}>
                   <Button
                     type="button"
-                    variant="outline"
-                    size="sm"
+                    variant="ghost"
+                    size="icon"
+                    className={iconButtonClass('neutral')}
+                    title="Columns"
+                    aria-label="Columns"
+                    aria-expanded={columnsOpen}
                     onClick={() => setColumnsOpen((o) => !o)}
                     disabled={loading}
                   >
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
+                    <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                   </Button>
                   {columnsOpen && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
@@ -905,47 +850,11 @@ export default function ClaimSusutPage() {
                     </div>
                   )}
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                    <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}>
-                      Previous
-                    </Button>
-                    <div className="flex items-center gap-1">
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let pageNum: number
-                        if (totalPages <= 5) pageNum = i + 1
-                        else if (page <= 3) pageNum = i + 1
-                        else if (page >= totalPages - 2) pageNum = totalPages - 4 + i
-                        else pageNum = page - 2 + i
-                        return (
-                          <Button
-                            key={pageNum}
-                            variant={page === pageNum ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => setPage(pageNum)}
-                            disabled={loading}
-                            className="min-w-[40px]"
-                          >
-                            {pageNum}
-                          </Button>
-                        )
-                      })}
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={page >= totalPages || loading}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                )}
               </div>
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="border rounded-lg overflow-hidden">
+          <CardContent className="p-0">
+            <div className="overflow-hidden">
               <div
                 ref={topScrollRef}
                 className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
@@ -982,7 +891,7 @@ export default function ClaimSusutPage() {
                   className={cn(
                     COMPACT_OPERATIONAL_TABLE_CLASS,
                     COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
-                    'klip-compact-table--perf-narrow-cols',
+                    'klip-compact-table--perf-narrow-cols', 'klip-table--directory',
                   )}
                 >
                   <colgroup>
@@ -1040,7 +949,7 @@ export default function ClaimSusutPage() {
                       })}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200">
+                  <tbody className="divide-y divide-gray-100">
                     {loading ? (
                       <tr className="bg-white">
                         <td colSpan={Math.max(visibleColumns.length, 1)} className="px-4 py-10 text-center text-gray-500">
@@ -1054,7 +963,7 @@ export default function ClaimSusutPage() {
                         </td>
                       </tr>
                     ) : rows.map((r, idx) => {
-                      const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                      const stripeClass = 'bg-white'
                       return (
                       <tr key={r.id} className={stripeClass}>
                         {visibleColumns.map((c) => {
@@ -1146,6 +1055,11 @@ export default function ClaimSusutPage() {
                 </table>
               </div>
             </div>
+            <MasterTableFooter
+              countText={listRangeText(totalCount, page, pageSize, 'rows')}
+              kinds={[]}
+              pager={{ page, totalPages, onPageChange: setPage, disabled: loading }}
+            />
           </CardContent>
         </Card>
       </div>
