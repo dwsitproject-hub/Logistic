@@ -6,6 +6,7 @@ import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StitchFields } from '@/components/shared/stitchField'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useRouter } from 'next/navigation'
@@ -14,9 +15,9 @@ import { Anchor, Building2, Cloud, CloudOff, Pencil, Plus, Save, Ship } from 'lu
 import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { MultiValueCell } from '@/components/shared/MultiValueCell'
-import { ListPager } from '@/components/performance/ListPager'
 import { MasterKpis } from '@/components/master/MasterKpis'
 import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
 import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import { masterCountText, masterDhmChip, sortCompanyOptions, type MasterDhmFilter } from '@/lib/masterDirectory'
@@ -485,7 +486,7 @@ export default function MasterLoadingPortPage() {
               isAdmin ? (
                 <>
                   <MasterDhmSyncButton master="port" onDone={refresh} iconOnly />
-                  <Button size="icon" className="h-9 w-9 shrink-0" title="New port" aria-label="New port" onClick={openNew}>
+                  <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="New port" aria-label="New port" onClick={openNew}>
                     <Plus className="h-4 w-4" aria-hidden />
                   </Button>
                 </>
@@ -541,14 +542,11 @@ export default function MasterLoadingPortPage() {
             )}
           />
 
-          <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
-            {masterCountText(pageRows.length, total, summary?.total ?? total, 'ports')} · click a row to {isAdmin ? 'edit' : 'view'} it
-          </div>
-          {totalPages > 1 ? (
-            <div className="px-4 pb-4">
-              <ListPager page={page} totalPages={totalPages} onPageChange={setPage} disabled={loading} summary={`Page ${page}/${totalPages}`} />
-            </div>
-          ) : null}
+          <MasterTableFooter
+            countText={`${masterCountText(pageRows.length, total, summary?.total ?? total, 'ports')} · click a row to ${isAdmin ? 'edit' : 'view'} it`}
+            kinds={['klip', 'dhm']}
+            pager={{ page: page, totalPages: totalPages, onPageChange: setPage, disabled: loading }}
+          />
         </div>
       </div>
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -358,7 +359,7 @@ export default function UsersPage() {
                 <Button
                   variant="outline"
                   size="icon"
-                  className="h-9 w-9 shrink-0 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  className={ICON_BUTTON_CLASS}
                   title="User Activity Log"
                   aria-label="User Activity Log"
                   onClick={() => router.push('/users/activity-log')}
@@ -368,7 +369,7 @@ export default function UsersPage() {
                 <Button
                   variant="outline"
                   size="icon"
-                  className="h-9 w-9 shrink-0 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  className={ICON_BUTTON_CLASS}
                   title="Manage Roles"
                   aria-label="Manage Roles"
                   onClick={() => router.push('/users/roles')}
@@ -376,8 +377,9 @@ export default function UsersPage() {
                   <Settings className="h-4 w-4" aria-hidden />
                 </Button>
                 <Button
+                  variant="outline"
                   size="icon"
-                  className="h-9 w-9 shrink-0"
+                  className={ICON_BUTTON_CLASS}
                   title="Add User"
                   aria-label="Add User"
                   onClick={() => {

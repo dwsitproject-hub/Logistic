@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, CalendarClock, FileSpreadsheet, Loader2, RefreshCw } from 'lucide-react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import { findRunStartedSince, formatSapFolderTime, syncClickTimeMs } from '@/lib/sapFolderSync'
 import {
   describeClaimAutoRun,
@@ -128,7 +129,7 @@ export function ClaimFolderSyncButton({ folderSync, canSync }: { folderSync: Cla
       disabled={folderSync.busy}
       title={folderSync.busy ? 'Syncing...' : 'Sync: pull the newest OSCLAIM file from the SAP folder now. Only the newest file is imported, and only if KLIP does not have it yet.'}
       aria-label={folderSync.busy ? 'Syncing' : 'Sync'}
-      className="h-9 w-9 shrink-0 border-gray-200 bg-white text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+      className={ICON_BUTTON_CLASS}
     >
       {folderSync.busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <RefreshCw className="h-4 w-4" aria-hidden />}
     </Button>

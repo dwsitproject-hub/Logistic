@@ -6,6 +6,7 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { StitchFields } from '@/components/shared/stitchField'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import api from '@/lib/api'
 import { EditVesselModal, type MasterVesselFormData } from '@/components/master-vessel/EditVesselModal'
 import { heatingFilterToApi, termsFilterToApi, type MasterVesselFilterOptions } from '@/components/master-vessel/MasterVesselGlobalFiltersSection'
@@ -15,9 +16,9 @@ import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { MultiValueCell } from '@/components/shared/MultiValueCell'
-import { ListPager } from '@/components/performance/ListPager'
 import { MasterKpis } from '@/components/master/MasterKpis'
 import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
 import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
 import { formatVesselCapacity, formatVesselMetres } from '@/lib/masterVesselColumns'
 import { masterCountText, type MasterDhmFilter } from '@/lib/masterDirectory'
@@ -371,7 +372,7 @@ export default function MasterVesselPage() {
                     isAdmin ? (
                       <>
                         <MasterDhmSyncButton master="vessel" onDone={refresh} iconOnly />
-                        <Button size="icon" className="h-9 w-9 shrink-0" title="New vessel" aria-label="New vessel" onClick={openNew}>
+                        <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="New vessel" aria-label="New vessel" onClick={openNew}>
                           <Plus className="h-4 w-4" aria-hidden />
                         </Button>
                       </>
@@ -454,14 +455,11 @@ export default function MasterVesselPage() {
                   )}
                 />
 
-                <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
-                  {masterCountText(items.length, total, summary?.total ?? total, 'vessels')} · click a row to {isAdmin ? 'edit' : 'view'} it
-                </div>
-                {totalPages > 1 ? (
-                  <div className="px-4 pb-4">
-                    <ListPager page={currentPage} totalPages={totalPages} onPageChange={handlePageChange} disabled={loading} summary={`Page ${currentPage}/${totalPages}`} />
-                  </div>
-                ) : null}
+                <MasterTableFooter
+                  countText={`${masterCountText(items.length, total, summary?.total ?? total, 'vessels')} · click a row to ${isAdmin ? 'edit' : 'view'} it`}
+                  kinds={['klip', 'dhm', 'pair']}
+                  pager={{ page: currentPage, totalPages: totalPages, onPageChange: handlePageChange, disabled: loading }}
+                />
               </div>
             </>
           ) : (

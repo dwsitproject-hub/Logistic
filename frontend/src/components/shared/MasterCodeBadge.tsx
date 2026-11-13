@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 
 export type MasterCodeKind = 'klip' | 'dhm' | 'sap' | 'pair'
 
-const TONE: Record<MasterCodeKind, string> = {
+export const MASTER_CODE_TONE: Record<MasterCodeKind, string> = {
   dhm: 'border-red-200 bg-red-50 text-red-600',
   klip: 'border-blue-200 bg-blue-50 text-blue-700',
   sap: 'border-slate-200 bg-slate-100 text-slate-500',
@@ -25,7 +25,7 @@ export function MasterCodeBadge({
   return (
     <span
       title={text}
-      className={`inline-block whitespace-nowrap rounded-md border px-2 py-0.5 text-xs leading-4 ${fit ? '' : 'max-w-full truncate'} ${TONE[kind]}`}
+      className={`inline-block whitespace-nowrap rounded-md border px-2 py-0.5 text-xs leading-4 ${fit ? '' : 'max-w-full truncate'} ${MASTER_CODE_TONE[kind]}`}
     >
       {text}
     </span>

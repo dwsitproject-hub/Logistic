@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 
 interface SyncPayload {
   total?: number
@@ -77,7 +78,7 @@ export function MasterDhmSyncButton({ master, onDone, iconOnly = false }: { mast
         type="button"
         variant="outline"
         size="icon"
-        className="h-9 w-9 shrink-0 border-gray-200 bg-white text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+        className={ICON_BUTTON_CLASS}
         disabled={busy}
         onClick={() => void sync()}
         title={busy ? 'Syncing to DHM...' : 'Sync to DHM'}

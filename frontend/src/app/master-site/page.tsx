@@ -5,6 +5,7 @@ import { Building2, Cloud, CloudOff, Pencil, Plus, Route } from 'lucide-react'
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -12,9 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { MultiValueCell } from '@/components/shared/MultiValueCell'
-import { ListPager } from '@/components/performance/ListPager'
 import { MasterKpis } from '@/components/master/MasterKpis'
 import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
 import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { StitchFields } from '@/components/shared/stitchField'
@@ -234,8 +235,9 @@ export default function MasterSitePage() {
                   <>
                     <MasterDhmSyncButton master="site" onDone={refresh} iconOnly />
                     <Button
+                      variant="outline"
                       size="icon"
-                      className="h-9 w-9 shrink-0"
+                      className={ICON_BUTTON_CLASS}
                       title="New site"
                       aria-label="New site"
                       onClick={() => {
@@ -305,20 +307,11 @@ export default function MasterSitePage() {
               )}
             />
 
-            <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
-              {masterCountText(items.length, total, summary?.total ?? total, 'sites')} · click a row to {isAdmin ? 'edit' : 'view'} it
-            </div>
-            {totalPages > 1 ? (
-              <div className="px-4 pb-4">
-                <ListPager
-                  page={page}
-                  totalPages={totalPages}
-                  onPageChange={setPage}
-                  disabled={loading}
-                  summary={`Page ${page}/${totalPages}`}
-                />
-              </div>
-            ) : null}
+            <MasterTableFooter
+              countText={`${masterCountText(items.length, total, summary?.total ?? total, 'sites')} · click a row to ${isAdmin ? 'edit' : 'view'} it`}
+              kinds={['klip', 'dhm']}
+              pager={{ page: page, totalPages: totalPages, onPageChange: setPage, disabled: loading }}
+            />
           </div>
 
           <Dialog open={open} onOpenChange={setOpen}>

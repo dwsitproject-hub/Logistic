@@ -7,15 +7,16 @@ import { Boxes, Cloud, CloudOff, Package, Pencil, Plus, Save } from 'lucide-reac
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { StitchFields } from '@/components/shared/stitchField'
 import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
-import { ListPager } from '@/components/performance/ListPager'
 import { MasterKpis } from '@/components/master/MasterKpis'
 import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
 import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import { masterCountText, masterDhmChip, type MasterDhmFilter } from '@/lib/masterDirectory'
@@ -331,7 +332,7 @@ export default function MasterProductConfigurationPage() {
               actions={
                 <>
                   {isAdmin ? <MasterDhmSyncButton master="product" onDone={refresh} iconOnly /> : null}
-                  <Button size="icon" className="h-9 w-9 shrink-0" title="New product" aria-label="New product" onClick={openAdd}>
+                  <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="New product" aria-label="New product" onClick={openAdd}>
                     <Plus className="h-4 w-4" aria-hidden />
                   </Button>
                 </>
@@ -386,14 +387,11 @@ export default function MasterProductConfigurationPage() {
               )}
             />
 
-            <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
-              {masterCountText(items.length, total, scopeTotal ?? total, 'products')} · click a row to {isAdmin ? 'edit' : 'view'} it
-            </div>
-            {totalPages > 1 ? (
-              <div className="px-4 pb-4">
-                <ListPager page={page} totalPages={totalPages} onPageChange={setPage} disabled={loading} summary={`Page ${page}/${totalPages}`} />
-              </div>
-            ) : null}
+            <MasterTableFooter
+              countText={`${masterCountText(items.length, total, scopeTotal ?? total, 'products')} · click a row to ${isAdmin ? 'edit' : 'view'} it`}
+              kinds={['klip', 'dhm', 'sap']}
+              pager={{ page: page, totalPages: totalPages, onPageChange: setPage, disabled: loading }}
+            />
           </div>
 
           {showModal && (

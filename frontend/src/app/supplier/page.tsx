@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -453,7 +454,7 @@ export default function SupplierPage() {
                   <Button
                     variant="outline"
                     size="icon"
-                    className="h-9 w-9 shrink-0 border-gray-200 bg-white text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+                    className={ICON_BUTTON_CLASS}
                     title="Download Template"
                     aria-label="Download Template"
                     onClick={downloadTemplate}
@@ -463,7 +464,7 @@ export default function SupplierPage() {
                   <Button
                     variant="outline"
                     size="icon"
-                    className="h-9 w-9 shrink-0 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    className={ICON_BUTTON_CLASS}
                     title={uploading ? 'Uploading...' : 'Upload CSV'}
                     aria-label={uploading ? 'Uploading' : 'Upload CSV'}
                     onClick={() => document.getElementById('supplier-upload')?.click()}
@@ -471,7 +472,7 @@ export default function SupplierPage() {
                   >
                     {uploading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Upload className="h-4 w-4" aria-hidden />}
                   </Button>
-                  <Button size="icon" className="h-9 w-9 shrink-0" title="Add Supplier" aria-label="Add Supplier" onClick={openAdd}>
+                  <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="Add Supplier" aria-label="Add Supplier" onClick={openAdd}>
                     <Plus className="h-4 w-4" aria-hidden />
                   </Button>
                 </div>

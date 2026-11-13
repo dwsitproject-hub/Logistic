@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import api from '@/lib/api'
 import { canCreatePermission, usePermissions } from '@/components/PermissionsContext'
 import { formatDateDMY } from '@/lib/dateFormat'
@@ -191,8 +192,9 @@ export default function ClaimDataImportDashboard() {
             <>
               <ClaimFolderSyncButton folderSync={folderSync} canSync={canUpload} />
               <Button
+                variant="outline"
                 size="icon"
-                className="h-9 w-9 shrink-0"
+                className={ICON_BUTTON_CLASS}
                 onClick={() => inputRef.current?.click()}
                 disabled={busy != null}
                 title="Import Claim Data"

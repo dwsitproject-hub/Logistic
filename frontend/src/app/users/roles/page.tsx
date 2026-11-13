@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -332,7 +333,7 @@ export default function RolesPage() {
             <Button
               variant="outline"
               size="icon"
-              className="h-9 w-9 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+              className={ICON_BUTTON_CLASS}
               title="Back to Users"
               aria-label="Back to Users"
               onClick={() => guardUnsaved(() => router.push('/users'))}
@@ -344,7 +345,7 @@ export default function RolesPage() {
               Pick a role, then choose what it can view, create, edit and delete.
             </p>
           </div>
-          <Button size="icon" className="h-9 w-9 shrink-0" title="Add Role" aria-label="Add Role" onClick={() => setShowAddRole(true)}>
+          <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="Add Role" aria-label="Add Role" onClick={() => setShowAddRole(true)}>
             <Plus className="h-4 w-4" aria-hidden />
           </Button>
         </div>

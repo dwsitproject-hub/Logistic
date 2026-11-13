@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
 import { Badge } from '@/components/ui/badge'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
@@ -197,7 +198,7 @@ function UserActivityLogPageContent() {
             <Button
               variant="outline"
               size="icon"
-              className="h-9 w-9 shrink-0 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+              className={ICON_BUTTON_CLASS}
               title="Refresh"
               aria-label="Refresh"
               onClick={() => void fetchSummary(page, dateFrom, dateTo)}
