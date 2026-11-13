@@ -29,6 +29,7 @@ export function SearchableMultiSelect({
   className,
   icon,
   fieldStyle = false,
+  singleSelect = false,
 }: {
   label: string
   options: string[]
@@ -48,6 +49,8 @@ export function SearchableMultiSelect({
   icon?: ReactNode
   /** The field look of the Contracts More filters: the chosen value reads in blue, and several choices show as "first +n" instead of "n selected (OR)". */
   fieldStyle?: boolean
+  /** One value at most: choosing an option replaces the choice (choosing the chosen one clears it) and closes the menu; nothing chosen means all. For filters that take a single value. */
+  singleSelect?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -127,6 +130,11 @@ export function SearchableMultiSelect({
   }, [open])
 
   const toggle = (value: string) => {
+    if (singleSelect) {
+      onChange(selected.includes(value) ? [] : [value])
+      setOpen(false)
+      return
+    }
     if (selected.includes(value)) onChange(selected.filter((s) => s !== value))
     else onChange([...selected, value])
   }

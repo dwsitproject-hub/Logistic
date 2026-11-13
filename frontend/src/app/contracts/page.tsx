@@ -90,7 +90,7 @@ import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import { periodRangeMatchesDates } from '@/components/performance/PerformanceContractDateControl'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
-import { ContractsFilterBar, ContractsFilterField, contractFilterButtonClass } from '@/components/contracts/ContractsFilterBar'
+import { ListFilterBar, ListFilterField, listFilterButtonClass } from '@/components/shared/ListFilterBar'
 import { MasterKpis } from '@/components/master/MasterKpis'
 import { MasterTableFooter } from '@/components/master/MasterTableFooter'
 import { iconButtonClass } from '@/lib/iconButton'
@@ -2631,7 +2631,7 @@ function ContractsPageContent() {
         icon={<CircleDot className="h-4 w-4" />}
         fieldStyle
         className="w-full"
-        buttonClassName={contractFilterButtonClass(contractStatusSelected.length > 0)}
+        buttonClassName={listFilterButtonClass(contractStatusSelected.length > 0)}
       />
     </div>
   )
@@ -2652,7 +2652,7 @@ function ContractsPageContent() {
         icon={<Anchor className="h-4 w-4" />}
         fieldStyle
         className="w-full"
-        buttonClassName={contractFilterButtonClass(selectedIncoterms.length > 0)}
+        buttonClassName={listFilterButtonClass(selectedIncoterms.length > 0)}
       />
     </div>
   )
@@ -4515,7 +4515,7 @@ function ContractsPageContent() {
             portalMenu
             icon={<MapPin className="h-4 w-4" />}
             fieldStyle
-            buttonClassName={contractFilterButtonClass(selectedGroupPlants.length > 0)}
+            buttonClassName={listFilterButtonClass(selectedGroupPlants.length > 0)}
             options={availableGroupPlants}
             selected={selectedGroupPlants}
             onChange={(values) => {
@@ -4559,7 +4559,7 @@ function ContractsPageContent() {
             },
           ]}
         />
-        <ContractsFilterBar
+        <ListFilterBar
           search={searchDraft}
           onSearchChange={setSearchDraft}
           onSearchSubmit={applySearch}
@@ -4572,13 +4572,13 @@ function ContractsPageContent() {
           }
           narrowOnly={
             <>
-              <ContractsFilterField label="Status">{contractStatusSelect('w-full')}</ContractsFilterField>
-              <ContractsFilterField label="Incoterm">{contractIncotermSelect('w-full')}</ContractsFilterField>
+              <ListFilterField label="Status">{contractStatusSelect('w-full')}</ListFilterField>
+              <ListFilterField label="Incoterm">{contractIncotermSelect('w-full')}</ListFilterField>
             </>
           }
           more={
             <>
-              <ContractsFilterField label="Contract type">
+              <ListFilterField label="Contract type">
                 <SearchableMultiSelect
                   label="Contract type"
                   hideLabel
@@ -4593,10 +4593,10 @@ function ContractsPageContent() {
                   icon={<Tag className="h-4 w-4" />}
                   fieldStyle
                   className="w-full"
-                  buttonClassName={contractFilterButtonClass(contractTypeSelected.length > 0)}
+                  buttonClassName={listFilterButtonClass(contractTypeSelected.length > 0)}
                 />
-              </ContractsFilterField>
-              <ContractsFilterField label="Product">
+              </ListFilterField>
+              <ListFilterField label="Product">
                 <SearchableMultiSelect
                   label="Product"
                   hideLabel
@@ -4610,10 +4610,10 @@ function ContractsPageContent() {
                   icon={<Package className="h-4 w-4" />}
                   fieldStyle
                   className="w-full"
-                  buttonClassName={contractFilterButtonClass(selectedProducts.length > 0)}
+                  buttonClassName={listFilterButtonClass(selectedProducts.length > 0)}
                 />
-              </ContractsFilterField>
-              <ContractsFilterField label="Group">
+              </ListFilterField>
+              <ListFilterField label="Group">
                 <SearchableMultiSelect
                   label="Group"
                   hideLabel
@@ -4627,10 +4627,10 @@ function ContractsPageContent() {
                   icon={<Layers className="h-4 w-4" />}
                   fieldStyle
                   className="w-full"
-                  buttonClassName={contractFilterButtonClass(selectedGroups.length > 0)}
+                  buttonClassName={listFilterButtonClass(selectedGroups.length > 0)}
                 />
-              </ContractsFilterField>
-              <ContractsFilterField label="Supplier">
+              </ListFilterField>
+              <ListFilterField label="Supplier">
                 <SearchableMultiSelect
                   label="Supplier"
                   hideLabel
@@ -4644,9 +4644,9 @@ function ContractsPageContent() {
                   icon={<Factory className="h-4 w-4" />}
                   fieldStyle
                   className="w-full"
-                  buttonClassName={contractFilterButtonClass(selectedSuppliers.length > 0)}
+                  buttonClassName={listFilterButtonClass(selectedSuppliers.length > 0)}
                 />
-              </ContractsFilterField>
+              </ListFilterField>
             </>
           }
           activeMore={

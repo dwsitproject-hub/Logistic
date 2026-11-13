@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2, Ban } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2, Ban, MapPin } from 'lucide-react'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -117,6 +117,9 @@ import { ContractPerfTableSortHeader } from '@/components/performance/ContractPe
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { refreshDocumentPresence } from '@/lib/documentPresence'
 import { ListPager } from '@/components/performance/ListPager'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { HeaderScopeField } from '@/components/shared/HeaderScopeField'
+import { listRangeText } from '@/lib/listRangeText'
 import { compareByStack, sortEntryFor, sortPriority, type SortEntry, type SortValue } from '@/lib/sortStack'
 import { nextShipmentsSortStack, shipmentsSortStackParam } from '@/lib/shipmentsSortStack'
 import {
@@ -6627,29 +6630,29 @@ function ShipmentsPageContent() {
             onDateFromChange={onGlobalDateFromChange}
             onDateToChange={onGlobalDateToChange}
             resolvePeriodRange={resolvePerformancePeriodDateRange}
+            fieldStyle
+            active={
+              shipmentPeriod !== 'YTD' ||
+              dateFrom !== shipmentYtdRange.dateFrom ||
+              dateTo !== shipmentYtdRange.dateTo
+            }
           />
-          <SearchableMultiSelect
+          <HeaderScopeField
             label="Region/Plant"
-            hideLabel
-            portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             options={availableGroupPlants}
             selected={selectedGroupPlants}
             onChange={onGroupPlantsChangeWithPageReset}
-            placeholder="Region/Plant"
             emptyMessage="No region/plant values"
+            icon={<MapPin className="h-4 w-4" />}
             uppercaseOptionLabels
           />
-          <SearchableMultiSelect
+          <HeaderScopeField
             label="Discharge Port"
-            hideLabel
-            portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             options={dischargePortDropdownOptions}
             selected={selectedDischargePorts}
             onChange={onDischargePortsChangeWithPageReset}
-            placeholder="Discharge Port"
             emptyMessage="No discharge ports"
+            icon={<Anchor className="h-4 w-4" />}
             uppercaseOptionLabels
           />
         </HeaderFilterSlot>
@@ -7285,8 +7288,8 @@ function ShipmentsPageContent() {
         />
 
         {/* Shipments List */}
-        <Card>
-          <CardHeader>
+        <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+          <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <CardTitle className="text-base flex items-center gap-2 flex-wrap">
@@ -7553,10 +7556,10 @@ function ShipmentsPageContent() {
               </div>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-0">
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
                 {/* Desktop compact table */}
-                <div className="hidden lg:block border rounded-lg overflow-hidden">
+                <div className="hidden lg:block overflow-hidden">
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
@@ -7591,7 +7594,7 @@ function ShipmentsPageContent() {
                       })
                     }}
                   >
-                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}>
+                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols klip-table--directory`}>
                         <colgroup>
                           {showStoExpandColumn ? (
                             <col style={{ width: SHIPMENT_EXPAND_COL_WIDTH_PX }} />
@@ -7671,7 +7674,7 @@ function ShipmentsPageContent() {
                         </tr>
                         </thead>
                         <tbody
-                          className={`transition-opacity duration-200 ${
+                          className={`divide-y divide-gray-100 transition-opacity duration-200 ${
                             listFetching && shipments.length > 0 ? 'opacity-65' : 'opacity-100'
                           }`}
                         >
@@ -7700,7 +7703,7 @@ function ShipmentsPageContent() {
                             return sortedPrePlannedTableGroups.map((group) => {
                               const rep = getPrePlannedGroupRepresentativeMember(group)
                               const cancelGroupId = resolvePrePlannedCancelGroupId(group)
-                              const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                              const rowBg = 'bg-white'
                               stripeIdx += 1
                               return (
                                 <tr key={group.groupKey} className={rowBg}>
@@ -7812,7 +7815,7 @@ function ShipmentsPageContent() {
                               const tableInlineEditActive =
                                 isEditing && SHIPMENTS_TABLE_LEGACY_INLINE_EDIT_ENABLED
                               const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
-                              const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                              const rowBg = 'bg-white'
                               stripeIdx += 1
                               const isStoChildRow = isMultiStoGroup
                               nodes.push(
@@ -8181,7 +8184,7 @@ function ShipmentsPageContent() {
                 </div>
 
                 {/* Mobile/tablet cards */}
-                <div className="lg:hidden space-y-2">
+                <div className="lg:hidden space-y-2 px-4 py-3">
                   {section3TableLoading || (listFetching && shipments.length === 0) ? (
                     <div className="rounded-lg border bg-white">
                       <TableInitialLoadPlaceholderContent icon={Package} />
@@ -8491,14 +8494,15 @@ function ShipmentsPageContent() {
                   )}
                   </div>
 
-                <ListPager
-                  page={page}
-                  totalPages={totalPages}
-                  onPageChange={handlePageChange}
-                  disabled={listFetching || section3TableLoading}
-                  summary={`Showing page ${page} of ${totalPages} (${tableShipmentCount.toLocaleString('en-US')} ${
-                    statusFilter === 'PREPLANNED' ? (tableShipmentCount === 1 ? 'grouping' : 'groupings') : 'total shipments'
-                  })`}
+                <MasterTableFooter
+                  countText={listRangeText(
+                    tableShipmentCount,
+                    page,
+                    pageSize,
+                    statusFilter === 'PREPLANNED' ? (tableShipmentCount === 1 ? 'grouping' : 'groupings') : 'shipments',
+                  )}
+                  kinds={[]}
+                  pager={{ page, totalPages, onPageChange: handlePageChange, disabled: listFetching || section3TableLoading }}
                 />
             </div>
           </CardContent>

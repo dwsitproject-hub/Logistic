@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Filter, X, Truck, Save, Loader2, Download, Eye, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
+import { Filter, X, Truck, Save, Loader2, Download, Eye, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical, MapPin, Anchor, Package, Factory, CircleDot, Timer, Database } from 'lucide-react'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
@@ -64,6 +64,11 @@ import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { ListPager } from '@/components/performance/ListPager'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { HeaderScopeField } from '@/components/shared/HeaderScopeField'
+import { ListFilterBar, ListFilterField } from '@/components/shared/ListFilterBar'
+import { MultiValueField, SingleValueField } from '@/components/shared/ListFilterFields'
+import { listRangeText } from '@/lib/listRangeText'
 import { TruckingDocumentsButton } from '@/components/trucking/TruckingDocumentsButton'
 import { refreshDocumentPresence } from '@/lib/documentPresence'
 import {
@@ -3850,6 +3855,32 @@ function TruckingPageContent() {
   const dailyPlanningUploadEligible = isDailyPlanningTemplateMode(statusFilter)
   const sapImportUploadBlockedTitle = SAP_IMPORT_IN_PROGRESS_MESSAGE
 
+  const truckingStatusField = (wrapperClass: string) => (
+    <SingleValueField
+      label="Status"
+      options={TRUCKING_GLOBAL_STATUS_OPTIONS}
+      value={mapTruckingStatusToGlobalBucket(statusFilter)}
+      onChange={(value) => {
+        beginTableScopeRefresh()
+        setPage(1)
+        setHasMore(true)
+        setStatusFilter(normalizeTruckingSummaryStatusFilter(value) || 'ALL')
+      }}
+      icon={<CircleDot className="h-4 w-4" />}
+      wrapperClass={wrapperClass}
+    />
+  )
+  const truckingLateField = (wrapperClass: string) => (
+    <SingleValueField
+      label="Late Indicator"
+      options={TRUCKING_LATE_INDICATOR_OPTIONS}
+      value={lateIndicatorFilter}
+      onChange={setLateIndicatorFilter}
+      icon={<Timer className="h-4 w-4" />}
+      wrapperClass={wrapperClass}
+    />
+  )
+
   return (
     <Layout>
       <StitchFields>
@@ -3984,143 +4015,99 @@ function TruckingPageContent() {
               setPage(1)
             }}
             resolvePeriodRange={resolvePerformancePeriodDateRange}
+            fieldStyle
+            active={dateFrom !== defaultContractDateRange.from || dateTo !== defaultContractDateRange.to}
           />
-          <SearchableMultiSelect
+          <HeaderScopeField
             label="Region/Plant"
-            hideLabel
-            portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             options={availableGroupPlants}
             selected={selectedGroupPlants}
             onChange={handleGroupPlantsChange}
-            placeholder="Region/Plant"
             emptyMessage="No region/plant values"
+            icon={<MapPin className="h-4 w-4" />}
             uppercaseOptionLabels
           />
         </HeaderFilterSlot>
-        <ListFilterPanel
-          onReset={clearTruckingFilters}
-          showReset={hasActiveTruckingFilters || searchDraft.trim().length > 0}
-          chips={[
-            ...(searchTerm.trim()
-              ? [{ id: 'search', label: `Search: ${searchTerm.trim()}`, onRemove: () => { setSearchDraft(''); setSearchTerm(''); setPage(1) } }]
-              : []),
-            ...(mapTruckingStatusToGlobalBucket(statusFilter) !== 'ALL'
-              ? [{ id: 'status', label: `Status: ${mapTruckingStatusToGlobalBucket(statusFilter) === 'OPEN' ? 'Open' : 'Close'}`, onRemove: () => { setStatusFilter('ALL'); setPage(1) } }]
-              : []),
-            ...(lateIndicatorFilter !== 'ALL'
-              ? [{ id: 'late', label: `Late: ${TRUCKING_LATE_INDICATOR_OPTIONS.find((o) => o.value === lateIndicatorFilter)?.label ?? lateIndicatorFilter}`, onRemove: () => setLateIndicatorFilter('ALL') }]
-              : []),
-            ...(sourceTypeFilter !== 'ALL'
-              ? [{ id: 'source', label: `Source: ${sourceTypeFilter}`, onRemove: () => setSourceTypeFilter('ALL') }]
-              : []),
-            ...selectionChips('Incoterm', selectedIncoterms, setSelectedIncoterms),
-            ...selectionChips('Product', selectedProducts, handleProductsChange),
-            ...selectionChips('Supplier', selectedSuppliers, onSuppliersChange),
-            ...selectionChips('Region/Plant', selectedGroupPlants, handleGroupPlantsChange),
-            ...(dateFrom !== defaultContractDateRange.from || dateTo !== defaultContractDateRange.to
-              ? [{ id: 'contract-date', label: `Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`, onRemove: () => { setTruckingPeriod('YTD'); setDateFrom(defaultContractDateRange.from); setDateTo(defaultContractDateRange.to) } }]
-              : []),
-          ]}
-        >
-          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-            <div className="min-w-[12rem] flex-[1.4]">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
-              <div className="relative">
-                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input
-                  placeholder="Contract, PO, STO"
-                  value={searchDraft}
-                  onChange={(e) => setSearchDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      applySearch()
-                    }
-                  }}
-                  className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+        <ListFilterBar
+          search={searchDraft}
+          onSearchChange={setSearchDraft}
+          onSearchSubmit={applySearch}
+          placeholder="Contract, PO, STO"
+          wide={
+            <>
+              {truckingStatusField('w-40 shrink-0')}
+              {truckingLateField('w-44 shrink-0')}
+            </>
+          }
+          narrowOnly={
+            <>
+              <ListFilterField label="Status">{truckingStatusField('w-full')}</ListFilterField>
+              <ListFilterField label="Late indicator">{truckingLateField('w-full')}</ListFilterField>
+            </>
+          }
+          more={
+            <>
+              <ListFilterField label="Source">
+                <SingleValueField
+                  label="Source"
+                  options={LOGISTICS_SOURCE_FILTER_OPTIONS}
+                  value={sourceTypeFilter}
+                  onChange={setSourceTypeFilter}
+                  icon={<Database className="h-4 w-4" />}
                 />
-              </div>
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Status</label>
-              <FilterSingleSelect
-                value={mapTruckingStatusToGlobalBucket(statusFilter)}
-                onChange={(value) => {
-                  beginTableScopeRefresh()
-                  setPage(1)
-                  setHasMore(true)
-                  setStatusFilter(normalizeTruckingSummaryStatusFilter(value) || 'ALL')
-                }}
-                options={TRUCKING_GLOBAL_STATUS_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.value === 'ALL' ? 'All' : option.label,
-                }))}
-                ariaLabel="Trucking status filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Late Indicator</label>
-              <FilterSingleSelect
-                value={lateIndicatorFilter}
-                onChange={setLateIndicatorFilter}
-                options={TRUCKING_LATE_INDICATOR_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.value === 'ALL' ? 'All' : option.label,
-                }))}
-                ariaLabel="Late indicator filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Source</label>
-              <FilterSingleSelect
-                value={sourceTypeFilter}
-                onChange={setSourceTypeFilter}
-                options={LOGISTICS_SOURCE_FILTER_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.value === 'ALL' ? 'All' : option.label,
-                }))}
-                ariaLabel="Source filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <PerformanceScopeFilters
-              inlineRow
-              microLabels
-              hideGroupPlantFilter
-              incotermOptions={availableIncoterms}
-              selectedIncoterms={selectedIncoterms}
-              onIncotermsChange={setSelectedIncoterms}
-              showProductFilter
-              productOptions={availableProducts}
-              selectedProducts={selectedProducts}
-              onProductsChange={handleProductsChange}
-              showSupplierFilter
-              supplierOptions={availableSuppliers}
-              selectedSuppliers={selectedSuppliers}
-              onSuppliersChange={onSuppliersChange}
-              groupPlantOptions={availableGroupPlants}
-              uppercaseGroupPlantLabels
-              selectedGroupPlants={selectedGroupPlants}
-              onGroupPlantsChange={handleGroupPlantsChange}
-              dateFrom={dateFrom}
-              dateTo={dateTo}
-              onDateFromChange={setDateFrom}
-              onDateToChange={setDateTo}
-              showDateRange={false}
-              incotermPlaceholder="All"
-              productPlaceholder="All"
-              supplierPlaceholder="All"
-              incotermEmptyMessage="Loading incoterms..."
-              productEmptyMessage="Loading products..."
-              supplierEmptyMessage="Loading suppliers..."
-              groupPlantPlaceholder="All"
-              groupPlantEmptyMessage="No region/plant values"
-            />
-          </div>
-        </ListFilterPanel>
+              </ListFilterField>
+              <ListFilterField label="Incoterm">
+                <MultiValueField
+                  label="Incoterm"
+                  options={filterIncotermOptions(availableIncoterms)}
+                  selected={selectedIncoterms}
+                  onChange={setSelectedIncoterms}
+                  placeholder="All incoterms"
+                  emptyMessage="Loading incoterms..."
+                  icon={<Anchor className="h-4 w-4" />}
+                />
+              </ListFilterField>
+              <ListFilterField label="Product">
+                <MultiValueField
+                  label="Product"
+                  options={availableProducts}
+                  selected={selectedProducts}
+                  onChange={handleProductsChange}
+                  placeholder="All products"
+                  emptyMessage="Loading products..."
+                  icon={<Package className="h-4 w-4" />}
+                />
+              </ListFilterField>
+              <ListFilterField label="Supplier">
+                <MultiValueField
+                  label="Supplier"
+                  options={availableSuppliers}
+                  selected={selectedSuppliers}
+                  onChange={onSuppliersChange}
+                  placeholder="All suppliers"
+                  emptyMessage="Loading suppliers..."
+                  icon={<Factory className="h-4 w-4" />}
+                />
+              </ListFilterField>
+            </>
+          }
+          activeMore={
+            (sourceTypeFilter !== 'ALL' ? 1 : 0) +
+            (selectedIncoterms.length > 0 ? 1 : 0) +
+            (selectedProducts.length > 0 ? 1 : 0) +
+            (selectedSuppliers.length > 0 ? 1 : 0)
+          }
+          activeAll={
+            (sourceTypeFilter !== 'ALL' ? 1 : 0) +
+            (selectedIncoterms.length > 0 ? 1 : 0) +
+            (selectedProducts.length > 0 ? 1 : 0) +
+            (selectedSuppliers.length > 0 ? 1 : 0) +
+            (mapTruckingStatusToGlobalBucket(statusFilter) !== 'ALL' ? 1 : 0) +
+            (lateIndicatorFilter !== 'ALL' ? 1 : 0)
+          }
+          anyActive={hasActiveTruckingFilters || searchDraft.trim().length > 0}
+          onReset={clearTruckingFilters}
+        />
 
         {ATTENTION_INSIGHTS_SECTION_ENABLED ? (
         <TruckingAttentionInsightsSection
@@ -4696,8 +4683,8 @@ function TruckingPageContent() {
 
         {/* Trucking Operations List */}
         {(!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED || activeTab === 'list') && (
-        <Card>
-          <CardHeader className="space-y-2">
+        <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+          <CardHeader className="space-y-2 border-b border-gray-200 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
               <CardTitle className="text-base flex items-center gap-2 flex-wrap shrink-0">
                 All Trucking
@@ -4872,7 +4859,7 @@ function TruckingPageContent() {
               ) : null}
             </p>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-0">
             {showCreateForm ? (
               <div className="text-center py-8 text-gray-500">
                 Create form is open. Close it to view the trucking list.
@@ -4880,7 +4867,7 @@ function TruckingPageContent() {
             ) : (
               <div className="min-h-[480px]">
                 {/* Desktop compact table */}
-                <div className="hidden lg:block border rounded-lg overflow-hidden">
+                <div className="hidden lg:block overflow-hidden">
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
@@ -4917,7 +4904,7 @@ function TruckingPageContent() {
                   >
                     <table
                       data-trucking-list-table
-                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}
+                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols klip-table--directory`}
                     >
                       <colgroup>
                         {visibleColumns.map((col) => (
@@ -4992,7 +4979,7 @@ function TruckingPageContent() {
                       </thead>
 
                       <tbody
-                        className={`divide-y divide-gray-200 transition-opacity duration-200 ${
+                        className={`divide-y divide-gray-100 transition-opacity duration-200 ${
                           (listFetching || tableScopeLoading) && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
                         }`}
                       >
@@ -5011,7 +4998,7 @@ function TruckingPageContent() {
                           </tr>
                         ) : sortedOperations.map((operation, idx) => {
                           const isEditing = editingId === operation.id
-                          const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                          const stripeClass = 'bg-white'
                           // PO-grain: one React key per operation id.
                           return (
                               <tr key={`${operation.id}|${idx}`} className={stripeClass}>
@@ -5162,7 +5149,7 @@ function TruckingPageContent() {
 
                 {/* Mobile card view */}
                 <div
-                  className={`lg:hidden space-y-4 min-h-[480px] transition-opacity duration-200 ${
+                  className={`lg:hidden space-y-4 min-h-[480px] px-4 py-3 transition-opacity duration-200 ${
                     (listFetching || tableScopeLoading) && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
                   }`}
                 >
@@ -5468,12 +5455,10 @@ function TruckingPageContent() {
                 })}
               </div>
 
-                <ListPager
-                  page={page}
-                  totalPages={totalPages}
-                  onPageChange={handlePageChange}
-                  disabled={listFetching}
-                  summary={`Showing page ${page} of ${totalPages} (${tableHeaderCount.value.toLocaleString('en-US')} total ${tableHeaderCount.noun})`}
+                <MasterTableFooter
+                  countText={listRangeText(tableHeaderCount.value, page, pageSize, tableHeaderCount.noun)}
+                  kinds={[]}
+                  pager={{ page, totalPages, onPageChange: handlePageChange, disabled: listFetching }}
                 />
               </div>
             )}

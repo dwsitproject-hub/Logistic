@@ -5,7 +5,7 @@ import { Search, SlidersHorizontal, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 
 /** The look of a searchable multi-select button in the Contracts filters: 36px, round, blue when something is chosen. Pass it as `buttonClassName`. */
-export function contractFilterButtonClass(active: boolean): string {
+export function listFilterButtonClass(active: boolean): string {
   return `flex h-9 w-full items-center gap-2 rounded-[10px] border px-2.5 text-left text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
     active ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
   }`
@@ -49,7 +49,7 @@ function activeText(count: number): string {
  * button for the rest with a count of the filters that are on, and the icon buttons at the right end. More filters opens a panel under the
  * row, in the page flow, so a dropdown opened inside it is never closed by clicking into it.
  */
-export function ContractsFilterBar({
+export function ListFilterBar({
   search,
   onSearchChange,
   onSearchSubmit,
@@ -146,7 +146,7 @@ export function ContractsFilterBar({
 }
 
 /** A label above a filter field inside More filters: sentence case, small and quiet. */
-export function ContractsFilterField({ label, children }: { label: string; children: ReactNode }) {
+export function ListFilterField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
       <label className="mb-1.5 block text-xs font-medium text-gray-600">{label}</label>
