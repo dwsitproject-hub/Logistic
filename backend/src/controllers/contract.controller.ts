@@ -670,11 +670,13 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
-    if (b2bFlag) {
+    // One contract type, or several as a comma list (the Contracts page's Contract type filter is a multi-select): any of them matches.
+    const b2bFlagValues = parseCommaSeparatedQuery(b2bFlag);
+    if (b2bFlagValues.length > 0) {
       queryText += ` AND (
-        COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '') = $${paramIndex}
+        COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '') = ANY($${paramIndex}::text[])
       )`;
-      queryParams.push(b2bFlag);
+      queryParams.push(b2bFlagValues);
       paramIndex++;
     }
 

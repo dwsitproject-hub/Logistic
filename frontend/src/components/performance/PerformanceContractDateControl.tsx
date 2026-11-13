@@ -73,6 +73,10 @@ export type PerformanceContractDateControlProps<T extends string = string> = {
   labelClassName?: string
   /** Header slot: hide the label and use a short trigger. */
   header?: boolean
+  /** The Contracts field look (36px, rounder, an icon, blue while the period is not the default). Header slot only. */
+  fieldStyle?: boolean
+  /** The period is not the default one (fieldStyle only). */
+  active?: boolean
 }
 
 /**
@@ -93,6 +97,8 @@ export function PerformanceContractDateControl<T extends string>({
   className,
   labelClassName,
   header = false,
+  fieldStyle = false,
+  active = false,
 }: PerformanceContractDateControlProps<T>) {
   const stitch = useStitchFields()
   const [open, setOpen] = useState(false)
@@ -138,7 +144,9 @@ export function PerformanceContractDateControl<T extends string>({
             aria-haspopup="dialog"
             aria-label={dateLabel}
             className={stitchControlClass(
-              header
+              header && fieldStyle
+                ? `flex h-9 w-44 items-center justify-between gap-2 rounded-[10px] border px-2.5 text-left text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${active ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`
+                : header
                 ? 'flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
                 : stretch
                   ? 'flex h-10 w-full items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
@@ -147,8 +155,8 @@ export function PerformanceContractDateControl<T extends string>({
             )}
           >
             <span className="flex min-w-0 items-center gap-2">
-              <CalendarDays className="h-4 w-4 shrink-0 text-gray-500" aria-hidden />
-              <span className="truncate text-gray-900">{summary}</span>
+              <CalendarDays className={`h-4 w-4 shrink-0 ${fieldStyle ? (active ? 'text-blue-600' : 'text-gray-400') : 'text-gray-500'}`} aria-hidden />
+              <span className={`truncate ${fieldStyle && active ? 'text-blue-700' : 'text-gray-900'}`}>{summary}</span>
             </span>
             <ChevronDown
               className={`h-4 w-4 shrink-0 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}

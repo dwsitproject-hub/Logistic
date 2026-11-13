@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Anchor, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, CircleCheck, CircleDot, Clock, Columns3, Factory, Layers, Package, Tag, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
+import { Anchor, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, CircleCheck, CircleDot, Clock, Columns3, Factory, Layers, MapPin, Package, Tag, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
 import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
@@ -2608,44 +2608,58 @@ function ContractsPageContent() {
     searchParams,
   ])
 
-  /** Status and Incoterm: drawn in the filter row from `lg` up and inside More filters below it, so one render function serves both. */
-  const contractStatusSelect = (className: string) => (
-    <FilterSingleSelect
-      value={statusFilter}
-      onChange={(value) => {
-        setStatusFilter(value)
-        setCurrentPage(1)
-      }}
-      options={[
-        { value: 'All Status', label: 'All status' },
-        { value: 'Open', label: 'Open' },
-        { value: 'Close', label: 'Close' },
-      ]}
-      ariaLabel="Contract status filter"
-      className={`${className} min-w-0`}
-      dense
-      icon={<CircleDot className="h-4 w-4" />}
-      active={statusFilter !== 'All Status'}
-    />
+  /*
+   * Status, Incoterm and Contract type are multi-selects, the same field as Product, Group and Supplier. No choice means all. Status keeps its single
+   * value underneath (Open, Close or all; both ticked is all), and Contract type travels as a comma list that the list endpoint matches with ANY.
+   * Drawn in the filter row from `lg` up and inside More filters below it, so one builder serves both.
+   */
+  const contractStatusSelected = statusFilter === 'Open' || statusFilter === 'Close' ? [statusFilter] : []
+  const contractTypeSelected = b2bFlagFilter === 'ALL' ? [] : b2bFlagFilter.split(',')
+  const contractStatusSelect = (wrapperClass: string) => (
+    <div className={wrapperClass}>
+      <SearchableMultiSelect
+        label="Status"
+        hideLabel
+        options={['Open', 'Close']}
+        selected={contractStatusSelected}
+        onChange={(values) => {
+          setStatusFilter(values.length === 1 ? values[0] : 'All Status')
+          setCurrentPage(1)
+        }}
+        placeholder="All status"
+        emptyMessage="No status"
+        icon={<CircleDot className="h-4 w-4" />}
+        fieldStyle
+        className="w-full"
+        buttonClassName={contractFilterButtonClass(contractStatusSelected.length > 0)}
+      />
+    </div>
   )
-  const contractIncotermSelect = (className: string) => (
-    <FilterSingleSelect
-      value={selectedIncoterms[0] ?? 'ALL'}
-      onChange={(value) => {
-        setSelectedIncoterms(value === 'ALL' ? [] : [value])
-        setCurrentPage(1)
-      }}
-      options={[
-        { value: 'ALL', label: 'All incoterms' },
-        ...availableIncoterms.map((inc) => ({ value: inc, label: inc })),
-      ]}
-      ariaLabel="Incoterm filter"
-      className={`${className} min-w-0`}
-      dense
-      icon={<Anchor className="h-4 w-4" />}
-      active={selectedIncoterms.length > 0}
-    />
+  const contractIncotermSelect = (wrapperClass: string) => (
+    <div className={wrapperClass}>
+      <SearchableMultiSelect
+        label="Incoterm"
+        hideLabel
+        options={availableIncoterms}
+        selected={selectedIncoterms}
+        onChange={(values) => {
+          setSelectedIncoterms(values)
+          setCurrentPage(1)
+        }}
+        placeholder="All incoterms"
+        emptyMessage="Loading incoterms..."
+        pinSelectedToTop
+        icon={<Anchor className="h-4 w-4" />}
+        fieldStyle
+        className="w-full"
+        buttonClassName={contractFilterButtonClass(selectedIncoterms.length > 0)}
+      />
+    </div>
   )
+
+  /** Whether the period in the header is not the default year to date, for the blue state of that field. */
+  const contractDateScopeChanged =
+    performancePeriod !== 'YTD' || !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo)
 
   /** "1,240 contracts · 61–80": how many there are and which of them this page shows. */
   const contractsRangeText = (page: number, perPage: number, total: number): string => {
@@ -4492,12 +4506,16 @@ function ContractsPageContent() {
               setCurrentPage(1)
             }}
             resolvePeriodRange={resolvePerformancePeriodDateRange}
+            fieldStyle
+            active={contractDateScopeChanged}
           />
           <SearchableMultiSelect
             label="Region/Plant"
             hideLabel
             portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            icon={<MapPin className="h-4 w-4" />}
+            fieldStyle
+            buttonClassName={contractFilterButtonClass(selectedGroupPlants.length > 0)}
             options={availableGroupPlants}
             selected={selectedGroupPlants}
             onChange={(values) => {
@@ -4548,8 +4566,8 @@ function ContractsPageContent() {
           placeholder="Search by Contract ID, Contract Ext No, PO, Supplier, or Product..."
           wide={
             <>
-              {contractStatusSelect('w-[8.5rem] [&_select]:h-9')}
-              {contractIncotermSelect('w-[8.5rem] [&_select]:h-9')}
+              {contractStatusSelect('w-40 shrink-0')}
+              {contractIncotermSelect('w-40 shrink-0')}
             </>
           }
           narrowOnly={
@@ -4561,18 +4579,21 @@ function ContractsPageContent() {
           more={
             <>
               <ContractsFilterField label="Contract type">
-                <FilterSingleSelect
-                  value={b2bFlagFilter}
-                  onChange={setB2bFlagFilter}
-                  options={[
-                    { value: 'ALL', label: 'All types' },
-                    ...availableB2bFlags.map((flag) => ({ value: flag, label: flag })),
-                  ]}
-                  ariaLabel="Contract type filter"
-                  className="w-full min-w-0"
-                  dense
+                <SearchableMultiSelect
+                  label="Contract type"
+                  hideLabel
+                  options={availableB2bFlags.filter((flag) => !flag.includes(','))}
+                  selected={contractTypeSelected}
+                  onChange={(values) => {
+                    setB2bFlagFilter(values.length > 0 ? values.join(',') : 'ALL')
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All types"
+                  emptyMessage="Loading types..."
                   icon={<Tag className="h-4 w-4" />}
-                  active={b2bFlagFilter !== 'ALL'}
+                  fieldStyle
+                  className="w-full"
+                  buttonClassName={contractFilterButtonClass(contractTypeSelected.length > 0)}
                 />
               </ContractsFilterField>
               <ContractsFilterField label="Product">
@@ -4666,7 +4687,7 @@ function ContractsPageContent() {
                 onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
               >
                 {csvCargoUploading ? (
-                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
                 ) : (
                   <Upload className="h-[1.125rem] w-[1.125rem]" />
                 )}

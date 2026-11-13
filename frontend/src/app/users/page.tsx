@@ -354,7 +354,7 @@ export default function UsersPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={iconButtonClass('neutral')}
+                  className={iconButtonClass('insight')}
                   title="User Activity Log"
                   aria-label="User Activity Log"
                   onClick={() => router.push('/users/activity-log')}
@@ -364,7 +364,7 @@ export default function UsersPage() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={iconButtonClass('neutral')}
+                  className={iconButtonClass('access')}
                   title="Manage Roles"
                   aria-label="Manage Roles"
                   onClick={() => router.push('/users/roles')}

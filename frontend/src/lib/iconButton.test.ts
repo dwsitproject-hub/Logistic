@@ -18,4 +18,8 @@ describe('iconButtonClass', () => {
     expect(new Set(colours).size).toBe(TONES.length)
     expect(ICON_BUTTON_TONE_CLASS.sync).not.toBe(ICON_BUTTON_TONE_CLASS.add)
   })
+
+  it('leaves blue to the Edit pencil of the Actions column', () => {
+    for (const tone of TONES) expect(ICON_BUTTON_TONE_CLASS[tone]).not.toMatch(/blue-/)
+  })
 })
