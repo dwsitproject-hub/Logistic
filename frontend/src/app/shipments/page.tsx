@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2, Ban, MapPin } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2, Ban, MapPin, FileDown, Columns3 } from 'lucide-react'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -120,6 +120,7 @@ import { ListPager } from '@/components/performance/ListPager'
 import { MasterTableFooter } from '@/components/master/MasterTableFooter'
 import { HeaderScopeField } from '@/components/shared/HeaderScopeField'
 import { listRangeText } from '@/lib/listRangeText'
+import { iconButtonClass } from '@/lib/iconButton'
 import { compareByStack, sortEntryFor, sortPriority, type SortEntry, type SortValue } from '@/lib/sortStack'
 import { nextShipmentsSortStack, shipmentsSortStackParam } from '@/lib/shipmentsSortStack'
 import {
@@ -6523,96 +6524,6 @@ function ShipmentsPageContent() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-end gap-4">
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <VesselIdleInsightChip
-              count={vesselIdleCount}
-              loading={vesselIdleLoading}
-              error={vesselIdleError}
-              onClick={handleVesselIdleClick}
-            />
-            {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
-              <Button
-                size="sm"
-                variant="outline"
-                title="Download Template"
-                aria-label="Download Template"
-                onClick={downloadTemplate}
-                className="border-green-600 text-green-700 hover:bg-green-50"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Template
-              </Button>
-            ) : null}
-            {canExportShipments && (
-              <Button
-                size="sm"
-                variant="outline"
-                title="Export Data"
-                aria-label="Export Data"
-                onClick={exportFilteredData}
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Export
-              </Button>
-            )}
-            {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
-            <>
-              <input
-                type="file"
-                accept=".csv"
-                onChange={handleBulkUpload}
-                className="hidden"
-                disabled={uploading}
-                id="bulk-upload-input"
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                title="Upload CSV"
-                aria-label="Upload CSV"
-                onClick={() => document.getElementById('bulk-upload-input')?.click()}
-                disabled={uploading}
-              >
-                {uploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    CSV
-                  </>
-                )}
-              </Button>
-            </>
-            ) : null}
-            <Button
-              size="sm"
-              onClick={() => {
-                // Allow opening the modal immediately; permissions load async and may fail open for admin workflows.
-                if (perms.loaded && !canOpenAddShipmentModal) {
-                  alert(
-                    'You need Create or Edit permission on Shipments (data.shipments) to add a shipment. Ask an admin to update your role.'
-                  )
-                  return
-                }
-                setPlotShipmentFromTable(null)
-                setAddShipmentPrefilledPOs(null)
-                setAddShipmentPrefilledSto(null)
-                setAddShipmentPrefilledContractNumbers(null)
-                setAddShipmentPrePlannedGroupId(null)
-                setShowAddShipment(true)
-              }}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Add New Shipment
-            </Button>
-          </div>
-        </div>
-
         <HeaderFilterSlot>
           <PerformanceContractDateControl
             header
@@ -6699,6 +6610,14 @@ function ShipmentsPageContent() {
           }}
           hasActiveFilters={hasActiveShipmentFilters}
           onClearFilters={clearShipmentFilters}
+          actions={
+            <VesselIdleInsightChip
+              count={vesselIdleCount}
+              loading={vesselIdleLoading}
+              error={vesselIdleError}
+              onClick={handleVesselIdleClick}
+            />
+          }
         />
 
         {section1LoadError ? (
@@ -7394,10 +7313,66 @@ function ShipmentsPageContent() {
                     setPage(1)
                   }}
                 />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                                {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
+                  <Button variant="ghost" size="icon" className={iconButtonClass('download')}
+                    title="Download Template"
+                    aria-label="Download Template"
+                    onClick={downloadTemplate}
+                  >
+                    <FileDown className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+                  </Button>
+                ) : null}
+                {canExportShipments && (
+                  <Button variant="ghost" size="icon" className={iconButtonClass('download')}
+                    title="Export Data"
+                    aria-label="Export Data"
+                    onClick={exportFilteredData}
+                  >
+                    <Download className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+                  </Button>
+                )}
+                {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
+                <>
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleBulkUpload}
+                    className="hidden"
+                    disabled={uploading}
+                    id="bulk-upload-input"
+                  />
+                  <Button variant="ghost" size="icon" className={iconButtonClass('upload')}
+                    title="Upload CSV"
+                    aria-label="Upload CSV"
+                    onClick={() => document.getElementById('bulk-upload-input')?.click()}
+                    disabled={uploading}
+                  >
+                    {uploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Upload className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                  </Button>
+                </>
+                ) : null}
+                <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="Add New Shipment" aria-label="Add New Shipment"
+                  onClick={() => {
+                    // Allow opening the modal immediately; permissions load async and may fail open for admin workflows.
+                    if (perms.loaded && !canOpenAddShipmentModal) {
+                      alert(
+                        'You need Create or Edit permission on Shipments (data.shipments) to add a shipment. Ask an admin to update your role.'
+                      )
+                      return
+                    }
+                    setPlotShipmentFromTable(null)
+                    setAddShipmentPrefilledPOs(null)
+                    setAddShipmentPrefilledSto(null)
+                    setAddShipmentPrefilledContractNumbers(null)
+                    setAddShipmentPrePlannedGroupId(null)
+                    setShowAddShipment(true)
+                  }}
+                >
+                  <Plus className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+                </Button>
+
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
+                <Button variant="ghost" size="icon" className={iconButtonClass('download')}
                   title="Download Data"
                   aria-label="Download Data"
                   onClick={() => void downloadShipmentViewTable()}
@@ -7409,12 +7384,7 @@ function ShipmentsPageContent() {
                     visibleColumns.length === 0
                   }
                 >
-                  {downloadingTable ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4 mr-2" />
-                  )}
-                  Data
+                  {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Download className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </Button>
                 <input
                   ref={groupingUploadInputRef}
@@ -7427,21 +7397,13 @@ function ShipmentsPageContent() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                      <Button variant="ghost" size="icon" className={`${iconButtonClass('download')} disabled:pointer-events-none`}
                         title={groupingTemplateEnabled ? 'Download Unplanned' : undefined}
                         aria-label="Download Unplanned"
                         onClick={() => void downloadGroupingTemplate()}
                         disabled={!groupingTemplateEnabled || groupingTemplateDownloading}
                       >
-                        {groupingTemplateDownloading ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Download className="h-4 w-4 mr-2" />
-                        )}
-                        Unplan
+                        {groupingTemplateDownloading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <FileDown className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                       </Button>
                     </span>
                   </TooltipTrigger>
@@ -7452,21 +7414,13 @@ function ShipmentsPageContent() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-red-600 text-red-700 hover:bg-red-50 hover:text-red-700 disabled:opacity-50 disabled:pointer-events-none"
+                      <Button variant="ghost" size="icon" className={`${iconButtonClass('upload')} disabled:pointer-events-none`}
                         title={groupingTemplateEnabled ? 'Upload Planning' : undefined}
                         aria-label="Upload Planning"
                         onClick={() => groupingUploadInputRef.current?.click()}
                         disabled={!groupingTemplateEnabled || groupingTemplateUploading}
                       >
-                        {groupingTemplateUploading ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Upload className="h-4 w-4 mr-2" />
-                        )}
-                        Plan
+                        {groupingTemplateUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Upload className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                       </Button>
                     </span>
                   </TooltipTrigger>
@@ -7475,16 +7429,13 @@ function ShipmentsPageContent() {
                   ) : null}
                 </Tooltip>
                 <div className="relative">
-                  <Button
-                    variant="outline"
-                    size="sm"
+                  <Button variant="ghost" size="icon" className={iconButtonClass('neutral')}
                     title="Columns"
                     aria-label="Columns"
                     onClick={() => setShowColumnsMenu(v => !v)}
                     disabled={listFetching || section3TableLoading}
                   >
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
+                    <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">

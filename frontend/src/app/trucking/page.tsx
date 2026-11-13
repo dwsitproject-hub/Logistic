@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Filter, X, Truck, Save, Loader2, Download, Eye, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical, MapPin, Anchor, Package, Factory, CircleDot, Timer, Database } from 'lucide-react'
+import { Filter, X, Truck, Save, Loader2, Download, Eye, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical, MapPin, Anchor, Package, Factory, CircleDot, Timer, Database, Scale, CalendarClock, FileDown, Columns3 } from 'lucide-react'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
@@ -69,6 +69,7 @@ import { HeaderScopeField } from '@/components/shared/HeaderScopeField'
 import { ListFilterBar, ListFilterField } from '@/components/shared/ListFilterBar'
 import { MultiValueField, SingleValueField } from '@/components/shared/ListFilterFields'
 import { listRangeText } from '@/lib/listRangeText'
+import { iconButtonClass } from '@/lib/iconButton'
 import { TruckingDocumentsButton } from '@/components/trucking/TruckingDocumentsButton'
 import { refreshDocumentPresence } from '@/lib/documentPresence'
 import {
@@ -3885,111 +3886,6 @@ function TruckingPageContent() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-end gap-4">
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <input
-              type="file"
-              accept=".csv,.xlsx,.xls"
-              className="hidden"
-              id="bulk-create-trucking-input"
-              onChange={handleBulkCreateFileChange}
-              disabled={bulkCreateUploading || sapImportActive}
-            />
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              className="hidden"
-              id="wb-rekap-upload-input"
-              onChange={handleWbRekapFileChange}
-              disabled={wbUploading || sapImportActive}
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
-              aria-label="Upload WB"
-              onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
-              disabled={wbUploading || sapImportActive}
-              title={
-                sapImportActive
-                  ? sapImportUploadBlockedTitle
-                  : 'Supported files: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
-              }
-            >
-              {wbUploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  WB
-                </>
-              )}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-red-600 text-red-700 hover:bg-red-50 disabled:border-red-200 disabled:bg-red-50/40 disabled:text-red-300 disabled:opacity-100 disabled:pointer-events-none"
-              aria-label="Upload Daily Planning"
-              onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-              disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
-              title={
-                sapImportActive
-                  ? sapImportUploadBlockedTitle
-                  : dailyPlanningUploadEligible
-                    ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
-                    : 'Upload Daily Planning tersedia pada status Unplanned atau Planned'
-              }
-            >
-              {bulkCreateUploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  Daily Planning
-                </>
-              )}
-            </Button>
-            {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
-              <>
-                {!isUnplannedPlanningTemplateMode(statusFilter) ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    title="Upload CSV"
-                    aria-label="Upload CSV"
-                    onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-                    disabled={bulkCreateUploading}
-                  >
-                    {bulkCreateUploading ? (
-                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
-                    ) : (
-                      <><Upload className="h-4 w-4 mr-2" />CSV</>
-                    )}
-                  </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setPlotTruckingFromTable(null)
-                    setEditTruckingFromTable(null)
-                    setShowCreateForm(true)
-                  }}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Create New
-                </Button>
-              </>
-            ) : null}
-          </div>
-        </div>
-
         {/* Section 1: Global Filters */}
         <HeaderFilterSlot>
           <PerformanceContractDateControl
@@ -4702,10 +4598,73 @@ function TruckingPageContent() {
                     setPage(1)
                   }}
                 />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                                <input
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  className="hidden"
+                  id="bulk-create-trucking-input"
+                  onChange={handleBulkCreateFileChange}
+                  disabled={bulkCreateUploading || sapImportActive}
+                />
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  id="wb-rekap-upload-input"
+                  onChange={handleWbRekapFileChange}
+                  disabled={wbUploading || sapImportActive}
+                />
+                <Button variant="ghost" size="icon" className={iconButtonClass('orange')}
+                  aria-label="Upload WB"
+                  onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
+                  disabled={wbUploading || sapImportActive}
+                  title={
+                    sapImportActive
+                      ? sapImportUploadBlockedTitle
+                      : 'Supported files: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
+                  }
+                >
+                  {wbUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Scale className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                </Button>
+                <Button variant="ghost" size="icon" className={iconButtonClass('pink')}
+                  aria-label="Upload Daily Planning"
+                  onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                  disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
+                  title={
+                    sapImportActive
+                      ? sapImportUploadBlockedTitle
+                      : dailyPlanningUploadEligible
+                        ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
+                        : 'Upload Daily Planning tersedia pada status Unplanned atau Planned'
+                  }
+                >
+                  {bulkCreateUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <CalendarClock className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                </Button>
+                {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
+                  <>
+                    {!isUnplannedPlanningTemplateMode(statusFilter) ? (
+                      <Button variant="ghost" size="icon" className={iconButtonClass('upload')}
+                        title="Upload CSV"
+                        aria-label="Upload CSV"
+                        onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                        disabled={bulkCreateUploading}
+                      >
+                        {bulkCreateUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Upload className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                      </Button>
+                    ) : null}
+                    <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="Create New Trucking" aria-label="Create New Trucking"
+                      onClick={() => {
+                        setPlotTruckingFromTable(null)
+                        setEditTruckingFromTable(null)
+                        setShowCreateForm(true)
+                      }}
+                    >
+                      <Plus className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+                    </Button>
+                  </>
+                ) : null}
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
+                <Button variant="ghost" size="icon" className={iconButtonClass('download')}
                   title="Download Data"
                   aria-label="Download Data"
                   onClick={() => void downloadTruckingViewTable()}
@@ -4717,20 +4676,12 @@ function TruckingPageContent() {
                     visibleColumns.length === 0
                   }
                 >
-                  {downloadingTable ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4 mr-2" />
-                  )}
-                  Data
+                  {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Download className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </Button>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                      <Button variant="ghost" size="icon" className={`${iconButtonClass('download')} disabled:pointer-events-none`}
                         title={isListActualsTemplateDownloadEnabled ? 'Download Template' : undefined}
                         aria-label="Download Template"
                         onClick={downloadFilteredActualsTemplate}
@@ -4738,12 +4689,7 @@ function TruckingPageContent() {
                           !isListActualsTemplateDownloadEnabled || listFetching || templateDownloading
                         }
                       >
-                        {templateDownloading ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Download className="h-4 w-4 mr-2" />
-                        )}
-                        Template
+                        {templateDownloading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <FileDown className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                       </Button>
                     </span>
                   </TooltipTrigger>
@@ -4752,16 +4698,13 @@ function TruckingPageContent() {
                   ) : null}
                 </Tooltip>
                 <div className="relative">
-                  <Button
-                    variant="outline"
-                    size="sm"
+                  <Button variant="ghost" size="icon" className={iconButtonClass('neutral')}
                     title="Columns"
                     aria-label="Columns"
                     onClick={() => setShowColumnsMenu(v => !v)}
                     disabled={listFetching}
                   >
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
+                    <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
