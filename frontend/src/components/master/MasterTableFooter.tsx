@@ -2,23 +2,32 @@
 
 import { Button } from '@/components/ui/button'
 import { pagerWindow } from '@/components/performance/ListPager'
-import { MASTER_CODE_TONE, type MasterCodeKind } from '@/components/shared/MasterCodeBadge'
+import type { MasterCodeKind } from '@/components/shared/MasterCodeBadge'
 
 const LEGEND_LABEL: Record<MasterCodeKind, string> = {
-  klip: 'KLIP code',
-  dhm: 'DHM code',
-  sap: 'SAP code',
-  pair: 'Tug / barge pair',
+  klip: 'KLIP',
+  dhm: 'DHM',
+  sap: 'SAP',
+  pair: 'Pair',
 }
 
-/** What the coloured code chips in the table mean, drawn as the same chips: KLIP blue, DHM red, SAP gray (and the tug/barge pair, green, where it is shown). */
+/** The little square in front of each word: a tint with a stronger edge of the same colour as the code chips (KLIP blue, DHM red, SAP gray, tug/barge pair green). */
+const LEGEND_SWATCH: Record<MasterCodeKind, string> = {
+  klip: 'border-blue-400 bg-blue-100',
+  dhm: 'border-red-400 bg-red-100',
+  sap: 'border-slate-400 bg-slate-200',
+  pair: 'border-green-500 bg-green-100',
+}
+
+/** What the coloured code chips in the table mean: a small coloured square and one word each (KLIP, DHM, SAP; Pair where the tug/barge pair is shown). */
 export function MasterCodeLegend({ kinds }: { kinds: readonly MasterCodeKind[] }) {
   if (kinds.length === 0) return null
   return (
-    <span className="inline-flex flex-wrap items-center gap-1.5" role="group" aria-label="Code colours">
+    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1" role="group" aria-label="Code colours">
       {kinds.map((kind) => (
-        <span key={kind} className={`inline-block whitespace-nowrap rounded-md border px-2 py-0.5 text-xs leading-4 ${MASTER_CODE_TONE[kind]}`}>
-          {LEGEND_LABEL[kind]}
+        <span key={kind} className="inline-flex items-center gap-1.5">
+          <span className={`inline-block h-3 w-3 shrink-0 rounded-[3px] border ${LEGEND_SWATCH[kind]}`} aria-hidden />
+          <span>{LEGEND_LABEL[kind]}</span>
         </span>
       ))}
     </span>
