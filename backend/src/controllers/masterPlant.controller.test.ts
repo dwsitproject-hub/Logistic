@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../database/connection', () => ({
   query: vi.fn(),
 }));
-vi.mock('../dhm', () => ({ pushMasterPlantToDhm: vi.fn() }));
+vi.mock('../dhm', () => ({ pushMasterPlantToDhm: vi.fn(), attachDhmPushState: vi.fn(async (_kind: string, rows: unknown[]) => rows) }));
 
 import { query } from '../database/connection';
 import { listMasterPlants } from './masterPlant.controller';
