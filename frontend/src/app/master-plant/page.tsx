@@ -1,26 +1,22 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  LIST_FILTER_FIELD_LABEL_CLASS,
-  ListFilterPanel,
-  LIST_FILTER_FIELDS_ROW_CLASS,
-} from '@/components/shared/ListFilterPanel'
 import { StitchFields } from '@/components/shared/stitchField'
-import { StitchSearchIcon } from '@/components/shared/stitchIcons'
-import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
-import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
-import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import api from '@/lib/api'
-import { Plus, Save } from 'lucide-react'
+import { Building2, Cloud, CloudOff, Factory, FileText, Pencil, Plus, Save } from 'lucide-react'
+import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
-import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
+import { ListPager } from '@/components/performance/ListPager'
+import { MasterKpis } from '@/components/master/MasterKpis'
+import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
+import { masterCountText, masterDhmChip, sortCompanyOptions, type MasterDhmFilter } from '@/lib/masterDirectory'
 import * as XLSX from 'xlsx'
 import {
   Dialog,
@@ -57,27 +53,30 @@ function plantCell(value: string | null | undefined): string {
   return value && value.trim() ? value : '-'
 }
 
-const PLANT_COLUMNS: MasterListTableColumn<MasterPlant>[] = [
-  { id: 'code_klip', label: 'Plant Code (KLIP)', getText: (row) => plantCell(row.code_klip) },
-  { id: 'code_dhm', label: 'Plant Code (DHM)', getText: (row) => plantCell(row.code_dhm) },
-  { id: 'plant_code', label: 'Plant Code (SAP)', getText: (row) => plantCell(row.plant_code) },
-  { id: 'plant_name', label: 'Plant Name', getText: (row) => plantCell(row.plant_name) },
-  { id: 'plant_type', label: 'Plant Type', getText: (row) => plantCell(row.plant_type) },
-  { id: 'company', label: 'Company', getText: (row) => plantCell(row.linked_company_name) },
-  { id: 'site', label: 'Site', getText: (row) => plantCell(row.site) },
-  dhmStatusListColumn<MasterPlant>(),
-]
+interface PlantSummary {
+  total: number
+  synced: number
+  notSynced: number
+  failed: number
+  usedInKlip: number
+  /** The internal companies that have plants, with how many. */
+  companies: Array<{ id: string; name: string; plants: number }>
+}
+
+const PAGE_SIZE = 20
+const ALL_COMPANIES = '__all__'
 
 export default function MasterPlantPage() {
   const [items, setItems] = useState<MasterPlant[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const PAGE_SIZE = 20
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
-  const [sortKey, setSortKey] = useState('plant_name')
+  const [dhm, setDhm] = useState<MasterDhmFilter>('all')
+  const [company, setCompany] = useState('')
+  const [summary, setSummary] = useState<PlantSummary | null>(null)
+  const [sortKey, setSortKey] = useState('plant')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const plantColumns = useListColumnLayout('master-plant.visibleColumns.v4', PLANT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [isAdmin, setIsAdmin] = useState(false)
   const [editing, setEditing] = useState<MasterPlant | null>(null)
@@ -93,13 +92,15 @@ export default function MasterPlantPage() {
     errors: Array<{ row: number; plant_code: string; reason: string }>
   } | null>(null)
 
-  const fetchData = useCallback(async (pageNum: number, searchQuery: string) => {
+  const fetchData = useCallback(async (pageNum: number, searchQuery: string, dhmFilter: MasterDhmFilter, companyId: string) => {
     try {
       setLoading(true)
       const params = new URLSearchParams()
       params.set('page', String(pageNum))
       params.set('limit', String(PAGE_SIZE))
       if (searchQuery.length >= 2) params.set('search', searchQuery)
+      if (dhmFilter !== 'all') params.set('dhm', dhmFilter)
+      if (companyId) params.set('company', companyId)
       const res = await api.get('/master-plants', { params })
       setItems(res.data?.data?.items || [])
       setTotal(res.data?.data?.pagination?.total ?? 0)
@@ -109,22 +110,31 @@ export default function MasterPlantPage() {
     } finally {
       setLoading(false)
     }
-  }, [PAGE_SIZE])
+  }, [])
 
-  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total, PAGE_SIZE])
-
-  const skipSearchPageReset = useRef(true)
-  useEffect(() => {
-    if (skipSearchPageReset.current) {
-      skipSearchPageReset.current = false
-      return
+  const fetchSummary = useCallback(async () => {
+    try {
+      const res = await api.get('/master-plants/summary')
+      setSummary(res.data?.data ?? null)
+    } catch (err) {
+      // the cards are informational: the list still works without them
+      console.error('Failed to load the plant summary', err)
     }
-    setPage(1)
-  }, [debouncedSearch])
+  }, [])
+
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total])
 
   useEffect(() => {
-    void fetchData(page, debouncedSearch)
-  }, [page, debouncedSearch, fetchData])
+    void fetchData(page, debouncedSearch, dhm, company)
+  }, [page, debouncedSearch, dhm, company, fetchData])
+
+  useEffect(() => {
+    void fetchSummary()
+  }, [fetchSummary])
+
+  const refresh = async () => {
+    await Promise.all([fetchData(page, debouncedSearch, dhm, company), fetchSummary()])
+  }
 
   useEffect(() => {
     try {
@@ -147,10 +157,6 @@ export default function MasterPlantPage() {
     })
     return () => { cancelled = true }
   }, [isFormOpen])
-
-  const handlePageChange = (newPage: number) => {
-    if (newPage >= 1 && newPage <= totalPages) setPage(newPage)
-  }
 
   const emptyForm = (): Partial<MasterPlant> => ({
     company_code: '',
@@ -218,7 +224,7 @@ export default function MasterPlantPage() {
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
-      await fetchData(page, debouncedSearch)
+      await refresh()
     } catch (err: any) {
       console.error('Save master plant error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to save master plant'
@@ -324,7 +330,7 @@ export default function MasterPlantPage() {
         errors: allErrors,
       })
 
-      await fetchData(page, debouncedSearch)
+      await refresh()
     } catch (err: any) {
       console.error('Upload master plant file error', err)
       const msg =
@@ -338,138 +344,159 @@ export default function MasterPlantPage() {
     }
   }
 
+  const companyOptions = useMemo(() => sortCompanyOptions(summary?.companies ?? []), [summary])
+  const filtersOn = search.trim() !== '' || company !== '' || dhm !== 'all'
+
+  const sortedRows = useMemo(() => {
+    const text = (row: MasterPlant): string => {
+      if (sortKey === 'dhm') return masterDhmChip(row).label
+      if (sortKey === 'company') return row.linked_company_name || ''
+      if (sortKey === 'site') return row.site || ''
+      return row.plant_name || row.plant_code || ''
+    }
+    return [...items].sort((a, b) => {
+      const cmp = text(a).localeCompare(text(b), undefined, { numeric: true })
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+  }, [items, sortKey, sortDir])
+
+  const columns: MasterTableColumn<MasterPlant>[] = [
+    {
+      id: 'plant',
+      label: 'Plant',
+      sortable: true,
+      render: (row) => <MasterIdentityCell name={row.plant_name || row.plant_code} subtitle={[row.plant_type, row.city].filter(Boolean).join(' · ') || 'No type yet'} />,
+    },
+    {
+      id: 'codes',
+      label: 'Codes',
+      className: 'whitespace-nowrap',
+      render: (row) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MasterCodeBadge kind="klip" value={row.code_klip || ''} fit />
+          <MasterCodeBadge kind="dhm" value={row.code_dhm || ''} fit />
+          <MasterCodeBadge kind="sap" value={row.plant_code || ''} fit />
+        </div>
+      ),
+    },
+    { id: 'company', label: 'Company', sortable: true, render: (row) => <span className="block max-w-[18rem] truncate text-sm text-gray-800" title={row.linked_company_name || undefined}>{plantCell(row.linked_company_name)}</span> },
+    { id: 'site', label: 'Site', sortable: true, render: (row) => <span className="block max-w-[14rem] truncate text-sm text-gray-800" title={row.site || undefined}>{plantCell(row.site)}</span> },
+    { id: 'dhm', label: 'DHM', sortable: true, className: 'whitespace-nowrap', render: (row) => <MasterDhmChip row={row} /> },
+  ]
+
+  const kpis = [
+    { id: 'total', icon: <Factory className="h-4 w-4" />, label: 'Total plants', value: summary?.total ?? null, tone: 'bg-blue-50 text-blue-600', hint: 'all master plants' },
+    { id: 'synced', icon: <Cloud className="h-4 w-4" />, label: 'Synced to DHM', value: summary?.synced ?? null, tone: 'bg-emerald-50 text-emerald-600', hint: 'DHM has them' },
+    {
+      id: 'not-synced',
+      icon: <CloudOff className="h-4 w-4" />,
+      label: 'Not synced',
+      value: summary?.notSynced ?? null,
+      tone: 'bg-amber-50 text-amber-600',
+      hint: summary && summary.failed > 0 ? `${summary.failed.toLocaleString('en-US')} more failed to deliver` : 'not in DHM yet',
+    },
+    { id: 'used', icon: <FileText className="h-4 w-4" />, label: 'Used in KLIP', value: summary?.usedInKlip ?? null, tone: 'bg-violet-50 text-violet-600', hint: 'with a contract placed on them' },
+  ]
+
   return (
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <p className="text-gray-600">Maintain internal companies and reconcile them with DHM.</p>
+        <p className="text-sm text-gray-500">The plants KLIP uses: which company and site they belong to, and whether DHM has them.</p>
 
-        <ListFilterPanel
-          onReset={() => setSearch('')}
-          showReset={search.trim().length > 0}
-          chips={
-            debouncedSearch
-              ? [{ id: 'search', label: `Search: ${debouncedSearch}`, onRemove: () => setSearch('') }]
-              : []
-          }
-        >
-          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-            <div className="min-w-[12rem] flex-[1.4]">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
-              <div className="relative">
-                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input
-                  placeholder="Company, Plant Code, Plant Name, City, Type, or Group"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
-                />
-              </div>
-            </div>
-            {isAdmin ? (
-              <div className="flex shrink-0 items-end gap-2">
-                <Button size="sm" className="shrink-0" onClick={openNew}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Company
-                </Button>
-                <MasterDhmSyncButton master="plant" onDone={() => void fetchData(page, debouncedSearch)} />
-              </div>
-            ) : null}
+        <MasterKpis items={kpis} />
+
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <MasterFilterBar
+            search={search}
+            onSearch={(value) => {
+              setSearch(value)
+              setPage(1)
+            }}
+            placeholder="Search plant, code, company, site or city"
+            ariaLabel="Search plants"
+            dhm={dhm}
+            onDhm={(value) => {
+              setDhm(value)
+              setPage(1)
+            }}
+            dhmCounts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
+            extraActive={company !== ''}
+            onClear={() => {
+              setSearch('')
+              setDhm('all')
+              setCompany('')
+              setPage(1)
+            }}
+            actions={
+              isAdmin ? (
+                <>
+                  <MasterDhmSyncButton master="plant" onDone={() => void refresh()} iconOnly />
+                  <Button size="icon" className="h-9 w-9 shrink-0" title="New plant" aria-label="New plant" onClick={openNew}>
+                    <Plus className="h-4 w-4" aria-hidden />
+                  </Button>
+                </>
+              ) : null
+            }
+          >
+            <Select
+              value={company || ALL_COMPANIES}
+              onValueChange={(value) => {
+                setCompany(value === ALL_COMPANIES ? '' : value)
+                setPage(1)
+              }}
+            >
+              <SelectTrigger className="h-9 w-[250px] gap-2 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left" aria-label="Filter by company">
+                <Building2 className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_COMPANIES}>All companies{summary ? ` (${companyOptions.length.toLocaleString('en-US')})` : ''}</SelectItem>
+                {companyOptions.map((option) => (
+                  <SelectItem key={option.id} value={option.id}>
+                    {option.name} ({option.plants.toLocaleString('en-US')})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </MasterFilterBar>
+
+          <MasterListTable
+            rows={sortedRows}
+            columns={columns}
+            getRowId={(row) => row.id}
+            loading={loading}
+            emptyLabel={filtersOn ? 'No plants match these filters' : 'No plants yet'}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={(id) => {
+              setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
+              setSortKey(id)
+            }}
+            onRowClick={openEdit}
+            renderActions={(row) => (
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
+                title={isAdmin ? 'Edit plant' : 'View plant'}
+                aria-label={`${isAdmin ? 'Edit' : 'View'} ${row.plant_name || row.plant_code}`}
+                onClick={() => openEdit(row)}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+            )}
+          />
+
+          <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
+            {masterCountText(items.length, total, summary?.total ?? total, 'plants')} · click a row to {isAdmin ? 'edit' : 'view'} it
           </div>
-        </ListFilterPanel>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                  <span>All Plant</span>
-                </CardTitle>
-                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
-                  <span className="whitespace-nowrap tabular-nums text-gray-700">
-                    <span className="font-semibold">{total.toLocaleString('en-US')}</span> plants
-                  </span>
-                  <span className="text-gray-400" aria-hidden>·</span>
-                  <span className="whitespace-nowrap tabular-nums">
-                    Page {page}/{totalPages} · {items.length} rows
-                  </span>
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <ListPageColumnsMenu
-                  columns={plantColumns.menuColumns}
-                  visibleIds={plantColumns.visibleIds}
-                  disabled={loading}
-                  onToggle={plantColumns.toggle}
-                  onSelectAll={plantColumns.selectAll}
-                  onUnselectAll={plantColumns.unselectAll}
-                  onReset={plantColumns.reset}
-                  onReorder={plantColumns.reorder}
-                />
-              {totalPages > 1 ? (
-                <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(page - 1)} disabled={page <= 1}>
-                    Previous
-                  </Button>
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum: number
-                    if (totalPages <= 5) pageNum = i + 1
-                    else if (page <= 3) pageNum = i + 1
-                    else if (page >= totalPages - 2) pageNum = totalPages - 4 + i
-                    else pageNum = page - 2 + i
-                    return (
-                      <Button
-                        key={pageNum}
-                        variant={page === pageNum ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => handlePageChange(pageNum)}
-                        className="min-w-[40px]"
-                      >
-                        {pageNum}
-                      </Button>
-                    )
-                  })}
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(page + 1)} disabled={page >= totalPages}>
-                    Next
-                  </Button>
-                </div>
-              ) : null}
-              </div>
+          {totalPages > 1 ? (
+            <div className="px-4 pb-4">
+              <ListPager page={page} totalPages={totalPages} onPageChange={setPage} disabled={loading} summary={`Page ${page}/${totalPages}`} />
             </div>
-          </CardHeader>
-          <CardContent>
-            <MasterListCompactTable
-              tightActions
-              fitContent
-              onRowClick={openEdit}
-              rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
-              rows={[...items].sort((a, b) => {
-                const col = PLANT_COLUMNS.find((item) => item.id === sortKey)
-                const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })
-                return sortDir === 'asc' ? cmp : -cmp
-              })}
-              columns={PLANT_COLUMNS.filter((col) => plantColumns.orderedVisibleIds.includes(col.id)).sort(
-                (a, b) => plantColumns.orderedVisibleIds.indexOf(a.id) - plantColumns.orderedVisibleIds.indexOf(b.id),
-              )}
-              getRowId={(row) => row.id}
-              sortKey={sortKey}
-              sortDir={sortDir}
-              dragColId={plantColumns.dragColId}
-              loading={loading}
-              emptyLabel="No plants found"
-              onSort={(id) => {
-                setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
-                setSortKey(id)
-              }}
-              onDragStart={plantColumns.setDragColId}
-              onDragEnd={() => plantColumns.setDragColId(null)}
-              onDrop={(id) => {
-                if (plantColumns.dragColId) plantColumns.reorder(plantColumns.dragColId, id)
-                plantColumns.setDragColId(null)
-              }}
-            />
-          </CardContent>
-        </Card>
+          ) : null}
+        </div>
       </div>
 
       {/* Upload result dialog */}

@@ -1,29 +1,26 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  LIST_FILTER_FIELD_LABEL_CLASS,
-  ListFilterPanel,
-  LIST_FILTER_FIELDS_ROW_CLASS,
-} from '@/components/shared/ListFilterPanel'
 import { StitchFields } from '@/components/shared/stitchField'
-import { StitchSearchIcon } from '@/components/shared/stitchIcons'
-import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
-import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
-import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Plus, Save } from 'lucide-react'
+import { Anchor, Building2, Cloud, CloudOff, Pencil, Plus, Save, Ship } from 'lucide-react'
+import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { MultiValueCell } from '@/components/shared/MultiValueCell'
-import { multiValuesOf, multiValueText } from '@/lib/multiValueCell'
-import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
+import { ListPager } from '@/components/performance/ListPager'
+import { MasterKpis } from '@/components/master/MasterKpis'
+import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
+import { masterCountText, masterDhmChip, sortCompanyOptions, type MasterDhmFilter } from '@/lib/masterDirectory'
+import { multiValuesOf, multiValueText } from '@/lib/multiValueCell'
 import {
   Dialog,
   DialogContent,
@@ -69,27 +66,30 @@ function portCell(value: string | number | null | undefined): string {
   return String(value)
 }
 
-const PORT_COLUMNS: MasterListTableColumn<MasterLoadingPort>[] = [
-  { id: 'code_klip', label: 'Port Code (KLIP)', getText: (row) => portCell(row.code_klip) },
-  { id: 'code_dhm', label: 'Port Code (DHM)', getText: (row) => portCell(row.code_dhm) },
-  { id: 'port', label: 'Port', getText: (row) => portCell(row.port) },
-  {
-    id: 'vessel_port_sap',
-    label: 'VESSEL PORT (SAP)',
-    getText: (row) => portCell(multiValueText(multiValuesOf(row.vessel_port_sap))),
-    render: (row) => <MultiValueCell values={multiValuesOf(row.vessel_port_sap)} rowTitle={row.port} columnLabel="Vessel Port (SAP)" plural="SAP names" />,
-  },
-  dhmStatusListColumn<MasterLoadingPort>(),
-]
+interface PortSummary {
+  total: number
+  synced: number
+  notSynced: number
+  failed: number
+  usedInKlip: number
+  /** The Sites that have ports, with how many. */
+  sites: Array<{ id: string; name: string; ports: number }>
+}
+
+const PAGE_SIZE = 20
+const ALL_SITES = '__all__'
 
 export default function MasterLoadingPortPage() {
   const router = useRouter()
   const [items, setItems] = useState<MasterLoadingPort[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [dhm, setDhm] = useState<MasterDhmFilter>('all')
+  const [site, setSite] = useState('')
+  const [page, setPage] = useState(1)
+  const [summary, setSummary] = useState<PortSummary | null>(null)
   const [sortKey, setSortKey] = useState('port')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const portColumns = useListColumnLayout('master-port.visibleColumns.v5', PORT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterLoadingPort | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -104,7 +104,9 @@ export default function MasterLoadingPortPage() {
     errors: Array<{ row: number; port: string; reason: string }>
   } | null>(null)
 
-  const fetchData = useCallback(async (searchQuery: string) => {
+  // The Master Port list is small (a few hundred ports at most), so it is loaded whole - already filtered by the server (search, DHM status, Site) - and paged
+  // and sorted here, which keeps the sort across every port and not only across one page.
+  const fetchData = useCallback(async (searchQuery: string, dhmFilter: MasterDhmFilter, siteId: string) => {
     try {
       setLoading(true)
       const params = new URLSearchParams()
@@ -113,6 +115,8 @@ export default function MasterLoadingPortPage() {
       if (searchQuery.length >= 2) {
         params.set('search', searchQuery)
       }
+      if (dhmFilter !== 'all') params.set('dhm', dhmFilter)
+      if (siteId) params.set('site', siteId)
       const res = await api.get('/master-loading-ports', { params })
       setItems(res.data?.data?.items || [])
     } catch (err) {
@@ -120,6 +124,16 @@ export default function MasterLoadingPortPage() {
       alert('Failed to load master ports')
     } finally {
       setLoading(false)
+    }
+  }, [])
+
+  const fetchSummary = useCallback(async () => {
+    try {
+      const res = await api.get('/master-loading-ports/summary')
+      setSummary(res.data?.data ?? null)
+    } catch (err) {
+      // the cards are informational: the list still works without them
+      console.error('Failed to load the port summary', err)
     }
   }, [])
 
@@ -133,8 +147,17 @@ export default function MasterLoadingPortPage() {
   }, [])
 
   useEffect(() => {
-    void fetchData(debouncedSearch)
-  }, [debouncedSearch, fetchData])
+    void fetchData(debouncedSearch, dhm, site)
+  }, [debouncedSearch, dhm, site, fetchData])
+
+  useEffect(() => {
+    void fetchSummary()
+  }, [fetchSummary])
+
+  const refresh = () => {
+    void fetchData(debouncedSearch, dhm, site)
+    void fetchSummary()
+  }
 
   const openNew = () => {
     setEditing(null)
@@ -176,7 +199,7 @@ export default function MasterLoadingPortPage() {
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
-      void fetchData(debouncedSearch)
+      refresh()
     } catch (err: any) {
       console.error('Save master loading port error', err)
       const msg = err?.response?.data?.error?.message || 'Failed to save master port'
@@ -300,7 +323,7 @@ export default function MasterLoadingPortPage() {
           errors: [],
         })
       }
-      void fetchData(debouncedSearch)
+      refresh()
     } catch (err) {
       console.error('Upload master loading port file error', err)
       alert('Failed to parse or upload file. Please upload CSV exported from Master Port.xlsx')
@@ -309,47 +332,78 @@ export default function MasterLoadingPortPage() {
     }
   }
 
+  const siteOptions = useMemo(() => sortCompanyOptions(summary?.sites ?? []), [summary])
+  const filtersOn = search.trim() !== '' || site !== '' || dhm !== 'all'
+
+  const sortedRows = useMemo(() => {
+    const text = (row: MasterLoadingPort): string => {
+      if (sortKey === 'dhm') return masterDhmChip(row).label
+      if (sortKey === 'vessel_port_sap') return multiValueText(multiValuesOf(row.vessel_port_sap))
+      return row.port || ''
+    }
+    return [...items].sort((a, b) => {
+      const cmp = text(a).localeCompare(text(b), undefined, { numeric: true })
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+  }, [items, sortKey, sortDir])
+
+  const total = sortedRows.length
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const pageRows = useMemo(() => sortedRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [sortedRows, page])
+
+  // a filter that leaves fewer pages than the one on screen must not leave the table empty
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages)
+  }, [page, totalPages])
+
+  const columns: MasterTableColumn<MasterLoadingPort>[] = [
+    {
+      id: 'port',
+      label: 'Port',
+      sortable: true,
+      render: (row) => <MasterIdentityCell name={row.port} subtitle={[row.region, row.site].filter(Boolean).join(' · ') || 'No region or site yet'} />,
+    },
+    {
+      id: 'codes',
+      label: 'Codes',
+      className: 'whitespace-nowrap',
+      render: (row) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MasterCodeBadge kind="klip" value={row.code_klip || ''} fit />
+          <MasterCodeBadge kind="dhm" value={row.code_dhm || ''} fit />
+        </div>
+      ),
+    },
+    {
+      id: 'vessel_port_sap',
+      label: 'Vessel Port (SAP)',
+      sortable: true,
+      render: (row) => <MultiValueCell values={multiValuesOf(row.vessel_port_sap)} rowTitle={row.port} columnLabel="Vessel Port (SAP)" plural="SAP names" />,
+    },
+    { id: 'dhm', label: 'DHM', sortable: true, className: 'whitespace-nowrap', render: (row) => <MasterDhmChip row={row} /> },
+  ]
+
+  const kpis = [
+    { id: 'total', icon: <Anchor className="h-4 w-4" />, label: 'Total ports', value: summary?.total ?? null, tone: 'bg-blue-50 text-blue-600', hint: 'all master ports' },
+    { id: 'synced', icon: <Cloud className="h-4 w-4" />, label: 'Synced to DHM', value: summary?.synced ?? null, tone: 'bg-emerald-50 text-emerald-600', hint: 'DHM has them' },
+    {
+      id: 'not-synced',
+      icon: <CloudOff className="h-4 w-4" />,
+      label: 'Not synced',
+      value: summary?.notSynced ?? null,
+      tone: 'bg-amber-50 text-amber-600',
+      hint: summary && summary.failed > 0 ? `${summary.failed.toLocaleString('en-US')} more failed to deliver` : 'not in DHM yet',
+    },
+    { id: 'used', icon: <Ship className="h-4 w-4" />, label: 'Used in KLIP', value: summary?.usedInKlip ?? null, tone: 'bg-violet-50 text-violet-600', hint: 'used by a shipment or a vessel' },
+  ]
+
   return (
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <p className="text-gray-600">
-          Maintain reference data for ports used in shipments.
-        </p>
+        <p className="text-sm text-gray-500">The ports KLIP uses in shipments: which SAP names stand for them, and whether DHM has them.</p>
 
-        <ListFilterPanel
-          onReset={() => setSearch('')}
-          showReset={search.trim().length > 0}
-          chips={
-            debouncedSearch
-              ? [{ id: 'search', label: `Search: ${debouncedSearch}`, onRemove: () => setSearch('') }]
-              : []
-          }
-        >
-          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-            <div className="min-w-[12rem] flex-[1.4]">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
-              <div className="relative">
-                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input
-                  placeholder="Region or Port"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
-                />
-              </div>
-            </div>
-            {isAdmin ? (
-              <div className="flex shrink-0 items-end gap-2">
-                <Button size="sm" className="shrink-0" onClick={openNew}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Port
-                </Button>
-                <MasterDhmSyncButton master="port" onDone={() => void fetchData(debouncedSearch)} />
-              </div>
-            ) : null}
-          </div>
-        </ListFilterPanel>
+        <MasterKpis items={kpis} />
 
         {isFormOpen && (
           <Card>
@@ -405,68 +459,97 @@ export default function MasterLoadingPortPage() {
           </Card>
         )}
 
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                  <span>All Ports</span>
-                </CardTitle>
-                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
-                  <span className="whitespace-nowrap tabular-nums text-gray-700">
-                    <span className="font-semibold">{items.length.toLocaleString('en-US')}</span> ports
-                  </span>
-                  <span className="text-gray-400" aria-hidden>·</span>
-                  <span className="whitespace-nowrap font-medium text-gray-600">
-                    {debouncedSearch ? 'Filtered' : 'All'}
-                  </span>
-                </p>
-              </div>
-              <ListPageColumnsMenu
-                columns={portColumns.menuColumns}
-                visibleIds={portColumns.visibleIds}
-                disabled={loading}
-                onToggle={portColumns.toggle}
-                onSelectAll={portColumns.selectAll}
-                onUnselectAll={portColumns.unselectAll}
-                onReset={portColumns.reset}
-                onReorder={portColumns.reorder}
-              />
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <MasterFilterBar
+            search={search}
+            onSearch={(value) => {
+              setSearch(value)
+              setPage(1)
+            }}
+            placeholder="Search port, region, site or code"
+            ariaLabel="Search ports"
+            dhm={dhm}
+            onDhm={(value) => {
+              setDhm(value)
+              setPage(1)
+            }}
+            dhmCounts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
+            extraActive={site !== ''}
+            onClear={() => {
+              setSearch('')
+              setDhm('all')
+              setSite('')
+              setPage(1)
+            }}
+            actions={
+              isAdmin ? (
+                <>
+                  <MasterDhmSyncButton master="port" onDone={refresh} iconOnly />
+                  <Button size="icon" className="h-9 w-9 shrink-0" title="New port" aria-label="New port" onClick={openNew}>
+                    <Plus className="h-4 w-4" aria-hidden />
+                  </Button>
+                </>
+              ) : null
+            }
+          >
+            <Select
+              value={site || ALL_SITES}
+              onValueChange={(value) => {
+                setSite(value === ALL_SITES ? '' : value)
+                setPage(1)
+              }}
+            >
+              <SelectTrigger className="h-9 w-[230px] gap-2 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left" aria-label="Filter by site">
+                <Building2 className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_SITES}>All sites{summary ? ` (${siteOptions.length.toLocaleString('en-US')})` : ''}</SelectItem>
+                {siteOptions.map((option) => (
+                  <SelectItem key={option.id} value={option.id}>
+                    {option.name} ({option.ports.toLocaleString('en-US')})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </MasterFilterBar>
+
+          <MasterListTable
+            rows={pageRows}
+            columns={columns}
+            getRowId={(row) => row.id}
+            loading={loading}
+            emptyLabel={filtersOn ? 'No ports match these filters' : 'No ports yet'}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={(id) => {
+              setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
+              setSortKey(id)
+            }}
+            onRowClick={openEdit}
+            renderActions={(row) => (
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
+                title={isAdmin ? 'Edit port' : 'View port'}
+                aria-label={`${isAdmin ? 'Edit' : 'View'} ${row.port}`}
+                onClick={() => openEdit(row)}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+            )}
+          />
+
+          <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
+            {masterCountText(pageRows.length, total, summary?.total ?? total, 'ports')} · click a row to {isAdmin ? 'edit' : 'view'} it
+          </div>
+          {totalPages > 1 ? (
+            <div className="px-4 pb-4">
+              <ListPager page={page} totalPages={totalPages} onPageChange={setPage} disabled={loading} summary={`Page ${page}/${totalPages}`} />
             </div>
-          </CardHeader>
-          <CardContent>
-            <MasterListCompactTable
-              tightActions
-              fitContent
-              onRowClick={openEdit}
-              rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
-              rows={[...items].sort((a, b) => {
-                const col = PORT_COLUMNS.find((item) => item.id === sortKey)
-                const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })
-                return sortDir === 'asc' ? cmp : -cmp
-              })}
-              columns={PORT_COLUMNS.filter((col) => portColumns.orderedVisibleIds.includes(col.id)).sort(
-                (a, b) => portColumns.orderedVisibleIds.indexOf(a.id) - portColumns.orderedVisibleIds.indexOf(b.id),
-              )}
-              getRowId={(row) => row.id}
-              sortKey={sortKey}
-              sortDir={sortDir}
-              dragColId={portColumns.dragColId}
-              loading={loading}
-              emptyLabel="No ports found"
-              onSort={(id) => {
-                setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
-                setSortKey(id)
-              }}
-              onDragStart={portColumns.setDragColId}
-              onDragEnd={() => portColumns.setDragColId(null)}
-              onDrop={(id) => {
-                if (portColumns.dragColId) portColumns.reorder(portColumns.dragColId, id)
-                portColumns.setDragColId(null)
-              }}
-            />
-          </CardContent>
-        </Card>
+          ) : null}
+        </div>
       </div>
 
       {/* Upload result dialog */}
