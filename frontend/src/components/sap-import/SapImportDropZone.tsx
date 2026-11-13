@@ -9,10 +9,21 @@ interface Props {
   /** The zone was clicked: open the file picker. */
   onBrowse: () => void
   disabled?: boolean
+  /** The headline and the line under it; the defaults are the Logistics Data wording. */
+  title?: string
+  hint?: string
+  ariaLabel?: string
 }
 
 /** Where an SAP export goes: drop it here or click to browse. Only shown to people who may upload. */
-export function SapImportDropZone({ onFile, onBrowse, disabled = false }: Props) {
+export function SapImportDropZone({
+  onFile,
+  onBrowse,
+  disabled = false,
+  title = 'Drop an SAP export here, or browse',
+  hint = '.xlsx, .xlsm, .xlsb or .xls. Large files can take several minutes.',
+  ariaLabel = 'Upload an SAP export file',
+}: Props) {
   const [over, setOver] = useState(false)
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -35,7 +46,7 @@ export function SapImportDropZone({ onFile, onBrowse, disabled = false }: Props)
       role="button"
       tabIndex={disabled ? -1 : 0}
       aria-disabled={disabled}
-      aria-label="Upload an SAP export file"
+      aria-label={ariaLabel}
       onClick={() => {
         if (!disabled) onBrowse()
       }}
@@ -61,9 +72,9 @@ export function SapImportDropZone({ onFile, onBrowse, disabled = false }: Props)
       </div>
       <div className="min-w-0">
         <p className="text-sm font-medium text-gray-900">
-          {over ? 'Release to upload' : 'Drop an SAP export here, or browse'}
+          {over ? 'Release to upload' : title}
         </p>
-        <p className="mt-0.5 text-xs text-gray-500">.xlsx, .xlsm, .xlsb or .xls. Large files can take several minutes.</p>
+        <p className="mt-0.5 text-xs text-gray-500">{hint}</p>
       </div>
     </div>
   )
