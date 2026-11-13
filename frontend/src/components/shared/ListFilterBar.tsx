@@ -12,17 +12,17 @@ export function listFilterButtonClass(active: boolean): string {
 }
 
 interface Props {
-  /** The search box: the draft text, how it changes, and Enter (the search is applied on Enter, as before). */
-  search: string
-  onSearchChange: (value: string) => void
-  onSearchSubmit: () => void
-  placeholder: string
+  /** The search box: the draft text, how it changes, and Enter (the search is applied on Enter, as before). Leave all four out for a list without a search: the filters then sit on the left. */
+  search?: string
+  onSearchChange?: (value: string) => void
+  onSearchSubmit?: () => void
+  placeholder?: string
   /** Filters that sit in the row from the `lg` breakpoint up (Status, Incoterm); below it they move into More filters. */
   wide: ReactNode
   /** The same filters again, drawn only inside More filters on a screen narrower than `lg`. */
-  narrowOnly: ReactNode
-  /** The filters that always live in More filters (Contract Type, Product, Group, Supplier). */
-  more: ReactNode
+  narrowOnly?: ReactNode
+  /** The filters that always live in More filters (Contract Type, Product, Group, Supplier). Leave it out when every filter fits in the row: there is then no More filters button and `wide` shows at every width. */
+  more?: ReactNode
   /** How many of the `more` filters are on, and how many of all of them (wide + more) when the row is too narrow to show the wide ones. */
   activeMore: number
   activeAll: number
@@ -65,27 +65,41 @@ export function ListFilterBar({
 }: Props) {
   const [open, setOpen] = useState(false)
   const anyFilterOn = activeAll > 0
+  const hasSearch = onSearchChange != null
+  const hasMore = more != null
   return (
     <section className="rounded-xl border border-gray-200 bg-white">
       <div className="flex flex-nowrap items-center gap-2 px-3 py-3 sm:px-4">
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden />
-          <Input
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                onSearchSubmit()
-              }
-            }}
-            placeholder={placeholder}
-            aria-label="Search contracts"
-            className="h-9 rounded-[10px] pl-9"
-          />
-        </div>
-
-        <div className="hidden shrink-0 items-center gap-2 lg:flex">{wide}</div>
+        {hasSearch ? (
+          <>
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden />
+              <Input
+                value={search ?? ''}
+                onChange={(event) => onSearchChange?.(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    onSearchSubmit?.()
+                  }
+                }}
+                placeholder={placeholder}
+                aria-label="Search"
+                className="h-9 rounded-[10px] pl-9"
+              />
+            </div>
+            <div className="hidden shrink-0 items-center gap-2 lg:flex">{wide}</div>
+          </>
+        ) : (
+          hasMore ? (
+            <>
+              <div className="hidden min-w-0 flex-1 items-center gap-2 lg:flex">{wide}</div>
+              <div className="min-w-0 flex-1 lg:hidden" />
+            </>
+          ) : (
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">{wide}</div>
+          )
+        )}
 
         {anyActive ? (
           <button
@@ -99,25 +113,27 @@ export function ListFilterBar({
           </button>
         ) : null}
 
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-          title="More filters"
-          className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] border px-2.5 text-sm ${
-            open || anyFilterOn ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          <SlidersHorizontal className="h-4 w-4" aria-hidden />
-          <span className="hidden sm:inline">More filters</span>
-          <CountBadge value={activeMore} className="hidden lg:inline" />
-          <CountBadge value={activeAll} className="lg:hidden" />
-        </button>
+        {hasMore ? (
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+            title="More filters"
+            className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] border px-2.5 text-sm ${
+              open || anyFilterOn ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <SlidersHorizontal className="h-4 w-4" aria-hidden />
+            <span className="hidden sm:inline">More filters</span>
+            <CountBadge value={activeMore} className="hidden lg:inline" />
+            <CountBadge value={activeAll} className="lg:hidden" />
+          </button>
+        ) : null}
 
         {actions ? <div className="flex shrink-0 items-center gap-0.5">{actions}</div> : null}
       </div>
 
-      {open ? (
+      {hasMore && open ? (
         <div className="rounded-b-xl border-t border-gray-100 bg-gray-50/70 px-3 py-4 sm:px-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 [&>*]:min-w-0">
             <div className="contents lg:hidden">{narrowOnly}</div>

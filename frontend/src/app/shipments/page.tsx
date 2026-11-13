@@ -7384,7 +7384,7 @@ function ShipmentsPageContent() {
                     visibleColumns.length === 0
                   }
                 >
-                  {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Download className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                  {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Save className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </Button>
                 <input
                   ref={groupingUploadInputRef}
@@ -7403,12 +7403,12 @@ function ShipmentsPageContent() {
                         onClick={() => void downloadGroupingTemplate()}
                         disabled={!groupingTemplateEnabled || groupingTemplateDownloading}
                       >
-                        {groupingTemplateDownloading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <FileDown className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                        {groupingTemplateDownloading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Download className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                       </Button>
                     </span>
                   </TooltipTrigger>
                   {!groupingTemplateEnabled ? (
-                    <TooltipContent side="top">{SHIPMENT_GROUPING_DOWNLOAD_DISABLED_TOOLTIP}</TooltipContent>
+                    <TooltipContent side="top">Download Unplanned: {SHIPMENT_GROUPING_DOWNLOAD_DISABLED_TOOLTIP}</TooltipContent>
                   ) : null}
                 </Tooltip>
                 <Tooltip>
@@ -7425,7 +7425,7 @@ function ShipmentsPageContent() {
                     </span>
                   </TooltipTrigger>
                   {!groupingTemplateEnabled ? (
-                    <TooltipContent side="top">{SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP}</TooltipContent>
+                    <TooltipContent side="top">Upload Planning: {SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP}</TooltipContent>
                   ) : null}
                 </Tooltip>
                 <div className="relative">

@@ -62,6 +62,7 @@ export function MultiValueField({
   placeholder,
   emptyMessage,
   icon,
+  uppercase = false,
 }: {
   label: string
   options: string[]
@@ -70,6 +71,8 @@ export function MultiValueField({
   placeholder: string
   emptyMessage: string
   icon: ReactNode
+  /** Show the options in capitals (display only). */
+  uppercase?: boolean
 }) {
   return (
     <SearchableMultiSelect
@@ -81,6 +84,7 @@ export function MultiValueField({
       placeholder={placeholder}
       emptyMessage={emptyMessage}
       pinSelectedToTop
+      uppercaseOptionLabels={uppercase}
       icon={icon}
       fieldStyle
       className="w-full"

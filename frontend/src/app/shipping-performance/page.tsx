@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Eye, GripVertical, Loader2, MessageSquare, Package, SlidersHorizontal, X } from 'lucide-react'
+import { Columns3, Eye, GripVertical, Loader2, MessageSquare, Package, SlidersHorizontal, X } from 'lucide-react'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
@@ -105,6 +105,11 @@ import { operationalTableColumnClass } from '@/lib/operationalTableLayout'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { ListPager } from '@/components/performance/ListPager'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { PerformanceHeaderFilters } from '@/components/performance/PerformanceHeaderFilters'
+import { PerformanceFiltersSection } from '@/components/performance/PerformanceFiltersSection'
+import { iconButtonClass } from '@/lib/iconButton'
+import { listRangeText } from '@/lib/listRangeText'
 import { compactTableActionsColWidthPx } from '@/lib/compactTableUi'
 import {
   clickSortStack,
@@ -2498,8 +2503,7 @@ function ShippingPerformancePageContent() {
     <div className="space-y-6">
         {/* Header + Source / Product scope toggles (client-side only) */}
         <HeaderFilterSlot>
-          <PerformanceContractDateControl
-            header
+          <PerformanceHeaderFilters
             period={performancePeriod}
             options={buildPerformancePeriodOptions()}
             dateFrom={dateFrom}
@@ -2517,41 +2521,64 @@ function ShippingPerformancePageContent() {
               setCurrentPage(1)
             }}
             resolvePeriodRange={resolvePerformancePeriodDateRange}
-          />
-          <SearchableMultiSelect
-            label="Region/Plant"
-            hideLabel
-            portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-            options={narrowedGroupPlantOptions}
-            selected={selectedGroupPlants}
-            onChange={(values) => {
+            dateActive={
+              performancePeriod !== 'YTD' ||
+              !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo)
+            }
+            groupPlantOptions={narrowedGroupPlantOptions}
+            selectedGroupPlants={selectedGroupPlants}
+            onGroupPlantsChange={(values) => {
               handleGroupPlantsChange(values)
               setCurrentPage(1)
             }}
-            placeholder="Region/Plant"
-            emptyMessage="No region/plant values"
-            uppercaseOptionLabels
-          />
-          <SearchableMultiSelect
-            label="Discharge Port"
-            hideLabel
-            portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-            options={narrowedDischargePortOptions}
-            selected={selectedDischargePorts}
-            onChange={(values) => {
+            dischargePortOptions={narrowedDischargePortOptions}
+            selectedDischargePorts={selectedDischargePorts}
+            onDischargePortsChange={(values) => {
               setSelectedDischargePorts(values)
               setCurrentPage(1)
             }}
-            placeholder="Discharge Port"
-            emptyMessage="No discharge ports"
-            uppercaseOptionLabels
           />
         </HeaderFilterSlot>
-        <ListFilterPanel
-          onReset={resetPerfSelections}
-          showReset={
+        <PerformanceFiltersSection
+          products={{
+            options: narrowedProductOptions,
+            selected: selectedProducts,
+            onChange: (values) => {
+              handleProductsChange(values)
+              setCurrentPage(1)
+            },
+          }}
+          incoterms={{ options: narrowedIncotermOptions, selected: selectedIncoterms, onChange: setSelectedIncoterms }}
+          sources={{
+            options: narrowedSourceOptions,
+            selected: selectedSources,
+            onChange: (values) => {
+              setSelectedSources(values)
+              setCurrentPage(1)
+            },
+          }}
+          supplierGroups={{
+            options: narrowedSupplierGroupOptions,
+            selected: selectedSupplierGroups,
+            onChange: (values) => {
+              handleSupplierGroupsChange(values)
+              setCurrentPage(1)
+            },
+          }}
+          suppliers={{
+            options: narrowedSupplierOptions,
+            selected: selectedSuppliers,
+            onChange: (values) => {
+              setSelectedSuppliers(values)
+              setCurrentPage(1)
+            },
+          }}
+          planningStatuses={selectedPlanningStatuses}
+          onPlanningStatusesChange={(values) => {
+            setSelectedPlanningStatuses(values)
+            setCurrentPage(1)
+          }}
+          anyActive={
             performancePeriod !== 'YTD' ||
             !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo) ||
             selectedGroupPlants.length > 0 ||
@@ -2563,146 +2590,8 @@ function ShippingPerformancePageContent() {
             selectedPlanningStatuses.length > 0 ||
             selectedProducts.length > 0
           }
-          chips={[
-            ...(performancePeriod !== 'YTD' ||
-            !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo)
-              ? [
-                  {
-                    id: 'contract-date',
-                    label: formatContractDateScopeLabel(
-                      performancePeriod,
-                      dateFrom,
-                      dateTo,
-                      (p) => resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
-                      { prefix: true },
-                    ),
-                    onRemove: () => {
-                      setPerformancePeriod('YTD')
-                      const ytd = resolvePerformancePeriodDateRange('YTD')
-                      setDateFrom(ytd.dateFrom)
-                      setDateTo(ytd.dateTo)
-                      setCurrentPage(1)
-                    },
-                  },
-                ]
-              : []),
-            ...selectionChips('Region/Plant', selectedGroupPlants, (values) => {
-              handleGroupPlantsChange(values)
-              setCurrentPage(1)
-            }),
-            ...selectionChips('Discharge Port', selectedDischargePorts, (values) => {
-              setSelectedDischargePorts(values)
-              setCurrentPage(1)
-            }),
-            ...selectionChips('Source', selectedSources, (values) => {
-              setSelectedSources(values)
-              setCurrentPage(1)
-            }),
-            ...selectionChips('Incoterm', selectedIncoterms, setSelectedIncoterms),
-            ...selectionChips('Group', selectedSupplierGroups, (values) => {
-              handleSupplierGroupsChange(values)
-              setCurrentPage(1)
-            }),
-            ...selectionChips('Supplier', selectedSuppliers, (values) => {
-              setSelectedSuppliers(values)
-              setCurrentPage(1)
-            }),
-            ...selectionChips('Planning', selectedPlanningStatuses, (values) => {
-              setSelectedPlanningStatuses(values)
-              setCurrentPage(1)
-            }),
-            ...selectionChips('Product', selectedProducts, (values) => {
-              handleProductsChange(values)
-              setCurrentPage(1)
-            }),
-          ]}
-        >
-          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-              <SearchableMultiSelect
-                label="Product"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedProductOptions}
-                selected={selectedProducts}
-                onChange={(values) => {
-                  handleProductsChange(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No products"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Incoterm"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedIncotermOptions}
-                selected={selectedIncoterms}
-                onChange={setSelectedIncoterms}
-                placeholder="All"
-                emptyMessage="No incoterms"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Source"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedSourceOptions}
-                selected={selectedSources}
-                onChange={(values) => {
-                  setSelectedSources(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No sources"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Group Supplier"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedSupplierGroupOptions}
-                selected={selectedSupplierGroups}
-                onChange={(values) => {
-                  handleSupplierGroupsChange(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No supplier groups"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Supplier"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedSupplierOptions}
-                selected={selectedSuppliers}
-                onChange={(values) => {
-                  setSelectedSuppliers(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No suppliers"
-                uppercaseOptionLabels
-              />
-              <div className="min-w-[7.5rem] flex-1">
-                <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Planning Status</label>
-                <FilterSingleSelect
-                  value={selectedPlanningStatuses[0] ?? 'ALL'}
-                  onChange={(value) => {
-                    setSelectedPlanningStatuses(value === 'ALL' ? [] : [value])
-                    setCurrentPage(1)
-                  }}
-                  options={[
-                    { value: 'ALL', label: 'All' },
-                    ...PLANNING_STATUS_OPTIONS.map((value) => ({ value, label: value })),
-                  ]}
-                  ariaLabel="Planning Status"
-                  className="w-full min-w-0"
-                />
-              </div>
-          </div>
-        </ListFilterPanel>
+          onReset={resetPerfSelections}
+        />
 
         {/* Section 1: Summary Cards */}
         {(() => {
@@ -2981,8 +2870,8 @@ function ShippingPerformancePageContent() {
 
         {/* Section 3: View Table — scoped by Section 1 card + Section 2 drilldown */}
         <div>
-        <Card>
-          <CardHeader className="space-y-3">
+        <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+          <CardHeader className="space-y-3 border-b border-gray-200 px-4 py-3">
             <div>
               <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel'}</span>
@@ -3053,9 +2942,17 @@ function ShippingPerformancePageContent() {
                 }}
               />
               <div ref={columnsMenuRef} className="relative">
-                <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)} disabled={summaryFetching || section3TableLoading}>
-                  <SlidersHorizontal className="h-4 w-4 mr-2" />
-                  Columns
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={iconButtonClass('neutral')}
+                  title="Columns"
+                  aria-label="Columns"
+                  aria-expanded={showColumnManager}
+                  onClick={() => setShowColumnManager((v) => !v)}
+                  disabled={summaryFetching || section3TableLoading}
+                >
+                  <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                 </Button>
                 {showColumnManager && (
                   <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
@@ -3141,9 +3038,9 @@ function ShippingPerformancePageContent() {
               </div>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-0">
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
-            <div className="border rounded-lg overflow-hidden">
+            <div className="overflow-hidden">
               {/* Top scrollbar */}
               <div
                 ref={topScrollRef}
@@ -3182,6 +3079,7 @@ function ShippingPerformancePageContent() {
                     COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                     'klip-compact-table--perf-narrow-cols',
                     showTableActionsColumn && 'klip-actions-w-2',
+                    'klip-table--directory',
                   )}
                 >
                   <colgroup>
@@ -3274,7 +3172,7 @@ function ShippingPerformancePageContent() {
                     </tr>
                   </thead>
                   <tbody
-                    className={`${SHIPPING_PERF_TABLE_BODY_CLASS} ${
+                    className={`${SHIPPING_PERF_TABLE_BODY_CLASS.replace('divide-gray-200', 'divide-gray-100')} ${
                       summaryFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
                     }`}
                   >
@@ -3291,7 +3189,7 @@ function ShippingPerformancePageContent() {
                       </tr>
                     ) : (
                       paginatedRows.map((row, rowIdx) => {
-                        const stripeClass = rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                        const stripeClass = 'bg-white'
                         return (
                         <tr key={row.id} className={stripeClass}>
                           {showTopRankColumn ? (
@@ -3561,15 +3459,13 @@ function ShippingPerformancePageContent() {
               </div>
             </div>
 
-            <ListPager
-              page={currentPage}
-              totalPages={totalPages}
-              onPageChange={handlePageChange}
-              disabled={summaryFetching || section3TableLoading}
-              summary={`Page ${currentPage} of ${totalPages}`}
+            <MasterTableFooter
+              countText={listRangeText(tableRows.length, currentPage, pageSize, tableViewMode === 'all' ? 'shipments' : `vessel${tableRows.length === 1 ? '' : 's'}`)}
+              kinds={[]}
+              pager={{ page: currentPage, totalPages, onPageChange: handlePageChange, disabled: summaryFetching || section3TableLoading }}
             />
 
-            <p className="text-xs text-gray-500 mt-3">
+            <p className="border-t border-gray-100 px-4 py-2.5 text-xs text-gray-500">
               Delta unit is day difference. Records include transport mode SEA or MIX only.
             </p>
             </div>

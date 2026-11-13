@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Anchor, Droplets, Eye, GripVertical, Loader2, PackageCheck, Ship, SlidersHorizontal, X, type LucideIcon } from 'lucide-react'
+import { Anchor, Columns3, Droplets, Eye, GripVertical, Loader2, Package, PackageCheck, Ship, SlidersHorizontal, X, type LucideIcon } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
@@ -21,6 +21,12 @@ import {
 } from '@/components/shared/ListFilterPanel'
 import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { PerformanceHeaderFilters } from '@/components/performance/PerformanceHeaderFilters'
+import { ListFilterBar } from '@/components/shared/ListFilterBar'
+import { MultiValueField } from '@/components/shared/ListFilterFields'
+import { iconButtonClass } from '@/lib/iconButton'
+import { listRangeText } from '@/lib/listRangeText'
 import { FieldHelp } from '@/components/FieldHelp'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { formatDateDMY } from '@/lib/dateFormat'
@@ -1982,8 +1988,7 @@ export default function OilLossPage() {
       <div className="space-y-6">
         <div className="space-y-3">
           <HeaderFilterSlot>
-            <PerformanceContractDateControl
-              header
+            <PerformanceHeaderFilters
               period={globalPeriod}
               options={globalPeriodOptions}
               dateFrom={dateFrom}
@@ -1992,35 +1997,50 @@ export default function OilLossPage() {
               onDateFromChange={setDateFrom}
               onDateToChange={setDateTo}
               resolvePeriodRange={resolveOilLossPeriodDateRange}
-            />
-            <SearchableMultiSelect
-              label="Region/Plant"
-              hideLabel
-              portalMenu
-              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-              options={availableGroupPlants}
-              selected={selectedGroupPlants}
-              onChange={handleGroupPlantsChange}
-              placeholder="Region/Plant"
-              emptyMessage="No region/plant values"
-              uppercaseOptionLabels
-            />
-            <SearchableMultiSelect
-              label="Discharge Port"
-              hideLabel
-              portalMenu
-              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-              options={dischargePortDropdownOptions}
-              selected={selectedDischargePorts}
-              onChange={setSelectedDischargePorts}
-              placeholder="Discharge Port"
-              emptyMessage="No discharge ports"
-              uppercaseOptionLabels
+              dateActive={
+                globalPeriod !== 'YTD' ||
+                !periodRangeMatchesDates(resolveOilLossPeriodDateRange('YTD'), dateFrom, dateTo)
+              }
+              groupPlantOptions={availableGroupPlants}
+              selectedGroupPlants={selectedGroupPlants}
+              onGroupPlantsChange={handleGroupPlantsChange}
+              dischargePortOptions={dischargePortDropdownOptions}
+              selectedDischargePorts={selectedDischargePorts}
+              onDischargePortsChange={setSelectedDischargePorts}
             />
           </HeaderFilterSlot>
-          <ListFilterPanel
-            onReset={resetGlobalBarFilters}
-            showReset={
+          <ListFilterBar
+            wide={
+              <>
+                <div className="w-48 shrink-0">
+                  <MultiValueField
+                    label="Product"
+                    options={productDropdownOptions}
+                    selected={selectedProducts}
+                    onChange={handleProductsChange}
+                    placeholder="All products"
+                    emptyMessage="No products"
+                    icon={<Package className="h-4 w-4" />}
+                    uppercase
+                  />
+                </div>
+                <div className="w-48 shrink-0">
+                  <MultiValueField
+                    label="Loading Port"
+                    options={loadingPortDropdownOptions}
+                    selected={selectedLoadingPorts}
+                    onChange={setSelectedLoadingPorts}
+                    placeholder="All loading ports"
+                    emptyMessage="No loading ports"
+                    icon={<Anchor className="h-4 w-4" />}
+                    uppercase
+                  />
+                </div>
+              </>
+            }
+            activeMore={0}
+            activeAll={0}
+            anyActive={
               globalPeriod !== 'YTD' ||
               !periodRangeMatchesDates(resolveOilLossPeriodDateRange('YTD'), dateFrom, dateTo) ||
               selectedGroupPlants.length > 0 ||
@@ -2028,57 +2048,8 @@ export default function OilLossPage() {
               selectedDischargePorts.length > 0 ||
               selectedProducts.length > 0
             }
-            chips={[
-              ...(globalPeriod !== 'YTD' ||
-              !periodRangeMatchesDates(resolveOilLossPeriodDateRange('YTD'), dateFrom, dateTo)
-                ? [
-                    {
-                      id: 'contract-date',
-                      label: formatContractDateScopeLabel(
-                        globalPeriod,
-                        dateFrom,
-                        dateTo,
-                        (p) => resolveOilLossPeriodDateRange(p as OilLossGlobalPeriodKey),
-                        { prefix: true },
-                      ),
-                      onRemove: () => {
-                        const ytd = resolveOilLossPeriodDateRange('YTD')
-                        setGlobalPeriod('YTD')
-                        setDateFrom(ytd.dateFrom)
-                        setDateTo(ytd.dateTo)
-                      },
-                    },
-                  ]
-                : []),
-              ...selectionChips('Region/Plant', selectedGroupPlants, handleGroupPlantsChange),
-              ...selectionChips('Discharge Port', selectedDischargePorts, setSelectedDischargePorts),
-              ...selectionChips('Product', selectedProducts, handleProductsChange),
-              ...selectionChips('Loading Port', selectedLoadingPorts, setSelectedLoadingPorts),
-            ]}
-          >
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <SearchableMultiSelect
-              label="Product"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={productDropdownOptions}
-              selected={selectedProducts}
-              onChange={handleProductsChange}
-              placeholder="All"
-              emptyMessage="No products"
-              uppercaseOptionLabels
-            />
-            <SearchableMultiSelect
-              label="Loading Port"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={loadingPortDropdownOptions}
-              selected={selectedLoadingPorts}
-              onChange={setSelectedLoadingPorts}
-              placeholder="All"
-              emptyMessage="No loading ports"
-              uppercaseOptionLabels
-            />
-          </div>
-          </ListFilterPanel>
+            onReset={resetGlobalBarFilters}
+          />
 
           <div
             className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${
@@ -2173,8 +2144,8 @@ export default function OilLossPage() {
           dataFetching={dataFetching}
         />
 
-        <Card>
-          <CardHeader className="space-y-3">
+        <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+          <CardHeader className="space-y-3 border-b border-gray-200 px-4 py-3">
             <div>
               <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>
@@ -2246,13 +2217,16 @@ export default function OilLossPage() {
               <div className="flex flex-wrap items-center gap-2 ml-auto shrink-0">
                 <div ref={columnsMenuRef} className="relative">
                   <Button
-                    variant="outline"
-                    size="sm"
+                    variant="ghost"
+                    size="icon"
+                    className={iconButtonClass('neutral')}
+                    title="Columns"
+                    aria-label="Columns"
+                    aria-expanded={showColumnsMenu}
                     onClick={() => setShowColumnsMenu((v) => !v)}
                     disabled={dataFetching || tableLoading}
                   >
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
+                    <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
@@ -2332,54 +2306,12 @@ export default function OilLossPage() {
                     </div>
                   )}
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex flex-wrap items-center gap-1">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(currentPage - 1)}
-                      disabled={currentPage <= 1 || dataFetching || tableLoading}
-                    >
-                      Previous
-                    </Button>
-                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                      let pageNum: number
-                      if (totalPages <= 5) pageNum = i + 1
-                      else if (currentPage <= 3) pageNum = i + 1
-                      else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i
-                      else pageNum = currentPage - 2 + i
-                      return (
-                        <Button
-                          key={pageNum}
-                          variant={currentPage === pageNum ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => handlePageChange(pageNum)}
-                          disabled={dataFetching || tableLoading}
-                          className="min-w-[40px]"
-                        >
-                          {pageNum}
-                        </Button>
-                      )
-                    })}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePageChange(currentPage + 1)}
-                      disabled={currentPage >= totalPages || dataFetching || tableLoading}
-                    >
-                      Next
-                    </Button>
-                    <span className="text-xs text-gray-500 ml-1 tabular-nums whitespace-nowrap">
-                      Page {currentPage} of {totalPages}
-                    </span>
-                  </div>
-                )}
               </div>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-0">
             <div className={tableLoading ? 'min-h-[480px]' : undefined}>
-                <div className="hidden lg:block border rounded-lg overflow-hidden">
+                <div className="hidden lg:block overflow-hidden">
                   <div
                     ref={topScrollRef}
                     className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
@@ -2421,6 +2353,7 @@ export default function OilLossPage() {
                         'klip-compact-table--perf-narrow-cols',
                         'klip-oil-loss-table',
                         'klip-actions-w-1',
+                        'klip-table--directory',
                       )}
                     >
                       <colgroup>
@@ -2503,7 +2436,7 @@ export default function OilLossPage() {
                         </tr>
                       </thead>
                       <tbody
-                        className={`divide-y divide-gray-200 transition-opacity duration-200 ${
+                        className={`divide-y divide-gray-100 transition-opacity duration-200 ${
                           (dataFetching || viewTransitionLoading) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
                         }`}
                       >
@@ -2525,7 +2458,7 @@ export default function OilLossPage() {
                           </tr>
                         ) : (
                           paginatedRows.map((row, idx) => {
-                            const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                            const stripeClass = 'bg-white'
                             return (
                               <tr key={row.id} className={stripeClass}>
                                 {visibleColumns.map((col) => {
@@ -2623,53 +2556,13 @@ export default function OilLossPage() {
                   </div>
                 </div>
 
-                {totalPages > 1 && (
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-                    <div className="text-sm text-gray-700 tabular-nums">
-                      Showing {rangeStart.toLocaleString('en-US')} to {rangeEnd.toLocaleString('en-US')} of{' '}
-                      {filteredRows.length.toLocaleString('en-US')} entries
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(currentPage - 1)}
-                        disabled={currentPage <= 1 || dataFetching || tableLoading}
-                      >
-                        Previous
-                      </Button>
-                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                        let p: number
-                        if (totalPages <= 5) p = i + 1
-                        else if (currentPage <= 3) p = i + 1
-                        else if (currentPage >= totalPages - 2) p = totalPages - 4 + i
-                        else p = currentPage - 2 + i
-                        return (
-                          <Button
-                            key={p}
-                            variant={currentPage === p ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => handlePageChange(p)}
-                            disabled={dataFetching || tableLoading}
-                            className="min-w-[36px]"
-                          >
-                            {p}
-                          </Button>
-                        )
-                      })}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handlePageChange(currentPage + 1)}
-                        disabled={currentPage >= totalPages || dataFetching || tableLoading}
-                      >
-                        Next
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                <MasterTableFooter
+                  countText={listRangeText(filteredRows.length, currentPage, pageSize, 'entries')}
+                  kinds={[]}
+                  pager={{ page: currentPage, totalPages, onPageChange: handlePageChange, disabled: dataFetching || tableLoading }}
+                />
 
-                <p className="text-xs text-gray-500 mt-3">
+                <p className="border-t border-gray-100 px-4 py-2.5 text-xs text-gray-500">
                   {viewMode === 'all_contract'
                     ? 'FOB only. One row per STO, the same rows as Shipments Completed. POs on that STO stay in the row. Qty Delivery and Qty Receive are SAP. SFAL and SFBD are the shipment figures for R1–R3. A completed STO with missing quantities still appears. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
                     : viewMode === 'by_transporter'

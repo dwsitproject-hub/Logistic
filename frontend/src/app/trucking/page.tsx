@@ -4620,8 +4620,8 @@ function TruckingPageContent() {
                   disabled={wbUploading || sapImportActive}
                   title={
                     sapImportActive
-                      ? sapImportUploadBlockedTitle
-                      : 'Supported files: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
+                      ? `Upload WB: ${sapImportUploadBlockedTitle}`
+                      : 'Upload WB: supported files are Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
                   }
                 >
                   {wbUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Scale className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
@@ -4632,10 +4632,10 @@ function TruckingPageContent() {
                   disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
                   title={
                     sapImportActive
-                      ? sapImportUploadBlockedTitle
+                      ? `Upload Daily Planning: ${sapImportUploadBlockedTitle}`
                       : dailyPlanningUploadEligible
                         ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
-                        : 'Upload Daily Planning tersedia pada status Unplanned atau Planned'
+                        : 'Upload Daily Planning: tersedia pada status Unplanned atau Planned'
                   }
                 >
                   {bulkCreateUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <CalendarClock className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
@@ -4676,7 +4676,7 @@ function TruckingPageContent() {
                     visibleColumns.length === 0
                   }
                 >
-                  {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Download className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                  {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Save className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </Button>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -4694,7 +4694,7 @@ function TruckingPageContent() {
                     </span>
                   </TooltipTrigger>
                   {!isListActualsTemplateDownloadEnabled ? (
-                    <TooltipContent side="top">{DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP}</TooltipContent>
+                    <TooltipContent side="top">Download Template: {DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP}</TooltipContent>
                   ) : null}
                 </Tooltip>
                 <div className="relative">

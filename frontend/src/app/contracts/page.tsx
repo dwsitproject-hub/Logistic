@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Anchor, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, CircleCheck, CircleDot, Clock, Columns3, Factory, Layers, MapPin, Package, Tag, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
+import { Anchor, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, CircleCheck, CircleDot, Clock, Columns3, Factory, Layers, MapPin, Package, Save, Tag, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
 import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
@@ -93,6 +93,8 @@ import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import { ListFilterBar, ListFilterField, listFilterButtonClass } from '@/components/shared/ListFilterBar'
 import { MasterKpis } from '@/components/master/MasterKpis'
 import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { PerformanceHeaderFilters } from '@/components/performance/PerformanceHeaderFilters'
+import { PerformanceFiltersSection } from '@/components/performance/PerformanceFiltersSection'
 import { iconButtonClass } from '@/lib/iconButton'
 import {
   formatContractDateScopeLabel,
@@ -3993,8 +3995,7 @@ function ContractsPageContent() {
         {isContractPerformance && (
           <>
           <HeaderFilterSlot>
-            <PerformanceContractDateControl
-              header
+            <PerformanceHeaderFilters
               period={performancePeriod}
               options={buildPerformancePeriodOptions()}
               dateFrom={dateFrom}
@@ -4015,45 +4016,77 @@ function ContractsPageContent() {
                 setCurrentPage(1)
               }}
               resolvePeriodRange={resolvePerformancePeriodDateRange}
-            />
-            <SearchableMultiSelect
-              label="Region/Plant"
-              hideLabel
-              portalMenu
-              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-              options={narrowedGroupPlantOptions}
-              selected={contractPerfSelectedGroupPlants}
-              onChange={(values) => {
+              dateActive={contractDateScopeChanged}
+              groupPlantOptions={narrowedGroupPlantOptions}
+              selectedGroupPlants={contractPerfSelectedGroupPlants}
+              onGroupPlantsChange={(values) => {
                 lockSection1FilterChange()
                 handleContractPerfGroupPlantsChange(values)
                 setCurrentPage(1)
               }}
-              placeholder="Region/Plant"
-              emptyMessage="No region/plant values"
-              uppercaseOptionLabels
-            />
-            <SearchableMultiSelect
-              label="Discharge Port"
-              hideLabel
-              portalMenu
-              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-              options={dischargePortDropdownOptions}
-              selected={contractPerfSelectedDischargePorts}
-              onChange={(values) => {
+              dischargePortOptions={dischargePortDropdownOptions}
+              selectedDischargePorts={contractPerfSelectedDischargePorts}
+              onDischargePortsChange={(values) => {
                 lockSection1FilterChange()
                 setContractPerfSelectedDischargePorts(values)
                 setCurrentPage(1)
               }}
-              placeholder="Discharge Port"
-              emptyMessage="No discharge ports"
-              uppercaseOptionLabels
             />
           </HeaderFilterSlot>
-          <ListFilterPanel
-            onReset={resetContractPerformancePage}
-            showReset={
-              performancePeriod !== 'YTD' ||
-              !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo) ||
+          <PerformanceFiltersSection
+            products={{
+              options: narrowedProductOptions,
+              selected: contractPerfSelectedProducts,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                handleContractPerfProductsChange(values)
+                setCurrentPage(1)
+              },
+            }}
+            incoterms={{
+              options: narrowedIncotermOptions,
+              selected: contractPerfSelectedIncoterms,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                setContractPerfSelectedIncoterms(values)
+                setCurrentPage(1)
+              },
+            }}
+            sources={{
+              options: narrowedSourceOptions,
+              selected: contractPerfSelectedSources,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                setContractPerfSelectedSources(values)
+                setCurrentPage(1)
+              },
+            }}
+            supplierGroups={{
+              options: narrowedSupplierGroupOptions,
+              selected: selectedSupplierGroups,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                handleContractPerfSupplierGroupsChange(values)
+                setCurrentPage(1)
+              },
+            }}
+            suppliers={{
+              options: narrowedSupplierOptions,
+              selected: selectedSuppliers,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                setSelectedSuppliers(values)
+                setCurrentPage(1)
+              },
+            }}
+            planningStatuses={selectedPlanningStatuses}
+            onPlanningStatusesChange={(values) => {
+              lockSection1FilterChange()
+              setSelectedPlanningStatuses(values)
+              setCurrentPage(1)
+            }}
+            anyActive={
+              contractDateScopeChanged ||
               contractPerfSelectedGroupPlants.length > 0 ||
               contractPerfSelectedDischargePorts.length > 0 ||
               contractPerfSelectedSources.length > 0 ||
@@ -4063,167 +4096,8 @@ function ContractsPageContent() {
               selectedSuppliers.length > 0 ||
               selectedPlanningStatuses.length > 0
             }
-            chips={[
-              ...(performancePeriod !== 'YTD' ||
-              !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo)
-                ? [
-                    {
-                      id: 'contract-date',
-                      label: formatContractDateScopeLabel(
-                        performancePeriod,
-                        dateFrom,
-                        dateTo,
-                        (p) => resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
-                        { prefix: true },
-                      ),
-                      onRemove: () => {
-                        lockSection1FilterChange()
-                        setPerformancePeriod('YTD')
-                        const ytd = resolvePerformancePeriodDateRange('YTD')
-                        setDateFrom(ytd.dateFrom)
-                        setDateTo(ytd.dateTo)
-                        setCurrentPage(1)
-                      },
-                    },
-                  ]
-                : []),
-              ...selectionChips('Region/Plant', contractPerfSelectedGroupPlants, (values) => {
-                lockSection1FilterChange()
-                handleContractPerfGroupPlantsChange(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Discharge Port', contractPerfSelectedDischargePorts, (values) => {
-                lockSection1FilterChange()
-                setContractPerfSelectedDischargePorts(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Product', contractPerfSelectedProducts, (values) => {
-                lockSection1FilterChange()
-                handleContractPerfProductsChange(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Incoterm', contractPerfSelectedIncoterms, (values) => {
-                lockSection1FilterChange()
-                setContractPerfSelectedIncoterms(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Source', contractPerfSelectedSources, (values) => {
-                lockSection1FilterChange()
-                setContractPerfSelectedSources(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Group', selectedSupplierGroups, (values) => {
-                lockSection1FilterChange()
-                handleContractPerfSupplierGroupsChange(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Supplier', selectedSuppliers, (values) => {
-                lockSection1FilterChange()
-                setSelectedSuppliers(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Planning', selectedPlanningStatuses, (values) => {
-                lockSection1FilterChange()
-                setSelectedPlanningStatuses(values)
-                setCurrentPage(1)
-              }),
-            ]}
-          >
-            <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-              <SearchableMultiSelect
-                label="Product"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedProductOptions}
-                selected={contractPerfSelectedProducts}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  handleContractPerfProductsChange(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No products"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Incoterm"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedIncotermOptions}
-                selected={contractPerfSelectedIncoterms}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  setContractPerfSelectedIncoterms(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No incoterms"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Source"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedSourceOptions}
-                selected={contractPerfSelectedSources}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  setContractPerfSelectedSources(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No sources"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Group Supplier"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedSupplierGroupOptions}
-                selected={selectedSupplierGroups}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  handleContractPerfSupplierGroupsChange(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No supplier groups"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Supplier"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedSupplierOptions}
-                selected={selectedSuppliers}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  setSelectedSuppliers(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No suppliers"
-                uppercaseOptionLabels
-              />
-              <div className="min-w-[7.5rem] flex-1">
-                <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Planning Status</label>
-                <FilterSingleSelect
-                  value={selectedPlanningStatuses[0] ?? 'ALL'}
-                  onChange={(value) => {
-                    lockSection1FilterChange()
-                    setSelectedPlanningStatuses(value === 'ALL' ? [] : [value])
-                    setCurrentPage(1)
-                  }}
-                  options={[
-                    { value: 'ALL', label: 'All' },
-                    ...PLANNING_STATUS_OPTIONS.map((value) => ({ value, label: value })),
-                  ]}
-                  ariaLabel="Planning Status"
-                  className="w-full min-w-0"
-                />
-              </div>
-            </div>
-          </ListFilterPanel>
+            onReset={resetContractPerformancePage}
+          />
           </>
         )}
 
@@ -4699,8 +4573,8 @@ function ContractsPageContent() {
         )}
 
         {/* Contracts List */}
-        <Card ref={contractsTableRef} className={!isContractPerformance ? 'overflow-hidden rounded-xl border-gray-200 shadow-none' : undefined}>
-          <CardHeader className={!isContractPerformance ? 'space-y-0 border-b border-gray-200 px-4 py-3' : undefined}>
+        <Card ref={contractsTableRef} className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+          <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div>
@@ -4788,47 +4662,34 @@ function ContractsPageContent() {
                 />
                 {isContractPerformance && (
                   <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                    variant="ghost"
+                    size="icon"
+                    className={iconButtonClass('download')}
                     title="Download Data"
                     aria-label="Download Data"
                     onClick={downloadContractPerformanceTable}
                     disabled={listFetching || section3TableLoading || downloadingTable || displayTotalContracts === 0}
                   >
                     {downloadingTable ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden />
                     ) : (
-                      <Download className="h-4 w-4 mr-2" />
+                      <Save className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                     )}
-                    Data
                   </Button>
                 )}
                 <div className="relative">
-                  {isContractPerformance ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowColumnsMenu(v => !v)}
-                      disabled={listFetching || section3TableLoading}
-                    >
-                      <SlidersHorizontal className="h-4 w-4 mr-2" />
-                      Columns
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className={iconButtonClass('neutral')}
-                      title="Visible columns"
-                      aria-label="Visible columns"
-                      aria-expanded={showColumnsMenu}
-                      onClick={() => setShowColumnsMenu(v => !v)}
-                      disabled={listFetching || section3TableLoading}
-                    >
-                      <Columns3 className="h-[1.125rem] w-[1.125rem]" />
-                    </Button>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={iconButtonClass('neutral')}
+                    title="Visible columns"
+                    aria-label="Visible columns"
+                    aria-expanded={showColumnsMenu}
+                    onClick={() => setShowColumnsMenu(v => !v)}
+                    disabled={listFetching || section3TableLoading}
+                  >
+                    <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+                  </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
                       <div className="flex items-center justify-between gap-2 mb-2">
@@ -4921,11 +4782,11 @@ function ContractsPageContent() {
               </div>
             </div>
           </CardHeader>
-          <CardContent className={!isContractPerformance ? 'p-0' : undefined}>
+          <CardContent className="p-0">
               <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
               <>
                 {/* Desktop compact table (Contracts + Contract Performance): semantic <table>, zebra on <tr>/<td> */}
-                <div className={cn('hidden lg:block overflow-hidden', isContractPerformance && 'border rounded-lg')}>
+                <div className="hidden lg:block overflow-hidden">
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
@@ -4967,7 +4828,7 @@ function ContractsPageContent() {
                           COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                           'klip-compact-table--perf-narrow-cols',
                           'klip-actions-w-2',
-                          !isContractPerformance && 'klip-table--directory',
+                          'klip-table--directory',
                         )}
                       >
                       <colgroup>
@@ -5375,7 +5236,7 @@ function ContractsPageContent() {
 
                       {/* Rows */}
                       <tbody
-                        className={`divide-y ${isContractPerformance ? 'divide-gray-200' : 'divide-gray-100'} transition-opacity duration-200 ${
+                        className={`divide-y divide-gray-100 transition-opacity duration-200 ${
                           (listFetching || (isContractPerformance && contractPerfSection3Loading)) &&
                           contracts.length > 0
                             ? 'opacity-65'
@@ -5400,7 +5261,7 @@ function ContractsPageContent() {
                           </tr>
                         ) : (
                           sortedContracts.map((contract, idx) => {
-                            const stripeClass = isContractPerformance && idx % 2 !== 0 ? 'bg-gray-50' : 'bg-white'
+                            const stripeClass = 'bg-white'
                             return (
                           <tr key={contract.id} className={stripeClass}>
                                 {visibleColumns.map(col => {
@@ -5496,7 +5357,7 @@ function ContractsPageContent() {
                 </div>
 
                 {/* Mobile/tablet cards */}
-                <div className={cn('lg:hidden space-y-2', !isContractPerformance && 'px-4 py-3')}>
+                <div className="lg:hidden space-y-2 px-4 py-3">
                   {(listFetching ||
                     (isContractPerformance && contractPerfSection3Loading)) &&
                   contracts.length === 0 ? (
@@ -5654,21 +5515,11 @@ function ContractsPageContent() {
               </div>
             
             {/* Pagination */}
-            {isContractPerformance ? (
-              <ListPager
-                page={currentPage}
-                totalPages={totalPages}
-                onPageChange={handlePageChange}
-                disabled={listFetching || section3TableLoading}
-                summary={`Page ${currentPage}/${totalPages} · ${displayTotalContracts.toLocaleString('en-US')} contracts`}
-              />
-            ) : (
-              <MasterTableFooter
-                countText={contractsRangeText(currentPage, contractsPerPage, displayTotalContracts)}
-                kinds={[]}
-                pager={{ page: currentPage, totalPages, onPageChange: handlePageChange, disabled: listFetching || section3TableLoading }}
-              />
-            )}
+            <MasterTableFooter
+              countText={contractsRangeText(currentPage, contractsPerPage, displayTotalContracts)}
+              kinds={[]}
+              pager={{ page: currentPage, totalPages, onPageChange: handlePageChange, disabled: listFetching || section3TableLoading }}
+            />
           </CardContent>
         </Card>
 
