@@ -25,7 +25,7 @@ export function MasterCodeBadge({
   return (
     <span
       title={text}
-      className={`inline-block whitespace-nowrap rounded-md border px-2 py-0.5 text-xs leading-4 ${fit ? '' : 'max-w-full truncate'} ${MASTER_CODE_TONE[kind]}`}
+      className={`inline-block whitespace-nowrap rounded-md border px-2 py-0.5 text-xs leading-4 normal-case ${fit ? '' : 'max-w-full truncate'} ${MASTER_CODE_TONE[kind]}`}
     >
       {text}
     </span>

@@ -34,6 +34,7 @@ interface Props<T> {
 
 /**
  * The Master list in the Users style: a light header, roomy rows with an avatar and a two-line first cell, chips for status and quiet icon buttons.
+ * Every value in a row is shown in capitals so the columns read evenly; the chips and badges keep their own case (normal-case on them), and the header does not change.
  * The page owns the data, the sorting and the paging; this only draws.
  */
 export function MasterListTable<T>({
@@ -60,7 +61,7 @@ export function MasterListTable<T>({
             {columns.map((col) => {
               const active = sortKey === col.id
               return (
-                <th key={col.id} scope="col" className={`px-4 py-2.5 ${col.className ?? ''}`} aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}>
+                <th key={col.id} scope="col" className={`px-4 py-2.5 font-medium ${col.className ?? ''}`} aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}>
                   {col.sortable && onSort ? (
                     <button type="button" onClick={() => onSort(col.id)} className="inline-flex items-center gap-1 hover:text-gray-800">
                       {col.label}
@@ -116,7 +117,7 @@ export function MasterListTable<T>({
                 } ${loading ? 'opacity-60' : ''}`}
               >
                 {columns.map((col) => (
-                  <td key={col.id} className={`px-4 py-3 align-middle ${col.className ?? ''}`}>
+                  <td key={col.id} className={`px-4 py-3 align-middle uppercase ${col.className ?? ''}`}>
                     {col.render(row)}
                   </td>
                 ))}
@@ -173,7 +174,7 @@ export function MasterDhmChip({ row }: { row: DhmStatusRow }) {
   const hint = dhmStatusHint(row)
   const tone = CHIP_TONE[chip.tone]
   const body = (
-    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${tone.chip}`}>
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium normal-case ${tone.chip}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} aria-hidden />
       {chip.label}
     </span>

@@ -246,7 +246,7 @@ export function ReferenceMasterPage({
       label: field.label,
       className: 'whitespace-nowrap',
       render: () => (
-        <span className="inline-block whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs leading-4 text-slate-600">{field.value}</span>
+        <span className="inline-block whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs leading-4 normal-case text-slate-600">{field.value}</span>
       ),
     })),
     ...(syncDhm

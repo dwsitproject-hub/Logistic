@@ -298,7 +298,7 @@ export default function MasterVesselPage() {
             <div className="truncate text-sm font-medium tabular-nums text-gray-900">
               {formatVesselCapacity(row.vessel_capacity_mt)}
               {row.vessel_capacity_mt != null ? ' MT' : ''}
-              {row.heating ? <span className="ml-2 rounded-full bg-orange-50 px-2 py-0.5 text-[0.6875rem] font-medium text-orange-700">Heating</span> : null}
+              {row.heating ? <span className="ml-2 rounded-full bg-orange-50 px-2 py-0.5 text-[0.6875rem] font-medium normal-case text-orange-700">Heating</span> : null}
             </div>
             <div className="truncate text-xs text-gray-500" title={line}>
               {line}
