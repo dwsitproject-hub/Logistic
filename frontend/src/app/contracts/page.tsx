@@ -5,13 +5,12 @@ import * as XLSX from 'xlsx'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { StitchFields } from '@/components/shared/stitchField'
-import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, CircleCheck, Clock, Columns3, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
 import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
@@ -91,6 +90,8 @@ import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import { periodRangeMatchesDates } from '@/components/performance/PerformanceContractDateControl'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
+import { ContractsFilterBar, ContractsFilterField } from '@/components/contracts/ContractsFilterBar'
+import { MasterKpis } from '@/components/master/MasterKpis'
 import {
   formatContractDateScopeLabel,
   PerformanceContractDateControl,
@@ -2538,6 +2539,106 @@ function ContractsPageContent() {
     statusFilter !== 'All Status' ||
     hasActiveSectionOneColumnFilters(columnFilters)
 
+  /*
+   * The three cards. Each is the same list request as the table (same search, filters and dates) with limit=1, so the
+   * count is pagination.total; only the status is set per card, and the Status filter itself never changes them.
+   * The filter parameters mirror fetchContracts for the Contracts page: keep the two in step.
+   */
+  const [contractStatusCounts, setContractStatusCounts] = useState<{ total: number | null; open: number | null; close: number | null }>({
+    total: null,
+    open: null,
+    close: null,
+  })
+  useEffect(() => {
+    if (!authReady || !userScopeReady || isContractPerformance) return
+    let cancelled = false
+    const base = new URLSearchParams()
+    const searchTrim = searchTerm.trim()
+    if (searchTrim.length >= 2) base.append('search', searchTrim)
+    const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+      selectedIncoterms,
+      selectedProducts,
+      selectedGroups,
+      selectedSuppliers,
+    })
+    if (Object.keys(mergedColumnFilters).length > 0) base.append('columnFilters', JSON.stringify(mergedColumnFilters))
+    if (b2bFlagFilter && b2bFlagFilter !== 'ALL') base.append('b2bFlag', b2bFlagFilter)
+    if (presenceFilter !== 'ALL') base.append('presence', presenceFilter)
+    selectedGroupPlants.forEach((plant) => base.append('plant', plant))
+    if (dateFrom) base.append('dateFrom', dateFrom)
+    if (dateTo) base.append('dateTo', dateTo)
+    if (searchParams.get('outstanding') === 'true') base.append('outstanding', 'true')
+    base.append('page', '1')
+    base.append('limit', '1')
+    const countFor = async (status?: 'Open' | 'Close'): Promise<number | null> => {
+      const params = new URLSearchParams(base)
+      if (status) params.set('status', status)
+      const url = `/contracts?${params.toString()}`
+      try {
+        const { data } = await cachedGet(buildCacheKey('GET', url), (signal) => api.get(url, { signal }).then((r) => r.data))
+        const total = (data as { data?: { pagination?: { total?: number } } })?.data?.pagination?.total
+        return typeof total === 'number' ? total : null
+      } catch {
+        return null
+      }
+    }
+    void Promise.all([countFor(), countFor('Open'), countFor('Close')]).then(([total, open, close]) => {
+      if (!cancelled) setContractStatusCounts({ total, open, close })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    authReady,
+    userScopeReady,
+    isContractPerformance,
+    searchTerm,
+    columnFilters,
+    selectedIncoterms,
+    selectedProducts,
+    selectedGroups,
+    selectedSuppliers,
+    b2bFlagFilter,
+    presenceFilter,
+    selectedGroupPlants,
+    dateFrom,
+    dateTo,
+    searchParams,
+  ])
+
+  /** Status and Incoterm: drawn in the filter row from `lg` up and inside More filters below it, so one render function serves both. */
+  const contractStatusSelect = (className: string) => (
+    <FilterSingleSelect
+      value={statusFilter}
+      onChange={(value) => {
+        setStatusFilter(value)
+        setCurrentPage(1)
+      }}
+      options={[
+        { value: 'All Status', label: 'All status' },
+        { value: 'Open', label: 'Open' },
+        { value: 'Close', label: 'Close' },
+      ]}
+      ariaLabel="Contract status filter"
+      className={`${className} min-w-0`}
+    />
+  )
+  const contractIncotermSelect = (className: string) => (
+    <FilterSingleSelect
+      value={selectedIncoterms[0] ?? 'ALL'}
+      onChange={(value) => {
+        setSelectedIncoterms(value === 'ALL' ? [] : [value])
+        setCurrentPage(1)
+      }}
+      options={[
+        { value: 'ALL', label: 'All incoterms' },
+        ...availableIncoterms.map((inc) => ({ value: inc, label: inc })),
+      ]}
+      ariaLabel="Incoterm filter"
+      className={`${className} min-w-0`}
+    />
+  )
+
   const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
   const formatNumber = (num: number | string) => {
@@ -3847,44 +3948,15 @@ function ContractsPageContent() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        {/* Header */}
+        {/* The cargo readiness file input; its Template / Upload icon buttons sit in the filter row below. */}
         {!isContractPerformance && (
-          <div className="flex items-center justify-end">
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                title="Download Cargo Readiness Date template"
-                aria-label="Download Cargo Readiness Date template"
-                onClick={downloadCargoReadinessTemplate}
-                className="border-green-600 text-green-700 hover:bg-green-50"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Template
-              </Button>
-              <input
-                id="cargo-readiness-upload"
-                type="file"
-                accept={CARGO_READINESS_UPLOAD_ACCEPT}
-                onChange={handleCargoReadinessUpload}
-                className="hidden"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                title="Upload Cargo Readiness Date (Excel)"
-                aria-label="Upload Cargo Readiness Date (Excel)"
-                disabled={csvCargoUploading}
-                onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
-              >
-                {csvCargoUploading ? (
-                  <><span className="h-4 w-4 mr-2 inline-block border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />Uploading...</>
-                ) : (
-                  <><Upload className="h-4 w-4 mr-2" />Cargo Readiness</>
-                )}
-              </Button>
-            </div>
-          </div>
+          <input
+            id="cargo-readiness-upload"
+            type="file"
+            accept={CARGO_READINESS_UPLOAD_ACCEPT}
+            onChange={handleCargoReadinessUpload}
+            className="hidden"
+          />
         )}
 
         {isContractPerformance && (
@@ -4420,151 +4492,155 @@ function ContractsPageContent() {
             uppercaseOptionLabels
           />
         </HeaderFilterSlot>
-        <ListFilterPanel
-          onReset={clearContractsPageFilters}
-          showReset={hasActiveContractsPageFilters || searchDraft.trim().length > 0}
-          chips={[
-            ...(searchTerm.trim()
-              ? [{ id: 'search', label: `Search: ${searchTerm.trim()}`, onRemove: () => { setSearchDraft(''); setSearchTerm(''); setCurrentPage(1) } }]
-              : []),
-            ...(statusFilter !== 'All Status'
-              ? [{ id: 'status', label: `Status: ${statusFilter}`, onRemove: () => { setStatusFilter('All Status'); setCurrentPage(1) } }]
-              : []),
-            ...(b2bFlagFilter !== 'ALL'
-              ? [{ id: 'type', label: `Type: ${b2bFlagFilter}`, onRemove: () => setB2bFlagFilter('ALL') }]
-              : []),
-            ...selectionChips('Incoterm', selectedIncoterms, (values) => { setSelectedIncoterms(values); setCurrentPage(1) }),
-            ...selectionChips('Product', selectedProducts, handleProductsChange),
-            ...selectionChips('Group', selectedGroups, setSelectedGroups),
-            ...selectionChips('Supplier', selectedSuppliers, setSelectedSuppliers),
-            ...selectionChips('Region/Plant', selectedGroupPlants, handleGroupPlantsChange),
-            ...(performancePeriod !== 'YTD' ||
-            !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo)
-              ? [{
-                  id: 'contract-date',
-                  label: formatContractDateScopeLabel(
-                    performancePeriod,
-                    dateFrom,
-                    dateTo,
-                    (p) => resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
-                    { prefix: true },
-                  ),
-                  onRemove: () => {
-                    setPerformancePeriod('YTD')
-                    const ytd = resolvePerformancePeriodDateRange('YTD')
-                    setDateFrom(ytd.dateFrom)
-                    setDateTo(ytd.dateTo)
-                    setCurrentPage(1)
-                  },
-                }]
-              : []),
+        <MasterKpis
+          columns={3}
+          items={[
+            {
+              id: 'total',
+              icon: <FileText className="h-4 w-4" />,
+              label: 'Total contracts',
+              value: contractStatusCounts.total,
+              tone: 'bg-blue-50 text-blue-600',
+              onSelect: () => { setStatusFilter('All Status'); setCurrentPage(1) },
+              active: statusFilter === 'All Status',
+            },
+            {
+              id: 'open',
+              icon: <Clock className="h-4 w-4" />,
+              label: 'Open',
+              value: contractStatusCounts.open,
+              tone: 'bg-amber-50 text-amber-600',
+              onSelect: () => { setStatusFilter('Open'); setCurrentPage(1) },
+              active: statusFilter === 'Open',
+            },
+            {
+              id: 'close',
+              icon: <CircleCheck className="h-4 w-4" />,
+              label: 'Close',
+              value: contractStatusCounts.close,
+              tone: 'bg-emerald-50 text-emerald-600',
+              onSelect: () => { setStatusFilter('Close'); setCurrentPage(1) },
+              active: statusFilter === 'Close',
+            },
           ]}
-        >
-          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-            <div className="min-w-[12rem] flex-[1.4]">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
-              <div className="relative">
-                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    placeholder="Search by Contract ID, Contract Ext No, PO, Supplier, or Product..."
-                    value={searchDraft}
-                    onChange={(e) => setSearchDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        applySearch()
-                      }
-                    }}
-                    className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
-                  />
-                </div>
-              </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Status</label>
-              <FilterSingleSelect
-                value={statusFilter}
-                onChange={(value) => {
-                  setStatusFilter(value)
-                  setCurrentPage(1)
-                }}
-                options={[
-                  { value: 'All Status', label: 'All' },
-                  { value: 'Open', label: 'Open' },
-                  { value: 'Close', label: 'Close' },
-                ]}
-                ariaLabel="Contract status filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Contract Type</label>
-              <FilterSingleSelect
-                value={b2bFlagFilter}
-                onChange={setB2bFlagFilter}
-                options={[
-                  { value: 'ALL', label: 'All' },
-                  ...availableB2bFlags.map((flag) => ({ value: flag, label: flag })),
-                ]}
-                ariaLabel="Contract type filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Incoterm</label>
-              <FilterSingleSelect
-                value={selectedIncoterms[0] ?? 'ALL'}
-                onChange={(value) => {
-                  setSelectedIncoterms(value === 'ALL' ? [] : [value])
-                  setCurrentPage(1)
-                }}
-                options={[
-                  { value: 'ALL', label: 'All' },
-                  ...availableIncoterms.map((inc) => ({ value: inc, label: inc })),
-                ]}
-                ariaLabel="Incoterm filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <PerformanceScopeFilters
-              inlineRow
-              hideGroupPlantFilter
-              uppercaseGroupPlantLabels
-              microLabels
-              showIncoterm={false}
-                  incotermOptions={availableIncoterms}
-                  selectedIncoterms={selectedIncoterms}
-                  onIncotermsChange={setSelectedIncoterms}
-                  showProductFilter
-                  productOptions={availableProducts}
-                  selectedProducts={selectedProducts}
-                  onProductsChange={handleProductsChange}
-                  showGroupFilter
-                  groupOptions={availableGroups}
-                  selectedGroups={selectedGroups}
-                  onGroupsChange={setSelectedGroups}
-                  showSupplierFilter
-                  supplierOptions={availableSuppliers}
-                  selectedSuppliers={selectedSuppliers}
-                  onSuppliersChange={setSelectedSuppliers}
-                  groupPlantOptions={availableGroupPlants}
-                  selectedGroupPlants={selectedGroupPlants}
-                  onGroupPlantsChange={handleGroupPlantsChange}
-                  dateFrom={dateFrom}
-                  dateTo={dateTo}
-                  onDateFromChange={setDateFrom}
-                  onDateToChange={setDateTo}
-                  showDateRange={false}
-                  productPlaceholder="All"
-              groupPlaceholder="All"
-              supplierPlaceholder="All"
-              productEmptyMessage="Loading products..."
-                  groupEmptyMessage="Loading groups..."
-                  supplierEmptyMessage="Loading suppliers..."
-                  groupPlantPlaceholder="All"
-                  groupPlantEmptyMessage="No region/plant values"
+        />
+        <ContractsFilterBar
+          search={searchDraft}
+          onSearchChange={setSearchDraft}
+          onSearchSubmit={applySearch}
+          placeholder="Search by Contract ID, Contract Ext No, PO, Supplier, or Product..."
+          wide={
+            <>
+              {contractStatusSelect('w-[8.5rem] [&_select]:h-9')}
+              {contractIncotermSelect('w-[8.5rem] [&_select]:h-9')}
+            </>
+          }
+          narrowOnly={
+            <>
+              <ContractsFilterField label="Status">{contractStatusSelect('w-full')}</ContractsFilterField>
+              <ContractsFilterField label="Incoterm">{contractIncotermSelect('w-full')}</ContractsFilterField>
+            </>
+          }
+          more={
+            <>
+              <ContractsFilterField label="Contract Type">
+                <FilterSingleSelect
+                  value={b2bFlagFilter}
+                  onChange={setB2bFlagFilter}
+                  options={[
+                    { value: 'ALL', label: 'All' },
+                    ...availableB2bFlags.map((flag) => ({ value: flag, label: flag })),
+                  ]}
+                  ariaLabel="Contract type filter"
+                  className="w-full min-w-0"
                 />
-          </div>
-        </ListFilterPanel>
+              </ContractsFilterField>
+              <PerformanceScopeFilters
+                inlineRow
+                hideGroupPlantFilter
+                uppercaseGroupPlantLabels
+                microLabels
+                showIncoterm={false}
+                incotermOptions={availableIncoterms}
+                selectedIncoterms={selectedIncoterms}
+                onIncotermsChange={setSelectedIncoterms}
+                showProductFilter
+                productOptions={availableProducts}
+                selectedProducts={selectedProducts}
+                onProductsChange={handleProductsChange}
+                showGroupFilter
+                groupOptions={availableGroups}
+                selectedGroups={selectedGroups}
+                onGroupsChange={setSelectedGroups}
+                showSupplierFilter
+                supplierOptions={availableSuppliers}
+                selectedSuppliers={selectedSuppliers}
+                onSuppliersChange={setSelectedSuppliers}
+                groupPlantOptions={availableGroupPlants}
+                selectedGroupPlants={selectedGroupPlants}
+                onGroupPlantsChange={handleGroupPlantsChange}
+                dateFrom={dateFrom}
+                dateTo={dateTo}
+                onDateFromChange={setDateFrom}
+                onDateToChange={setDateTo}
+                showDateRange={false}
+                productPlaceholder="All"
+                groupPlaceholder="All"
+                supplierPlaceholder="All"
+                productEmptyMessage="Loading products..."
+                groupEmptyMessage="Loading groups..."
+                supplierEmptyMessage="Loading suppliers..."
+                groupPlantPlaceholder="All"
+                groupPlantEmptyMessage="No region/plant values"
+              />
+            </>
+          }
+          activeMore={
+            (b2bFlagFilter !== 'ALL' ? 1 : 0) +
+            (selectedProducts.length > 0 ? 1 : 0) +
+            (selectedGroups.length > 0 ? 1 : 0) +
+            (selectedSuppliers.length > 0 ? 1 : 0)
+          }
+          activeAll={
+            (b2bFlagFilter !== 'ALL' ? 1 : 0) +
+            (selectedProducts.length > 0 ? 1 : 0) +
+            (selectedGroups.length > 0 ? 1 : 0) +
+            (selectedSuppliers.length > 0 ? 1 : 0) +
+            (statusFilter !== 'All Status' ? 1 : 0) +
+            (selectedIncoterms.length > 0 ? 1 : 0)
+          }
+          anyActive={hasActiveContractsPageFilters || searchDraft.trim().length > 0}
+          onReset={clearContractsPageFilters}
+          actions={
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+                title="Download Cargo Readiness Date template"
+                aria-label="Download Cargo Readiness Date template"
+                onClick={downloadCargoReadinessTemplate}
+              >
+                <Download className="h-[1.125rem] w-[1.125rem]" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                title="Upload Cargo Readiness Date (Excel)"
+                aria-label="Upload Cargo Readiness Date (Excel)"
+                disabled={csvCargoUploading}
+                onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
+              >
+                {csvCargoUploading ? (
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                ) : (
+                  <Upload className="h-[1.125rem] w-[1.125rem]" />
+                )}
+              </Button>
+            </>
+          }
+        />
         </>
         )}
 
@@ -4675,15 +4751,30 @@ function ContractsPageContent() {
                   </Button>
                 )}
                 <div className="relative">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowColumnsMenu(v => !v)}
-                    disabled={listFetching || section3TableLoading}
-                  >
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
-                  </Button>
+                  {isContractPerformance ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowColumnsMenu(v => !v)}
+                      disabled={listFetching || section3TableLoading}
+                    >
+                      <SlidersHorizontal className="h-4 w-4 mr-2" />
+                      Columns
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 text-slate-600 hover:bg-slate-100 hover:text-slate-800"
+                      title="Visible columns"
+                      aria-label="Visible columns"
+                      aria-expanded={showColumnsMenu}
+                      onClick={() => setShowColumnsMenu(v => !v)}
+                      disabled={listFetching || section3TableLoading}
+                    >
+                      <Columns3 className="h-[1.125rem] w-[1.125rem]" />
+                    </Button>
+                  )}
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
                       <div className="flex items-center justify-between gap-2 mb-2">
