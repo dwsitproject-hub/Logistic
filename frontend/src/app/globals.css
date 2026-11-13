@@ -454,7 +454,9 @@
 
   /* Icon-only status columns (DHM status, Klip transaction): the width of a one-icon Actions column (56px, 12px each side), the same on every master table. */
   .klip-compact-table--operational th.klip-op-col--icon,
-  .klip-compact-table--operational td.klip-op-col--icon {
+  .klip-compact-table--operational td.klip-op-col--icon,
+  /* the master list tables size their cells to their values ("fit-values": width auto, inner width max-content): those rules are stronger, so this one repeats the class chain to win */
+  .klip-master-list-table.klip-master-fit-values td.klip-compact-table-cell.klip-op-col--icon {
     width: 56px;
     min-width: 56px;
     max-width: 56px;
@@ -468,9 +470,11 @@
   }
 
   /* The inner wrapper of a data cell is shrink-wrapped and left-aligned, which put the icon 12px from the left edge and 16px from the right one: centre it so both gaps are the same. */
-  .klip-compact-table--operational td.klip-op-col--icon .klip-compact-table-cell-inner {
+  .klip-compact-table--operational td.klip-op-col--icon .klip-compact-table-cell-inner,
+  .klip-master-list-table.klip-master-fit-values td.klip-compact-table-cell.klip-op-col--icon .klip-compact-table-cell-inner {
     width: 100%;
     min-width: 0;
+    max-width: 100%;
     align-items: center;
     justify-content: center;
     text-align: center;
