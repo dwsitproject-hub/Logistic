@@ -13,6 +13,7 @@ import { resolveMasterVessel } from '../services/resolveMasterVessel.service';
 import {
   buildMasterVesselListWhere,
   buildMasterVesselOrderBy,
+  MASTER_VESSEL_DHM_SOURCE,
   MASTER_VESSEL_KLIP_TRANSACTION_SQL,
   MASTER_VESSEL_LAMBUNG_OPTIONS,
   MASTER_VESSEL_PAIR_CTE,
@@ -24,6 +25,7 @@ import {
   parseMasterVesselListQuery,
 } from '../utils/masterVesselListFilters';
 import { attachDhmPushState, pushMasterVesselToDhm } from '../dhm';
+import { masterSummarySql, toMasterSummaryCounts } from '../utils/masterSummary';
 import type { KlipVesselForDhm } from '../dhm/types';
 
 /** Charter type accepts T/C, V/C, or CIF (case-insensitive); anything else stores NULL. */
@@ -139,6 +141,25 @@ export const listMasterVessels = async (req: AuthRequest, res: Response): Promis
     logger.error('List master vessels error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to fetch master vessels' } });
     return;
+  }
+};
+
+/**
+ * The cards above the Master Vessel list (GET /master-vessels/summary): all vessels, how many DHM has, how many it does not, how many failed to deliver, and how many
+ * KLIP uses = the "In KLIP" flag of the table (a shipment resolves to the vessel, or to the other half of its tug/barge pair). Counts are over ALL vessels, not the page or the
+ * filters on screen.
+ */
+export const getMasterVesselSummary = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await query(
+      `WITH ${MASTER_VESSEL_PAIR_USE_CTE},
+      ${MASTER_VESSEL_USED_IDS_CTE}
+      ${masterSummarySql(MASTER_VESSEL_DHM_SOURCE, MASTER_VESSEL_KLIP_TRANSACTION_SQL)}`,
+    );
+    res.json({ success: true, data: toMasterSummaryCounts(result.rows[0]) });
+  } catch (error) {
+    logger.error('Master vessel summary error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the Master Vessel summary' } });
   }
 };
 

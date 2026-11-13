@@ -1,34 +1,39 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Anchor, Cloud, CloudOff, Pencil, Plus, Ship } from 'lucide-react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { StitchFields } from '@/components/shared/stitchField'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import api from '@/lib/api'
-import {
-  EditVesselModal,
-  type MasterVesselFormData,
-} from '@/components/master-vessel/EditVesselModal'
-import {
-  heatingFilterToApi,
-  MasterVesselGlobalFiltersSection,
-  termsFilterToApi,
-  type MasterVesselFilterOptions,
-} from '@/components/master-vessel/MasterVesselGlobalFiltersSection'
+import { EditVesselModal, type MasterVesselFormData } from '@/components/master-vessel/EditVesselModal'
+import { heatingFilterToApi, termsFilterToApi, type MasterVesselFilterOptions } from '@/components/master-vessel/MasterVesselGlobalFiltersSection'
+import { KlipTransactionBadge } from '@/components/master-vessel/KlipTransactionBadge'
 import { MasterVesselReviewPanel } from '@/components/master-vessel/MasterVesselReviewPanel'
-import { MasterVesselTable } from '@/components/master-vessel/MasterVesselTable'
-import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
+import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
-import { MASTER_VESSEL_COLUMNS, type MasterVesselColumnId } from '@/lib/masterVesselColumns'
-import { useListColumnLayout } from '@/lib/listColumnLayout'
-import { Plus } from 'lucide-react'
-
-const VESSEL_LAYOUT_COLUMNS = MASTER_VESSEL_COLUMNS.map((col) => ({ id: col.id, label: col.label }))
+import { MultiValueCell } from '@/components/shared/MultiValueCell'
+import { ListPager } from '@/components/performance/ListPager'
+import { MasterKpis } from '@/components/master/MasterKpis'
+import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
+import { formatVesselCapacity, formatVesselMetres } from '@/lib/masterVesselColumns'
+import { masterCountText, type MasterDhmFilter } from '@/lib/masterDirectory'
+import { multiValuesOf } from '@/lib/multiValueCell'
 
 interface MasterVessel extends MasterVesselFormData {
   id: string
+  pair_code?: string | null
+}
+
+interface VesselSummary {
+  total: number
+  synced: number
+  notSynced: number
+  failed: number
+  usedInKlip: number
 }
 
 const VESSELS_PER_PAGE = 20
@@ -37,6 +42,35 @@ const EMPTY_FILTER_OPTIONS: MasterVesselFilterOptions = {
   owners: [],
   vesselTypes: ['BARGE', 'TANKER', 'SPOB', 'TUG BOAT'],
   terms: ['T/C', 'V/C', 'CIF'],
+}
+
+const TERMS_FILTER_OPTIONS = ['T/C', 'V/C', 'CIF', '(Blank)']
+const KLIP_TRANSACTION_FILTER_OPTIONS = ['Yes', 'No']
+
+/** A multi-select that looks like the Select next to it in the filter row: one 36px field, the name as the placeholder. */
+const FILTER_BUTTON_CLASS =
+  'w-full flex items-center justify-between gap-2 h-9 px-3 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
+
+type VesselSortKey = 'vessel_name' | 'vessel_code' | 'vessel_codes_sap' | 'vessel_type' | 'vessel_capacity_mt' | 'klip_transaction' | 'dhm_status'
+
+function ownerLine(row: MasterVessel): string {
+  const owner = row.vessel_owner?.trim()
+  const code = row.sap_vendor_code?.trim()
+  if (owner && code) return `${owner} · ${code}`
+  return owner || code || 'No owner yet'
+}
+
+function typeLine(row: MasterVessel): string {
+  return [row.terms, row.lambung_type].filter(Boolean).join(' · ') || 'No charter type'
+}
+
+function specsLine(row: MasterVessel): string {
+  const parts: string[] = []
+  if (row.vessel_draft != null && String(row.vessel_draft).trim() !== '') parts.push(`Draft ${formatVesselMetres(row.vessel_draft)} m`)
+  if (row.vessel_length_overall) parts.push(`LOA ${formatVesselMetres(row.vessel_length_overall)} m`)
+  if (row.vessel_hull_type) parts.push(row.vessel_hull_type)
+  if (row.vessel_registration_year != null) parts.push(String(row.vessel_registration_year))
+  return parts.join(' · ') || 'No dimensions yet'
 }
 
 export default function MasterVesselPage() {
@@ -55,6 +89,8 @@ export default function MasterVesselPage() {
   const [selectedVesselTypes, setSelectedVesselTypes] = useState<string[]>([])
   const [selectedTerms, setSelectedTerms] = useState<string[]>([])
   const [selectedKlipTransaction, setSelectedKlipTransaction] = useState<string[]>([])
+  const [dhm, setDhm] = useState<MasterDhmFilter>('all')
+  const [summary, setSummary] = useState<VesselSummary | null>(null)
 
   const [modalOpen, setModalOpen] = useState(false)
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
@@ -63,39 +99,24 @@ export default function MasterVesselPage() {
   // "Perlu review": vessels KLIP registered from a SAP name and is not sure of (the badge counts them)
   const [view, setView] = useState<'all' | 'review'>('all')
   const [reviewCount, setReviewCount] = useState(0)
-  const [sortKey, setSortKey] = useState<MasterVesselColumnId>('vessel_name')
+  const [sortKey, setSortKey] = useState<VesselSortKey>('vessel_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const vesselColumns = useListColumnLayout('master-vessel.visibleColumns.v1', VESSEL_LAYOUT_COLUMNS)
 
-  const hasActiveFilters = useMemo(
-    () =>
-      searchTerm.length > 0 ||
-      selectedOwners.length > 0 ||
-      selectedVesselTypes.length > 0 ||
-      selectedTerms.length > 0 ||
-      selectedKlipTransaction.length > 0,
-    [
-      searchTerm,
-      selectedOwners,
-      selectedVesselTypes,
-      selectedTerms,
-      selectedKlipTransaction,
-    ],
-  )
+  const extraFiltersOn =
+    selectedOwners.length > 0 || selectedVesselTypes.length > 0 || selectedTerms.length > 0 || selectedKlipTransaction.length > 0
+  const filtersOn = searchTerm.length > 0 || extraFiltersOn || dhm !== 'all'
 
   const fetchVessels = useCallback(
     async (page = 1) => {
       try {
         setLoading(true)
-        const params: Record<string, unknown> = {
-          page,
-          limit: VESSELS_PER_PAGE,
-        }
+        const params: Record<string, unknown> = { page, limit: VESSELS_PER_PAGE }
         if (searchTerm.length >= 2) params.search = searchTerm
         if (selectedOwners.length) params.owners = selectedOwners
         if (selectedVesselTypes.length) params.vesselTypes = selectedVesselTypes
         if (selectedTerms.length) params.terms = termsFilterToApi(selectedTerms)
         if (selectedKlipTransaction.length) params.klipTransaction = heatingFilterToApi(selectedKlipTransaction)
+        if (dhm !== 'all') params.dhm = dhm
         params.sortKey = sortKey
         params.sortDir = sortDir
 
@@ -112,16 +133,18 @@ export default function MasterVesselPage() {
         setLoading(false)
       }
     },
-    [
-      searchTerm,
-      selectedOwners,
-      selectedVesselTypes,
-      selectedTerms,
-      selectedKlipTransaction,
-      sortKey,
-      sortDir,
-    ],
+    [searchTerm, selectedOwners, selectedVesselTypes, selectedTerms, selectedKlipTransaction, dhm, sortKey, sortDir],
   )
+
+  const fetchSummary = useCallback(async () => {
+    try {
+      const res = await api.get('/master-vessels/summary')
+      setSummary(res.data?.data ?? null)
+    } catch (err) {
+      // the cards are informational: the list still works without them
+      console.error('Failed to load the vessel summary', err)
+    }
+  }, [])
 
   useEffect(() => {
     try {
@@ -142,6 +165,10 @@ export default function MasterVesselPage() {
   useEffect(() => {
     refreshReviewCount()
   }, [refreshReviewCount])
+
+  useEffect(() => {
+    void fetchSummary()
+  }, [fetchSummary])
 
   useEffect(() => {
     void api
@@ -165,24 +192,17 @@ export default function MasterVesselPage() {
 
   useEffect(() => {
     void fetchVessels(1)
-  }, [
-    searchTerm,
-    selectedOwners,
-    selectedVesselTypes,
-    selectedTerms,
-    selectedKlipTransaction,
-    sortKey,
-    sortDir,
-    fetchVessels,
-  ])
+  }, [searchTerm, selectedOwners, selectedVesselTypes, selectedTerms, selectedKlipTransaction, dhm, sortKey, sortDir, fetchVessels])
 
-  const handleSortChange = (colId: MasterVesselColumnId) => {
-    setSortDir((prev) => (sortKey === colId ? (prev === 'asc' ? 'desc' : 'asc') : 'asc'))
-    setSortKey(colId)
+  const refresh = () => {
+    void fetchVessels(currentPage)
+    void fetchSummary()
   }
 
-  const applySearch = () => {
-    setSearchTerm(searchDraft.trim().length >= 2 ? searchDraft.trim() : '')
+  const handleSortChange = (colId: string) => {
+    const id = colId as VesselSortKey
+    setSortDir((prev) => (sortKey === id ? (prev === 'asc' ? 'desc' : 'asc') : 'asc'))
+    setSortKey(id)
   }
 
   const handlePageChange = (newPage: number) => {
@@ -199,6 +219,7 @@ export default function MasterVesselPage() {
     setSelectedVesselTypes([])
     setSelectedTerms([])
     setSelectedKlipTransaction([])
+    setDhm('all')
   }
 
   // the Edit button lives in the All Vessel list: show the vessel there
@@ -220,197 +241,252 @@ export default function MasterVesselPage() {
     setModalOpen(true)
   }
 
-  const renderPagination = () => {
-    if (totalPages <= 1) return null
-    return (
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => handlePageChange(currentPage - 1)}
-          disabled={currentPage <= 1 || loading}
-        >
-          Previous
-        </Button>
-        <div className="flex items-center gap-1">
-          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-            let pageNum: number
-            if (totalPages <= 5) {
-              pageNum = i + 1
-            } else if (currentPage <= 3) {
-              pageNum = i + 1
-            } else if (currentPage >= totalPages - 2) {
-              pageNum = totalPages - 4 + i
-            } else {
-              pageNum = currentPage - 2 + i
-            }
-            return (
-              <Button
-                key={pageNum}
-                variant={currentPage === pageNum ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => handlePageChange(pageNum)}
-                disabled={loading}
-                className="min-w-[40px]"
-              >
-                {pageNum}
-              </Button>
-            )
-          })}
+  const termOptions = useMemo(
+    () => [...TERMS_FILTER_OPTIONS, ...filterOptions.terms.filter((t) => t !== 'T/C' && t !== 'V/C' && t !== 'CIF')],
+    [filterOptions.terms],
+  )
+
+  const columns: MasterTableColumn<MasterVessel>[] = [
+    {
+      id: 'vessel_name',
+      label: 'Vessel',
+      sortable: true,
+      render: (row) => <MasterIdentityCell name={row.vessel_name} subtitle={ownerLine(row)} />,
+    },
+    {
+      id: 'vessel_code',
+      label: 'Codes',
+      sortable: true,
+      className: 'whitespace-nowrap',
+      render: (row) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MasterCodeBadge kind="klip" value={row.vessel_code_klip || ''} fit />
+          {row.dhm_code ? <MasterCodeBadge kind="dhm" value={row.dhm_code} fit /> : null}
+          {row.pair_code ? <MasterCodeBadge kind="pair" value={row.pair_code} fit /> : null}
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => handlePageChange(currentPage + 1)}
-          disabled={currentPage >= totalPages || loading}
-        >
-          Next
-        </Button>
-      </div>
-    )
-  }
+      ),
+    },
+    {
+      id: 'vessel_codes_sap',
+      label: 'SAP codes',
+      sortable: true,
+      className: 'whitespace-nowrap',
+      render: (row) => (
+        <MultiValueCell values={multiValuesOf(null, row.vessel_codes_sap)} rowTitle={row.vessel_name} columnLabel="Vessel Code SAP" plural="SAP codes" />
+      ),
+    },
+    {
+      id: 'vessel_type',
+      label: 'Type',
+      sortable: true,
+      render: (row) => (
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-gray-900">{row.vessel_type || '-'}</div>
+          <div className="truncate text-xs text-gray-500">{typeLine(row)}</div>
+        </div>
+      ),
+    },
+    {
+      id: 'vessel_capacity_mt',
+      label: 'Capacity',
+      sortable: true,
+      render: (row) => {
+        const line = specsLine(row)
+        return (
+          <div className="min-w-0 max-w-[16rem]">
+            <div className="truncate text-sm font-medium tabular-nums text-gray-900">
+              {formatVesselCapacity(row.vessel_capacity_mt)}
+              {row.vessel_capacity_mt != null ? ' MT' : ''}
+              {row.heating ? <span className="ml-2 rounded-full bg-orange-50 px-2 py-0.5 text-[0.6875rem] font-medium text-orange-700">Heating</span> : null}
+            </div>
+            <div className="truncate text-xs text-gray-500" title={line}>
+              {line}
+            </div>
+          </div>
+        )
+      },
+    },
+    { id: 'klip_transaction', label: 'In KLIP', sortable: true, className: 'whitespace-nowrap', render: (row) => <KlipTransactionBadge value={row.klip_transaction} /> },
+    { id: 'dhm_status', label: 'DHM', sortable: true, className: 'whitespace-nowrap', render: (row) => <MasterDhmChip row={row} /> },
+  ]
+
+  const kpis = [
+    { id: 'total', icon: <Ship className="h-4 w-4" />, label: 'Total vessels', value: summary?.total ?? null, tone: 'bg-blue-50 text-blue-600', hint: 'all master vessels' },
+    { id: 'synced', icon: <Cloud className="h-4 w-4" />, label: 'Synced to DHM', value: summary?.synced ?? null, tone: 'bg-emerald-50 text-emerald-600', hint: 'DHM has them' },
+    {
+      id: 'not-synced',
+      icon: <CloudOff className="h-4 w-4" />,
+      label: 'Not synced',
+      value: summary?.notSynced ?? null,
+      tone: 'bg-amber-50 text-amber-600',
+      hint: summary && summary.failed > 0 ? `${summary.failed.toLocaleString('en-US')} more failed to deliver` : 'not in DHM yet',
+    },
+    { id: 'used', icon: <Anchor className="h-4 w-4" />, label: 'Used in KLIP', value: summary?.usedInKlip ?? null, tone: 'bg-violet-50 text-violet-600', hint: 'on at least one shipment' },
+  ]
 
   return (
     <Layout>
       <StitchFields>
-      <div className="space-y-6">
-        <p className="text-gray-600">
-          Maintain reference data for vessels used in shipments.
-        </p>
+        <div className="space-y-6">
+          <p className="text-sm text-gray-500">Maintain reference data for vessels used in shipments.</p>
 
-        <div className="flex gap-2 border-b border-gray-200">
-          {([
-            ['all', 'All Vessel'],
-            ['review', reviewCount > 0 ? `Perlu review (${reviewCount})` : 'Perlu review'],
-          ] as const).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setView(id)}
-              className={
-                view === id
-                  ? '-mb-px border-b-2 border-blue-600 px-3 py-2 text-sm font-medium text-blue-700'
-                  : 'px-3 py-2 text-sm text-gray-600 hover:text-gray-900'
-              }
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+          <div className="flex gap-2 border-b border-gray-200">
+            {(
+              [
+                ['all', 'All Vessel'],
+                ['review', reviewCount > 0 ? `Perlu review (${reviewCount})` : 'Perlu review'],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setView(id)}
+                className={
+                  view === id
+                    ? '-mb-px border-b-2 border-blue-600 px-3 py-2 text-sm font-medium text-blue-700'
+                    : 'px-3 py-2 text-sm text-gray-600 hover:text-gray-900'
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
 
-        {view === 'all' ? (
-          <>
+          {view === 'all' ? (
+            <>
+              <MasterKpis items={kpis} />
 
-        <MasterVesselGlobalFiltersSection
-          searchDraft={searchDraft}
-          searchTerm={searchTerm}
-          onSearchDraftChange={setSearchDraft}
-          onSearchApply={applySearch}
-          onSearchClear={() => {
-            setSearchDraft('')
-            setSearchTerm('')
-          }}
-          filterOptions={filterOptions}
-          selectedOwners={selectedOwners}
-          onOwnersChange={setSelectedOwners}
-          selectedVesselTypes={selectedVesselTypes}
-          onVesselTypesChange={setSelectedVesselTypes}
-          selectedTerms={selectedTerms}
-          onTermsChange={setSelectedTerms}
-          selectedKlipTransaction={selectedKlipTransaction}
-          onKlipTransactionChange={setSelectedKlipTransaction}
-          hasActiveFilters={hasActiveFilters}
-          onClearFilters={clearFilters}
-          action={
-            isAdmin ? (
-              <div className="flex shrink-0 items-end gap-2">
-                <Button size="sm" className="shrink-0" onClick={openNew}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Vessel
-                </Button>
-                <MasterDhmSyncButton master="vessel" onDone={() => void fetchVessels(currentPage)} />
-              </div>
-            ) : null
-          }
-        />
+              <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+                <MasterFilterBar
+                  search={searchDraft}
+                  onSearch={setSearchDraft}
+                  placeholder="Search vessel code or name"
+                  ariaLabel="Search vessels"
+                  dhm={dhm}
+                  onDhm={setDhm}
+                  dhmCounts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
+                  extraActive={extraFiltersOn}
+                  onClear={clearFilters}
+                  actions={
+                    isAdmin ? (
+                      <>
+                        <MasterDhmSyncButton master="vessel" onDone={refresh} iconOnly />
+                        <Button size="icon" className="h-9 w-9 shrink-0" title="New vessel" aria-label="New vessel" onClick={openNew}>
+                          <Plus className="h-4 w-4" aria-hidden />
+                        </Button>
+                      </>
+                    ) : null
+                  }
+                >
+                  <div className="w-[150px] shrink-0">
+                  <SearchableMultiSelect
+                    label="Owner"
+                    hideLabel
+                    buttonClassName={FILTER_BUTTON_CLASS}
+                    options={filterOptions.owners}
+                    selected={selectedOwners}
+                    onChange={setSelectedOwners}
+                    placeholder="All owners"
+                    emptyMessage="No owners"
+                    uppercaseOptionLabels
+                  />
+                  </div>
+                  <div className="w-[140px] shrink-0">
+                  <SearchableMultiSelect
+                    label="Vessel Type"
+                    hideLabel
+                    buttonClassName={FILTER_BUTTON_CLASS}
+                    options={filterOptions.vesselTypes}
+                    selected={selectedVesselTypes}
+                    onChange={setSelectedVesselTypes}
+                    placeholder="All types"
+                    emptyMessage="No types"
+                  />
+                  </div>
+                  <div className="w-[150px] shrink-0">
+                  <SearchableMultiSelect
+                    label="Term / Charter"
+                    hideLabel
+                    buttonClassName={FILTER_BUTTON_CLASS}
+                    options={termOptions}
+                    selected={selectedTerms}
+                    onChange={setSelectedTerms}
+                    placeholder="All charters"
+                    emptyMessage="No terms"
+                  />
+                  </div>
+                  <div className="w-[140px] shrink-0">
+                  <SearchableMultiSelect
+                    label="Klip Transaction"
+                    hideLabel
+                    buttonClassName={FILTER_BUTTON_CLASS}
+                    options={KLIP_TRANSACTION_FILTER_OPTIONS}
+                    selected={selectedKlipTransaction}
+                    onChange={setSelectedKlipTransaction}
+                    placeholder="In KLIP: all"
+                    emptyMessage="No options"
+                  />
+                  </div>
+                </MasterFilterBar>
 
-        <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                  <span>All Vessel</span>
-                </CardTitle>
-                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
-                  <span className="whitespace-nowrap tabular-nums text-gray-700">
-                    <span className="font-semibold">{total.toLocaleString('en-US')}</span> vessels
-                  </span>
-                  <span className="text-gray-400" aria-hidden>·</span>
-                  <span className="whitespace-nowrap tabular-nums">
-                    Page {currentPage}/{totalPages} · {items.length} rows
-                  </span>
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <ListPageColumnsMenu
-                  columns={vesselColumns.menuColumns}
-                  visibleIds={vesselColumns.visibleIds}
-                  disabled={loading}
-                  onToggle={vesselColumns.toggle}
-                  onSelectAll={vesselColumns.selectAll}
-                  onUnselectAll={vesselColumns.unselectAll}
-                  onReset={vesselColumns.reset}
-                  onReorder={vesselColumns.reorder}
+                <MasterListTable
+                  rows={items}
+                  columns={columns}
+                  getRowId={(row) => row.id}
+                  loading={loading}
+                  emptyLabel={filtersOn ? 'No vessels match these filters' : 'No vessels yet'}
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onSort={handleSortChange}
+                  onRowClick={openEdit}
+                  minWidthPx={900}
+                  renderActions={(row) => (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
+                      title={isAdmin ? 'Edit vessel' : 'View vessel'}
+                      aria-label={`${isAdmin ? 'Edit' : 'View'} ${row.vessel_name}`}
+                      onClick={() => openEdit(row)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                  )}
                 />
-                {renderPagination()}
+
+                <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
+                  {masterCountText(items.length, total, summary?.total ?? total, 'vessels')} · click a row to {isAdmin ? 'edit' : 'view'} it
+                </div>
+                {totalPages > 1 ? (
+                  <div className="px-4 pb-4">
+                    <ListPager page={currentPage} totalPages={totalPages} onPageChange={handlePageChange} disabled={loading} summary={`Page ${currentPage}/${totalPages}`} />
+                  </div>
+                ) : null}
               </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <MasterVesselTable
-              items={items}
-              loading={loading}
-              sortKey={sortKey}
-              sortDir={sortDir}
+            </>
+          ) : (
+            <MasterVesselReviewPanel
               isAdmin={isAdmin}
-              onSortChange={handleSortChange}
-              onEdit={openEdit}
-              columnIds={vesselColumns.orderedVisibleIds as MasterVesselColumnId[]}
-              dragColId={vesselColumns.dragColId}
-              onColumnDragStart={(id) => vesselColumns.setDragColId(id)}
-              onColumnDragEnd={() => vesselColumns.setDragColId(null)}
-              onColumnDrop={(id) => {
-                if (vesselColumns.dragColId) vesselColumns.reorder(vesselColumns.dragColId, id)
-                vesselColumns.setDragColId(null)
+              onChanged={() => {
+                refreshReviewCount()
+                refresh()
               }}
+              onOpenInList={openInList}
             />
-          </CardContent>
-        </Card>
+          )}
 
-          </>
-        ) : (
-          <MasterVesselReviewPanel
+          <EditVesselModal
+            open={modalOpen}
+            mode={modalMode}
+            vessel={editingVessel}
             isAdmin={isAdmin}
-            onChanged={() => {
-              refreshReviewCount()
-              void fetchVessels(currentPage)
+            onClose={() => {
+              setModalOpen(false)
+              setEditingVessel(null)
             }}
-            onOpenInList={openInList}
+            onSaved={refresh}
           />
-        )}
-
-        <EditVesselModal
-          open={modalOpen}
-          mode={modalMode}
-          vessel={editingVessel}
-          isAdmin={isAdmin}
-          onClose={() => {
-            setModalOpen(false)
-            setEditingVessel(null)
-          }}
-          onSaved={() => void fetchVessels(currentPage)}
-        />
-      </div>
+        </div>
       </StitchFields>
     </Layout>
   )

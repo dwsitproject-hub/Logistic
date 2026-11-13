@@ -1,5 +1,9 @@
 import { sqlExcludeDhmDeleted, wantsExcludeDhmDeleted } from './dhmDeletedFilter';
 import { sqlResolveMasterVesselIdFromShipment } from './masterVesselCanonicalSql';
+import { masterDhmFilterClause, parseMasterDhmFilter, type MasterDhmFilter, type MasterDhmSource } from './masterDhmFilter';
+
+/** Where the DHM link of a vessel lives: dhm_id and dhm_code (it has no code_dhm column), pushes recorded as kind 'vessel'. */
+export const MASTER_VESSEL_DHM_SOURCE: MasterDhmSource = { table: 'master_vessels', kind: 'vessel', idColumn: 'dhm_id', codeColumns: ['dhm_code'] };
 
 /**
  * SAP codes for one vessel, newest-first by primary then code. A vessel can hold several - SAP
@@ -121,6 +125,8 @@ export type MasterVesselListFilterParams = {
   terms?: string[];
   /** 'yes' / 'no' (a vessel with / without a shipment). Both or neither = no filter. The query must carry MASTER_VESSEL_USED_IDS_CTE. */
   klipTransaction?: string[];
+  /** The DHM status of the Master Vessel page: synced / not_synced / failed (see masterDhmFilter). Absent = all. */
+  dhm?: MasterDhmFilter;
   /** Pickers only: leave out vessels deleted in DHM. The Master Vessel table does not set it. */
   excludeDhmDeleted?: boolean;
 };
@@ -201,6 +207,9 @@ export function buildMasterVesselListWhere(
     if (wantsNo && !wantsYes) where += ` AND NOT ${MASTER_VESSEL_KLIP_TRANSACTION_SQL}`;
   }
 
+  const dhmClause = masterDhmFilterClause(filters.dhm ?? 'all', MASTER_VESSEL_DHM_SOURCE);
+  if (dhmClause) where += ` AND ${dhmClause}`;
+
   return { where, params };
 }
 
@@ -262,6 +271,7 @@ export function parseMasterVesselListQuery(query: Record<string, unknown>): Mast
     lambungTypes: parseMultiQueryParam(query.lambungTypes),
     terms: parseMultiQueryParam(query.terms),
     klipTransaction: parseMultiQueryParam(query.klipTransaction),
+    dhm: parseMasterDhmFilter(query.dhm),
     excludeDhmDeleted: wantsExcludeDhmDeleted(query.excludeDeleted),
     sortKey,
     sortDir,

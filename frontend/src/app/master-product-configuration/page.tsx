@@ -1,28 +1,24 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useRouter } from 'next/navigation'
+import { Boxes, Cloud, CloudOff, Package, Pencil, Plus, Save } from 'lucide-react'
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  LIST_FILTER_FIELD_LABEL_CLASS,
-  ListFilterPanel,
-  LIST_FILTER_FIELDS_ROW_CLASS,
-} from '@/components/shared/ListFilterPanel'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { StitchFields } from '@/components/shared/stitchField'
-import { StitchSearchIcon } from '@/components/shared/stitchIcons'
-import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
-import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
-import { useListColumnLayout } from '@/lib/listColumnLayout'
-import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
-import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
-import { Plus, Save } from 'lucide-react'
+import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
+import { ListPager } from '@/components/performance/ListPager'
+import { MasterKpis } from '@/components/master/MasterKpis'
+import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
+import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
+import { masterCountText, masterDhmChip, type MasterDhmFilter } from '@/lib/masterDirectory'
 
 interface Product {
   id: string
@@ -38,37 +34,60 @@ interface Product {
   uom?: string | null
   code_klip?: string | null
   code_dhm?: string | null
+  dhm_id?: string | null
+  dhm_push_status?: string | null
+  dhm_push_error?: string | null
+  dhm_push_attempts?: number | null
+  dhm_push_next_attempt_at?: string | null
   percent_produce: number | null
   working_hours_per_day: number | null
   working_days_per_month: number | null
   working_days_per_year: number | null
 }
 
+/** The cards: the catalog and the products contracts use, and the DHM counts of both (the cards follow the scope the list shows). */
+interface ProductSummary {
+  total: number
+  usedInKlip: number
+  synced: number
+  notSynced: number
+  failed: number
+  usedSynced: number
+  usedNotSynced: number
+  usedFailed: number
+}
+
 // What DHM accepts for a commodity type today (GET /v1/catalog, 2026-10-26). The Hub's Integrator edits the list; a
 // value saved earlier that is not in it stays selectable so it is not wiped by an edit.
 const COMMODITY_TYPES = ['liquid', 'solid', 'Fuel, Greases, & Lub', 'Chemical', 'Civil Supplies (Building)']
 
-const PRODUCT_COLUMNS: MasterListTableColumn<Product>[] = [
-  { id: 'code_klip', label: 'Product Code (KLIP)', getText: (row) => row.code_klip || '-' },
-  { id: 'code_dhm', label: 'Code (DHM)', getText: (row) => row.code_dhm || '-' },
-  { id: 'material_code', label: 'Material Code (SAP)', getText: (row) => row.material_code || '-' },
-  { id: 'klip_product', label: 'KLIP Product (SAP)', getText: (row) => row.klip_product || '-' },
-  { id: 'klip_contracts', label: 'Contracts', getText: (row) => (row.klip_contracts ? String(row.klip_contracts) : '-') },
-  { id: 'product_name', label: 'Short Name (DHM)', getText: (row) => row.product_name || '-' },
-  { id: 'long_name', label: 'Long Name (DHM)', getText: (row) => row.long_name || '-' },
-  { id: 'commodity_type', label: 'Type (DHM)', getText: (row) => row.commodity_type || '-' },
-  { id: 'material_group', label: 'Material Group (DHM)', getText: (row) => row.material_group || '-' },
-  { id: 'hs_code', label: 'HS Code (DHM)', getText: (row) => row.hs_code || '-' },
-  { id: 'uom', label: 'UoM (DHM)', getText: (row) => row.uom || '-' },
-  dhmStatusListColumn<Product>(),
-]
+const PAGE_SIZE = 20
+type Scope = 'used' | 'all'
+
+function sortText(row: Product, key: string): string {
+  switch (key) {
+    case 'klip_contracts':
+      return String(row.klip_contracts ?? 0).padStart(9, '0')
+    case 'commodity_type':
+      return row.commodity_type || ''
+    case 'dhm':
+      return masterDhmChip(row).label
+    case 'codes':
+      return row.code_klip || ''
+    default:
+      return row.product_name || ''
+  }
+}
+
+function detailLine(row: Product): string {
+  return [row.material_group, row.hs_code ? `HS ${row.hs_code}` : null, row.uom ? `UoM ${row.uom}` : null].filter(Boolean).join(' · ') || 'No DHM details yet'
+}
 
 export default function MasterProductConfigurationPage() {
   const router = useRouter()
   const [items, setItems] = useState<Product[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [limit] = useState(20)
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [loading, setLoading] = useState(false)
@@ -77,17 +96,22 @@ export default function MasterProductConfigurationPage() {
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
   const [form, setForm] = useState<any>({ product_name: '', percent_produce: '', working_hours_per_day: '', working_days_per_month: '', working_days_per_year: '' })
-  const [usedOnly, setUsedOnly] = useState(true)
+  // On: only products whose Material Code is on at least one KLIP contract (what the DHM Sync sends). Off: the whole DHM catalog.
+  const [scope, setScope] = useState<Scope>('used')
+  const [dhm, setDhm] = useState<MasterDhmFilter>('all')
+  const [summary, setSummary] = useState<ProductSummary | null>(null)
   const [sortKey, setSortKey] = useState('product_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [isAdmin, setIsAdmin] = useState(false)
-  const productColumns = useListColumnLayout('master-product.visibleColumns.v5', PRODUCT_COLUMNS)
 
-  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit])
+  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total])
 
   useEffect(() => {
     const userStr = localStorage.getItem('user')
-    if (!userStr) { router.push('/login'); return }
+    if (!userStr) {
+      router.push('/login')
+      return
+    }
     try {
       const user = JSON.parse(userStr) as { role?: string }
       setIsAdmin(String(user.role || '').toUpperCase() === 'ADMIN')
@@ -96,17 +120,15 @@ export default function MasterProductConfigurationPage() {
     }
   }, [router])
 
-  const fetchData = useCallback(async (pageNum: number, searchQuery: string, onlyUsed: boolean) => {
+  const fetchData = useCallback(async (pageNum: number, searchQuery: string, scopeValue: Scope, dhmFilter: MasterDhmFilter) => {
     setLoading(true)
     setError('')
     try {
-      const params = new URLSearchParams()
-      params.append('page', String(pageNum))
-      params.append('limit', String(limit))
-      if (searchQuery) params.append('search', searchQuery)
-      params.append('withUsage', 'true')
-      if (onlyUsed) params.append('usedInKlip', 'true')
-      const res = await api.get(`/products?${params.toString()}`)
+      const params: Record<string, string> = { page: String(pageNum), limit: String(PAGE_SIZE), withUsage: 'true' }
+      if (searchQuery) params.search = searchQuery
+      if (scopeValue === 'used') params.usedInKlip = 'true'
+      if (dhmFilter !== 'all') params.dhm = dhmFilter
+      const res = await api.get('/products', { params })
       setItems(res.data.data.items)
       setTotal(res.data.data.total)
     } catch (e: any) {
@@ -114,27 +136,46 @@ export default function MasterProductConfigurationPage() {
     } finally {
       setLoading(false)
     }
-  }, [limit])
+  }, [])
 
-  const skipSearchPageReset = useRef(true)
-  useEffect(() => {
-    if (skipSearchPageReset.current) {
-      skipSearchPageReset.current = false
-      return
+  const fetchSummary = useCallback(async () => {
+    try {
+      const res = await api.get('/products/summary')
+      setSummary(res.data?.data ?? null)
+    } catch (e) {
+      // the cards are informational: the list still works without them
+      console.error('Failed to load the product summary', e)
     }
-    setPage(1)
-  }, [debouncedSearch, usedOnly])
+  }, [])
 
   useEffect(() => {
-    void fetchData(page, debouncedSearch, usedOnly)
-  }, [page, debouncedSearch, usedOnly, fetchData])
+    void fetchData(page, debouncedSearch, scope, dhm)
+  }, [page, debouncedSearch, scope, dhm, fetchData])
 
-  const openAdd = () => { setEditing(null); setForm({ product_name: '' }); setShowModal(true) }
-  const openEdit = (p: Product) => { setEditing(p); setForm({ ...p }); setShowModal(true) }
+  useEffect(() => {
+    void fetchSummary()
+  }, [fetchSummary])
+
+  const refresh = () => {
+    void fetchData(page, debouncedSearch, scope, dhm)
+    void fetchSummary()
+  }
+
+  const openAdd = () => {
+    setEditing(null)
+    setForm({ product_name: '' })
+    setShowModal(true)
+  }
+  const openEdit = (p: Product) => {
+    setEditing(p)
+    setForm({ ...p })
+    setShowModal(true)
+  }
 
   const saveProduct = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError(''); setSuccess('')
+    setError('')
+    setSuccess('')
     try {
       const payload = {
         product_name: form.product_name,
@@ -153,217 +194,286 @@ export default function MasterProductConfigurationPage() {
         await saveWithDhmConfirm((overwrite) => api.post(`/products${overwrite ? '?dhmOverwrite=true' : ''}`, payload), noun)
         setSuccess('Product created')
       }
-      setShowModal(false); void fetchData(page, debouncedSearch, usedOnly)
+      setShowModal(false)
+      refresh()
     } catch (err: any) {
-      const msg = err?.response?.data?.error?.message 
-        || (err?.response ? `${err.response.status} ${err.response.statusText}` : '')
-        || err?.message 
-        || 'Save failed'
+      const msg =
+        err?.response?.data?.error?.message ||
+        (err?.response ? `${err.response.status} ${err.response.statusText}` : '') ||
+        err?.message ||
+        'Save failed'
       setError(msg)
     }
   }
 
-  return (
-    <Layout>
-    <StitchFields>
-      <div className="space-y-6">
-      {error && <div className="text-red-600 text-sm">{error}</div>}
-      {success && <div className="text-green-600 text-sm">{success}</div>}
+  const sortedRows = useMemo(
+    () =>
+      [...items].sort((a, b) => {
+        const cmp = sortText(a, sortKey).localeCompare(sortText(b, sortKey), undefined, { numeric: true })
+        return sortDir === 'asc' ? cmp : -cmp
+      }),
+    [items, sortKey, sortDir],
+  )
 
-      <ListFilterPanel
-        onReset={() => setSearch('')}
-        showReset={search.trim().length > 0}
-        chips={
-          search.trim()
-            ? [{ id: 'search', label: `Search: ${search.trim()}`, onRemove: () => setSearch('') }]
-            : []
-        }
-      >
-        <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-          <div className="min-w-[12rem] flex-[1.4]">
-            <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
-            <div className="relative">
-              <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <Input
-                placeholder="Short name, long name, material code or DHM code"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
-              />
-              </div>
-            </div>
-            <div className="flex shrink-0 items-end gap-2">
-              <Button size="sm" className="shrink-0" onClick={openAdd}>
-                <Plus className="h-4 w-4 mr-2" />
-                New Product
-              </Button>
-              {isAdmin ? <MasterDhmSyncButton master="product" onDone={() => void fetchData(page, debouncedSearch, usedOnly)} /> : null}
-            </div>
+  const columns: MasterTableColumn<Product>[] = [
+    {
+      id: 'product_name',
+      label: 'Product',
+      sortable: true,
+      render: (row) => <MasterIdentityCell name={row.product_name} subtitle={row.long_name && row.long_name !== row.product_name ? row.long_name : null} />,
+    },
+    {
+      id: 'codes',
+      label: 'Codes',
+      sortable: true,
+      className: 'whitespace-nowrap',
+      render: (row) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MasterCodeBadge kind="klip" value={row.code_klip || ''} fit />
+          {row.code_dhm ? <MasterCodeBadge kind="dhm" value={row.code_dhm} fit /> : null}
+          {row.material_code ? <MasterCodeBadge kind="sap" value={row.material_code} fit /> : null}
+        </div>
+      ),
+    },
+    {
+      id: 'klip_contracts',
+      label: 'In KLIP contracts',
+      sortable: true,
+      className: 'whitespace-nowrap',
+      render: (row) => (
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-gray-900" title={row.klip_product || undefined}>
+            {row.klip_product || '-'}
           </div>
-      </ListFilterPanel>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                <span>All Products</span>
-              </CardTitle>
-              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
-                <span className="whitespace-nowrap tabular-nums text-gray-700">
-                  <span className="font-semibold">{total.toLocaleString('en-US')}</span> products
-                </span>
-                <span className="text-gray-400" aria-hidden>·</span>
-                <span className="whitespace-nowrap tabular-nums">
-                  Page {page}/{totalPages} · {items.length} rows
-                </span>
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none" title="On: only products whose Material Code is on at least one KLIP contract. Off: the whole DHM catalog.">
-                <input type="checkbox" className="h-3.5 w-3.5" checked={usedOnly} onChange={(e) => setUsedOnly(e.target.checked)} />
-                Used in KLIP only
-              </label>
-              <ListPageColumnsMenu
-                columns={productColumns.menuColumns}
-                visibleIds={productColumns.visibleIds}
-                disabled={loading}
-                onToggle={productColumns.toggle}
-                onSelectAll={productColumns.selectAll}
-                onUnselectAll={productColumns.unselectAll}
-                onReset={productColumns.reset}
-                onReorder={productColumns.reorder}
-              />
-            {totalPages > 1 ? (
-              <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Previous</Button>
-                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
-              </div>
-            ) : null}
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <MasterListCompactTable
-            tightActions
-            fitContent
-            onRowClick={openEdit}
-            rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
-            rows={[...items].sort((a, b) => {
-              const col = PRODUCT_COLUMNS.find((item) => item.id === sortKey)
-              const left = col?.getText(a) ?? ''
-              const right = col?.getText(b) ?? ''
-              const cmp = left.localeCompare(right, undefined, { numeric: true })
-              return sortDir === 'asc' ? cmp : -cmp
-            })}
-            columns={PRODUCT_COLUMNS.filter((col) => productColumns.orderedVisibleIds.includes(col.id)).sort(
-              (a, b) => productColumns.orderedVisibleIds.indexOf(a.id) - productColumns.orderedVisibleIds.indexOf(b.id),
-            )}
-            getRowId={(row) => row.id}
-            sortKey={sortKey}
-            sortDir={sortDir}
-            dragColId={productColumns.dragColId}
-            loading={loading}
-            emptyLabel="No products found"
-            onSort={(id) => {
-              setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
-              setSortKey(id)
-            }}
-            onDragStart={productColumns.setDragColId}
-            onDragEnd={() => productColumns.setDragColId(null)}
-            onDrop={(id) => {
-              if (productColumns.dragColId) productColumns.reorder(productColumns.dragColId, id)
-              productColumns.setDragColId(null)
-            }}
-          />
-        </CardContent>
-      </Card>
-
-      {showModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-md w-full max-w-3xl max-h-[90vh] overflow-y-auto px-6 pb-6">
-            <h2 className="text-xl font-semibold mb-4">{editing ? 'Edit Product' : 'New Product'}</h2>
-            <form onSubmit={saveProduct} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <Label>Product Code (KLIP)</Label>
-                <Input value={editing?.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
-              </div>
-              <div className="space-y-1">
-                <Label>Code (DHM)</Label>
-                <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
-              </div>
-              <div className="space-y-1 md:col-span-2">
-                <Label>Short Name (DHM)</Label>
-                <Input
-                  value={form.product_name ?? ''}
-                  onChange={(e) => setForm((f: { product_name?: string }) => ({ ...f, product_name: e.target.value }))}
-                  required
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>Long Name (DHM)</Label>
-                <Input
-                  value={form.long_name ?? ''}
-                  onChange={(e) => setForm((f: Product) => ({ ...f, long_name: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>Type (DHM)</Label>
-                <select
-                  className="w-full rounded-md border px-3 py-2 text-sm"
-                  value={form.commodity_type ?? ''}
-                  onChange={(e) => setForm((f: Product) => ({ ...f, commodity_type: e.target.value }))}
-                >
-                  <option value="">Select a type</option>
-                  {form.commodity_type && !COMMODITY_TYPES.includes(form.commodity_type) ? (
-                    <option value={form.commodity_type}>{form.commodity_type}</option>
-                  ) : null}
-                  {COMMODITY_TYPES.map((type) => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <Label>Material Code (SAP)</Label>
-                <Input
-                  value={form.material_code ?? ''}
-                  placeholder="Filled from the SAP import"
-                  onChange={(e) => setForm((f: Product) => ({ ...f, material_code: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>Material Group (DHM)</Label>
-                <Input
-                  value={form.material_group ?? ''}
-                  onChange={(e) => setForm((f: Product) => ({ ...f, material_group: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>HS Code (DHM)</Label>
-                <Input
-                  value={form.hs_code ?? ''}
-                  onChange={(e) => setForm((f: Product) => ({ ...f, hs_code: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>UoM (DHM)</Label>
-                <Input
-                  value={form.uom ?? ''}
-                  onChange={(e) => setForm((f: Product) => ({ ...f, uom: e.target.value }))}
-                />
-              </div>
-              <div className="col-span-full flex justify-end gap-2 mt-2">
-                <Button type="button" variant="outline" onClick={() => setShowModal(false)}>Cancel</Button>
-                <Button type="submit"><Save className="mr-2 h-4 w-4" aria-hidden />Save</Button>
-              </div>
-            </form>
+          <div className="text-xs tabular-nums text-gray-500">
+            {row.klip_contracts ? `${row.klip_contracts.toLocaleString('en-US')} ${row.klip_contracts === 1 ? 'contract' : 'contracts'}` : 'No contract yet'}
           </div>
         </div>
-      )}
-    </div>
-    </StitchFields>
+      ),
+    },
+    {
+      id: 'commodity_type',
+      label: 'Type (DHM)',
+      sortable: true,
+      render: (row) => {
+        const line = detailLine(row)
+        return (
+          <div className="min-w-0 max-w-[18rem]">
+            <div className="truncate text-sm font-medium text-gray-900">{row.commodity_type || '-'}</div>
+            <div className="truncate text-xs text-gray-500" title={line}>
+              {line}
+            </div>
+          </div>
+        )
+      },
+    },
+    { id: 'dhm', label: 'DHM', sortable: true, className: 'whitespace-nowrap', render: (row) => <MasterDhmChip row={row} /> },
+  ]
+
+  // The DHM numbers follow the scope the list shows: the used products (what the Sync pushes) or the whole catalog.
+  const dhmSynced = scope === 'used' ? summary?.usedSynced : summary?.synced
+  const dhmNotSynced = scope === 'used' ? summary?.usedNotSynced : summary?.notSynced
+  const dhmFailed = scope === 'used' ? summary?.usedFailed : summary?.failed
+  const scopeTotal = summary ? (scope === 'used' ? summary.usedInKlip : summary.total) : null
+  const scopeWord = scope === 'used' ? 'of the used products' : 'whole catalog'
+
+  const kpis = [
+    { id: 'total', icon: <Package className="h-4 w-4" />, label: 'Total products', value: summary?.total ?? null, tone: 'bg-blue-50 text-blue-600', hint: 'the DHM catalog' },
+    { id: 'used', icon: <Boxes className="h-4 w-4" />, label: 'Used in KLIP', value: summary?.usedInKlip ?? null, tone: 'bg-violet-50 text-violet-600', hint: 'on at least one contract' },
+    { id: 'synced', icon: <Cloud className="h-4 w-4" />, label: 'Synced to DHM', value: dhmSynced ?? null, tone: 'bg-emerald-50 text-emerald-600', hint: scopeWord },
+    {
+      id: 'not-synced',
+      icon: <CloudOff className="h-4 w-4" />,
+      label: 'Not synced',
+      value: dhmNotSynced ?? null,
+      tone: 'bg-amber-50 text-amber-600',
+      hint: dhmFailed ? `${dhmFailed.toLocaleString('en-US')} more failed to deliver` : scopeWord,
+    },
+  ]
+
+  return (
+    <Layout>
+      <StitchFields>
+        <div className="space-y-6">
+          {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
+          {success && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">{success}</div>}
+
+          <p className="text-sm text-gray-500">The products KLIP uses: their SAP material code, and how DHM holds them.</p>
+
+          <MasterKpis items={kpis} />
+
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+            <MasterFilterBar
+              search={search}
+              onSearch={(value) => {
+                setSearch(value)
+                setPage(1)
+              }}
+              placeholder="Short name, long name, material code or DHM code"
+              ariaLabel="Search products"
+              dhm={dhm}
+              onDhm={(value) => {
+                setDhm(value)
+                setPage(1)
+              }}
+              dhmCounts={
+                summary && dhmSynced != null && dhmNotSynced != null && dhmFailed != null && scopeTotal != null
+                  ? { all: scopeTotal, synced: dhmSynced, not_synced: dhmNotSynced, failed: dhmFailed }
+                  : undefined
+              }
+              extraActive={scope !== 'used'}
+              onClear={() => {
+                setSearch('')
+                setDhm('all')
+                setScope('used')
+                setPage(1)
+              }}
+              actions={
+                <>
+                  {isAdmin ? <MasterDhmSyncButton master="product" onDone={refresh} iconOnly /> : null}
+                  <Button size="icon" className="h-9 w-9 shrink-0" title="New product" aria-label="New product" onClick={openAdd}>
+                    <Plus className="h-4 w-4" aria-hidden />
+                  </Button>
+                </>
+              }
+            >
+              <Select
+                value={scope}
+                onValueChange={(value) => {
+                  setScope(value as Scope)
+                  setPage(1)
+                }}
+              >
+                <SelectTrigger
+                  className="h-9 w-[210px] gap-2 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left"
+                  aria-label="Which products to list"
+                  title="Used in KLIP: only products whose Material Code is on at least one KLIP contract. Whole catalog: every product DHM has."
+                >
+                  <Boxes className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="used">Used in KLIP{summary ? ` (${summary.usedInKlip.toLocaleString('en-US')})` : ''}</SelectItem>
+                  <SelectItem value="all">Whole catalog{summary ? ` (${summary.total.toLocaleString('en-US')})` : ''}</SelectItem>
+                </SelectContent>
+              </Select>
+            </MasterFilterBar>
+
+            <MasterListTable
+              rows={sortedRows}
+              columns={columns}
+              getRowId={(row) => row.id}
+              loading={loading}
+              emptyLabel={search.trim() || dhm !== 'all' || scope !== 'used' ? 'No products match these filters' : 'No products yet'}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={(id) => {
+                setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
+                setSortKey(id)
+              }}
+              onRowClick={openEdit}
+              renderActions={(row) => (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
+                  title={isAdmin ? 'Edit product' : 'View product'}
+                  aria-label={`${isAdmin ? 'Edit' : 'View'} ${row.product_name}`}
+                  onClick={() => openEdit(row)}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              )}
+            />
+
+            <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
+              {masterCountText(items.length, total, scopeTotal ?? total, 'products')} · click a row to {isAdmin ? 'edit' : 'view'} it
+            </div>
+            {totalPages > 1 ? (
+              <div className="px-4 pb-4">
+                <ListPager page={page} totalPages={totalPages} onPageChange={setPage} disabled={loading} summary={`Page ${page}/${totalPages}`} />
+              </div>
+            ) : null}
+          </div>
+
+          {showModal && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
+              <div className="bg-white rounded-md w-full max-w-3xl max-h-[90vh] overflow-y-auto px-6 pb-6">
+                <h2 className="text-xl font-semibold mb-4">{editing ? 'Edit Product' : 'New Product'}</h2>
+                <form onSubmit={saveProduct} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label>Product Code (KLIP)</Label>
+                    <Input value={editing?.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Code (DHM)</Label>
+                    <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
+                  </div>
+                  <div className="space-y-1 md:col-span-2">
+                    <Label>Short Name (DHM)</Label>
+                    <Input
+                      value={form.product_name ?? ''}
+                      onChange={(e) => setForm((f: { product_name?: string }) => ({ ...f, product_name: e.target.value }))}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Long Name (DHM)</Label>
+                    <Input value={form.long_name ?? ''} onChange={(e) => setForm((f: Product) => ({ ...f, long_name: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Type (DHM)</Label>
+                    <select
+                      className="w-full rounded-md border px-3 py-2 text-sm"
+                      value={form.commodity_type ?? ''}
+                      onChange={(e) => setForm((f: Product) => ({ ...f, commodity_type: e.target.value }))}
+                    >
+                      <option value="">Select a type</option>
+                      {form.commodity_type && !COMMODITY_TYPES.includes(form.commodity_type) ? (
+                        <option value={form.commodity_type}>{form.commodity_type}</option>
+                      ) : null}
+                      {COMMODITY_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Material Code (SAP)</Label>
+                    <Input
+                      value={form.material_code ?? ''}
+                      placeholder="Filled from the SAP import"
+                      onChange={(e) => setForm((f: Product) => ({ ...f, material_code: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Material Group (DHM)</Label>
+                    <Input value={form.material_group ?? ''} onChange={(e) => setForm((f: Product) => ({ ...f, material_group: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>HS Code (DHM)</Label>
+                    <Input value={form.hs_code ?? ''} onChange={(e) => setForm((f: Product) => ({ ...f, hs_code: e.target.value }))} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>UoM (DHM)</Label>
+                    <Input value={form.uom ?? ''} onChange={(e) => setForm((f: Product) => ({ ...f, uom: e.target.value }))} />
+                  </div>
+                  <div className="col-span-full flex justify-end gap-2 mt-2">
+                    <Button type="button" variant="outline" onClick={() => setShowModal(false)}>
+                      Cancel
+                    </Button>
+                    <Button type="submit">
+                      <Save className="mr-2 h-4 w-4" aria-hidden />
+                      Save
+                    </Button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+      </StitchFields>
     </Layout>
   )
 }
-
-
