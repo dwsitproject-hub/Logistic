@@ -467,6 +467,15 @@
     padding-right: 0.75rem;
   }
 
+  /* The inner wrapper of a data cell is shrink-wrapped and left-aligned, which put the icon 12px from the left edge and 16px from the right one: centre it so both gaps are the same. */
+  .klip-compact-table--operational td.klip-op-col--icon .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
   /* The header only has to fit "DHM" and its sort arrow. */
   .klip-compact-table--operational th.klip-op-col--icon {
     padding-left: 0.25rem;
