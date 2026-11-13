@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   daysSinceIsoDate,
+  describeClaimAutoRun,
+  describeDailyCron,
   detectClaimDataKind,
   formatFileSize,
+  isClaimAutoRunFinished,
   isClaimDataFileName,
+  isRealisedClaimFileName,
   summarizeClaimStatus,
   type ClaimStatusData,
 } from './claimDataImportView'
@@ -87,5 +91,27 @@ describe('filterClaimUploads', () => {
     expect(filterClaimUploads(items, 'os')).toHaveLength(2)
     expect(filterClaimUploads(items, 'real')).toHaveLength(1)
     expect(filterClaimUploads(items, 'failed')).toHaveLength(2)
+  })
+})
+
+describe('claim auto-import helpers', () => {
+  it('refuses a realised file on the outstanding page but accepts the outstanding and unknown names', () => {
+    expect(isRealisedClaimFileName('REALCLAIM_ALLREGION.xls')).toBe(true)
+    expect(isRealisedClaimFileName('OSCLAIM_ALLREGION_MUTU SUSUT_JAN S.D OKT 2026.xls')).toBe(false)
+    expect(isRealisedClaimFileName('claim_export_new_name.xlsx')).toBe(false)
+  })
+  it('describes a run by its outcome', () => {
+    const run = { id: '1', trigger_source: 'cron', started_at: '', finished_at: 'x', file_name: null, file_mtime: null, total_rows: null, failed_rows: null, detail: null }
+    expect(describeClaimAutoRun({ ...run, outcome: 'imported' })).toEqual({ label: 'New file imported', tone: 'ok' })
+    expect(describeClaimAutoRun({ ...run, outcome: 'source_missing' }).tone).toBe('error')
+    expect(describeClaimAutoRun({ ...run, outcome: 'something_new' })).toEqual({ label: 'something_new', tone: 'info' })
+    expect(isClaimAutoRunFinished({ ...run, outcome: 'imported' })).toBe(true)
+    expect(isClaimAutoRunFinished({ ...run, outcome: 'imported', finished_at: null })).toBe(false)
+    expect(isClaimAutoRunFinished(null)).toBe(false)
+  })
+  it('reads a daily schedule in words', () => {
+    expect(describeDailyCron('0 7 * * *')).toBe('every day at 07:00')
+    expect(describeDailyCron('30 6 * * *')).toBe('every day at 06:30')
+    expect(describeDailyCron('0 6-10 * * *')).toBe('0 6-10 * * *')
   })
 })

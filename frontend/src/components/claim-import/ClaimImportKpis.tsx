@@ -1,11 +1,12 @@
 'use client'
 
 import type { ReactNode } from 'react'
-import { CalendarClock, Clock, FileSpreadsheet } from 'lucide-react'
+import { CalendarClock, Clock, FileSpreadsheet, RefreshCw } from 'lucide-react'
 import { ClaimKindIcon, CLAIM_KIND_LOOK } from '@/components/claim-import/ClaimKindIcon'
 import { formatSapImportWhen } from '@/lib/sapImportSummary'
 import { formatDateDMY } from '@/lib/dateFormat'
-import type { ClaimKindCount, ClaimStatusSummary } from '@/lib/claimDataImportView'
+import { describeClaimAutoRun, describeDailyCron } from '@/lib/claimDataImportView'
+import type { ClaimAutoImportStatus, ClaimKindCount, ClaimStatusSummary } from '@/lib/claimDataImportView'
 
 const nf = new Intl.NumberFormat('en-US')
 
@@ -39,8 +40,9 @@ function KindKpi({ kind, label, count }: { kind: 'os' | 'real'; label: string; c
   )
 }
 
-/** Four cards above the import area: the last import, what is outstanding, what is realised, and the date the outstanding snapshot is as of. */
-export function ClaimImportKpis({ summary }: { summary: ClaimStatusSummary }) {
+/** Four cards above the import area: the last import, what is outstanding, the date the outstanding snapshot is as of, and the state of the daily auto-import. */
+export function ClaimImportKpis({ summary, auto }: { summary: ClaimStatusSummary; auto: ClaimAutoImportStatus | null }) {
+  const lastRun = auto?.runs?.[0] ?? null
   const last = summary.lastImport
   const when = last ? formatSapImportWhen(last.uploadedAt) : null
   return (
@@ -59,7 +61,6 @@ export function ClaimImportKpis({ summary }: { summary: ClaimStatusSummary }) {
         )}
       </Kpi>
       <KindKpi kind="os" label="Outstanding claims" count={summary.os} />
-      <KindKpi kind="real" label="Realised claims" count={summary.real} />
       <Kpi
         icon={<CalendarClock className="h-3.5 w-3.5" />}
         label="Outstanding data as of"
@@ -67,6 +68,20 @@ export function ClaimImportKpis({ summary }: { summary: ClaimStatusSummary }) {
       >
         {summary.dataAsOfDaysAgo != null ? (
           <span>{summary.dataAsOfDaysAgo === 0 ? 'today' : `${summary.dataAsOfDaysAgo} day${summary.dataAsOfDaysAgo === 1 ? '' : 's'} ago`}</span>
+        ) : (
+          <span>-</span>
+        )}
+      </Kpi>
+      <Kpi
+        icon={<RefreshCw className="h-3.5 w-3.5" />}
+        label="Auto-import"
+        value={auto ? (auto.cronEnabled ? 'On' : 'Off') : '-'}
+      >
+        {auto ? (
+          <span>
+            {auto.cronEnabled ? `Runs ${describeDailyCron(auto.cron)}` : 'Switched off on this server'}
+            {lastRun ? ` · last: ${describeClaimAutoRun(lastRun).label.toLowerCase()}` : ''}
+          </span>
         ) : (
           <span>-</span>
         )}

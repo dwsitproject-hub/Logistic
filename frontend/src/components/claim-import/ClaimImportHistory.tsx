@@ -81,7 +81,8 @@ export function ClaimImportHistory({ items, loadError }: { items: ClaimUploadHis
             processed_records: Math.max(0, (Number(item.total_rows) || 0) - failed),
             failed_records: failed,
           })
-          const by = item.uploaded_by_name || item.uploaded_by_username || ''
+          // An import with no user behind it came from the SAP folder (the 07:00 schedule); a manual one always has the person who made it.
+          const by = item.uploaded_by_name || item.uploaded_by_username || 'Auto-import'
           const errorLines = messagesOf(item.errors)
           return (
             <li key={item.id} className="border-b border-gray-100 last:border-b-0">

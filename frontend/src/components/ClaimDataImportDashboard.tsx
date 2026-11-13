@@ -12,12 +12,11 @@ import { ClaimImportReview } from '@/components/claim-import/ClaimImportReview'
 import { ClaimImportProgress } from '@/components/claim-import/ClaimImportProgress'
 import { ClaimImportResult } from '@/components/claim-import/ClaimImportResult'
 import { ClaimImportHistory } from '@/components/claim-import/ClaimImportHistory'
+import { ClaimFolderSyncButton, ClaimFolderSyncStatus, useClaimFolderSync } from '@/components/claim-import/ClaimFolderSync'
 import {
-  CLAIM_KIND_LABEL,
-  detectClaimDataKind,
   isClaimDataFileName,
+  isRealisedClaimFileName,
   summarizeClaimStatus,
-  type ClaimDataKind,
   type ClaimImportResultData,
   type ClaimStatusData,
   type ClaimUploadHistoryItem,
@@ -36,16 +35,14 @@ const errorMessage = (e: unknown): string => {
 
 interface PendingFile {
   file: File
-  kind: ClaimDataKind | null
-  /** The kind came from the file name (so the review says so). */
-  detected: boolean
   dataAsOf: string
 }
 
 /**
- * Claim Data import: ONE drop area for the SAP claim export. The file name says whether it is the outstanding (OSCLAIM) or the realised (REALCLAIM) file,
- * the review step shows that and what the import will do, and nothing is sent until the person confirms. The import rules are the server's and are unchanged:
- * OSCLAIM replaces the whole outstanding snapshot, REALCLAIM is upserted per CR number.
+ * Claim Data import: ONE drop area, for the OUTSTANDING claim file (OSCLAIM) only - the file SAP delivers every day. The review step says what the import does
+ * and nothing is sent until the person confirms. The same file is also pulled from SAP's folder every morning and by the Sync button (see ClaimFolderSync).
+ * The import replaces the whole outstanding snapshot; the server's rules are unchanged. A realised (REALCLAIM) file is refused here, so it can never replace
+ * the snapshot by mistake; when SAP's one claim file carries the outstanding/realised column, this is the place to adjust.
  */
 export default function ClaimDataImportDashboard() {
   const perms = usePermissions()
@@ -76,6 +73,8 @@ export default function ClaimDataImportDashboard() {
     void load()
   }, [load])
 
+  const folderSync = useClaimFolderSync(() => void load())
+
   const summary = useMemo(() => summarizeClaimStatus(status), [status])
 
   const selectFile = (file: File) => {
@@ -86,19 +85,21 @@ export default function ClaimDataImportDashboard() {
       setUploadError('Only .xls or .xlsx files are accepted.')
       return
     }
-    const kind = detectClaimDataKind(file.name)
-    setPending({ file, kind, detected: kind != null, dataAsOf: todayIso() })
+    if (isRealisedClaimFileName(file.name)) {
+      setPending(null)
+      setUploadError('This is a realised (REALCLAIM) file. This page imports the outstanding claim file (OSCLAIM) only.')
+      return
+    }
+    setPending({ file, dataAsOf: todayIso() })
   }
 
   const runImport = async () => {
-    if (!pending || !pending.kind) return
-    const { file, kind, dataAsOf } = pending
-    if (kind === 'os') {
-      const ok = window.confirm(
-        `Importing the Outstanding file replaces the whole Outstanding snapshot on Shortage Claim and Quality Claim (data as of ${formatDateDMY(dataAsOf)}). Continue?`,
-      )
-      if (!ok) return
-    }
+    if (!pending) return
+    const { file, dataAsOf } = pending
+    const ok = window.confirm(
+      `Importing the Outstanding file replaces the whole Outstanding snapshot on Shortage Claim and Quality Claim (data as of ${formatDateDMY(dataAsOf)}). Continue?`,
+    )
+    if (!ok) return
     setBusy({ phase: 'uploading', fileName: file.name })
     setProgress(0)
     setUploadError(null)
@@ -106,8 +107,8 @@ export default function ClaimDataImportDashboard() {
     try {
       const form = new FormData()
       form.append('file', file)
-      form.append('kind', kind)
-      if (kind === 'os' && dataAsOf) form.append('dataAsOf', dataAsOf)
+      form.append('kind', 'os')
+      if (dataAsOf) form.append('dataAsOf', dataAsOf)
       const res = await api.post('/claim-data/upload', form, {
         timeout: 10 * 60 * 1000,
         onUploadProgress: (event) => {
@@ -144,13 +145,16 @@ export default function ClaimDataImportDashboard() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-gray-500">
-          SAP claim export: one file holds Mutu and Susut claims; they feed Quality Claim and Shortage Claim.
+          SAP outstanding claim export (OSCLAIM): one file holds Mutu and Susut claims; they feed Quality Claim and Shortage Claim.
         </p>
         {canUpload ? (
-          <Button size="sm" onClick={() => inputRef.current?.click()} disabled={busy != null}>
-            <Upload className="mr-2 h-4 w-4" aria-hidden />
-            Import Claim Data
-          </Button>
+          <div className="flex items-center gap-2">
+            <ClaimFolderSyncButton folderSync={folderSync} canSync={canUpload} />
+            <Button size="sm" onClick={() => inputRef.current?.click()} disabled={busy != null}>
+              <Upload className="mr-2 h-4 w-4" aria-hidden />
+              Import Claim Data
+            </Button>
+          </div>
         ) : null}
       </div>
 
@@ -160,7 +164,9 @@ export default function ClaimDataImportDashboard() {
         <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-600">View only: you do not have permission to import Claim Data.</p>
       ) : null}
 
-      <ClaimImportKpis summary={summary} />
+      <ClaimFolderSyncStatus folderSync={folderSync} />
+
+      <ClaimImportKpis summary={summary} auto={folderSync.status} />
 
       {busy ? (
         <ClaimImportProgress phase={busy.phase} uploadProgress={progress} fileName={busy.fileName} />
@@ -168,9 +174,6 @@ export default function ClaimDataImportDashboard() {
         <ClaimImportReview
           fileName={pending.file.name}
           fileSize={pending.file.size}
-          kind={pending.kind}
-          detected={pending.detected}
-          onKind={(kind) => setPending((current) => (current ? { ...current, kind, detected: false } : current))}
           dataAsOf={pending.dataAsOf}
           onDataAsOf={(value) => setPending((current) => (current ? { ...current, dataAsOf: value } : current))}
           maxDate={todayIso()}
@@ -181,9 +184,9 @@ export default function ClaimDataImportDashboard() {
         <SapImportDropZone
           onFile={selectFile}
           onBrowse={() => inputRef.current?.click()}
-          title="Drop the SAP claim file here, or browse"
-          hint={`.xls or .xlsx. OSCLAIM (${CLAIM_KIND_LABEL.os.toLowerCase()}) or REALCLAIM (${CLAIM_KIND_LABEL.real.toLowerCase()}) is read from the file name.`}
-          ariaLabel="Upload an SAP claim file"
+          title="Drop the SAP Claim file here, or browse"
+          hint=".xls or .xlsx. The outstanding file (OSCLAIM) replaces the whole outstanding snapshot."
+          ariaLabel="Upload the SAP Claim file"
         />
       ) : null}
 

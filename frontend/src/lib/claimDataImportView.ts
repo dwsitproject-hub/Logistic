@@ -143,3 +143,57 @@ export function filterClaimUploads<T extends Pick<ClaimUploadHistoryItem, 'kind'
   if (filter === 'failed') return items.filter((item) => (Number(item.failed_rows) || 0) > 0)
   return items.filter((item) => item.kind === filter)
 }
+
+/** What this page imports by hand: the OUTSTANDING file only. A realised (REALCLAIM) file is refused here so it can never replace the outstanding snapshot by mistake. */
+export function isRealisedClaimFileName(fileName: string): boolean {
+  return detectClaimDataKind(fileName) === 'real'
+}
+
+export type ClaimAutoRunOutcome = 'imported' | 'unchanged' | 'no_file' | 'source_missing' | 'failed'
+export type ClaimAutoRunTone = 'ok' | 'info' | 'warn' | 'error'
+
+/** One run of the claim folder job (GET /claim-data/auto-import/status). */
+export interface ClaimAutoImportRun {
+  id: string
+  trigger_source: 'cron' | 'manual' | string
+  started_at: string
+  finished_at: string | null
+  outcome: ClaimAutoRunOutcome | string
+  file_name: string | null
+  file_mtime: string | null
+  total_rows: number | null
+  failed_rows: number | null
+  detail: string | null
+}
+
+export interface ClaimAutoImportStatus {
+  running: boolean
+  cronEnabled: boolean
+  cron: string
+  folder: string
+  runs: ClaimAutoImportRun[]
+}
+
+const CLAIM_RUN_LABEL: Record<string, { label: string; tone: ClaimAutoRunTone }> = {
+  imported: { label: 'New file imported', tone: 'ok' },
+  unchanged: { label: 'No new file', tone: 'ok' },
+  no_file: { label: 'No claim file in the folder', tone: 'warn' },
+  source_missing: { label: 'Folder not reachable', tone: 'error' },
+  failed: { label: 'Failed', tone: 'error' },
+}
+
+export function describeClaimAutoRun(run: ClaimAutoImportRun): { label: string; tone: ClaimAutoRunTone } {
+  return CLAIM_RUN_LABEL[run.outcome] ?? { label: run.outcome, tone: 'info' }
+}
+
+/** True once the run has finished (it is written when it ends, so a row means it ended). */
+export function isClaimAutoRunFinished(run: ClaimAutoImportRun | null): boolean {
+  return !!run && !!run.finished_at
+}
+
+/** "Every day at 07:00" for the plain `m h * * *` schedules the job uses; the raw expression for anything else. */
+export function describeDailyCron(cron: string): string {
+  const m = /^\s*(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*\s*$/.exec(String(cron || ''))
+  if (!m) return cron || '-'
+  return `every day at ${m[2].padStart(2, '0')}:${m[1].padStart(2, '0')}`
+}
