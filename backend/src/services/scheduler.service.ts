@@ -7,6 +7,7 @@ import { PipelineDailySummaryService } from './pipelineDailySummary.service';
 import { runContractEtaReminderJob } from './contractEtaReminder.service';
 import { runSapFolderAutoImportJob } from './sapFolderAutoImport.service';
 import { runPoCreatorsAutoLoadJob } from './poCreators.service';
+import { claimAutoImportCron, isClaimAutoImportEnabled, runClaimAutoImportJob } from './claimDataAutoImport.service';
 
 export interface ScheduledImport {
   id: string;
@@ -40,8 +41,29 @@ export class SchedulerService {
     this.startDhmVesselSyncCron();
     this.startJpsSyncCron();
     this.startPoCreatorsAutoLoadCron();
+    this.startClaimAutoImportCron();
 
     logger.info('Scheduler service initialized successfully');
+  }
+
+  /**
+   * Claim Data from the folder SAP writes into (IT's share, read-only): the newest OSCLAIM file, imported as the outstanding snapshot when KLIP does
+   * not have it yet. Off unless CLAIM_AUTO_IMPORT_ENABLED=true; CLAIM_AUTO_IMPORT_CRON overrides the 07:00 default. The refresh at 07:30 follows it.
+   */
+  private static startClaimAutoImportCron(): void {
+    if (!isClaimAutoImportEnabled()) {
+      logger.info('Claim Data auto-import cron is disabled (CLAIM_AUTO_IMPORT_ENABLED is not true)');
+      return;
+    }
+    const schedule = claimAutoImportCron();
+    cron.schedule(
+      schedule,
+      async () => {
+        await runClaimAutoImportJob();
+      },
+      { timezone: 'Asia/Jakarta' },
+    );
+    logger.info(`Claim Data auto-import cron scheduled: ${schedule} (Asia/Jakarta)`);
   }
 
   /**

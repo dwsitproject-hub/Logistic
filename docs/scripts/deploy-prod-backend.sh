@@ -290,6 +290,18 @@ else
   else
     bad "SAP share mounted and readable (check KLIP_SAP_IMPORT_MOUNT points at a path that exists)"
   fi
+  # Claim Data folder rides on the same overlay (KLIP_CLAIM_IMPORT_MOUNT -> /mnt/claim-import). Only reported, never fatal: the claim auto-import is
+  # opt-in (CLAIM_AUTO_IMPORT_ENABLED=true in .env), and the page's status strip names a folder it cannot read.
+  if grep -qE '^CLAIM_AUTO_IMPORT_ENABLED=true' .env; then
+    if logs | grep -qi 'Claim Data auto-import cron scheduled'; then ok "Claim auto-import cron registered"; else bad "Claim auto-import cron registered"; fi
+    if docker exec "$CONTAINER" sh -c 'ls "/mnt/claim-import/original" >/dev/null 2>&1'; then
+      ok "Claim share mounted and readable"
+    else
+      bad "Claim share mounted and readable (check KLIP_CLAIM_IMPORT_MOUNT points at a path that holds an original folder)"
+    fi
+  else
+    printf '  [SKIP] Claim auto-import is off (CLAIM_AUTO_IMPORT_ENABLED is not true in .env)\n'
+  fi
 fi
 
 # docker-compose.backend.yml reads the key from env_file ONLY; a ${...:-} line would substitute an

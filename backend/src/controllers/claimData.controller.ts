@@ -5,6 +5,14 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { parseClaimDataWorkbook, type ClaimDataKind } from '../utils/claimDataWorkbook';
 import { importClaimData } from '../services/claimData.service';
+import {
+  claimAutoImportCron,
+  isClaimAutoImportEnabled,
+  isClaimAutoImportRunning,
+  listRecentClaimAutoImportRuns,
+  startClaimAutoImportInBackground,
+} from '../services/claimDataAutoImport.service';
+import { claimAutoImportOriginalDir } from '../utils/claimAutoImportPaths';
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -102,5 +110,43 @@ export const getClaimDataStatus = async (_req: AuthRequest, res: Response) => {
   } catch (error) {
     logger.error('Claim Data status failed:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Data status' } });
+  }
+};
+
+/**
+ * The auto-import's state for the page (GET /claim-data/auto-import/status): whether the schedule is on and when, whether a run is going, the
+ * folder it reads and the latest runs. Informational: a failed read must not break the page.
+ */
+export const getClaimAutoImportStatus = async (_req: AuthRequest, res: Response) => {
+  try {
+    const runs = await listRecentClaimAutoImportRuns(5);
+    return res.json({
+      success: true,
+      data: {
+        running: isClaimAutoImportRunning(),
+        cronEnabled: isClaimAutoImportEnabled(),
+        cron: claimAutoImportCron(),
+        folder: claimAutoImportOriginalDir(),
+        runs,
+      },
+    });
+  } catch (error) {
+    logger.error('Claim Data auto-import status failed:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load the auto-import status' } });
+  }
+};
+
+/** Sync (POST /claim-data/auto-import/sync): the same run as the schedule, started now in the background. 409 while one is running. */
+export const syncClaimAutoImport = async (req: AuthRequest, res: Response) => {
+  try {
+    const clock = await query('SELECT NOW() AS now');
+    const { started } = startClaimAutoImportInBackground(req.user?.id ?? null);
+    if (!started) {
+      return res.status(409).json({ success: false, error: { message: 'An import is already running. Wait for it to finish.' } });
+    }
+    return res.status(202).json({ success: true, data: { started: true, serverNow: new Date(clock.rows[0].now).toISOString() } });
+  } catch (error) {
+    logger.error('Claim Data sync failed to start:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to start the sync' } });
   }
 };
