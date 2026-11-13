@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronRight, Clock, FileSpreadsheet, User } from 'lucide-react'
 import { SapImportStatusChip } from '@/components/sap-import/SapImportStatusChip'
 import {
@@ -19,6 +19,8 @@ interface Props {
   error: string | null
   canUpload: boolean
   onOpen: (id: string) => void
+  /** Icon buttons (Sync, Import) at the right end of the section header, so every action of the table sits inside the table's section. */
+  actions?: ReactNode
 }
 
 const GRID = 'md:grid md:grid-cols-[1.1fr_1.7fr_0.9fr_1.5fr_1fr_1rem] md:items-center md:gap-3'
@@ -56,7 +58,7 @@ function ResultBar({ imp }: { imp: SapImportRow }) {
 }
 
 /** The import history: filter chips on top, one clickable row per import (the whole row opens its details). */
-export function SapImportHistory({ imports, error, canUpload, onOpen }: Props) {
+export function SapImportHistory({ imports, error, canUpload, onOpen, actions }: Props) {
   const [filter, setFilter] = useState<SapImportFilter>('all')
   const rows = useMemo(
     () =>
@@ -71,6 +73,7 @@ export function SapImportHistory({ imports, error, canUpload, onOpen }: Props) {
     <section className="overflow-hidden rounded-xl border border-gray-200 bg-white" aria-label="Import history">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-4 py-3">
         <h3 className="text-sm font-semibold text-gray-900">Import history</h3>
+        <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by status">
           {SAP_IMPORT_FILTERS.map((f) => (
             <button
@@ -87,6 +90,8 @@ export function SapImportHistory({ imports, error, canUpload, onOpen }: Props) {
               {f.label}
             </button>
           ))}
+        </div>
+        {actions ? <div className="flex items-center gap-1.5 border-l border-gray-200 pl-2">{actions}</div> : null}
         </div>
       </div>
 

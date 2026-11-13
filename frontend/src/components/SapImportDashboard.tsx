@@ -486,24 +486,6 @@ const SapImportDashboard: React.FC = () => {
         <p className="text-sm text-gray-500">
           SAP MASTER v2: upload a file, or let the schedule pull it from the SAP folder.
         </p>
-        <div className="flex items-center gap-2">
-          <SapFolderSyncButton folderSync={folderSync} canSync={canUploadSap} />
-          {canUploadSap ? (
-            <Button size="sm" onClick={handleStartImport} disabled={importing}>
-              {importing ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  {uploadPhase === 'processing' ? 'Processing...' : 'Uploading...'}
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  Import Logistics Data
-                </>
-              )}
-            </Button>
-          ) : null}
-        </div>
       </div>
 
       <SapFolderSyncStatus folderSync={folderSync} />
@@ -541,6 +523,23 @@ const SapImportDashboard: React.FC = () => {
         error={importsError}
         canUpload={canUploadSap}
         onOpen={openImportDetail}
+        actions={
+          canUploadSap ? (
+            <>
+              <SapFolderSyncButton folderSync={folderSync} canSync={canUploadSap} />
+              <Button
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                onClick={handleStartImport}
+                disabled={importing}
+                title={importing ? (uploadPhase === 'processing' ? 'Processing...' : 'Uploading...') : 'Import Logistics Data'}
+                aria-label={importing ? (uploadPhase === 'processing' ? 'Processing' : 'Uploading') : 'Import Logistics Data'}
+              >
+                {importing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Upload className="h-4 w-4" aria-hidden />}
+              </Button>
+            </>
+          ) : null
+        }
       />
 
       <BulkUploadStatusModal

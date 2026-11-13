@@ -147,15 +147,6 @@ export default function ClaimDataImportDashboard() {
         <p className="text-sm text-gray-500">
           SAP outstanding claim export (OSCLAIM): one file holds Mutu and Susut claims; they feed Quality Claim and Shortage Claim.
         </p>
-        {canUpload ? (
-          <div className="flex items-center gap-2">
-            <ClaimFolderSyncButton folderSync={folderSync} canSync={canUpload} />
-            <Button size="sm" onClick={() => inputRef.current?.click()} disabled={busy != null}>
-              <Upload className="mr-2 h-4 w-4" aria-hidden />
-              Import Claim Data
-            </Button>
-          </div>
-        ) : null}
       </div>
 
       {loadError ? <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{loadError}</p> : null}
@@ -192,7 +183,27 @@ export default function ClaimDataImportDashboard() {
 
       {result ? <ClaimImportResult result={result.data} fileName={result.fileName} onDismiss={() => setResult(null)} /> : null}
 
-      <ClaimImportHistory items={history} loadError={loadError} />
+      <ClaimImportHistory
+        items={history}
+        loadError={loadError}
+        actions={
+          canUpload ? (
+            <>
+              <ClaimFolderSyncButton folderSync={folderSync} canSync={canUpload} />
+              <Button
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                onClick={() => inputRef.current?.click()}
+                disabled={busy != null}
+                title="Import Claim Data"
+                aria-label="Import Claim Data"
+              >
+                <Upload className="h-4 w-4" aria-hidden />
+              </Button>
+            </>
+          ) : null
+        }
+      />
     </div>
   )
 }

@@ -130,23 +130,14 @@ export function SapFolderSyncButton({ folderSync, canSync }: { folderSync: SapFo
   return (
     <Button
       variant="outline"
-      size="sm"
+      size="icon"
       onClick={() => void folderSync.sync()}
       disabled={folderSync.busy}
-      title="Pull the newest file from the SAP share now. Only the newest file is imported, and only if KLIP does not have it yet."
-      className="border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+      title={folderSync.busy ? 'Syncing...' : 'Sync: pull the newest file from the SAP share now. Only the newest file is imported, and only if KLIP does not have it yet.'}
+      aria-label={folderSync.busy ? 'Syncing' : 'Sync'}
+      className="h-9 w-9 shrink-0 border-gray-200 bg-white text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
     >
-      {folderSync.busy ? (
-        <>
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />
-          Syncing...
-        </>
-      ) : (
-        <>
-          <RefreshCw className="mr-2 h-4 w-4" aria-hidden />
-          Sync
-        </>
-      )}
+      {folderSync.busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <RefreshCw className="h-4 w-4" aria-hidden />}
     </Button>
   );
 }

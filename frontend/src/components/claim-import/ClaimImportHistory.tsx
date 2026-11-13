@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, FileSpreadsheet } from 'lucide-react'
 import { ClaimKindIcon } from '@/components/claim-import/ClaimKindIcon'
 import { formatSapImportWhen, sapImportBarSegments } from '@/lib/sapImportSummary'
@@ -33,7 +33,7 @@ function Detail({ label, value }: { label: string; value: string }) {
 }
 
 /** The import history: filter chips, one row per import, and a row opens to its details (B2B / Direct, unmatched, warnings, failed rows). */
-export function ClaimImportHistory({ items, loadError }: { items: ClaimUploadHistoryItem[]; loadError: string | null }) {
+export function ClaimImportHistory({ items, loadError, actions }: { items: ClaimUploadHistoryItem[]; loadError: string | null; actions?: ReactNode }) {
   const [filter, setFilter] = useState<ClaimUploadFilter>('all')
   const [openId, setOpenId] = useState<string | null>(null)
   const rows = useMemo(() => filterClaimUploads(items, filter), [items, filter])
@@ -43,6 +43,7 @@ export function ClaimImportHistory({ items, loadError }: { items: ClaimUploadHis
     <section className="overflow-hidden rounded-xl border border-gray-200 bg-white" aria-label="Import history">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-4 py-3">
         <h3 className="text-sm font-semibold text-gray-900">Import history</h3>
+        <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter the history">
           {CLAIM_UPLOAD_FILTERS.map((option) => (
             <button
@@ -59,6 +60,8 @@ export function ClaimImportHistory({ items, loadError }: { items: ClaimUploadHis
               {option.label}
             </button>
           ))}
+        </div>
+        {actions ? <div className="flex items-center gap-1.5 border-l border-gray-200 pl-2">{actions}</div> : null}
         </div>
       </div>
 

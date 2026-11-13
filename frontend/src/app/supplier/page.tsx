@@ -377,51 +377,6 @@ export default function SupplierPage() {
               Maintain reference data for suppliers and their production estimates.
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-green-600 text-green-700 hover:bg-green-50"
-              title="Download Template"
-              aria-label="Download Template"
-              onClick={downloadTemplate}
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Template
-            </Button>
-            <input
-              id="supplier-upload"
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="hidden"
-              onChange={handleUpload}
-              disabled={uploading}
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              title="Upload CSV"
-              aria-label="Upload CSV"
-              onClick={() => document.getElementById('supplier-upload')?.click()}
-              disabled={uploading}
-            >
-              {uploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  CSV
-                </>
-              )}
-            </Button>
-            <Button size="sm" onClick={openAdd}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Supplier
-            </Button>
-          </div>
         </div>
 
         {error && <div className="text-red-600 text-sm">{error}</div>}
@@ -486,6 +441,40 @@ export default function SupplierPage() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 border-r border-gray-200 pr-2">
+                  <input
+                    id="supplier-upload"
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    onChange={handleUpload}
+                    disabled={uploading}
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9 shrink-0 border-gray-200 bg-white text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+                    title="Download Template"
+                    aria-label="Download Template"
+                    onClick={downloadTemplate}
+                  >
+                    <Download className="h-4 w-4" aria-hidden />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9 shrink-0 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    title={uploading ? 'Uploading...' : 'Upload CSV'}
+                    aria-label={uploading ? 'Uploading' : 'Upload CSV'}
+                    onClick={() => document.getElementById('supplier-upload')?.click()}
+                    disabled={uploading}
+                  >
+                    {uploading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Upload className="h-4 w-4" aria-hidden />}
+                  </Button>
+                  <Button size="icon" className="h-9 w-9 shrink-0" title="Add Supplier" aria-label="Add Supplier" onClick={openAdd}>
+                    <Plus className="h-4 w-4" aria-hidden />
+                  </Button>
+                </div>
                 <ListPageColumnsMenu
                   columns={supplierColumns.menuColumns}
                   visibleIds={supplierColumns.visibleIds}

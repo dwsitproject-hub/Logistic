@@ -165,10 +165,6 @@ function UserActivityLogPageContent() {
             </p>
           </div>
         </div>
-        <Button variant="outline" onClick={() => void fetchSummary(page, dateFrom, dateTo)}>
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
       </div>
 
       <Card>
@@ -196,7 +192,19 @@ function UserActivityLogPageContent() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle>Daily activity summary</CardTitle>
-          <span className="text-sm text-gray-500">{total.toLocaleString('en-US')} day record(s)</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-500">{total.toLocaleString('en-US')} day record(s)</span>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 shrink-0 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+              title="Refresh"
+              aria-label="Refresh"
+              onClick={() => void fetchSummary(page, dateFrom, dateTo)}
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden />
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (

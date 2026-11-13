@@ -329,18 +329,23 @@ export default function RolesPage() {
         {/* Header */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <Button variant="outline" size="sm" onClick={() => guardUnsaved(() => router.push('/users'))}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Users
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+              title="Back to Users"
+              aria-label="Back to Users"
+              onClick={() => guardUnsaved(() => router.push('/users'))}
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden />
             </Button>
             <h2 className="mt-3 text-lg font-semibold text-gray-900">Roles and access</h2>
             <p className="mt-0.5 text-sm text-gray-500">
               Pick a role, then choose what it can view, create, edit and delete.
             </p>
           </div>
-          <Button size="sm" onClick={() => setShowAddRole(true)}>
-            <Plus className="mr-2 h-4 w-4" aria-hidden />
-            Add Role
+          <Button size="icon" className="h-9 w-9 shrink-0" title="Add Role" aria-label="Add Role" onClick={() => setShowAddRole(true)}>
+            <Plus className="h-4 w-4" aria-hidden />
           </Button>
         </div>
 

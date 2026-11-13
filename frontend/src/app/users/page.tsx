@@ -315,38 +315,6 @@ export default function UsersPage() {
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-gray-500">Manage accounts, roles and what each person can see.</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-              onClick={() => router.push('/users/activity-log')}
-            >
-              <Activity className="mr-2 h-4 w-4 text-gray-500" aria-hidden />
-              User Activity Log
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-              onClick={() => router.push('/users/roles')}
-            >
-              <Settings className="mr-2 h-4 w-4 text-gray-500" aria-hidden />
-              Manage Roles
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => {
-                setFormData(emptyFormData)
-                setError('')
-                setSuccess('')
-                setShowAddModal(true)
-              }}
-            >
-              <UserPlus className="mr-2 h-4 w-4" aria-hidden />
-              Add User
-            </Button>
-          </div>
         </div>
 
         {/* Alerts */}
@@ -384,6 +352,45 @@ export default function UsersPage() {
             totalCount={users.length}
             status={statusFilter}
             onStatus={setStatusFilter}
+            statusCounts={{ all: userSummary.total, active: userSummary.active, pending: userSummary.pending, inactive: userSummary.inactive }}
+            actions={
+              <>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  title="User Activity Log"
+                  aria-label="User Activity Log"
+                  onClick={() => router.push('/users/activity-log')}
+                >
+                  <Activity className="h-4 w-4" aria-hidden />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                  title="Manage Roles"
+                  aria-label="Manage Roles"
+                  onClick={() => router.push('/users/roles')}
+                >
+                  <Settings className="h-4 w-4" aria-hidden />
+                </Button>
+                <Button
+                  size="icon"
+                  className="h-9 w-9 shrink-0"
+                  title="Add User"
+                  aria-label="Add User"
+                  onClick={() => {
+                    setFormData(emptyFormData)
+                    setError('')
+                    setSuccess('')
+                    setShowAddModal(true)
+                  }}
+                >
+                  <UserPlus className="h-4 w-4" aria-hidden />
+                </Button>
+              </>
+            }
           />
           {filteredUsers.length === 0 ? (
             <div className="px-4 py-12 text-center text-sm text-gray-500">No users match these filters</div>
