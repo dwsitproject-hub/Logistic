@@ -92,6 +92,7 @@ import { periodRangeMatchesDates } from '@/components/performance/PerformanceCon
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import { ContractsFilterBar, ContractsFilterField } from '@/components/contracts/ContractsFilterBar'
 import { MasterKpis } from '@/components/master/MasterKpis'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
 import { iconButtonClass } from '@/lib/iconButton'
 import {
   formatContractDateScopeLabel,
@@ -4646,8 +4647,8 @@ function ContractsPageContent() {
         )}
 
         {/* Contracts List */}
-        <Card ref={contractsTableRef}>
-          <CardHeader>
+        <Card ref={contractsTableRef} className={!isContractPerformance ? 'overflow-hidden rounded-xl border-gray-200 shadow-none' : undefined}>
+          <CardHeader className={!isContractPerformance ? 'space-y-0 border-b border-gray-200 px-4 py-3' : undefined}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div>
@@ -4868,11 +4869,11 @@ function ContractsPageContent() {
               </div>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className={!isContractPerformance ? 'p-0' : undefined}>
               <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
               <>
                 {/* Desktop compact table (Contracts + Contract Performance): semantic <table>, zebra on <tr>/<td> */}
-                <div className="hidden lg:block border rounded-lg overflow-hidden">
+                <div className={cn('hidden lg:block overflow-hidden', isContractPerformance && 'border rounded-lg')}>
                   {/* Top scrollbar (synced) */}
                   <div
                     ref={topScrollRef}
@@ -4914,6 +4915,7 @@ function ContractsPageContent() {
                           COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                           'klip-compact-table--perf-narrow-cols',
                           'klip-actions-w-2',
+                          !isContractPerformance && 'klip-table--directory',
                         )}
                       >
                       <colgroup>
@@ -5321,7 +5323,7 @@ function ContractsPageContent() {
 
                       {/* Rows */}
                       <tbody
-                        className={`divide-y divide-gray-200 transition-opacity duration-200 ${
+                        className={`divide-y ${isContractPerformance ? 'divide-gray-200' : 'divide-gray-100'} transition-opacity duration-200 ${
                           (listFetching || (isContractPerformance && contractPerfSection3Loading)) &&
                           contracts.length > 0
                             ? 'opacity-65'
@@ -5346,7 +5348,7 @@ function ContractsPageContent() {
                           </tr>
                         ) : (
                           sortedContracts.map((contract, idx) => {
-                            const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                            const stripeClass = isContractPerformance && idx % 2 !== 0 ? 'bg-gray-50' : 'bg-white'
                             return (
                           <tr key={contract.id} className={stripeClass}>
                                 {visibleColumns.map(col => {
@@ -5442,7 +5444,7 @@ function ContractsPageContent() {
                 </div>
 
                 {/* Mobile/tablet cards */}
-                <div className="lg:hidden space-y-2">
+                <div className={cn('lg:hidden space-y-2', !isContractPerformance && 'px-4 py-3')}>
                   {(listFetching ||
                     (isContractPerformance && contractPerfSection3Loading)) &&
                   contracts.length === 0 ? (
@@ -5600,13 +5602,21 @@ function ContractsPageContent() {
               </div>
             
             {/* Pagination */}
-            <ListPager
-              page={currentPage}
-              totalPages={totalPages}
-              onPageChange={handlePageChange}
-              disabled={listFetching || section3TableLoading}
-              summary={`Page ${currentPage}/${totalPages} · ${displayTotalContracts.toLocaleString('en-US')} contracts`}
-            />
+            {isContractPerformance ? (
+              <ListPager
+                page={currentPage}
+                totalPages={totalPages}
+                onPageChange={handlePageChange}
+                disabled={listFetching || section3TableLoading}
+                summary={`Page ${currentPage}/${totalPages} · ${displayTotalContracts.toLocaleString('en-US')} contracts`}
+              />
+            ) : (
+              <MasterTableFooter
+                countText={`${displayTotalContracts.toLocaleString('en-US')} contracts · page ${currentPage} of ${totalPages}`}
+                kinds={[]}
+                pager={{ page: currentPage, totalPages, onPageChange: handlePageChange, disabled: listFetching || section3TableLoading }}
+              />
+            )}
           </CardContent>
         </Card>
 

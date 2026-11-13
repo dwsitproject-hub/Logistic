@@ -110,6 +110,29 @@
   }
 
   /*
+   * Contracts list: the look of the Master lists (header in normal case, quiet grey, 14px cells, hairline rows, a wash on hover, no zebra),
+   * on top of the compact operational table so the column widths and sticky Actions keep working. Added only by the Contracts page.
+   */
+  .klip-table--directory thead th {
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: rgb(107 114 128);
+    background-color: rgb(249 250 251);
+  }
+  .klip-table--directory tbody td {
+    font-size: 0.875rem;
+  }
+  .klip-table--directory tbody tr:hover > td {
+    background-color: rgb(249 250 251);
+  }
+  .klip-table--directory th:first-child,
+  .klip-table--directory td:first-child {
+    padding-left: 1rem;
+  }
+
+  /*
    * Operational list tables (Shipments, Trucking): shrink-wrap columns to the longest
    * unbreakable word/token in each column; wrap-type columns absorb leftover width.
    */
