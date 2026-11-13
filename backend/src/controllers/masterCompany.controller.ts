@@ -35,7 +35,8 @@ async function replaceCompanySites(companyId: string, ids: string[]): Promise<vo
 const listSelect = `
   SELECT company.id, company.code_klip, company.code_dhm, company.company_code, company.company_name, company.dhm_id,
          COALESCE(array_agg(site.id::text ORDER BY site.site_name) FILTER (WHERE site.id IS NOT NULL), '{}') AS site_ids,
-         COALESCE(string_agg(site.site_name, ', ' ORDER BY site.site_name), '') AS site
+         COALESCE(string_agg(site.site_name, ', ' ORDER BY site.site_name), '') AS site,
+         COALESCE(array_agg(site.site_name ORDER BY site.site_name) FILTER (WHERE site.id IS NOT NULL), '{}') AS site_names
   FROM master_companies company
   LEFT JOIN master_company_sites link ON link.company_id = company.id
   LEFT JOIN master_sites site ON site.id = link.site_id

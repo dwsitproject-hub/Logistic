@@ -12,6 +12,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
+import { MultiValueCell } from '@/components/shared/MultiValueCell'
+import { multiValuesOf, multiValueText } from '@/lib/multiValueCell'
 import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { ListFilterPanel, LIST_FILTER_FIELD_LABEL_CLASS, LIST_FILTER_FIELDS_ROW_CLASS } from '@/components/shared/ListFilterPanel'
@@ -28,6 +30,8 @@ interface MasterCompany {
   company_code: string
   company_name: string
   site: string | null
+  /** The sites linked to the company, as a list. */
+  site_names?: string[] | null
   site_ids: string[] | null
 }
 
@@ -41,7 +45,12 @@ const COLUMNS: MasterListTableColumn<MasterCompany>[] = [
   { id: 'code_dhm', label: 'Company Code (DHM)', getText: (row) => row.code_dhm || '-' },
   { id: 'company_code', label: 'Company Code (SAP)', getText: (row) => row.company_code || '-' },
   { id: 'company_name', label: 'Company Name', getText: (row) => row.company_name || '-' },
-  { id: 'site', label: 'Site', getText: (row) => row.site || '-' },
+  {
+    id: 'site',
+    label: 'Site',
+    getText: (row) => multiValueText(multiValuesOf(row.site_names, row.site)),
+    render: (row) => <MultiValueCell values={multiValuesOf(row.site_names, row.site)} rowTitle={row.company_name} columnLabel="Site" plural="sites" />,
+  },
   dhmStatusListColumn<MasterCompany>(),
 ]
 

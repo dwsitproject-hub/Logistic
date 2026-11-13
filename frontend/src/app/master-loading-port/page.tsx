@@ -20,6 +20,8 @@ import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { Plus, Save } from 'lucide-react'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
+import { MultiValueCell } from '@/components/shared/MultiValueCell'
+import { multiValuesOf, multiValueText } from '@/lib/multiValueCell'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import {
@@ -71,7 +73,12 @@ const PORT_COLUMNS: MasterListTableColumn<MasterLoadingPort>[] = [
   { id: 'code_klip', label: 'Port Code (KLIP)', getText: (row) => portCell(row.code_klip) },
   { id: 'code_dhm', label: 'Port Code (DHM)', getText: (row) => portCell(row.code_dhm) },
   { id: 'port', label: 'Port', getText: (row) => portCell(row.port) },
-  { id: 'vessel_port_sap', label: 'VESSEL PORT (SAP)', getText: (row) => portCell((row.vessel_port_sap ?? []).join('; ')) },
+  {
+    id: 'vessel_port_sap',
+    label: 'VESSEL PORT (SAP)',
+    getText: (row) => portCell(multiValueText(multiValuesOf(row.vessel_port_sap))),
+    render: (row) => <MultiValueCell values={multiValuesOf(row.vessel_port_sap)} rowTitle={row.port} columnLabel="Vessel Port (SAP)" plural="SAP names" />,
+  },
   dhmStatusListColumn<MasterLoadingPort>(),
 ]
 
