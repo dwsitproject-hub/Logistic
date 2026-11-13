@@ -65,6 +65,7 @@ import { ContractPerfTableSortHeader } from '@/components/performance/ContractPe
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { ListPager } from '@/components/performance/ListPager'
 import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { ViewToggle } from '@/components/shared/ViewToggle'
 import { HeaderScopeField } from '@/components/shared/HeaderScopeField'
 import { ListFilterBar, ListFilterField } from '@/components/shared/ListFilterBar'
 import { MultiValueField, SingleValueField } from '@/components/shared/ListFilterFields'
@@ -3836,22 +3837,15 @@ function TruckingPageContent() {
   }, [visibleColumns, sortedOperations, editingId])
 
   const truckingViewToggle = TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED ? (
-    <div className="inline-flex rounded-lg border bg-white p-1">
-      <button
-        type="button"
-        onClick={() => setActiveTab('list')}
-        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-      >
-        List
-      </button>
-      <button
-        type="button"
-        onClick={() => setActiveTab('calendar')}
-        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'calendar' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-      >
-        Daily Planning Deliverables
-      </button>
-    </div>
+    <ViewToggle
+      ariaLabel="Trucking view"
+      value={activeTab}
+      onChange={setActiveTab}
+      options={[
+        { value: 'list', label: 'List' },
+        { value: 'calendar', label: 'Daily Planning Deliverables' },
+      ]}
+    />
   ) : null
   const dailyPlanningUploadEligible = isDailyPlanningTemplateMode(statusFilter)
   const sapImportUploadBlockedTitle = SAP_IMPORT_IN_PROGRESS_MESSAGE
@@ -4626,20 +4620,6 @@ function TruckingPageContent() {
                 >
                   {wbUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Scale className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </Button>
-                <Button variant="ghost" size="icon" className={iconButtonClass('pink')}
-                  aria-label="Upload Daily Planning"
-                  onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-                  disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
-                  title={
-                    sapImportActive
-                      ? `Upload Daily Planning: ${sapImportUploadBlockedTitle}`
-                      : dailyPlanningUploadEligible
-                        ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
-                        : 'Upload Daily Planning: tersedia pada status Unplanned atau Planned'
-                  }
-                >
-                  {bulkCreateUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <CalendarClock className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
-                </Button>
                 {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
                   <>
                     {!isUnplannedPlanningTemplateMode(statusFilter) ? (
@@ -4663,7 +4643,6 @@ function TruckingPageContent() {
                     </Button>
                   </>
                 ) : null}
-                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <Button variant="ghost" size="icon" className={iconButtonClass('download')}
                   title="Download Data"
                   aria-label="Download Data"
@@ -4678,6 +4657,7 @@ function TruckingPageContent() {
                 >
                   {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Save className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </Button>
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
@@ -4697,6 +4677,21 @@ function TruckingPageContent() {
                     <TooltipContent side="top">Download Template: {DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP}</TooltipContent>
                   ) : null}
                 </Tooltip>
+                <Button variant="ghost" size="icon" className={iconButtonClass('pink')}
+                  aria-label="Upload Daily Planning"
+                  onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                  disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
+                  title={
+                    sapImportActive
+                      ? `Upload Daily Planning: ${sapImportUploadBlockedTitle}`
+                      : dailyPlanningUploadEligible
+                        ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
+                        : 'Upload Daily Planning: tersedia pada status Unplanned atau Planned'
+                  }
+                >
+                  {bulkCreateUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <CalendarClock className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                </Button>
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <div className="relative">
                   <Button variant="ghost" size="icon" className={iconButtonClass('neutral')}
                     title="Columns"

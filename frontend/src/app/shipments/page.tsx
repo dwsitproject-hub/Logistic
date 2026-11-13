@@ -7371,7 +7371,6 @@ function ShipmentsPageContent() {
                   <Plus className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                 </Button>
 
-                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <Button variant="ghost" size="icon" className={iconButtonClass('download')}
                   title="Download Data"
                   aria-label="Download Data"
@@ -7386,6 +7385,7 @@ function ShipmentsPageContent() {
                 >
                   {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Save className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </Button>
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <input
                   ref={groupingUploadInputRef}
                   type="file"
@@ -7428,6 +7428,7 @@ function ShipmentsPageContent() {
                     <TooltipContent side="top">Upload Planning: {SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP}</TooltipContent>
                   ) : null}
                 </Tooltip>
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <div className="relative">
                   <Button variant="ghost" size="icon" className={iconButtonClass('neutral')}
                     title="Columns"
