@@ -4589,7 +4589,7 @@ function TruckingPageContent() {
                 ) : null}
               </CardTitle>
               {truckingViewToggle}
-              <div className="flex flex-wrap items-center gap-2 ml-auto">
+              <div className="flex flex-wrap items-center gap-1.5 ml-auto sm:flex-nowrap">
                 <SortStackSummary
                   stack={sortStack}
                   labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}

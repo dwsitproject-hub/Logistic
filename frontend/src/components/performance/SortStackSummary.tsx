@@ -19,7 +19,7 @@ function DirIcon({ dir }: { dir: 'asc' | 'desc' }) {
 }
 
 /**
- * A multi-column sort in one short piece: "Urutan: [1 STO ↑ +2 ▾]  Reset". It sits in the card header's action group, just before
+ * A multi-column sort in one short piece: "Urutan: [1 STO ↑ +2 ▾] ✕" (the word Urutan shows from 2xl up, the reset is an icon). It sits in the card header's action group, just before
  * the Download Data button, and never wraps, so the header keeps the same height however many columns are sorted. The pill opens the full order (primary first, the order the rows are compared) in a
  * small list; Reset goes back to the table's default sort.
  */
@@ -51,7 +51,7 @@ export function SortStackSummary<K extends string>({ stack, labelFor, onReset, m
       className="relative flex max-w-full items-center gap-2 text-xs text-gray-600"
       aria-label="Urutan kolom"
     >
-      <span className="font-medium">Urutan:</span>
+      <span className="hidden font-medium 2xl:inline">Urutan:</span>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -72,10 +72,11 @@ export function SortStackSummary<K extends string>({ stack, labelFor, onReset, m
           setOpen(false)
           onReset()
         }}
-        className="inline-flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+        className="inline-flex shrink-0 items-center gap-0.5 rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-800"
         title="Kembali ke urutan awal"
       >
-        <X className="h-3 w-3" /> Reset
+        <X className="h-3.5 w-3.5" aria-hidden />
+        <span className="sr-only">Reset</span>
       </button>
       {open ? (
         <div

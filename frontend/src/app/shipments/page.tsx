@@ -7210,7 +7210,7 @@ function ShipmentsPageContent() {
         <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
           <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
+              <div className="min-w-0 sm:flex-1">
                 <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                   <span>All Shipments</span>
                   {listFetching || tableScopeLoading ? (
@@ -7272,7 +7272,7 @@ function ShipmentsPageContent() {
                     ) : null}
                   </p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0 sm:flex-nowrap">
                 {statusFilter === 'UNPLANNED' && selectedManualGroupContractIds.size > 0 ? (
                   <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5">
                     <span className="text-xs font-medium text-blue-800 whitespace-nowrap">
