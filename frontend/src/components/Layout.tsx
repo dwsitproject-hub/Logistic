@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/t
 import { AppTourProvider, useAppTour } from './AppTourProvider'
 import { PageActivityFab } from './PageActivityFab'
 import { UserActivityTracker } from './UserActivityTracker'
-import { BookOpen, Bug, Loader2, LogOut, Menu, X } from 'lucide-react'
+import { BookOpen, Bug, ChevronLeft, ChevronRight, Loader2, LogOut } from 'lucide-react'
 import { hubOpenBugReport, isHubSdkEnabled } from '@/lib/hubSdk'
 import { PageHeaderBusyProvider, usePageHeaderBusyState } from '@/components/PageHeaderBusyContext'
 import { resolvePageTitle } from '@/lib/resolvePageTitle'
@@ -113,22 +113,16 @@ function LayoutChrome({
   return (
     <HeaderFilterSlotProvider>
     <div className="flex h-screen bg-gray-100">
+      <div className="relative flex shrink-0">
       <aside
         data-tour="tour-sidebar"
         className={`${
           sidebarOpen ? 'w-52' : 'w-16'
-        } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out shrink-0 flex flex-col overflow-hidden`}
+        } bg-white transition-all duration-300 ease-in-out shrink-0 flex flex-col overflow-hidden`}
       >
-        <div className="flex h-16 min-h-16 items-center justify-between gap-1 border-b border-gray-200 px-3 shrink-0">
-          {sidebarOpen && (
-            <div className="flex min-w-0 items-center gap-2">
-              <Image src="/icon.svg" alt="" width={32} height={32} unoptimized className="h-8 w-8 shrink-0" />
-              <h1 className="text-xl font-bold text-primary leading-snug tracking-tight">KLIP</h1>
-            </div>
-          )}
-          <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
-            {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </Button>
+        <div className={`flex h-16 min-h-16 items-center gap-2 border-b border-gray-200 shrink-0 ${sidebarOpen ? 'px-3' : 'justify-center px-0'}`}>
+          <Image src="/icon.svg" alt="" width={32} height={32} unoptimized className="h-8 w-8 shrink-0" />
+          {sidebarOpen && <h1 className="text-xl font-bold text-primary leading-snug tracking-tight">KLIP</h1>}
         </div>
         <nav className="flex-1 overflow-y-auto p-2.5 space-y-3">
           {sidebarNavigationLoading
@@ -172,6 +166,18 @@ function LayoutChrome({
             )}
         </nav>
       </aside>
+      {/* The collapse handle: a small round button on the sidebar edge, halfway down it, so the header holds only the logo and the title. */}
+      <button
+        type="button"
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+        aria-expanded={sidebarOpen}
+        title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+        className="absolute -right-3 top-1/2 z-30 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+      >
+        {sidebarOpen ? <ChevronLeft className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
+      </button>
+      </div>
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 relative">
         <header
