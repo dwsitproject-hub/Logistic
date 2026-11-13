@@ -6,7 +6,7 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { StitchFields } from '@/components/shared/stitchField'
 import { Button } from '@/components/ui/button'
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import api from '@/lib/api'
 import { EditVesselModal, type MasterVesselFormData } from '@/components/master-vessel/EditVesselModal'
 import { heatingFilterToApi, termsFilterToApi, type MasterVesselFilterOptions } from '@/components/master-vessel/MasterVesselGlobalFiltersSection'
@@ -370,7 +370,7 @@ export default function MasterVesselPage() {
                     isAdmin ? (
                       <>
                         <MasterDhmSyncButton master="vessel" onDone={refresh} iconOnly />
-                        <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="New vessel" aria-label="New vessel" onClick={openNew}>
+                        <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="New vessel" aria-label="New vessel" onClick={openNew}>
                           <Plus className="h-4 w-4" aria-hidden />
                         </Button>
                       </>

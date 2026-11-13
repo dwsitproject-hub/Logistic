@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Button } from '@/components/ui/button'
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -352,9 +352,9 @@ export default function UsersPage() {
             actions={
               <>
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   size="icon"
-                  className={ICON_BUTTON_CLASS}
+                  className={iconButtonClass('neutral')}
                   title="User Activity Log"
                   aria-label="User Activity Log"
                   onClick={() => router.push('/users/activity-log')}
@@ -362,9 +362,9 @@ export default function UsersPage() {
                   <Activity className="h-4 w-4" aria-hidden />
                 </Button>
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   size="icon"
-                  className={ICON_BUTTON_CLASS}
+                  className={iconButtonClass('neutral')}
                   title="Manage Roles"
                   aria-label="Manage Roles"
                   onClick={() => router.push('/users/roles')}
@@ -372,9 +372,9 @@ export default function UsersPage() {
                   <Settings className="h-4 w-4" aria-hidden />
                 </Button>
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   size="icon"
-                  className={ICON_BUTTON_CLASS}
+                  className={iconButtonClass('add')}
                   title="Add User"
                   aria-label="Add User"
                   onClick={() => {

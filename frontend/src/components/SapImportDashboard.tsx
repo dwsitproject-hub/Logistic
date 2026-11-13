@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from './ui/button';
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Loader2, Upload } from 'lucide-react';
 import { SapImportKpis } from '@/components/sap-import/SapImportKpis';
 import { SapImportDropZone } from '@/components/sap-import/SapImportDropZone';
@@ -523,9 +523,9 @@ const SapImportDashboard: React.FC = () => {
             <>
               <SapFolderSyncButton folderSync={folderSync} canSync={canUploadSap} />
               <Button
-                variant="outline"
+                variant="ghost"
                 size="icon"
-                className={ICON_BUTTON_CLASS}
+                className={iconButtonClass('upload')}
                 onClick={handleStartImport}
                 disabled={importing}
                 title={importing ? (uploadPhase === 'processing' ? 'Processing...' : 'Uploading...') : 'Import Logistics Data'}

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Badge } from '@/components/ui/badge'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
@@ -191,9 +191,9 @@ function UserActivityLogPageContent() {
           <div className="flex items-center gap-3">
             <span className="text-sm text-gray-500">{total.toLocaleString('en-US')} day record(s) · idle after {USER_ACTIVITY_IDLE_MINUTES} min</span>
             <Button
-              variant="outline"
+              variant="ghost"
               size="icon"
-              className={ICON_BUTTON_CLASS}
+              className={iconButtonClass('sync')}
               title="Refresh"
               aria-label="Refresh"
               onClick={() => void fetchSummary(page, dateFrom, dateTo)}

@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CalendarClock, FileSpreadsheet, Loader2, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
 import { Button } from './ui/button';
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import {
   describeSapFolderRun,
   findRunStartedSince,
@@ -130,13 +130,13 @@ export function SapFolderSyncButton({ folderSync, canSync }: { folderSync: SapFo
   if (!canSync) return null;
   return (
     <Button
-      variant="outline"
+      variant="ghost"
       size="icon"
       onClick={() => void folderSync.sync()}
       disabled={folderSync.busy}
       title={folderSync.busy ? 'Syncing...' : 'Sync: pull the newest file from the SAP share now. Only the newest file is imported, and only if KLIP does not have it yet.'}
       aria-label={folderSync.busy ? 'Syncing' : 'Sync'}
-      className={ICON_BUTTON_CLASS}
+      className={iconButtonClass('sync')}
     >
       {folderSync.busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <RefreshCw className="h-4 w-4" aria-hidden />}
     </Button>

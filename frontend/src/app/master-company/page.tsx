@@ -5,7 +5,7 @@ import { Building2, Cloud, CloudOff, Factory, MapPin, Pencil, Plus } from 'lucid
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -262,9 +262,9 @@ export default function MasterCompanyPage() {
                   <>
                     <MasterDhmSyncButton master="company" onDone={refresh} iconOnly />
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       size="icon"
-                      className={ICON_BUTTON_CLASS}
+                      className={iconButtonClass('add')}
                       title="New company"
                       aria-label="New company"
                       onClick={() => {

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -444,9 +444,9 @@ export default function SupplierPage() {
                     disabled={uploading}
                   />
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="icon"
-                    className={ICON_BUTTON_CLASS}
+                    className={iconButtonClass('download')}
                     title="Download Template"
                     aria-label="Download Template"
                     onClick={downloadTemplate}
@@ -454,9 +454,9 @@ export default function SupplierPage() {
                     <Download className="h-4 w-4" aria-hidden />
                   </Button>
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="icon"
-                    className={ICON_BUTTON_CLASS}
+                    className={iconButtonClass('upload')}
                     title={uploading ? 'Uploading...' : 'Upload CSV'}
                     aria-label={uploading ? 'Uploading' : 'Upload CSV'}
                     onClick={() => document.getElementById('supplier-upload')?.click()}
@@ -464,7 +464,7 @@ export default function SupplierPage() {
                   >
                     {uploading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Upload className="h-4 w-4" aria-hidden />}
                   </Button>
-                  <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="Add Supplier" aria-label="Add Supplier" onClick={openAdd}>
+                  <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="Add Supplier" aria-label="Add Supplier" onClick={openAdd}>
                     <Plus className="h-4 w-4" aria-hidden />
                   </Button>
                 </div>

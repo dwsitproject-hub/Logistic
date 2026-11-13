@@ -7,7 +7,7 @@ import { Boxes, Cloud, CloudOff, Package, Pencil, Plus, Save } from 'lucide-reac
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -330,7 +330,7 @@ export default function MasterProductConfigurationPage() {
               actions={
                 <>
                   {isAdmin ? <MasterDhmSyncButton master="product" onDone={refresh} iconOnly /> : null}
-                  <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="New product" aria-label="New product" onClick={openAdd}>
+                  <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="New product" aria-label="New product" onClick={openAdd}>
                     <Plus className="h-4 w-4" aria-hidden />
                   </Button>
                 </>

@@ -92,6 +92,7 @@ import { periodRangeMatchesDates } from '@/components/performance/PerformanceCon
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import { ContractsFilterBar, ContractsFilterField } from '@/components/contracts/ContractsFilterBar'
 import { MasterKpis } from '@/components/master/MasterKpis'
+import { iconButtonClass } from '@/lib/iconButton'
 import {
   formatContractDateScopeLabel,
   PerformanceContractDateControl,
@@ -4616,7 +4617,7 @@ function ContractsPageContent() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-9 w-9 shrink-0 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+                className={iconButtonClass('download')}
                 title="Download Cargo Readiness Date template"
                 aria-label="Download Cargo Readiness Date template"
                 onClick={downloadCargoReadinessTemplate}
@@ -4626,14 +4627,14 @@ function ContractsPageContent() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-9 w-9 shrink-0 text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                className={iconButtonClass('upload')}
                 title="Upload Cargo Readiness Date (Excel)"
                 aria-label="Upload Cargo Readiness Date (Excel)"
                 disabled={csvCargoUploading}
                 onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
               >
                 {csvCargoUploading ? (
-                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
                 ) : (
                   <Upload className="h-[1.125rem] w-[1.125rem]" />
                 )}
@@ -4765,7 +4766,7 @@ function ContractsPageContent() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 text-slate-600 hover:bg-slate-100 hover:text-slate-800"
+                      className={iconButtonClass('neutral')}
                       title="Visible columns"
                       aria-label="Visible columns"
                       aria-expanded={showColumnsMenu}

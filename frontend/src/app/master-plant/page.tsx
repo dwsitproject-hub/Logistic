@@ -5,7 +5,7 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { StitchFields } from '@/components/shared/stitchField'
 import { Button } from '@/components/ui/button'
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import api from '@/lib/api'
@@ -431,7 +431,7 @@ export default function MasterPlantPage() {
               isAdmin ? (
                 <>
                   <MasterDhmSyncButton master="plant" onDone={() => void refresh()} iconOnly />
-                  <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="New plant" aria-label="New plant" onClick={openNew}>
+                  <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="New plant" aria-label="New plant" onClick={openNew}>
                     <Plus className="h-4 w-4" aria-hidden />
                   </Button>
                 </>

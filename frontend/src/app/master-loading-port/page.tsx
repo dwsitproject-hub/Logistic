@@ -6,7 +6,7 @@ import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StitchFields } from '@/components/shared/stitchField'
 import { Button } from '@/components/ui/button'
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useRouter } from 'next/navigation'
@@ -484,7 +484,7 @@ export default function MasterLoadingPortPage() {
               isAdmin ? (
                 <>
                   <MasterDhmSyncButton master="port" onDone={refresh} iconOnly />
-                  <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title="New port" aria-label="New port" onClick={openNew}>
+                  <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="New port" aria-label="New port" onClick={openNew}>
                     <Plus className="h-4 w-4" aria-hidden />
                   </Button>
                 </>

@@ -5,7 +5,7 @@ import { Cloud, CloudOff, Layers, Pencil, Plus, Route } from 'lucide-react'
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
-import { ICON_BUTTON_CLASS } from '@/lib/iconButton'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StitchFields } from '@/components/shared/stitchField'
@@ -308,7 +308,7 @@ export function ReferenceMasterPage({
                 isAdmin ? (
                   <>
                     {dhmSyncMaster ? <MasterDhmSyncButton master={dhmSyncMaster} onDone={() => void refresh()} iconOnly /> : null}
-                    <Button variant="outline" size="icon" className={ICON_BUTTON_CLASS} title={newLabel} aria-label={newLabel} onClick={openNew}>
+                    <Button variant="ghost" size="icon" className={iconButtonClass('add')} title={newLabel} aria-label={newLabel} onClick={openNew}>
                       <Plus className="h-4 w-4" aria-hidden />
                     </Button>
                   </>
