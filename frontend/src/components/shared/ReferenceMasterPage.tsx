@@ -278,8 +278,6 @@ export function ReferenceMasterPage({
     <Layout>
       <StitchFields>
         <div className="space-y-6">
-          <p className="text-sm text-gray-500">{description}</p>
-
           <MasterKpis items={kpis} />
 
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">

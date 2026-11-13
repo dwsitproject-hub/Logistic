@@ -144,12 +144,6 @@ export default function ClaimDataImportDashboard() {
         }}
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-gray-500">
-          SAP outstanding claim export (OSCLAIM): one file holds Mutu and Susut claims; they feed Quality Claim and Shortage Claim.
-        </p>
-      </div>
-
       {loadError ? <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{loadError}</p> : null}
       {uploadError ? <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{uploadError}</p> : null}
       {!canUpload ? (

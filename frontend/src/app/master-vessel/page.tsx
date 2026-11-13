@@ -329,8 +329,6 @@ export default function MasterVesselPage() {
     <Layout>
       <StitchFields>
         <div className="space-y-6">
-          <p className="text-sm text-gray-500">Maintain reference data for vessels used in shipments.</p>
-
           <div className="flex gap-2 border-b border-gray-200">
             {(
               [

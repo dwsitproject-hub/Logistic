@@ -402,8 +402,6 @@ export default function MasterLoadingPortPage() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <p className="text-sm text-gray-500">The ports KLIP uses in shipments: which SAP names stand for them, and whether DHM has them.</p>
-
         <MasterKpis items={kpis} />
 
         {isFormOpen && (

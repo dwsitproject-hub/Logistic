@@ -299,8 +299,6 @@ export default function MasterProductConfigurationPage() {
           {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
           {success && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">{success}</div>}
 
-          <p className="text-sm text-gray-500">The products KLIP uses: their SAP material code, and how DHM holds them.</p>
-
           <MasterKpis items={kpis} />
 
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">

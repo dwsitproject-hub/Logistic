@@ -483,12 +483,6 @@ const SapImportDashboard: React.FC = () => {
         style={{ display: 'none' }}
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-gray-500">
-          SAP MASTER v2: upload a file, or let the schedule pull it from the SAP folder.
-        </p>
-      </div>
-
       <SapFolderSyncStatus folderSync={folderSync} />
 
       {!canUploadSap ? (

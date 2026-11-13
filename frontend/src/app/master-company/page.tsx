@@ -233,8 +233,6 @@ export default function MasterCompanyPage() {
     <Layout>
       <StitchFields>
         <div className="space-y-6">
-          <p className="text-sm text-gray-500">The companies KLIP works for: their SAP code, the sites they run, and whether DHM has them.</p>
-
           <MasterKpis items={kpis} />
 
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">

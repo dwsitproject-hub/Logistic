@@ -403,8 +403,6 @@ export default function MasterPlantPage() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <p className="text-sm text-gray-500">The plants KLIP uses: which company and site they belong to, and whether DHM has them.</p>
-
         <MasterKpis items={kpis} />
 
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">

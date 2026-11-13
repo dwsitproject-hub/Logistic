@@ -208,10 +208,6 @@ export default function MasterSitePage() {
     <Layout>
       <StitchFields>
         <div className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-gray-500">The sites KLIP uses: which companies they belong to, and whether DHM has them.</p>
-          </div>
-
           <MasterKpis items={kpis} />
 
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">

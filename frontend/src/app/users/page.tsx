@@ -313,11 +313,6 @@ export default function UsersPage() {
   return (
     <Layout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-gray-500">Manage accounts, roles and what each person can see.</p>
-        </div>
-
         {/* Alerts */}
         {error && (
           <Alert variant="destructive">

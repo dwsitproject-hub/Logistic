@@ -372,14 +372,6 @@ export default function SupplierPage() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-gray-600">
-              Maintain reference data for suppliers and their production estimates.
-            </p>
-          </div>
-        </div>
-
         {error && <div className="text-red-600 text-sm">{error}</div>}
         {success && <div className="text-green-600 text-sm">{success}</div>}
 
