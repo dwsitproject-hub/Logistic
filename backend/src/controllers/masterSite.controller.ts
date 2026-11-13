@@ -70,12 +70,12 @@ export const listMasterSites = async (req: AuthRequest, res: Response): Promise<
                 ) AS company_name,
                 -- the same companies as a list, so a name that holds a comma is not cut in two by the page (it shows them one per row in a dialog)
                 COALESCE(
-                  NULLIF(ARRAY(SELECT c.company_name
+                  NULLIF(ARRAY(SELECT c.company_name::text
                                  FROM master_company_sites l
                                  JOIN master_companies c ON c.id = l.company_id
                                 WHERE l.site_id = master_sites.id
                                 ORDER BY c.company_name), '{}'::text[]),
-                  CASE WHEN COALESCE(company_name, '') = '' THEN '{}'::text[] ELSE ARRAY[company_name] END
+                  CASE WHEN COALESCE(company_name, '') = '' THEN '{}'::text[] ELSE ARRAY[company_name::text] END
                 ) AS company_names,
                 city, postal_code, dhm_id, created_at, updated_at
          FROM master_sites ${where}

@@ -38,7 +38,8 @@ function summary(data: SyncPayload | undefined): string {
   return parts.join('. ')
 }
 
-export function MasterDhmSyncButton({ master, onDone }: { master: string; onDone?: () => void }) {
+/** `iconOnly` is the quiet icon button of the Users-style master pages (the word is in the tooltip); the default keeps the labelled button the other pages use. */
+export function MasterDhmSyncButton({ master, onDone, iconOnly = false }: { master: string; onDone?: () => void; iconOnly?: boolean }) {
   const [busy, setBusy] = useState(false)
 
   const sync = async () => {
@@ -68,6 +69,23 @@ export function MasterDhmSyncButton({ master, onDone }: { master: string; onDone
     } finally {
       setBusy(false)
     }
+  }
+
+  if (iconOnly) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="h-9 w-9 shrink-0 border-gray-200 bg-white text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+        disabled={busy}
+        onClick={() => void sync()}
+        title={busy ? 'Syncing to DHM...' : 'Sync to DHM'}
+        aria-label={busy ? 'Syncing to DHM' : 'Sync to DHM'}
+      >
+        <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} aria-hidden />
+      </Button>
+    )
   }
 
   return (

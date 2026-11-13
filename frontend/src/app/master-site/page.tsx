@@ -209,22 +209,6 @@ export default function MasterSitePage() {
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-gray-500">The sites KLIP uses: which companies they belong to, and whether DHM has them.</p>
-            {isAdmin ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <MasterDhmSyncButton master="site" onDone={refresh} />
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setEditing(null)
-                    setForm({ site_name: '', city: '', postal_code: '' })
-                    setOpen(true)
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" aria-hidden />
-                  New Site
-                </Button>
-              </div>
-            ) : null}
           </div>
 
           <MasterKpis items={kpis} />
@@ -243,7 +227,28 @@ export default function MasterSitePage() {
                 setDhm(value)
                 setPage(1)
               }}
+              dhmCounts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
               extraActive={company !== ''}
+              actions={
+                isAdmin ? (
+                  <>
+                    <MasterDhmSyncButton master="site" onDone={refresh} iconOnly />
+                    <Button
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      title="New site"
+                      aria-label="New site"
+                      onClick={() => {
+                        setEditing(null)
+                        setForm({ site_name: '', city: '', postal_code: '' })
+                        setOpen(true)
+                      }}
+                    >
+                      <Plus className="h-4 w-4" aria-hidden />
+                    </Button>
+                  </>
+                ) : null
+              }
               onClear={() => {
                 setSearch('')
                 setDhm('all')

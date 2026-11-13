@@ -42,8 +42,9 @@ describe('listMasterSites: the Company column', () => {
   it('also sends the companies as a list (company_names), linked ones first and the stored text as the only fallback', async () => {
     await run();
     const sql = String(vi.mocked(query).mock.calls[0]![0]);
-    expect(sql).toMatch(/NULLIF\(ARRAY\(SELECT c\.company_name[\s\S]*ORDER BY c\.company_name\), '\{\}'::text\[\]\)/);
-    expect(sql).toContain('ARRAY[company_name]');
+    // both sides of the COALESCE must be text[]: company_name is varchar, and varchar[] = text[] is a Postgres error that a mocked query never shows (it was a 500 on SIT)
+    expect(sql).toMatch(/NULLIF\(ARRAY\(SELECT c\.company_name::text[\s\S]*ORDER BY c\.company_name\), '\{\}'::text\[\]\)/);
+    expect(sql).toContain('ARRAY[company_name::text]');
     expect(sql).toContain(') AS company_names');
   });
 
