@@ -1,23 +1,22 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Plus } from 'lucide-react'
+import { Cloud, CloudOff, Layers, Pencil, Plus, Route } from 'lucide-react'
 import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { ListFilterPanel, LIST_FILTER_FIELD_LABEL_CLASS, LIST_FILTER_FIELDS_ROW_CLASS } from '@/components/shared/ListFilterPanel'
 import { StitchFields } from '@/components/shared/stitchField'
-import { StitchSearchIcon } from '@/components/shared/stitchIcons'
-import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
-import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
-import { useListColumnLayout } from '@/lib/listColumnLayout'
-import { useDebouncedValue } from '@/hooks/useDebouncedValue'
-import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
-import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
+import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
+import { ListPager } from '@/components/performance/ListPager'
+import { MasterKpis, type MasterKpiItem } from '@/components/master/MasterKpis'
+import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
+import { masterCountText, masterDhmChip, type MasterDhmFilter } from '@/lib/masterDirectory'
 
 export interface ReferenceField {
   key: 'value_1' | 'value_2' | 'value_3'
@@ -32,6 +31,20 @@ interface ReferenceRow {
   value_1: string | null
   value_2: string | null
   value_3: string | null
+  dhm_id?: string | null
+  dhm_push_status?: string | null
+  dhm_push_error?: string | null
+  dhm_push_attempts?: number | null
+  dhm_push_next_attempt_at?: string | null
+}
+
+interface ReferenceSummary {
+  total: number
+  synced: number
+  notSynced: number
+  failed: number
+  usedInKlip: number
+  dhm: boolean
 }
 
 interface ReferenceMasterPageProps {
@@ -40,7 +53,8 @@ interface ReferenceMasterPageProps {
   description: string
   newLabel: string
   fields: ReferenceField[]
-  storageKey: string
+  /** Kept so the page files do not change: the Users-style layout has no column picker, so there is nothing to remember. */
+  storageKey?: string
   codeNoun: string
   syncDhm?: boolean
   dhmNoun?: string
@@ -49,9 +63,17 @@ interface ReferenceMasterPageProps {
 }
 
 const EMPTY_LOCKED_FIELDS: NonNullable<ReferenceMasterPageProps['lockedFields']> = []
+const PAGE_SIZE = 20
 
-function cell(value: string | null | undefined): string {
-  return value && value.trim() ? value : '-'
+/** What "Used in KLIP" counts for each reference master (the API judges it; this is the one line under the number). */
+const USED_HINT: Record<string, string> = {
+  incoterm: 'on a contract',
+  ext_company: 'is the supplier of a contract',
+  truck_transporter: 'owns a trucking operation',
+}
+
+function clean(value: string | null | undefined): string {
+  return String(value ?? '').trim()
 }
 
 export function ReferenceMasterPage({
@@ -60,46 +82,32 @@ export function ReferenceMasterPage({
   description,
   newLabel,
   fields,
-  storageKey,
   codeNoun,
   syncDhm = false,
   dhmNoun = 'record',
   dhmSyncMaster,
   lockedFields = EMPTY_LOCKED_FIELDS,
 }: ReferenceMasterPageProps) {
-  const columns = useMemo<MasterListTableColumn<ReferenceRow>[]>(
-    () => [
-      { id: 'code_klip', label: `${codeNoun} Code (KLIP)`, getText: (row) => cell(row.code_klip) },
-      { id: 'code_dhm', label: `${codeNoun} Code (DHM)`, getText: (row) => cell(row.code_dhm) },
-      ...fields.map((field) => ({
-        id: field.key,
-        label: field.label,
-        getText: (row: ReferenceRow) => cell(row[field.key]),
-      })),
-      ...lockedFields.map((field) => ({
-        id: field.id,
-        label: field.label,
-        getText: () => field.value,
-      })),
-      dhmStatusListColumn<ReferenceRow>(),
-    ],
-    [codeNoun, fields, lockedFields],
-  )
-  const layout = useListColumnLayout(storageKey, columns)
+  const noun = title.replace(/^All /, '')
+  // The row's name is the field the form requires (Company Name on External Company), else the first field; the others are the quiet line under it.
+  const nameKey = (fields.find((field) => field.required) ?? fields[0])?.key ?? 'value_1'
+  const otherKeys = fields.filter((field) => field.key !== nameKey).map((field) => field.key)
+
   const [items, setItems] = useState<ReferenceRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
+  const [dhm, setDhm] = useState<MasterDhmFilter>('all')
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [loading, setLoading] = useState(false)
+  const [summary, setSummary] = useState<ReferenceSummary | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<ReferenceRow | null>(null)
   const [form, setForm] = useState<Record<string, string>>({})
-  const [sortKey, setSortKey] = useState('value_1')
+  const [sortKey, setSortKey] = useState('name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const limit = 20
-  const totalPages = Math.max(1, Math.ceil(total / limit))
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   useEffect(() => {
     try {
@@ -114,7 +122,7 @@ export function ReferenceMasterPage({
     setLoading(true)
     try {
       const res = await api.get(`/master-references/${kind}`, {
-        params: { page, limit, search: debouncedSearch },
+        params: { page, limit: PAGE_SIZE, search: debouncedSearch, ...(syncDhm && dhm !== 'all' ? { dhm } : {}) },
       })
       setItems(res.data?.data?.items || [])
       setTotal(Number(res.data?.data?.total || 0))
@@ -125,15 +133,33 @@ export function ReferenceMasterPage({
     } finally {
       setLoading(false)
     }
-  }, [kind, page, debouncedSearch])
+  }, [kind, page, debouncedSearch, dhm, syncDhm])
+
+  const fetchSummary = useCallback(async () => {
+    try {
+      const res = await api.get(`/master-references/${kind}/summary`)
+      setSummary(res.data?.data ?? null)
+    } catch (error) {
+      // the cards are informational: the list still works without them
+      console.error('Load master reference summary error', error)
+    }
+  }, [kind])
 
   useEffect(() => {
     void fetchRows()
   }, [fetchRows])
 
   useEffect(() => {
+    void fetchSummary()
+  }, [fetchSummary])
+
+  useEffect(() => {
     setPage(1)
   }, [debouncedSearch])
+
+  const refresh = async () => {
+    await Promise.all([fetchRows(), fetchSummary()])
+  }
 
   const openNew = () => {
     setEditing(null)
@@ -172,7 +198,7 @@ export function ReferenceMasterPage({
       if (syncDhm) await saveWithDhmConfirm(persist, dhmNoun)
       else await persist(false)
       setOpen(false)
-      await fetchRows()
+      await refresh()
     } catch (error: unknown) {
       const message =
         (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
@@ -181,116 +207,158 @@ export function ReferenceMasterPage({
     }
   }
 
+  const nameOf = useCallback((row: ReferenceRow) => clean(row[nameKey]), [nameKey])
+  const subtitleOf = useCallback(
+    (row: ReferenceRow) => otherKeys.map((key) => clean(row[key])).filter(Boolean).join(' · '),
+    [otherKeys],
+  )
+
+  const sortedRows = useMemo(() => {
+    const text = (row: ReferenceRow): string => (sortKey === 'dhm' ? masterDhmChip(row).label : sortKey === 'code' ? clean(row.code_klip) : nameOf(row))
+    return [...items].sort((a, b) => {
+      const cmp = text(a).localeCompare(text(b), undefined, { numeric: true })
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+  }, [items, sortKey, sortDir, nameOf])
+
+  const columns: MasterTableColumn<ReferenceRow>[] = [
+    {
+      id: 'name',
+      label: fields.find((field) => field.key === nameKey)?.label ?? 'Name',
+      sortable: true,
+      render: (row) => <MasterIdentityCell name={nameOf(row)} subtitle={subtitleOf(row) || undefined} />,
+    },
+    {
+      id: 'code',
+      label: 'Codes',
+      sortable: true,
+      className: 'whitespace-nowrap',
+      render: (row) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <MasterCodeBadge kind="klip" value={row.code_klip || ''} fit />
+          {syncDhm ? <MasterCodeBadge kind="dhm" value={row.code_dhm || ''} fit /> : null}
+        </div>
+      ),
+    },
+    ...lockedFields.map((field) => ({
+      id: field.id,
+      label: field.label,
+      className: 'whitespace-nowrap',
+      render: () => (
+        <span className="inline-block whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs leading-4 text-slate-600">{field.value}</span>
+      ),
+    })),
+    ...(syncDhm
+      ? [{ id: 'dhm', label: 'DHM', sortable: true, className: 'whitespace-nowrap', render: (row: ReferenceRow) => <MasterDhmChip row={row} /> }]
+      : []),
+  ]
+
+  const kpis: MasterKpiItem[] = [
+    { id: 'total', icon: <Layers className="h-4 w-4" />, label: `Total ${noun.toLowerCase()}`, value: summary?.total ?? null, tone: 'bg-blue-50 text-blue-600', hint: 'all rows' },
+    ...(syncDhm
+      ? [
+          { id: 'synced', icon: <Cloud className="h-4 w-4" />, label: 'Synced to DHM', value: summary?.synced ?? null, tone: 'bg-emerald-50 text-emerald-600', hint: 'DHM has them' },
+          {
+            id: 'not-synced',
+            icon: <CloudOff className="h-4 w-4" />,
+            label: 'Not synced',
+            value: summary?.notSynced ?? null,
+            tone: 'bg-amber-50 text-amber-600',
+            hint: summary && summary.failed > 0 ? `${summary.failed.toLocaleString('en-US')} more failed to deliver` : 'not in DHM yet',
+          },
+        ]
+      : []),
+    { id: 'used', icon: <Route className="h-4 w-4" />, label: 'Used in KLIP', value: summary?.usedInKlip ?? null, tone: 'bg-violet-50 text-violet-600', hint: USED_HINT[kind] ?? 'referenced by KLIP data' },
+  ]
+
+  const filtersOn = search.trim() !== '' || (syncDhm && dhm !== 'all')
+
   return (
     <Layout>
       <StitchFields>
         <div className="space-y-6">
-          <p className="text-gray-600">{description}</p>
-          <ListFilterPanel
-            onReset={() => setSearch('')}
-            showReset={search.trim().length > 0}
-            chips={
-              search.trim()
-                ? [{ id: 'search', label: `Search: ${search.trim()}`, onRemove: () => setSearch('') }]
-                : []
-            }
-          >
-            <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-              <div className="min-w-[12rem] flex-[1.4]">
-                <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
-                <div className="relative">
-                  <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Code or name"
-                    className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
-                  />
-                </div>
-              </div>
-              {isAdmin ? (
-                <div className="flex shrink-0 items-end gap-2">
-                  <Button size="sm" className="shrink-0" onClick={openNew}>
-                    <Plus className="h-4 w-4 mr-2" />
-                    {newLabel}
-                  </Button>
-                  {dhmSyncMaster ? <MasterDhmSyncButton master={dhmSyncMaster} onDone={() => void fetchRows()} /> : null}
-                </div>
-              ) : null}
+          <p className="text-sm text-gray-500">{description}</p>
+
+          <MasterKpis items={kpis} />
+
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+            <MasterFilterBar
+              search={search}
+              onSearch={(value) => {
+                setSearch(value)
+                setPage(1)
+              }}
+              placeholder={`Search ${codeNoun.toLowerCase()} code or name`}
+              ariaLabel={`Search ${noun.toLowerCase()}`}
+              dhm={syncDhm ? dhm : undefined}
+              onDhm={
+                syncDhm
+                  ? (value) => {
+                      setDhm(value)
+                      setPage(1)
+                    }
+                  : undefined
+              }
+              dhmCounts={syncDhm && summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
+              onClear={() => {
+                setSearch('')
+                setDhm('all')
+                setPage(1)
+              }}
+              actions={
+                isAdmin ? (
+                  <>
+                    {dhmSyncMaster ? <MasterDhmSyncButton master={dhmSyncMaster} onDone={() => void refresh()} iconOnly /> : null}
+                    <Button size="icon" className="h-9 w-9 shrink-0" title={newLabel} aria-label={newLabel} onClick={openNew}>
+                      <Plus className="h-4 w-4" aria-hidden />
+                    </Button>
+                  </>
+                ) : null
+              }
+            />
+
+            <MasterListTable
+              rows={sortedRows}
+              columns={columns}
+              getRowId={(row) => row.id}
+              loading={loading}
+              emptyLabel={filtersOn ? 'No rows match these filters' : 'No rows yet'}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={(id) => {
+                setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
+                setSortKey(id)
+              }}
+              onRowClick={openEdit}
+              minWidthPx={640}
+              renderActions={(row) => (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-8 w-8 border-transparent bg-transparent text-blue-600 hover:bg-blue-50"
+                  title={isAdmin ? 'Edit' : 'View'}
+                  aria-label={`${isAdmin ? 'Edit' : 'View'} ${nameOf(row) || codeNoun}`}
+                  onClick={() => openEdit(row)}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              )}
+            />
+
+            <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500">
+              {masterCountText(items.length, total, summary?.total ?? total, noun.toLowerCase())} · click a row to {isAdmin ? 'edit' : 'view'} it
             </div>
-          </ListFilterPanel>
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="text-base">{title}</CardTitle>
-                  <p className="mt-1 text-xs text-gray-500">
-                    <span className="font-semibold text-gray-700">{total.toLocaleString('en-US')}</span> rows
-                    <span className="text-gray-400"> · </span>
-                    Page {page}/{totalPages} · {items.length} rows
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <ListPageColumnsMenu
-                    columns={layout.menuColumns}
-                    visibleIds={layout.visibleIds}
-                    disabled={loading}
-                    onToggle={layout.toggle}
-                    onSelectAll={layout.selectAll}
-                    onUnselectAll={layout.unselectAll}
-                    onReset={layout.reset}
-                    onReorder={layout.reorder}
-                  />
-                  {totalPages > 1 ? (
-                    <div className="ml-1 flex items-center gap-2 border-l border-gray-200 pl-2">
-                      <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>
-                        Previous
-                      </Button>
-                      <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)}>
-                        Next
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
+            {totalPages > 1 ? (
+              <div className="px-4 pb-4">
+                <ListPager page={page} totalPages={totalPages} onPageChange={setPage} disabled={loading} summary={`Page ${page}/${totalPages}`} />
               </div>
-            </CardHeader>
-            <CardContent>
-              <MasterListCompactTable
-                tightActions
-                fitContent
-                onRowClick={openEdit}
-                rowClickHint={`Click a row to ${isAdmin ? 'edit' : 'view'} it`}
-                rows={[...items].sort((a, b) => {
-                  const column = columns.find((item) => item.id === sortKey)
-                  const cmp = (column?.getText(a) ?? '').localeCompare(column?.getText(b) ?? '', undefined, { numeric: true })
-                  return sortDir === 'asc' ? cmp : -cmp
-                })}
-                columns={columns
-                  .filter((column) => layout.orderedVisibleIds.includes(column.id))
-                  .sort((a, b) => layout.orderedVisibleIds.indexOf(a.id) - layout.orderedVisibleIds.indexOf(b.id))}
-                getRowId={(row) => row.id}
-                sortKey={sortKey}
-                sortDir={sortDir}
-                dragColId={layout.dragColId}
-                loading={loading}
-                emptyLabel="No rows found"
-                onSort={(id) => {
-                  setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
-                  setSortKey(id)
-                }}
-                onDragStart={layout.setDragColId}
-                onDragEnd={() => layout.setDragColId(null)}
-                onDrop={(id) => {
-                  if (layout.dragColId) layout.reorder(layout.dragColId, id)
-                  layout.setDragColId(null)
-                }}
-              />
-            </CardContent>
-          </Card>
+            ) : null}
+          </div>
+
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogContent className="sm:max-w-xl">
               <DialogHeader>
-                <DialogTitle>{editing ? `Edit ${title.replace(/^All /, '')}` : newLabel}</DialogTitle>
+                <DialogTitle>{editing ? `Edit ${noun}` : newLabel}</DialogTitle>
               </DialogHeader>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>

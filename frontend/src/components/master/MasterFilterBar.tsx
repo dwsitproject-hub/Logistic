@@ -45,7 +45,7 @@ export function MasterFilterBar({ search, onSearch, placeholder, ariaLabel, dhm,
 
       {dhm != null && onDhm ? (
         <Select value={dhm} onValueChange={(value) => onDhm(value as MasterDhmFilter)}>
-          <SelectTrigger className="h-9 w-[190px] gap-2 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left" aria-label="Filter by DHM status">
+          <SelectTrigger className="h-9 w-[230px] gap-2 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left" aria-label="Filter by DHM status">
             <Cloud className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
             <SelectValue />
           </SelectTrigger>

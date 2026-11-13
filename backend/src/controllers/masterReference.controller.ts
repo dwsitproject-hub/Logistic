@@ -3,6 +3,8 @@ import { attachDhmPushState, pushMasterExternalPartyToDhm, pushNamedMasterToDhm 
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
+import { masterDhmCountsSelect, masterDhmFilterClause, parseMasterDhmFilter, type MasterDhmSource } from '../utils/masterDhmFilter';
+import { toMasterSummaryCounts } from '../utils/masterSummary';
 
 const KINDS = {
   ext_company: { prefix: 'KEXT', sequence: 'master_ext_company_klip_code_seq', fields: 3 },
@@ -16,6 +18,28 @@ function readKind(value: unknown): ReferenceKind | null {
   const kind = String(value ?? '').trim();
   return kind in KINDS ? (kind as ReferenceKind) : null;
 }
+
+/** Truck Transporter has no DHM slug, so there is nothing of it to be undelivered and no DHM status to filter by. */
+function kindHasDhm(kind: ReferenceKind): boolean {
+  return kind === 'incoterm' || kind === 'ext_company';
+}
+
+function dhmSource(kind: ReferenceKind): MasterDhmSource {
+  return { table: 'master_reference_items', kind, idColumn: 'dhm_id', codeColumns: ['code_dhm'] };
+}
+
+/**
+ * "Used in KLIP" per kind: the master is referenced BY NAME (no foreign key), so it is the same text on the data KLIP runs on, compared trimmed and
+ * case-insensitive. Each subquery is uncorrelated, so Postgres evaluates it once as a hash and not once per master row.
+ *   incoterm           contracts.incoterm              (FRC, LCO, FOB, CIF, CFR are on contracts; the master is the picker for them)
+ *   ext_company        contracts.supplier = Company Name (value_3): 436 of 453 on the local copy
+ *   truck_transporter  trucking_operations.trucking_owner = Name (value_1): 77 of 89 on the local copy
+ */
+const USED_IN_KLIP: Record<ReferenceKind, string> = {
+  incoterm: `upper(trim(master_reference_items.value_1)) IN (SELECT upper(trim(c.incoterm)) FROM contracts c WHERE COALESCE(c.incoterm, '') <> '')`,
+  ext_company: `upper(trim(master_reference_items.value_3)) IN (SELECT upper(trim(c.supplier)) FROM contracts c WHERE COALESCE(c.supplier, '') <> '')`,
+  truck_transporter: `upper(trim(master_reference_items.value_1)) IN (SELECT upper(trim(t.trucking_owner)) FROM trucking_operations t WHERE COALESCE(t.trucking_owner, '') <> '')`,
+};
 
 function textOrNull(value: unknown): string | null {
   const text = String(value ?? '').trim();
@@ -47,7 +71,7 @@ export const listMasterReferences = async (req: AuthRequest, res: Response): Pro
       res.status(400).json({ success: false, error: { message: 'Unknown master reference' } });
       return;
     }
-    const { search = '', page = '1', limit = '20' } = req.query as Record<string, string>;
+    const { search = '', page = '1', limit = '20', dhm } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
     const offset = (pageNum - 1) * limitNum;
@@ -64,6 +88,9 @@ export const listMasterReferences = async (req: AuthRequest, res: Response): Pro
         OR value_3 ILIKE $${params.length}
       )`;
     }
+    // DHM status (Synced / Not synced / Failed) is judged here, not on the 20 rows on screen, because the list is paged. Kinds without DHM ignore it.
+    const dhmClause = kindHasDhm(kind) ? masterDhmFilterClause(parseMasterDhmFilter(dhm), dhmSource(kind)) : '';
+    if (dhmClause) where += ` AND ${dhmClause}`;
     const [listResult, countResult] = await Promise.all([
       query(
         `SELECT id, kind, code_klip, code_dhm, value_1, value_2, value_3, created_at, updated_at
@@ -91,6 +118,33 @@ export const listMasterReferences = async (req: AuthRequest, res: Response): Pro
   } catch (error) {
     logger.error('List master reference error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to list master reference' } });
+  }
+};
+
+/**
+ * The cards above a reference master (GET /master-references/:kind/summary): how many rows there are, how many DHM has / does not have / failed to
+ * deliver (only for a kind that goes to DHM) and how many KLIP actually uses (see USED_IN_KLIP). Counts are over ALL rows of the kind.
+ */
+export const getMasterReferenceSummary = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const kind = readKind(req.params.kind);
+    if (!kind) {
+      res.status(400).json({ success: false, error: { message: 'Unknown master reference' } });
+      return;
+    }
+    const hasDhm = kindHasDhm(kind);
+    const counts = hasDhm ? masterDhmCountsSelect(dhmSource(kind)) : 'COUNT(*)::int AS total';
+    const result = await query(
+      `SELECT ${counts},
+              COUNT(*) FILTER (WHERE ${USED_IN_KLIP[kind]})::int AS used_in_klip
+       FROM master_reference_items
+       WHERE kind = $1`,
+      [kind],
+    );
+    res.json({ success: true, data: { ...toMasterSummaryCounts(result.rows[0]), dhm: hasDhm } });
+  } catch (error) {
+    logger.error('Master reference summary error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the master reference summary' } });
   }
 };
 
