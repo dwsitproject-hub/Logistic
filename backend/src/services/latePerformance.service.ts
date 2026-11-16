@@ -705,7 +705,14 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
          * contract_sto_agg_snapshot is one small row per contract, so this is a cheap join and
          * needs no snapshot rebuild.
          */
-        SELECT cps.*, sa.sto_count, vsd.vessel_stos_finished
+        /*
+         * all_stos_discharged is not stored either, yet the Open / Close predicates and the Planning Status finished-test read it
+         * (base.all_stos_discharged), so any request carrying a status or a Planning Status on this path failed with 42703. It only matters
+         * where an ATC alone cannot finish the PO, i.e. more than one STO, so it is evaluated for those rows only; a row with one STO
+         * (or none) keeps NULL, which the rule reads exactly as before.
+         */
+        SELECT cps.*, sa.sto_count, vsd.vessel_stos_finished,
+               CASE WHEN COALESCE(sa.sto_count, 1) > 1 THEN ${sqlContractEveryStoDischargedExpr('cps.contract_id', 'sa.sto_count')} END AS all_stos_discharged
         FROM ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE} cps
         LEFT JOIN contract_sto_agg_snapshot sa ON sa.contract_number = cps.contract_id
         LEFT JOIN vessel_sto_done vsd ON vsd.contract_id = cps.contract_id
