@@ -1511,18 +1511,21 @@ export function ContractDetailModal({
                     <div className="text-gray-500">
                       Total STO Quantity ({displayStoCount} STO{displayStoCount !== 1 ? 's' : ''})
                     </div>
-                    <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(displayTotalStoQty)}</div>
-                    {stoQtySummary && stoQtySummary.by_type.length > 0 ? (
-                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
-                        {stoQtySummary.by_type.map((leg) => (
-                          <span key={leg.sto_type} className="inline-flex items-center gap-1.5">
-                            <StoTypeChip type={leg.sto_type} />
-                            <span className="tabular-nums">{formatQtyMtFromKg(leg.total_sto_quantity)}</span>
-                            <span className="text-gray-400">({leg.sto_count} STO{leg.sto_count !== 1 ? 's' : ''})</span>
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
+                    {/* The total, and beside it the split by leg when the cargo travels in two (V and T). Wraps under the total only when the box is too narrow for both, so nothing overlaps. */}
+                    <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                      <div className="font-medium text-base">{formatQtyMtFromKg(displayTotalStoQty)}</div>
+                      {stoQtySummary && stoQtySummary.by_type.length > 0 ? (
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
+                          {stoQtySummary.by_type.map((leg) => (
+                            <span key={leg.sto_type} className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                              <StoTypeChip type={leg.sto_type} />
+                              <span className="tabular-nums">{formatQtyMtFromKg(leg.total_sto_quantity)}</span>
+                              <span className="text-gray-400">({leg.sto_count} STO{leg.sto_count !== 1 ? 's' : ''})</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Delivery Quantity</div>
