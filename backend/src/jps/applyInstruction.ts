@@ -9,10 +9,17 @@ import type { JpsInstruction } from './types';
 
 export async function applyJpsInstruction(rowId: string, data: JpsInstruction): Promise<void> {
   /*
-   * COALESCE on every v5.0 column: a v4.x response omits them entirely, and `undefined ?? null`
+   * COALESCE on the columns that are not times of the schedule: a v4.x response omits them entirely, and `undefined ?? null`
    * would otherwise blank a milestone JPS had already told us about.
+   *
+   * The schedule times are different. JPS recalculates them from current data and says so when one is taken back: Closing cleared sends
+   * schedule.updated with cargo_ops_end_at null, an Opening row deleted moves cargo_ops_start_at, a stage can move back (JPS answer, 2026-11-16). A time
+   * the response CARRIES as null is therefore "not logged" and clears the column, exactly as the JPS lane already does (planJpsAtaLane). Only a key the
+   * response does not carry at all (a v4.x or v5.3 response has no schedule, or no cargo_ops_*) leaves the column alone, which is what the list of
+   * present keys ($22) decides.
    */
   const sch = data.schedule ?? {};
+  const scheduleKeys = Object.keys(sch).filter((key) => (sch as Record<string, unknown>)[key] !== undefined);
   const updated = await query(
     `UPDATE jps_shipping_instructions
      SET jps_id = COALESCE($2, jps_id),
@@ -25,16 +32,16 @@ export async function applyJpsInstruction(rowId: string, data: JpsInstruction): 
          etr_minutes = COALESCE($9::int, etr_minutes),
          approved_at = COALESCE($10::timestamptz, approved_at),
          rejected_at = COALESCE($11::timestamptz, rejected_at),
-         schedule_eta = COALESCE($12::timestamptz, schedule_eta),
-         schedule_ta = COALESCE($13::timestamptz, schedule_ta),
-         schedule_etb = COALESCE($14::timestamptz, schedule_etb),
-         schedule_tb = COALESCE($15::timestamptz, schedule_tb),
-         schedule_etc = COALESCE($16::timestamptz, schedule_etc),
-         schedule_tc = COALESCE($17::timestamptz, schedule_tc),
-         schedule_cast_off_at = COALESCE($18::timestamptz, schedule_cast_off_at),
-         schedule_sailed_at = COALESCE($19::timestamptz, schedule_sailed_at),
-         schedule_cargo_ops_start_at = COALESCE($20::timestamptz, schedule_cargo_ops_start_at),
-         schedule_cargo_ops_end_at = COALESCE($21::timestamptz, schedule_cargo_ops_end_at),
+         schedule_eta = CASE WHEN 'eta' = ANY($22::text[]) THEN $12::timestamptz ELSE schedule_eta END,
+         schedule_ta = CASE WHEN 'ta' = ANY($22::text[]) THEN $13::timestamptz ELSE schedule_ta END,
+         schedule_etb = CASE WHEN 'etb' = ANY($22::text[]) THEN $14::timestamptz ELSE schedule_etb END,
+         schedule_tb = CASE WHEN 'tb' = ANY($22::text[]) THEN $15::timestamptz ELSE schedule_tb END,
+         schedule_etc = CASE WHEN 'etc' = ANY($22::text[]) THEN $16::timestamptz ELSE schedule_etc END,
+         schedule_tc = CASE WHEN 'tc' = ANY($22::text[]) THEN $17::timestamptz ELSE schedule_tc END,
+         schedule_cast_off_at = CASE WHEN 'cast_off_at' = ANY($22::text[]) THEN $18::timestamptz ELSE schedule_cast_off_at END,
+         schedule_sailed_at = CASE WHEN 'sailed_at' = ANY($22::text[]) THEN $19::timestamptz ELSE schedule_sailed_at END,
+         schedule_cargo_ops_start_at = CASE WHEN 'cargo_ops_start_at' = ANY($22::text[]) THEN $20::timestamptz ELSE schedule_cargo_ops_start_at END,
+         schedule_cargo_ops_end_at = CASE WHEN 'cargo_ops_end_at' = ANY($22::text[]) THEN $21::timestamptz ELSE schedule_cargo_ops_end_at END,
          last_polled_at = NOW(),
          last_error = NULL,
          updated_at = CURRENT_TIMESTAMP
@@ -62,6 +69,7 @@ export async function applyJpsInstruction(rowId: string, data: JpsInstruction): 
       sch.sailed_at ?? null,
       sch.cargo_ops_start_at ?? null,
       sch.cargo_ops_end_at ?? null,
+      scheduleKeys,
     ],
   );
 

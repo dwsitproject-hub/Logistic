@@ -96,12 +96,12 @@ export function jettyStatusLabel(row: JettyStatusFields | null | undefined): str
 
 /**
  * What a badge or a sentence SAYS for a status: the stage JPS gave, with what it means on the berth where JPS's own name does not say it. Start Cargo is the hoses
- * going on, Cargo Done the hoses coming off (and the final checks). Every other status reads as it is. jettyStatusLabel stays the value to compare, sort and colour by:
+ * going on (the Opening time). Cargo Done is NOT the hoses coming off: JPS says Hose Off is the Closing time an operator records in Post-Checking, often after Cargo Done and
+ * sometimes never, while Cargo Done is cargo work plus final checks finished - so it reads as it is. Every other status reads as it is. jettyStatusLabel stays the value to compare, sort and colour by:
  * this is display only.
  */
 const JETTY_STAGE_MEANING: Record<string, string> = {
   'Start Cargo': 'Start Cargo (Hose On)',
-  'Cargo Done': 'Cargo Done (Hose Off)',
 }
 
 export function jettyStatusText(row: JettyStatusFields | null | undefined): string {

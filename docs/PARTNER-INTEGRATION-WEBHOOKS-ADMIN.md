@@ -119,11 +119,12 @@ Partners map industry labels to fields in webhook/GET **`data.schedule`**:
 |---------------|-----------|---------------------------|
 | ATA | `ta` | Arrival / TA |
 | ATB | `tb` | Berthing |
-| ATS (Hose On) | **`cargo_ops_start_at`** | **Cargo Operations → Operation Window → Start** |
-| ATC (Hose Off) | **`cargo_ops_end_at`** | **Cargo Operations → Operation Window → End** |
+| ATS (Hose On) | **`cargo_ops_start_at`** | **Opening** — the earliest Opening start (JPS, 2026-11-16; before that the Cargo Operations window start) |
+| ATC (Hose Off) | **`cargo_ops_end_at`** | **Closing** — the time an operator records in Post-Checking (JPS, 2026-11-16; before that the window end). Not filled when cargo operations end, at Cargo Done or at sailing; often recorded after Cargo Done; null is expected until it is recorded |
+| Cargo Done | `cargo_done_at` (status `Cargo Done`) | Cargo work and final checks finished. Can be set while Hose Off is still null. **Not** the ATC: JPS says not to substitute it (or `tc`) for Hose Off |
 | Vessel sailed | `cast_off_at`, `sailed_at` | Clearance / depart — not Hose Off |
 
-**`schedule.updated`** fires when these schedule fields change (including Cargo Operations window start/end on create/update/delete). Load-segment-only edits do not change Hose On/Off.
+**`schedule.updated`** fires when Opening, Closing or Cargo Done change, and a cleared Closing is sent as `cargo_ops_end_at: null`. Values are recalculated from current data on every GET (Opening can still change after the vessel finished) and old webhooks are not replayed, so KLIP rewrites what it stored from what JPS sends, null included, and keeps polling a sailed vessel for a while.
 
 ## Partner status stages (v5.7)
 

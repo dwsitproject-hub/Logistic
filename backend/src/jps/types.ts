@@ -57,11 +57,14 @@ export interface JpsSchedule {
   /** Time of Completion, actual. */
   tc?: string | null;
   /**
-   * Hose On (partner ATS): the START of the Cargo Operations window. v5.4 sent the Entry 1 start under the same name;
-   * v5.5 redefined it as the window start. Absent from v5.3 responses.
+   * Hose On (partner ATS): the earliest OPENING start (from 2026-11-16 on JPS; v5.5 to v5.7 sent the Cargo Operations window start, v5.4 the Entry 1 start,
+   * all under this name). Recalculated on every GET, so it can still move after the vessel finished. Absent from v5.3 responses.
    */
   cargo_ops_start_at?: string | null;
-  /** v5.5. Hose Off (partner ATC): the END of the Cargo Operations window. Absent before v5.5. */
+  /**
+   * v5.5. Hose Off (partner ATC): the CLOSING time an operator records in Post-Checking. Null on a Cargo Done or Sailed Off instruction when Closing was never
+   * recorded (expected), and often recorded after Cargo Done. Until 2026-11-16 it was the end of the Cargo Operations window. Absent before v5.5.
+   */
   cargo_ops_end_at?: string | null;
   cast_off_at?: string | null;
   sailed_at?: string | null;
