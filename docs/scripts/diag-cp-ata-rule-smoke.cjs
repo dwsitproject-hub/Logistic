@@ -20,6 +20,19 @@ if (!DIST) {
 }
 const load = (m) => require(path.join(DIST, m));
 
+// The handlers answer a generic 500 and put the real reason (the database error) in the log. Catch it here so the note says what failed.
+const logged = [];
+(() => {
+  const mod = load('utils/logger');
+  const logger = mod.default || mod.logger || mod;
+  const original = logger.error ? logger.error.bind(logger) : null;
+  logger.error = (...args) => {
+    const err = args.find((a) => a && typeof a === 'object' && (a.message || a.code));
+    logged.push(String((err && err.message) || args.map(String).join(' ')).replace(/\s+/g, ' ').slice(0, 160));
+    if (original && !/Query error|late performance/i.test(String(args[0]))) original(...args);
+  };
+})();
+
 function ask(handler, query) {
   return new Promise((resolve) => {
     const started = Date.now();
@@ -66,10 +79,12 @@ function ask(handler, query) {
   const out = [];
   for (const [label, handler, q] of cases) {
     if (typeof handler !== 'function') { out.push({ query: label, result: 'SKIPPED', http: '-', seconds: '-', note: 'handler not found in this build' }); continue; }
+    logged.length = 0;
     const r = await ask(handler, q);
     const body = r.body || {};
     const ok = r.code === 200 && body.success !== false;
-    const msg = ok ? '' : String((body.error && (body.error.message || body.error)) || body.thrown || body.message || 'failed').slice(0, 120);
+    const dbReason = logged.find((m) => /does not exist|syntax error|missing FROM|ambiguous|invalid|operator|function|type/i.test(m)) || logged[logged.length - 1] || '';
+    const msg = ok ? '' : (dbReason || String((body.error && (body.error.message || body.error)) || body.thrown || body.message || 'failed')).slice(0, 140);
     out.push({ query: label, result: ok ? 'ok' : 'FAILED', http: r.code, seconds: Math.round(r.ms / 100) / 10, note: msg });
   }
   console.table(out);
