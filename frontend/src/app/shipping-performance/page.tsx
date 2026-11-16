@@ -2855,12 +2855,39 @@ function ShippingPerformancePageContent() {
         <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
           <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-              <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel'}</span>
                 {summaryFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
               </CardTitle>
+                <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">{scopedUniqueContractCount.toLocaleString('en-US')}</span>{' '}
+                  unique contracts
+                </span>
+                <span className="text-gray-400" aria-hidden>
+                  ·
+                </span>
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">
+                    {(tableViewMode === 'all' ? drilldownStoRows.length : tableRows.length).toLocaleString('en-US')}
+                  </span>{' '}
+                  {tableViewMode === 'all' ? 'shipments' : `vessel${tableRows.length === 1 ? '' : 's'}`}
+                </span>
+                {tableScopeParts.length > 0 && (
+                  <>
+                    <span className="text-gray-400" aria-hidden>
+                      ·
+                    </span>
+                    <span className="whitespace-nowrap text-gray-600 font-medium">
+                      {tableScopeParts.join(' · ')}
+                    </span>
+                  </>
+                )}
+              </p>
+              </div>
               <div className="flex flex-wrap items-center gap-1.5 ml-auto sm:flex-nowrap">
               <SortStackSummary
                 stack={sortStack}
@@ -2982,37 +3009,6 @@ function ShippingPerformancePageContent() {
               </div>
               </div>
             </div>
-            <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
-                <span className="whitespace-nowrap tabular-nums text-gray-700">
-                  <span className="font-semibold">{scopedUniqueContractCount.toLocaleString('en-US')}</span>{' '}
-                  unique contracts
-                </span>
-                <span className="text-gray-400" aria-hidden>
-                  ·
-                </span>
-                <span className="whitespace-nowrap tabular-nums text-gray-700">
-                  <span className="font-semibold">
-                    {(tableViewMode === 'all' ? drilldownStoRows.length : tableRows.length).toLocaleString('en-US')}
-                  </span>{' '}
-                  {tableViewMode === 'all' ? 'shipments' : `vessel${tableRows.length === 1 ? '' : 's'}`}
-                </span>
-                <span className="text-gray-400" aria-hidden>
-                  ·
-                </span>
-                <span className="whitespace-nowrap tabular-nums">
-                  Page {currentPage}/{totalPages} · {paginatedRows.length} rows
-                </span>
-                {tableScopeParts.length > 0 && (
-                  <>
-                    <span className="text-gray-400" aria-hidden>
-                      ·
-                    </span>
-                    <span className="whitespace-nowrap text-gray-600 font-medium">
-                      {tableScopeParts.join(' · ')}
-                    </span>
-                  </>
-                )}
-              </p>
           </CardHeader>
           <CardContent className="p-0">
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>

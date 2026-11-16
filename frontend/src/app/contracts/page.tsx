@@ -4546,7 +4546,7 @@ function ContractsPageContent() {
           <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div>
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
                   <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                     <span>
                       {isContractPerformance
@@ -4558,7 +4558,7 @@ function ContractsPageContent() {
                     ) : null}
                   </CardTitle>
                   {isContractPerformance ? (
-                    <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                    <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                       <span className="whitespace-nowrap tabular-nums text-gray-700">
                         <span className="font-semibold">
                           {displayTotalContracts.toLocaleString('en-US')}
@@ -4584,15 +4584,9 @@ function ContractsPageContent() {
                       ) : (
                         <span className="whitespace-nowrap text-gray-600 font-medium">Global · All</span>
                       )}
-                      <span className="text-gray-400" aria-hidden>
-                        ·
-                      </span>
-                      <span className="whitespace-nowrap tabular-nums">
-                        Page {currentPage}/{totalPages} · {filteredContracts.length} rows
-                      </span>
                     </p>
                   ) : (
-                    <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                    <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                       <span className="whitespace-nowrap tabular-nums text-gray-700">
                         <span className="font-semibold">
                           {displayTotalContracts.toLocaleString('en-US')}
@@ -4609,12 +4603,6 @@ function ContractsPageContent() {
                         )}
                       >
                         {contractsTableScope.text}
-                      </span>
-                      <span className="text-gray-400" aria-hidden>
-                        ·
-                      </span>
-                      <span className="whitespace-nowrap tabular-nums">
-                        Page {currentPage}/{totalPages} · {filteredContracts.length} rows
                       </span>
                     </p>
                   )}

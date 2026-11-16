@@ -2135,7 +2135,8 @@ export default function OilLossPage() {
         <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
           <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-              <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>
                   {viewMode === 'all_contract'
                     ? 'All Oil Loss'
@@ -2147,6 +2148,22 @@ export default function OilLossPage() {
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
               </CardTitle>
+                <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0">
+              <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">{filteredRows.length.toLocaleString('en-US')}</span> entries
+                </span>
+              {hasActiveDrilldown ? (
+                <>
+                  <span className="text-gray-400" aria-hidden>
+                    ·
+                  </span>
+                  <span className="whitespace-nowrap text-blue-700 font-medium">
+                    Drilldown: {drilldownPathLabel}
+                  </span>
+                </>
+              ) : null}
+            </p>
+              </div>
               <div className="flex flex-wrap items-center gap-1.5 ml-auto sm:flex-nowrap shrink-0">
                 <ViewToggle
                   ariaLabel="Table view"
@@ -2251,36 +2268,6 @@ export default function OilLossPage() {
                 </div>
               </div>
             </div>
-            <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
-              <span className="whitespace-nowrap tabular-nums text-gray-700">
-                Showing{' '}
-                <span className="font-semibold">
-                  {rangeStart.toLocaleString('en-US')} to {rangeEnd.toLocaleString('en-US')}
-                </span>{' '}
-                of <span className="font-semibold">{filteredRows.length.toLocaleString('en-US')}</span>{' '}
-                entries
-              </span>
-              {totalPages > 1 ? (
-                <>
-                  <span className="text-gray-400" aria-hidden>
-                    ·
-                  </span>
-                  <span className="whitespace-nowrap tabular-nums">
-                    Page {currentPage}/{totalPages}
-                  </span>
-                </>
-              ) : null}
-              {hasActiveDrilldown ? (
-                <>
-                  <span className="text-gray-400" aria-hidden>
-                    ·
-                  </span>
-                  <span className="whitespace-nowrap text-blue-700 font-medium">
-                    Drilldown: {drilldownPathLabel}
-                  </span>
-                </>
-              ) : null}
-            </p>
           </CardHeader>
           <CardContent className="p-0">
             <div className={tableLoading ? 'min-h-[480px]' : undefined}>
