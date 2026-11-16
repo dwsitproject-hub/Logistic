@@ -3,6 +3,7 @@ import {
   resolveContractLogisticsOperationId,
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
+  resolveSharedShipmentStoDelivered,
   summarizeContractLogisticsStoQty,
 } from './contractLogisticsStoDisplay';
 
@@ -114,5 +115,31 @@ describe('contractLogisticsStoDisplay', () => {
         },
       }),
     ).toBe('PLANNED');
+  });
+});
+
+describe('resolveSharedShipmentStoDelivered', () => {
+  const shipment = 'ship-1';
+  it('shows each STO of a shared shipment its own SAP delivery, not the shipment total (PO 1011003087)', () => {
+    const rows = [
+      { id: shipment, sto: '1016010835', quantity_delivered: 3_000_000, sap_delivered_kg: 3_000_000 },
+      { id: shipment, sto: '1016010841', quantity_delivered: 3_000_000, sap_delivered_kg: 888_240 },
+      { id: shipment, sto: '1016010845', quantity_delivered: 3_000_000, sap_delivered_kg: 157_850 },
+    ];
+    expect(resolveSharedShipmentStoDelivered(rows).map((r) => r.quantity_delivered)).toEqual([3_000_000, 888_240, 157_850]);
+  });
+  it('shows 0 for a STO of a shared shipment that SAP has nothing for', () => {
+    const rows = [
+      { id: shipment, quantity_delivered: 3_500_000, sap_delivered_kg: 0 },
+      { id: shipment, quantity_delivered: 3_500_000, sap_delivered_kg: null },
+    ];
+    expect(resolveSharedShipmentStoDelivered(rows).map((r) => r.quantity_delivered)).toEqual([0, 0]);
+  });
+  it('leaves a shipment with a single STO, and a row without a shipment, as they are', () => {
+    const rows = [
+      { id: 'a', quantity_delivered: 1_000, sap_delivered_kg: 500 },
+      { id: null, quantity_delivered: 2_000, sap_delivered_kg: 700 },
+    ];
+    expect(resolveSharedShipmentStoDelivered(rows)).toEqual(rows);
   });
 });

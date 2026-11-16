@@ -147,3 +147,28 @@ export function resolveContractLogisticsStoStatus(input: {
     ...input.shipmentMilestones,
   });
 }
+
+/**
+ * Delivery Qty of the shipment rows in the STO table.
+ *
+ * A row's quantity_delivered is the shipment's own figure (KLIP or legacy) whenever SAP has nothing for the STO, and a shipment is one voyage:
+ * when it carries several STOs (PO 1011003087: 1016010835 by vessel, 1016010841-45 trucked on from the terminal) that figure is the whole
+ * cargo and printed 3,000 MT on every one of them. For the STOs that share a shipment the per-STO SAP delivery (sap_delivered_kg: the
+ * incoterm-picked arm, then the trucking arm) is what the row shows, 0 when SAP has none - the shipment's total is no STO's delivery.
+ * A shipment with a single STO keeps its value untouched, and so does a row without a shipment id.
+ */
+export function resolveSharedShipmentStoDelivered<T extends { id?: unknown; quantity_delivered?: unknown; sap_delivered_kg?: unknown }>(
+  rows: readonly T[],
+): T[] {
+  const perShipment = new Map<string, number>();
+  for (const row of rows) {
+    const id = row.id == null ? '' : String(row.id);
+    if (id) perShipment.set(id, (perShipment.get(id) ?? 0) + 1);
+  }
+  return rows.map((row) => {
+    const id = row.id == null ? '' : String(row.id);
+    if (!id || (perShipment.get(id) ?? 0) < 2) return row;
+    const sap = Number(row.sap_delivered_kg);
+    return { ...row, quantity_delivered: Number.isFinite(sap) && sap > 0 ? sap : 0 };
+  });
+}

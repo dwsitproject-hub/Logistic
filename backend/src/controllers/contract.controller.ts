@@ -131,6 +131,7 @@ import {
   sqlContractStoListShipmentMatchRank,
   sqlSapQtyDeliveredForStoKeyExpr,
   sqlSapQtyDeliveredKgFromSpd,
+  sqlSapTruckingDeliveredForStoKeyExpr,
   sqlSapQtyReceiveForStoKeyExpr,
   sqlSapStoQtyForContractPoExpr,
 } from '../utils/contractLogisticsStoDetailSql';
@@ -138,6 +139,7 @@ import {
   resolveContractLogisticsOperationId,
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
+  resolveSharedShipmentStoDelivered,
   summarizeContractLogisticsStoQty,
 } from '../utils/contractLogisticsStoDisplay';
 import {
@@ -2449,6 +2451,20 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           )},
           0
         ) AS quantity_delivered,
+        -- This STO's own SAP delivery (the incoterm-picked arm, then the trucking arm). The row above can only
+        -- hold the shipment's quantity, which is the whole cargo; see resolveSharedShipmentStoDelivered.
+        COALESCE(
+          NULLIF((${sqlSapQtyDeliveredForStoKeyExpr({
+            contractAlias: 'c_po',
+            stoKeyExpr: 'sk.sto_key',
+            contractQtyExpr: 'c_po.quantity_ordered',
+          })}), 0),
+          NULLIF((${sqlSapTruckingDeliveredForStoKeyExpr({
+            contractAlias: 'c_po',
+            stoKeyExpr: 'sk.sto_key',
+          })}), 0),
+          0
+        ) AS sap_delivered_kg,
         COALESCE(
           ${sqlShipmentResolvedReceiveKg(
             sqlIsContractSapClosedForStoExpr('c_po', 'sk.sto_key'),
@@ -2693,7 +2709,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       ? await query(truckingStosQuery, [id])
       : { rows: [] };
 
-    const shipmentStos = shipmentRows.rows.map((r: any) => {
+    const shipmentStos = resolveSharedShipmentStoDelivered(shipmentRows.rows).map((r: any) => {
       const lateIndicator = computeLateIndicatorText(
         deliveryEnd,
         r.ata_discharge_complete,
