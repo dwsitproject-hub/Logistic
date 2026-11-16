@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * The row of filter fields inside the panel. It scrolls sideways (overflow-x-auto), which also clips:
- * a field's focus ring is 3px (ring-2 + ring-offset-1), so the row needs at least that much padding or
+ * a field's focus ring is 1px (ring-1), so the row needs at least that much padding or
  * the first and last fields' rings are cut off at the edges. -mx-0.5 keeps the fields where they were.
  */
 export const LIST_FILTER_FIELDS_ROW_CLASS = 'flex flex-nowrap items-end gap-2 overflow-x-auto -mx-0.5 px-1 pb-1.5 pt-1'

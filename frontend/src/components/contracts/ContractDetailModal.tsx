@@ -1230,7 +1230,7 @@ export function ContractDetailModal({
                           disabled={cargoReadinessSaving}
                         />
                         <textarea
-                          className="w-full min-h-[72px] border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200 bg-white"
+                          className="w-full min-h-[72px] border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-200 bg-white"
                           placeholder="Remark (required) — explain why Cargo Readiness Date is changing"
                           value={cargoReadinessRemark}
                           onChange={(e) => setCargoReadinessRemark(e.target.value)}
@@ -1793,7 +1793,7 @@ export function ContractDetailModal({
                   <div className="rounded border p-3">
                     <div className="flex items-start gap-2">
                       <textarea
-                        className="w-full min-h-[80px] border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200"
+                        className="w-full min-h-[80px] border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-200"
                         placeholder="Write a comment for this contract..."
                         value={newRemarkText}
                         onChange={(e) => setNewRemarkText(e.target.value)}

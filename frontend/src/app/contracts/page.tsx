@@ -899,7 +899,7 @@ function ContractPerfQtyReconciliationTooltip({
           type="button"
           data-testid="cp-qty-reconciliation-trigger"
           title="Qty reconciliation"
-          className={`inline-flex shrink-0 items-center justify-center rounded-md border p-1 focus:outline-none focus:ring-2 focus:ring-primary/30 ${triggerTone}`}
+          className={`inline-flex shrink-0 items-center justify-center rounded-md border p-1 focus:outline-none focus:ring-1 focus:ring-primary/30 ${triggerTone}`}
           aria-label={`${title}${productSuffix}. ${hasGap ? 'Qty gap detected' : 'Qty totals match'}`}
         >
           <ClipboardCheck className="h-4 w-4" strokeWidth={2.25} aria-hidden />
@@ -987,7 +987,7 @@ function ContractPerfDrilldownSectionHelp({
       <TooltipTrigger asChild>
         <button
           type="button"
-          className="inline-flex shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          className="inline-flex shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary/30"
           aria-label="Contract performance drilldown help"
         >
           <HelpCircle className="h-4 w-4" />

@@ -60,7 +60,7 @@ export function PageActivityFab() {
         type="button"
         data-tour="tour-page-activity"
         onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-[100] flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-primary/40"
+        className="fixed bottom-6 right-6 z-[100] flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition hover:brightness-110 focus:outline-none focus:ring-1 focus:ring-primary/40"
         title="Latest activity on this page"
         aria-label="Open latest activity for this page"
       >

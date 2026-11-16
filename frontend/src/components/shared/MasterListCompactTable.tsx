@@ -231,7 +231,7 @@ export function MasterListCompactTable<T>({
                   return (
                     <tr
                       key={getRowId(row)}
-                      className={cn(stripe, onRowClick && 'group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500')}
+                      className={cn(stripe, onRowClick && 'group cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-500')}
                       tabIndex={onRowClick ? 0 : undefined}
                       onClick={
                         onRowClick

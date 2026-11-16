@@ -145,12 +145,12 @@ export function PerformanceContractDateControl<T extends string>({
             aria-label={dateLabel}
             className={stitchControlClass(
               header && fieldStyle
-                ? `flex h-9 w-44 items-center justify-between gap-2 rounded-[10px] border px-2.5 text-left text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${active ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`
+                ? `flex h-9 w-44 items-center justify-between gap-2 rounded-[10px] border px-2.5 text-left text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 ${active ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'}`
                 : header
-                ? 'flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
+                ? 'flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500'
                 : stretch
-                  ? 'flex h-10 w-full items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
-                  : 'flex h-10 min-w-[11rem] max-w-[18rem] items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+                  ? 'flex h-10 w-full items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500'
+                  : 'flex h-10 min-w-[11rem] max-w-[18rem] items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500',
               stitch,
             )}
           >

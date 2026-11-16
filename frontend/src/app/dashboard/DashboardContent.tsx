@@ -454,7 +454,7 @@ function SearchableMultiSelect({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between gap-2 h-10 px-3 py-2 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+        className="w-full flex items-center justify-between gap-2 h-10 px-3 py-2 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500"
       >
         <span className={`min-w-0 truncate ${selected.length === 0 ? 'text-gray-500' : 'text-gray-900'}`}>{displayLabel}</span>
         <ChevronDown className={`h-4 w-4 text-gray-500 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -1191,7 +1191,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
       <button
         type="button"
         onClick={onClick}
-        className="text-left focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded-lg"
+        className="text-left focus:outline-none focus:ring-1 focus:ring-blue-500 rounded-lg"
       >
         {body}
       </button>
@@ -1325,7 +1325,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                   <button
                     key={seg.label}
                     type="button"
-                    className="block w-full text-left focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                    className="block w-full text-left focus:outline-none focus:ring-1 focus:ring-blue-500"
                     onClick={() => onSegmentClick(seg.label)}
                   >
                     {row}
@@ -1368,7 +1368,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                 <button
                   key={seg.label}
                   type="button"
-                  className="block w-full text-left focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded-md"
+                  className="block w-full text-left focus:outline-none focus:ring-1 focus:ring-blue-500 rounded-md"
                   onClick={() => onSegmentClick(seg.label)}
                 >
                   {row}
@@ -1427,7 +1427,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
               <button
                 key={it.key}
                 type="button"
-                className="block w-full text-left focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 rounded-lg"
+                className="block w-full text-left focus:outline-none focus:ring-1 focus:ring-blue-500 rounded-lg"
                 onClick={() => onItemClick(it.key)}
               >
                 {row}

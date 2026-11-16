@@ -27,7 +27,7 @@ function Switch({ on, disabled, onChange, label }: { on: boolean; disabled?: boo
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange?.(!on)}
-      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-default ${
+      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-400 disabled:cursor-default ${
         on ? 'bg-emerald-500' : 'bg-gray-300'
       }`}
     >

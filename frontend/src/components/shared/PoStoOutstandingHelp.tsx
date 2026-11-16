@@ -67,7 +67,7 @@ export function PoStoOutstandingHelp({ stoCount, incoterm, contractRowId, curren
           tabIndex={0}
           aria-label="Why this OS Qty is the PO's, not this STO's"
           className={cn(
-            'inline-flex shrink-0 items-center justify-center rounded-full text-blue-500 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-primary/30',
+            'inline-flex shrink-0 items-center justify-center rounded-full text-blue-500 hover:text-blue-700 focus:outline-none focus:ring-1 focus:ring-primary/30',
             className,
           )}
         >

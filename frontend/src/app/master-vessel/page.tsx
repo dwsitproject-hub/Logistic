@@ -54,7 +54,7 @@ const KLIP_TRANSACTION_FILTER_OPTIONS = ['Yes', 'No']
 
 /** A multi-select that looks like the Select next to it in the filter row: one 36px field, the name as the placeholder. */
 const FILTER_BUTTON_CLASS =
-  'w-full flex items-center justify-between gap-2 h-9 px-3 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
+  'w-full flex items-center justify-between gap-2 h-9 px-3 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500'
 
 /**
  * Every column of the vessel list. The first seven are the default view; the others are what a vessel also holds (the Vessel, Type and Capacity cells fold some of

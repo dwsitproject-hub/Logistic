@@ -216,7 +216,7 @@ export function SearchableMultiSelect({
         aria-label={label}
         className={stitchControlClass(
           buttonClassName ??
-            'w-full flex items-center justify-between gap-2 h-10 px-3 py-2 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+            'w-full flex items-center justify-between gap-2 h-10 px-3 py-2 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500',
           stitch,
         )}
       >

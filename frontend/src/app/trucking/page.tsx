@@ -4900,7 +4900,7 @@ function TruckingPageContent() {
                                           <select
                                             value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}
                                             onChange={(e) => handleFieldChange('status', e.target.value)}
-                                            className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
+                                            className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 w-full bg-white"
                                           >
                                             <option value="">Select Status</option>
                                             <option value="CANCELLED">CANCELLED</option>

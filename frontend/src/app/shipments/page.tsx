@@ -80,7 +80,7 @@ import {
   VesselPortsQuantitiesTable,
   type VesselPortsQuantityEdits,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
-import { hasVesselPortsQuantityUserEdits, hasVesselPortsQuantityFieldEdits } from '@/lib/vesselPortsQuantityEdits'
+import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
 import {
   VESSEL_MODAL_BODY_CLASS,
   VESSEL_MODAL_HEADER_CLASS,
@@ -629,11 +629,6 @@ interface DocumentItem {
   created_at?: string
 }
 
-/** Document types for SLD/SDD uploads that unlock quantity delivery/receive edits in the vessel modal. */
-const SHIPMENT_SLD_DOC_TYPE = 'SLD'
-const SHIPMENT_SDD_DOC_TYPE = 'SDD'
-/** Legacy type — still unlocks quantities when present on a shipment. */
-const SHIPMENT_LEGACY_QUANTITY_UNLOCK_DOC_TYPE = 'QUANTITY_ADJUSTMENT'
 
 function shipmentQuantityValuesEqual(a: unknown, b: unknown): boolean {
   const toNum = (v: unknown) => {
@@ -1482,19 +1477,6 @@ function ShipmentsPageContent() {
   const [editedShipmentInfo, setEditedShipmentInfo] = useState<any>(null)
   const editedShipmentInfoRef = useRef<any>(null)
   editedShipmentInfoRef.current = editedShipmentInfo
-  const [hasUploadedSld, setHasUploadedSld] = useState(false)
-  const [hasUploadedSdd, setHasUploadedSdd] = useState(false)
-  const [sldDocId, setSldDocId] = useState<string | null>(null)
-  const [sddDocId, setSddDocId] = useState<string | null>(null)
-  const [sldDocUploading, setSldDocUploading] = useState(false)
-  const [sddDocUploading, setSddDocUploading] = useState(false)
-  const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
-  const isQuantityUnlockedRef = useRef(false)
-  isQuantityUnlockedRef.current = isQuantityUnlocked
-  const sldDocIdRef = useRef<string | null>(null)
-  sldDocIdRef.current = sldDocId
-  const sddDocIdRef = useRef<string | null>(null)
-  sddDocIdRef.current = sddDocId
   const [editingPortId, setEditingPortId] = useState<string | null>(null)
   const [editedPortData, setEditedPortData] = useState<Partial<VesselLoadingPort> | null>(null)
   const [cancelPortTarget, setCancelPortTarget] = useState<{ id: string; portName: string; portSequence: number } | null>(null)
@@ -5759,42 +5741,6 @@ function ShipmentsPageContent() {
     }
   }
 
-  const resetQuantityUnlockState = () => {
-    setHasUploadedSld(false)
-    setHasUploadedSdd(false)
-    setSldDocId(null)
-    setSddDocId(null)
-    setSldDocUploading(false)
-    setSddDocUploading(false)
-  }
-
-  const hydrateQuantityUnlockDocs = async (shipmentInternalId: string) => {
-    try {
-      const params = new URLSearchParams()
-      params.append('shipmentId', shipmentInternalId)
-      const res = await api.get(`/documents?${params.toString()}`)
-      const docs: DocumentItem[] = res.data?.data || []
-      const sldDoc = docs.find((d) => d.document_type === SHIPMENT_SLD_DOC_TYPE)
-      const sddDoc = docs.find((d) => d.document_type === SHIPMENT_SDD_DOC_TYPE)
-      const legacyDoc = docs.find((d) => d.document_type === SHIPMENT_LEGACY_QUANTITY_UNLOCK_DOC_TYPE)
-
-      if (sldDoc?.id) {
-        setHasUploadedSld(true)
-        setSldDocId(String(sldDoc.id))
-      }
-      if (sddDoc?.id) {
-        setHasUploadedSdd(true)
-        setSddDocId(String(sddDoc.id))
-      }
-      if (legacyDoc?.id && !sldDoc && !sddDoc) {
-        setHasUploadedSld(true)
-        setSldDocId(String(legacyDoc.id))
-      }
-    } catch (err) {
-      console.error('Hydrate quantity unlock documents error:', err)
-    }
-  }
-
   const resetPortsQuantityRowEdit = () => {
     setEditingPortsQtyRowKey(null)
     setEditedPortsContractQty({})
@@ -5867,7 +5813,6 @@ function ShipmentsPageContent() {
   const handleCancelEditAll = () => {
     handleCancelEditShipmentInfo()
     handleCancelEditPort()
-    resetQuantityUnlockState()
     resetPortsQuantityRowEdit()
   }
 
@@ -5889,7 +5834,6 @@ function ShipmentsPageContent() {
 
   const handleEditShipmentInfo = () => {
     if (shipmentInfo) {
-      resetQuantityUnlockState()
       // Initialize with all fields including ETA
       setEditedShipmentInfo({ 
         ...shipmentInfo,
@@ -5920,76 +5864,13 @@ function ShipmentsPageContent() {
         quality_at_discharge_loc_1_stone: shipmentInfo.quality_at_discharge_loc_1_stone ?? null,
       })
       setEditingShipmentInfo(true)
-      if (selectedShipment?.id) {
-        void hydrateQuantityUnlockDocs(selectedShipment.id)
-      }
     }
   }
 
   const handleCancelEditShipmentInfo = () => {
     setEditingShipmentInfo(false)
     setEditedShipmentInfo(null)
-    resetQuantityUnlockState()
     resetPortsQuantityRowEdit()
-  }
-
-  const handleShipmentQuantityDocChange = async (
-    kind: typeof SHIPMENT_SLD_DOC_TYPE | typeof SHIPMENT_SDD_DOC_TYPE,
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = e.target.files?.[0]
-    if (!file || !selectedShipment) return
-
-    const isPdf =
-      file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-    if (!isPdf) {
-      alert('Only PDF files are allowed.')
-      e.target.value = ''
-      return
-    }
-
-    const isSld = kind === SHIPMENT_SLD_DOC_TYPE
-    const alreadyUploaded = isSld ? hasUploadedSld : hasUploadedSdd
-    if (alreadyUploaded) return
-
-    const setUploading = isSld ? setSldDocUploading : setSddDocUploading
-    const setUploaded = isSld ? setHasUploadedSld : setHasUploadedSdd
-    const setDocId = isSld ? setSldDocId : setSddDocId
-
-    setUploading(true)
-    try {
-      const form = new FormData()
-      form.append('file', file)
-      form.append('document_type', kind)
-      form.append('shipment_id', selectedShipment.id)
-      form.append('description', `${kind} document for quantity delivery/receive edit`)
-
-      const res = await api.post('/documents/upload', form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      if (res.data?.success) {
-        const docId = res.data?.data?.id ? String(res.data.data.id) : null
-        setDocId(docId)
-        setUploaded(true)
-        refreshDocumentPresence()
-        if (showDocs && selectedShipment) {
-          await fetchShipmentDocuments(selectedShipment)
-        }
-      } else {
-        alert(res.data?.error?.message || 'Failed to upload document')
-      }
-    } catch (err: any) {
-      console.error(`${kind} document upload error:`, err)
-      const msg =
-        err?.response?.data?.error?.message ||
-        err?.response?.data?.error?.detail ||
-        err?.message ||
-        'Failed to upload document. Please try again.'
-      alert(msg)
-    } finally {
-      setUploading(false)
-      e.target.value = ''
-    }
   }
 
   const handleSaveShipmentInfo = async () => {
@@ -6038,24 +5919,10 @@ function ShipmentsPageContent() {
             },
       )
       const qtyUserEdited = hasVesselPortsQuantityUserEdits(portsQtyRows, editedPortsContractQty)
-      const receiveUserEdited = hasVesselPortsQuantityFieldEdits(
-        portsQtyRows,
-        editedPortsContractQty,
-        'quantity_receive',
-      )
       if (qtyUserEdited && portsQtyRows.length > 0) {
         const sums = sumVesselPortsQuantityEdits(portsQtyRows, editedPortsContractQty)
         if (sums.quantity_delivered !== null) info.quantity_delivered = sums.quantity_delivered
         if (sums.quantity_receive !== null) info.actual_vessel_qty_receive = sums.quantity_receive
-      }
-
-      if (receiveUserEdited && !isQuantityUnlockedRef.current) {
-        alert('Please upload an SLD or SDD document before editing Quantity Receive.')
-        return
-      }
-      if (receiveUserEdited && !(sldDocIdRef.current || sddDocIdRef.current)) {
-        alert('An SLD or SDD document must be attached before saving Quantity Receive changes.')
-        return
       }
 
       const updateData: Record<string, unknown> = {}
@@ -6225,7 +6092,6 @@ function ShipmentsPageContent() {
       setEditingShipmentInfo(false)
       setEditedShipmentInfo(null)
       await fetchShipments(page, undefined, { force: true })
-      resetQuantityUnlockState()
       resetPortsQuantityRowEdit()
       alert('Shipment information updated successfully!')
     } catch (error) {
@@ -7864,7 +7730,7 @@ function ShipmentsPageContent() {
                                                   setEditedData(next)
                                                 }
                                               }}
-                                              className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
+                                              className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 w-full bg-white"
                                               title="Status lowered automatically. Can only be cancelled manually."
                                             >
                                               <option value={currentStatus}>{formatShipmentStatusLabel(shipment.status)}</option>
@@ -8559,7 +8425,6 @@ function ShipmentsPageContent() {
                           editingRowKey={editingPortsQtyRowKey}
                           edits={editedPortsContractQty}
                           quantityEditUnlocked={Boolean(editingShipmentInfo)}
-                          receiveQtyEditUnlocked={Boolean(editingShipmentInfo && isQuantityUnlocked)}
                           onStartEditRow={(rowKey) => {
                             if (!editingShipmentInfo) {
                               handleEditShipmentInfo()
@@ -8572,109 +8437,6 @@ function ShipmentsPageContent() {
                         />
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-                        {editingShipmentInfo && (
-                          <div className="md:col-span-2 lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
-                              <div className="flex flex-col gap-2">
-                                <div>
-                                  <p className="text-xs font-medium text-amber-900">Upload SLD</p>
-                                  <p className="text-[0.6875rem] text-amber-800/80 mt-0.5">
-                                    SLD document to unlock Received Qty (Klip).
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <input
-                                    id={`quantity-sld-doc-${selectedShipment.id}`}
-                                    type="file"
-                                    accept=".pdf,application/pdf"
-                                    className="hidden"
-                                    onChange={(e) => handleShipmentQuantityDocChange(SHIPMENT_SLD_DOC_TYPE, e)}
-                                    disabled={sldDocUploading || hasUploadedSld}
-                                  />
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-8 text-xs border-amber-300 bg-white hover:bg-amber-50"
-                                    disabled={sldDocUploading || hasUploadedSld}
-                                    onClick={() =>
-                                      document.getElementById(`quantity-sld-doc-${selectedShipment.id}`)?.click()
-                                    }
-                                  >
-                                    {sldDocUploading ? (
-                                      <>
-                                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                                        Uploading...
-                                      </>
-                                    ) : hasUploadedSld ? (
-                                      <>
-                                        <Check className="h-3.5 w-3.5 mr-1 text-green-600" />
-                                        SLD uploaded
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Upload className="h-3.5 w-3.5 mr-1" />
-                                        Upload SLD
-                                      </>
-                                    )}
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
-                              <div className="flex flex-col gap-2">
-                                <div>
-                                  <p className="text-xs font-medium text-amber-900">Upload SDD</p>
-                                  <p className="text-[0.6875rem] text-amber-800/80 mt-0.5">
-                                    SDD document to unlock Received Qty (Klip).
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <input
-                                    id={`quantity-sdd-doc-${selectedShipment.id}`}
-                                    type="file"
-                                    accept=".pdf,application/pdf"
-                                    className="hidden"
-                                    onChange={(e) => handleShipmentQuantityDocChange(SHIPMENT_SDD_DOC_TYPE, e)}
-                                    disabled={sddDocUploading || hasUploadedSdd}
-                                  />
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-8 text-xs border-amber-300 bg-white hover:bg-amber-50"
-                                    disabled={sddDocUploading || hasUploadedSdd}
-                                    onClick={() =>
-                                      document.getElementById(`quantity-sdd-doc-${selectedShipment.id}`)?.click()
-                                    }
-                                  >
-                                    {sddDocUploading ? (
-                                      <>
-                                        <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                                        Uploading...
-                                      </>
-                                    ) : hasUploadedSdd ? (
-                                      <>
-                                        <Check className="h-3.5 w-3.5 mr-1 text-green-600" />
-                                        SDD uploaded
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Upload className="h-3.5 w-3.5 mr-1" />
-                                        Upload SDD
-                                      </>
-                                    )}
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                            {!isQuantityUnlocked && (
-                              <p className="sm:col-span-2 text-[0.6875rem] text-amber-800/80">
-                                Received Qty (Klip) stays locked until at least one of SLD or SDD is uploaded.
-                              </p>
-                            )}
-                          </div>
-                        )}
                         <ShipmentMtQuantityField
                           label="Quantity SFAL"
                           value={editingShipmentInfo ? editedShipmentInfo?.sfal_qty : shipmentInfo.sfal_qty}
@@ -9614,7 +9376,7 @@ function ShipmentsPageContent() {
             </label>
             <textarea
               id="cancel-port-remark"
-              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-red-200"
               placeholder="Enter reason for cancelling this loading port activity..."
               value={cancelPortRemark}
               onChange={(e) => setCancelPortRemark(e.target.value)}
@@ -9657,7 +9419,7 @@ function ShipmentsPageContent() {
             </label>
             <textarea
               id="cancel-shipment-remark"
-              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-red-200"
               placeholder="Enter reason for cancelling this shipment..."
               value={cancelShipmentRemark}
               onChange={(e) => setCancelShipmentRemark(e.target.value)}
@@ -9701,7 +9463,7 @@ function ShipmentsPageContent() {
             </label>
             <textarea
               id="cancel-preplanned-remark"
-              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-red-200"
               placeholder="Enter reason for returning this group to Unplanned..."
               value={cancelPrePlannedRemark}
               onChange={(e) => setCancelPrePlannedRemark(e.target.value)}

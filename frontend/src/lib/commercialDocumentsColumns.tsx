@@ -112,7 +112,7 @@ export function DocStatusCell({
       onClick={onOpen}
       title={title}
       aria-label={title}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-green-600 transition hover:bg-green-50 hover:text-green-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-green-600 transition hover:bg-green-50 hover:text-green-700 focus:outline-none focus-visible:ring-1 focus-visible:ring-green-500"
     >
       <Check className="h-4 w-4" aria-hidden />
     </button>

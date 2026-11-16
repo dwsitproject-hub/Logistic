@@ -183,7 +183,7 @@ export function MasterDhmChip({ row }: { row: DhmStatusRow }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span tabIndex={0} className="cursor-help rounded-full outline-none focus-visible:ring-2 focus-visible:ring-blue-400" aria-label={`DHM ${chip.label}: ${hint}`}>
+        <span tabIndex={0} className="cursor-help rounded-full outline-none focus-visible:ring-1 focus-visible:ring-blue-400" aria-label={`DHM ${chip.label}: ${hint}`}>
           {body}
         </span>
       </TooltipTrigger>

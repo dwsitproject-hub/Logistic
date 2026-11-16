@@ -139,7 +139,7 @@ export function ShipmentOutstandingQtySummary({
           className={cn(
             'flex h-full w-full min-w-0 items-center gap-3 rounded-lg border border-rose-100 bg-rose-50/70 px-3 py-2 text-left transition-colors',
             onEtcNoAtcDueClick &&
-              'cursor-pointer hover:border-rose-200 hover:bg-rose-100/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-1',
+              'cursor-pointer hover:border-rose-200 hover:bg-rose-100/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-400',
             etcNoAtcDueActive && 'border-red-300 ring-2 ring-red-400 ring-offset-1',
             !onEtcNoAtcDueClick && 'cursor-default',
           )}

@@ -247,7 +247,7 @@ export function HeaderMissingEtaAlertBell() {
               onClick={() => setOpen((v) => !v)}
               className={cn(
                 'inline-flex min-h-9 items-center gap-2 rounded-lg border px-3 py-1.5 text-sm shadow-sm transition-all',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+                'focus-visible:outline-none focus-visible:ring-1',
                 tone.border,
                 tone.gradient,
                 tone.hoverBorder,

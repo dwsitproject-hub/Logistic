@@ -649,9 +649,9 @@ type ShipmentDetailRow = {
   quantity_receive_sap: number | null
   /** Shipment Plan Qty entered at Add New Shipment, editable here (a plan, not a delivery). */
   quantity_shipment_plan: number | null
-  /** KLIP delivered seed (editable without SLD/SDD). */
+  /** KLIP delivered seed (editable directly). */
   quantity_delivered_klip: number | null
-  /** KLIP receive seed (editable after SLD/SDD). */
+  /** KLIP receive seed (editable directly; SLD/SDD no longer gate it). */
   quantity_receive_klip: number | null
   /** SAP Vessel OA Budget (IDR/KG) for this PO line. */
   vessel_oa_budget_sap: number | null
@@ -1896,7 +1896,7 @@ export function EditShipmentModal({
         stoQtyAssignedKg: 0,
         reopenOperation,
       })
-      const baseMessage = 'PO added. Set Delivered Qty (Klip) on the row; Received Qty (Klip) needs SLD/SDD.'
+      const baseMessage = 'PO added. Set Delivered Qty (Klip) and Received Qty (Klip) on the row.'
       if (outcome.reopenedFromAta && outcome.remainingAta) {
         // A manual clear only overrides: SAP / JPS / the discharge port row still carry a discharge-complete ATA, so the operation did not reopen.
         setNotification({
@@ -2910,7 +2910,7 @@ export function EditShipmentModal({
                       </div>
                     ) : null}
                     <p className="text-xs italic text-gray-500">
-                      Search by PO, contract, supplier, or product (min. 2 characters). Delivered Qty (Klip) can be edited directly; Received Qty (Klip) needs SLD/SDD or Upload Planning.
+                      Search by PO, contract, supplier, or product (min. 2 characters). Delivered Qty (Klip) and Received Qty (Klip) can be edited directly on the row.
                     </p>
                   </div>
                 )}

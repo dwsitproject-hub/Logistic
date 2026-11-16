@@ -30,7 +30,7 @@ export function DhmStatusBadge({ row }: { row: DhmStatusRow }) {
           role="img"
           aria-label={hint ? `DHM ${label}: ${hint}` : `DHM ${label}`}
           tabIndex={0}
-          className={`inline-flex h-7 w-7 shrink-0 cursor-help items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${tone}`}
+          className={`inline-flex h-7 w-7 shrink-0 cursor-help items-center justify-center rounded-full outline-none focus-visible:ring-1 focus-visible:ring-blue-400 ${tone}`}
         >
           <Icon className="h-4 w-4" aria-hidden />
         </span>

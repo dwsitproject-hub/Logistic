@@ -24,7 +24,7 @@ export function SapImportInFlightBanner() {
       className={cn(
         'inline-flex max-w-full items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50',
         'px-2 py-1 text-xs font-medium text-amber-900',
-        'hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400',
+        'hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400',
       )}
     >
       <Loader2 className="h-3 w-3 shrink-0 animate-spin text-amber-700" aria-hidden />

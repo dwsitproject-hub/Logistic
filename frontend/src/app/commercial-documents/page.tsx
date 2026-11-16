@@ -637,7 +637,7 @@ function CommercialDocumentsPageContent() {
           label="Region/Plant"
           hideLabel
           portalMenu
-          buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+          buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500"
           options={availablePlants}
           selected={selectedPlants}
           onChange={handleGroupPlantsChange}
