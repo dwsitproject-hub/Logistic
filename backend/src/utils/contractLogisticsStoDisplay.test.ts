@@ -4,6 +4,8 @@ import {
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
   resolveSharedShipmentStoDelivered,
+  normalizeContractLogisticsStoType,
+  summarizeContractLogisticsStoQtyByType,
   summarizeContractLogisticsStoQty,
 } from './contractLogisticsStoDisplay';
 
@@ -141,5 +143,42 @@ describe('resolveSharedShipmentStoDelivered', () => {
       { id: null, quantity_delivered: 2_000, sap_delivered_kg: 700 },
     ];
     expect(resolveSharedShipmentStoDelivered(rows)).toEqual(rows);
+  });
+});
+
+describe('summarizeContractLogisticsStoQtyByType', () => {
+  it('splits a two-leg cargo into its V and T totals (PO 1011003087)', () => {
+    const stos = [
+      { sto_number: '1016010835', sto_quantity: 3_000_000, sto_type: 'V' },
+      { sto_number: '1016010841', sto_quantity: 900_000, sto_type: 'T' },
+      { sto_number: '1016010842', sto_quantity: 650_000, sto_type: 'T' },
+      { sto_number: '1016010843', sto_quantity: 650_000, sto_type: 't' },
+      { sto_number: '1016010844', sto_quantity: 650_000, sto_type: 'T' },
+      { sto_number: '1016010845', sto_quantity: 157_850, sto_type: 'T' },
+    ];
+    expect(summarizeContractLogisticsStoQtyByType(stos)).toEqual([
+      { sto_type: 'V', sto_count: 1, total_sto_quantity: 3_000_000 },
+      { sto_type: 'T', sto_count: 5, total_sto_quantity: 3_007_850 },
+    ]);
+  });
+  it('counts a STO once, with its largest quantity, even when two rows carry it', () => {
+    const stos = [
+      { sto_number: '1', sto_quantity: 100, sto_type: 'V' },
+      { sto_number: '1', sto_quantity: 120, sto_type: 'V' },
+      { sto_number: '2', sto_quantity: 50, sto_type: 'T' },
+    ];
+    expect(summarizeContractLogisticsStoQtyByType(stos)).toEqual([
+      { sto_type: 'V', sto_count: 1, total_sto_quantity: 120 },
+      { sto_type: 'T', sto_count: 1, total_sto_quantity: 50 },
+    ]);
+  });
+  it('returns nothing when there is one leg only, or no STO Type at all', () => {
+    expect(summarizeContractLogisticsStoQtyByType([{ sto_number: '1', sto_quantity: 100, sto_type: 'V' }])).toEqual([]);
+    expect(summarizeContractLogisticsStoQtyByType([{ sto_number: '1', sto_quantity: 100 }, { sto_number: '2', sto_quantity: 5, sto_type: 'X' }])).toEqual([]);
+  });
+  it('normalizes the type to V or T', () => {
+    expect(normalizeContractLogisticsStoType(' v ')).toBe('V');
+    expect(normalizeContractLogisticsStoType('M')).toBeNull();
+    expect(normalizeContractLogisticsStoType(null)).toBeNull();
   });
 });

@@ -135,12 +135,15 @@ import {
   sqlSapQtyReceiveForStoKeyExpr,
   sqlSapStoQtyForContractPoExpr,
 } from '../utils/contractLogisticsStoDetailSql';
+import { shipmentResolvedStoTypeForNumberExpr } from '../utils/shipmentStoTypeSql'
 import {
+  normalizeContractLogisticsStoType,
   resolveContractLogisticsOperationId,
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
   resolveSharedShipmentStoDelivered,
   summarizeContractLogisticsStoQty,
+  summarizeContractLogisticsStoQtyByType,
 } from '../utils/contractLogisticsStoDisplay';
 import {
   sqlContractImportStatusExpr,
@@ -2908,8 +2911,34 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         };
       });
 
-    const stos = [...shipmentStos, ...truckingStos, ...sapOnlyStos];
-    const summary = summarizeContractLogisticsStoQty(stos);
+    const stosWithoutType = [...shipmentStos, ...truckingStos, ...sapOnlyStos];
+
+    // SAP STO Type (V vessel / T truck) per real STO number: contract_stos first, then the SAP row (the same resolution the Shipments scope uses).
+    const realStoNumbers = [
+      ...new Set(stosWithoutType.map((row) => row.sto_number).filter((sto) => sto && sto !== '-')),
+    ];
+    const stoTypeByNumber = new Map<string, 'V' | 'T'>();
+    if (realStoNumbers.length > 0) {
+      const typeRows = await query(
+        `SELECT sk.sto, ${shipmentResolvedStoTypeForNumberExpr('c_t', 'sk.sto')} AS sto_type
+         FROM unnest($2::text[]) AS sk(sto)
+         CROSS JOIN contracts c_t
+         WHERE c_t.id = $1`,
+        [id, realStoNumbers],
+      );
+      for (const r of typeRows.rows as Array<{ sto: string; sto_type: unknown }>) {
+        const type = normalizeContractLogisticsStoType(r.sto_type);
+        if (type) stoTypeByNumber.set(String(r.sto).trim(), type);
+      }
+    }
+    const stos = stosWithoutType.map((row) => ({
+      ...row,
+      sto_type: stoTypeByNumber.get(String(row.sto_number).trim()) ?? null,
+    }));
+    const summary = {
+      ...summarizeContractLogisticsStoQty(stos),
+      by_type: summarizeContractLogisticsStoQtyByType(stos),
+    };
     return res.json({ success: true, data: { stos, summary } });
   } catch (error) {
     logger.error('Get contract STO information error:', error);
