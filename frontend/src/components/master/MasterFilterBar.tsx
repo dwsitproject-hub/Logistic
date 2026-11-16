@@ -31,6 +31,35 @@ const optionLabel = (id: MasterDhmFilter, label: string, counts?: Props['dhmCoun
   return n == null ? name : `${name} (${n.toLocaleString('en-US')})`
 }
 
+/** The search field of a Master list bar. */
+export function MasterSearchInput({ value, onChange, placeholder, ariaLabel }: { value: string; onChange: (value: string) => void; placeholder: string; ariaLabel: string }) {
+  return (
+    <div className="relative w-full">
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden />
+      <Input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-9 pl-9" aria-label={ariaLabel} />
+    </div>
+  )
+}
+
+/** The DHM status field of a Master list bar (All / Synced / Not synced / Failed, with the counts). */
+export function MasterDhmSelect({ value, onChange, counts }: { value: MasterDhmFilter; onChange: (value: MasterDhmFilter) => void; counts?: Props['dhmCounts'] }) {
+  return (
+    <Select value={value} onValueChange={(next) => onChange(next as MasterDhmFilter)}>
+      <SelectTrigger className="h-9 w-full gap-2 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left" aria-label="Filter by DHM status">
+        <Cloud className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {MASTER_DHM_FILTERS.map((option) => (
+          <SelectItem key={option.id} value={option.id}>
+            {optionLabel(option.id, option.label, counts)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
 /** One row: search, the page's own filter, the DHM status as a field (All / Synced / Not synced / Failed) and the icon buttons. The Users filter bar, for a Master list. */
 export function MasterFilterBar({ search, onSearch, placeholder, ariaLabel, dhm, onDhm, dhmCounts, children, extraActive = false, onClear, actions }: Props) {
   const anyOn = search.trim() !== '' || extraActive || (dhm != null && dhm !== 'all')
