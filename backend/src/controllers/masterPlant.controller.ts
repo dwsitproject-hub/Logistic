@@ -4,6 +4,11 @@ import { attachDhmPushState, pushMasterPlantToDhm } from '../dhm';
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
+import { masterDhmFilterClause, parseMasterDhmFilter } from '../utils/masterDhmFilter';
+import { masterSummarySql, toMasterSummaryCounts } from '../utils/masterSummary';
+
+const PLANT_DHM = { table: 'master_plants', kind: 'plant' } as const;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function wantsDhmOverwrite(req: AuthRequest): boolean {
   const q = String((req.query as { dhmOverwrite?: unknown }).dhmOverwrite ?? '').toLowerCase();
@@ -12,7 +17,7 @@ function wantsDhmOverwrite(req: AuthRequest): boolean {
 
 export const listMasterPlants = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { search, page = 1, limit = 50, excludeDeleted } = req.query as any;
+    const { search, page = 1, limit = 50, excludeDeleted, dhm, company } = req.query as any;
     const offset = (Number(page) - 1) * Number(limit);
 
     const params: any[] = [];
@@ -36,6 +41,13 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
         OR master_plants.code_klip ILIKE $${params.length}
         OR master_plants.code_dhm ILIKE $${params.length}
       )`;
+    }
+    // DHM status (All / Synced / Not synced / Failed) and the internal company a plant belongs to: judged here, not on the rows on screen, because the list is paged.
+    const dhmClause = masterDhmFilterClause(parseMasterDhmFilter(dhm), PLANT_DHM);
+    if (dhmClause) where += ` AND ${dhmClause}`;
+    if (typeof company === 'string' && UUID_RE.test(company.trim())) {
+      params.push(company.trim());
+      where += ` AND master_plants.company_id = $${params.length}::uuid`;
     }
 
     const listSql = `
@@ -99,6 +111,36 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
   } catch (error) {
     logger.error('List master plants error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to fetch master plants' } });
+  }
+};
+
+/**
+ * The cards above the Master Plant list (GET /master-plants/summary): how many plants there are, how many DHM has, how many it does not, how many failed to
+ * deliver, and how many KLIP actually uses (a plant a contract is placed on: contracts.plant_code = master_plants.plant_code). Also the internal companies that have
+ * plants, for the Company filter. Counts are over ALL plants, not the page or the filters on screen.
+ */
+export const getMasterPlantSummary = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const [counts, companies] = await Promise.all([
+      query(masterSummarySql(PLANT_DHM, 'EXISTS (SELECT 1 FROM contracts c WHERE c.plant_code = master_plants.plant_code)')),
+      query(
+        `SELECT c.id::text AS id, c.company_name AS name, COUNT(*)::int AS plants
+         FROM master_plants p
+         JOIN master_companies c ON c.id = p.company_id
+         GROUP BY c.id, c.company_name
+         ORDER BY c.company_name`,
+      ),
+    ]);
+    res.json({
+      success: true,
+      data: {
+        ...toMasterSummaryCounts(counts.rows[0]),
+        companies: companies.rows.map((c: { id: string; name: string; plants: number }) => ({ id: c.id, name: c.name, plants: Number(c.plants) })),
+      },
+    });
+  } catch (error) {
+    logger.error('Master plant summary error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the Master Plant summary' } });
   }
 };
 

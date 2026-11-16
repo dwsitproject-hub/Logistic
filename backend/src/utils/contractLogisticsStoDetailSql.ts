@@ -551,6 +551,27 @@ export function sqlSapQtyDeliveredForStoKeyExpr(opts: {
   ), 0)`;
 }
 
+/**
+ * SAP trucking-arm delivered qty (kg) for a logistics STO key, whatever the incoterm says.
+ *
+ * Only the shipment rows of the Contract Details STO table use it, as the next SAP source when the incoterm-picked value is empty: one cargo is
+ * shipped on one STO and trucked on by several others (PO 1011003087: 1016010835 by vessel, 1016010841-45 by truck), and those trucking-leg STOs
+ * carry Quantity Delivery Vessel 0 and a real Quantity Delivery Trucking. Without this the row fell through to the shipment's own quantity,
+ * which is the whole cargo and printed the same 3,000 MT on every one of them. It is display only - nothing derives a status or an outstanding
+ * from it - so the incoterm matrix of every other path (a vessel contract never lets trucking win) is untouched.
+ */
+export function sqlSapTruckingDeliveredForStoKeyExpr(opts: {
+  contractAlias?: string;
+  stoKeyExpr: string;
+}): string {
+  const c = opts.contractAlias ?? 'c';
+  return `COALESCE((
+    SELECT SUM(${sqlSapQtyTruckingFromSpd('spd')})
+    FROM sap_processed_data spd
+    WHERE ${sqlSapStoKeyMatchExpr({ contractAlias: c, stoKeyExpr: opts.stoKeyExpr })}
+  ), 0)`;
+}
+
 /** SAP Quantity Receive for a logistics STO key (real STO or Operation ID fallback by PO). */
 export function sqlSapQtyReceiveForStoKeyExpr(opts: {
   contractAlias?: string;

@@ -1,6 +1,7 @@
 'use client'
 
-import { Search, Shield, X } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { CircleDot, Search, Shield, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { UserStatusFilter } from '@/lib/userDirectory'
@@ -22,19 +23,28 @@ interface Props {
   totalCount: number
   status: UserStatusFilter
   onStatus: (value: UserStatusFilter) => void
+  /** How many users each status holds (all = everyone), shown after the name like the role filter. */
+  statusCounts?: Partial<Record<UserStatusFilter, number>>
+  /** Icon buttons at the right end of the row (Add user, Roles, Activity log), like the action icons of a table row. */
+  actions?: ReactNode
 }
 
 const ALL_ROLES = '__all__'
 
 const STATUS_OPTIONS: ReadonlyArray<{ id: UserStatusFilter; label: string }> = [
-  { id: 'all', label: 'All' },
+  { id: 'all', label: 'All statuses' },
   { id: 'active', label: 'Active' },
   { id: 'pending', label: 'Invitation pending' },
   { id: 'inactive', label: 'Inactive' },
 ]
 
-/** Search, the role filter (every role with its head count) and a status switch, in one row above the table. */
-export function UserFilterBar({ search, onSearch, role, onRole, roleOptions, totalCount, status, onStatus }: Props) {
+const statusLabel = (id: UserStatusFilter, label: string, counts?: Props['statusCounts']) => {
+  const n = counts?.[id]
+  return n == null ? label : `${label} (${n.toLocaleString('en-US')})`
+}
+
+/** One row: search, the role filter (every role with its head count), the status as a field, and the icon buttons. */
+export function UserFilterBar({ search, onSearch, role, onRole, roleOptions, totalCount, status, onStatus, statusCounts, actions }: Props) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-gray-200 px-4 py-3">
       <div className="relative min-w-[200px] flex-1">
@@ -49,7 +59,7 @@ export function UserFilterBar({ search, onSearch, role, onRole, roleOptions, tot
       </div>
 
       <Select value={role || ALL_ROLES} onValueChange={(value) => onRole(value === ALL_ROLES ? '' : value)}>
-        <SelectTrigger className="h-9 w-[230px] gap-2 [&>span]:flex-1 [&>span]:text-left" aria-label="Filter by role">
+        <SelectTrigger className="h-9 w-[230px] gap-2 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left" aria-label="Filter by role">
           <Shield className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
           <SelectValue />
         </SelectTrigger>
@@ -63,23 +73,19 @@ export function UserFilterBar({ search, onSearch, role, onRole, roleOptions, tot
         </SelectContent>
       </Select>
 
-      <div className="inline-flex overflow-hidden rounded-lg border border-gray-200 text-xs" role="group" aria-label="Filter by status">
-        {STATUS_OPTIONS.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            onClick={() => onStatus(option.id)}
-            aria-pressed={status === option.id}
-            className={
-              status === option.id
-                ? 'bg-gray-100 px-3 py-2 font-medium text-gray-900'
-                : 'px-3 py-2 text-gray-600 hover:bg-gray-50'
-            }
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
+      <Select value={status} onValueChange={(value) => onStatus(value as UserStatusFilter)}>
+        <SelectTrigger className="h-9 w-[230px] gap-2 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left" aria-label="Filter by status">
+          <CircleDot className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {STATUS_OPTIONS.map((option) => (
+            <SelectItem key={option.id} value={option.id}>
+              {statusLabel(option.id, option.label, statusCounts)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
 
       {role || status !== 'all' || search ? (
         <button
@@ -95,6 +101,8 @@ export function UserFilterBar({ search, onSearch, role, onRole, roleOptions, tot
           Clear filters
         </button>
       ) : null}
+
+      {actions ? <div className="ml-auto flex items-center gap-1.5">{actions}</div> : null}
     </div>
   )
 }

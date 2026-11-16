@@ -4,7 +4,13 @@ import path from 'path';
 import { authenticateToken, authorize } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import { ensureUploadDir, importDataSubdir } from '../utils/fileUpload';
-import { uploadClaimData, listClaimDataUploads, getClaimDataStatus } from '../controllers/claimData.controller';
+import {
+  uploadClaimData,
+  listClaimDataUploads,
+  getClaimDataStatus,
+  getClaimAutoImportStatus,
+  syncClaimAutoImport,
+} from '../controllers/claimData.controller';
 
 const router = express.Router();
 
@@ -35,5 +41,7 @@ const upload = multer({
 router.post('/upload', upload.single('file'), auditLog('CREATE', 'CLAIM_DATA_IMPORT'), uploadClaimData);
 router.get('/uploads', listClaimDataUploads);
 router.get('/status', getClaimDataStatus);
+router.get('/auto-import/status', getClaimAutoImportStatus);
+router.post('/auto-import/sync', auditLog('CREATE', 'CLAIM_DATA_AUTO_IMPORT'), syncClaimAutoImport);
 
 export default router;

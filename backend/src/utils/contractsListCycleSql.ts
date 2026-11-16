@@ -50,6 +50,64 @@ export function sqlLastAtaVesselCompleteDischargeForContract(contractIdExpr: str
 }
 
 /**
+ * True when the contract still has a LIVE shipment (not cancelled) that has no ATC.
+ *
+ * The ATC arm of "effectively done" reads the contract's LAST ATC, so one finished voyage closed a contract whose second voyage was still planned. PO 1001032275
+ * (production, 2026-11-16): voyage one has its ATC (2026-11-10, 377 MT of 1,000 MT) and a second shipment, created two days later, is the plan for the rest; the
+ * ATC of the first filed the contract under Close on Contract Performance while Contracts kept it Open with 622 MT outstanding. Ryan's rule: a contract that
+ * travels in two voyages is finished only once every voyage has its ATC. Measured on production before the change: of 8,185 contracts CP files under Close,
+ * 350 are SAP-Open, 17 of those have outstanding above the zero band and only this one has a live shipment without an ATC.
+ *
+ * The ATC of a shipment is resolved the way sqlLastAtaVesselCompleteDischargeForContract resolves it (JPS lane, KLIP override, the shipment's own column, the
+ * discharge leg), so the two cannot disagree about whether a shipment has one. A contract with no shipment at all is NOT "with a shipment without ATC": the
+ * arm keeps working for the contracts that never recorded a shipment, exactly as before.
+ *
+ * Pass the contracts.id of the contract (the newest contracts row, like the last-ATC helper), or the contract NUMBER when the caller groups by it.
+ */
+export function sqlContractLiveShipmentWithoutAtcExpr(opts: { contractIdExpr?: string; contractNumberExpr?: string }): string {
+  const scope = opts.contractIdExpr
+    ? `s_lw.contract_id = ${opts.contractIdExpr}`
+    : `s_lw.contract_id IN (SELECT c_lw.id FROM contracts c_lw WHERE c_lw.contract_id = ${opts.contractNumberExpr})`;
+  return `EXISTS (
+    SELECT 1
+    FROM shipments s_lw
+    LEFT JOIN shipment_ata_overrides sao_lw ON sao_lw.shipment_id = s_lw.id
+    LEFT JOIN LATERAL (
+      SELECT v_lw.ata_loading_completed
+      FROM vessel_loading_ports v_lw
+      WHERE v_lw.shipment_id = s_lw.id
+        AND COALESCE(v_lw.is_discharge_port, FALSE) = TRUE
+        AND v_lw.ata_loading_completed IS NOT NULL
+      ORDER BY v_lw.ata_loading_completed DESC
+      LIMIT 1
+    ) vlp_lw ON TRUE
+    WHERE ${scope}
+      AND UPPER(COALESCE(s_lw.status, '')) NOT IN ('CANCELLED', 'CANCELED')
+      AND COALESCE(
+        ${sqlJpsAtaWhileOpen('jps_ata_discharge_complete', 'sao_lw', 's_lw')}::date,
+        sao_lw.ata_discharge_complete::date,
+        s_lw.ata_discharge_complete::date,
+        vlp_lw.ata_loading_completed::date
+      ) IS NULL
+  )`;
+}
+
+/**
+ * The same fact as a COLUMN on the rows Contract Performance classifies in JavaScript (isContractEffectivelyDone reads it as row.live_shipment_without_atc).
+ *
+ * Computed only where it can matter - the contract has an ATC and SAP has not closed it - so the rows that cannot change keep NULL and cost nothing. NULL reads as
+ * "unknown", which isContractEffectivelyDone treats as the rule was before. Needs `<alias>.id` (the newest contracts row), `.last_ata_vessel_complete_discharge` and
+ * `.import_status` on the row set.
+ */
+export function sqlLiveShipmentWithoutAtcFlagColumn(alias = 'base'): string {
+  return `CASE
+          WHEN ${alias}.last_ata_vessel_complete_discharge IS NOT NULL
+            AND UPPER(COALESCE(${alias}.import_status, '')) NOT IN ('CLOSE', 'CLOSED', 'COMPLETED')
+          THEN (${sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: `${alias}.id` })})
+        END`;
+}
+
+/**
  * Has EVERY STO of this contract finished discharging?
  *
  * The ATC arm of "effectively done" is guarded by sto_count <= 1, because

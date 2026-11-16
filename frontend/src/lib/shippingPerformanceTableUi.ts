@@ -159,7 +159,7 @@ export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   delivered_qty: 88,
   group_name: 88,
   shipment_count: 64,
-  status: 80,
+  status: 132,
   po_number: 80,
   contract_date: 100,
   contract_number: 88,

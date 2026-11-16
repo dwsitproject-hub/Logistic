@@ -5,13 +5,12 @@ import * as XLSX from 'xlsx'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { StitchFields } from '@/components/shared/stitchField'
-import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
+import { Anchor, ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, CircleCheck, CircleDot, Clock, Columns3, Factory, Layers, MapPin, Package, Save, Tag, GripVertical, HelpCircle, Loader2, MessageSquare, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
 import { dischargePortOptionsFrom } from '@/lib/dischargePortFilter'
@@ -44,6 +43,7 @@ import {
   contextPerformanceClass,
   formatAvgDays,
   statusCardAvgDaysClass,
+  cycleDaysPillClass,
   formatLogCycleDays,
   formatLogCycleDaysCompact,
   formatSignedCycleDays,
@@ -91,6 +91,12 @@ import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import { periodRangeMatchesDates } from '@/components/performance/PerformanceContractDateControl'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
+import { ListFilterBar, ListFilterField, listFilterButtonClass } from '@/components/shared/ListFilterBar'
+import { MasterKpis } from '@/components/master/MasterKpis'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { PerformanceHeaderFilters } from '@/components/performance/PerformanceHeaderFilters'
+import { PerformanceFiltersSection } from '@/components/performance/PerformanceFiltersSection'
+import { iconButtonClass } from '@/lib/iconButton'
 import {
   formatContractDateScopeLabel,
   PerformanceContractDateControl,
@@ -542,13 +548,9 @@ function contractPerfOnTimeLatePercents(
 function ContractPerfStatusPctBadges({ onTimeCount, lateCount }: { onTimeCount: number; lateCount: number }) {
   const { onTimeLabel, lateLabel } = contractPerfOnTimeLatePercents(onTimeCount, lateCount)
   return (
-    <div className="flex flex-wrap gap-1.5 justify-end shrink-0">
-      <Badge className="bg-green-100 text-green-800 hover:bg-green-100 border-0 font-normal text-xs">
-        On Time: {onTimeLabel}
-      </Badge>
-      <Badge className="bg-red-100 text-red-800 hover:bg-red-100 border-0 font-normal text-xs">
-        Late: {lateLabel}
-      </Badge>
+    <div className="flex flex-wrap items-center justify-end gap-1">
+      <span className="whitespace-nowrap rounded-full bg-green-50 px-2 py-0.5 text-[0.6875rem] font-medium text-green-700">On Time {onTimeLabel}</span>
+      <span className="whitespace-nowrap rounded-full bg-red-50 px-2 py-0.5 text-[0.6875rem] font-medium text-red-700">Late {lateLabel}</span>
     </div>
   )
 }
@@ -565,6 +567,16 @@ const CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP = {
   avgLog: 'ATA Completion vs Cargo Readiness Date',
 } as const
 
+/** One average of a status card: the label (with its hover help) and the value in a soft pill of the colour of the rule. */
+function ContractPerfStatusCardMetric({ label, help, value, textClass }: { label: string; help: string; value: string; textClass: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <ContractPerfStatusCardMetricLabel label={label} help={help} />
+      <span className={`rounded-md px-1.5 py-0.5 font-medium tabular-nums ${cycleDaysPillClass(textClass)}`}>{value}</span>
+    </span>
+  )
+}
+
 /** Hover help on Open/Close summary metric labels (Contract Performance only). */
 function ContractPerfStatusCardMetricLabel({
   label,
@@ -577,7 +589,7 @@ function ContractPerfStatusCardMetricLabel({
     <Tooltip delayDuration={200}>
       <TooltipTrigger asChild>
         <span
-          className="cursor-help border-b border-dotted border-gray-400"
+          className="cursor-help"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
@@ -1080,10 +1092,6 @@ function ContractsPageContent() {
   const contractsTableRef = useRef<HTMLDivElement | null>(null)
 
   // Desktop table horizontal scroll sync (top + bottom)
-  const topScrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
-  const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
-  const isSyncingScroll = useRef(false)
   const [statusFilter, setStatusFilter] = useState<string>(() =>
     resolveContractsListInitialStatusFilter(pathname),
   )
@@ -2538,6 +2546,135 @@ function ContractsPageContent() {
     statusFilter !== 'All Status' ||
     hasActiveSectionOneColumnFilters(columnFilters)
 
+  /*
+   * The three cards. Each is the same list request as the table (same search, filters and dates) with limit=1, so the
+   * count is pagination.total; only the status is set per card, and the Status filter itself never changes them.
+   * The filter parameters mirror fetchContracts for the Contracts page: keep the two in step.
+   */
+  const [contractStatusCounts, setContractStatusCounts] = useState<{ total: number | null; open: number | null; close: number | null }>({
+    total: null,
+    open: null,
+    close: null,
+  })
+  useEffect(() => {
+    if (!authReady || !userScopeReady || isContractPerformance) return
+    let cancelled = false
+    const base = new URLSearchParams()
+    const searchTrim = searchTerm.trim()
+    if (searchTrim.length >= 2) base.append('search', searchTrim)
+    const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+      selectedIncoterms,
+      selectedProducts,
+      selectedGroups,
+      selectedSuppliers,
+    })
+    if (Object.keys(mergedColumnFilters).length > 0) base.append('columnFilters', JSON.stringify(mergedColumnFilters))
+    if (b2bFlagFilter && b2bFlagFilter !== 'ALL') base.append('b2bFlag', b2bFlagFilter)
+    if (presenceFilter !== 'ALL') base.append('presence', presenceFilter)
+    selectedGroupPlants.forEach((plant) => base.append('plant', plant))
+    if (dateFrom) base.append('dateFrom', dateFrom)
+    if (dateTo) base.append('dateTo', dateTo)
+    if (searchParams.get('outstanding') === 'true') base.append('outstanding', 'true')
+    base.append('page', '1')
+    base.append('limit', '1')
+    const countFor = async (status?: 'Open' | 'Close'): Promise<number | null> => {
+      const params = new URLSearchParams(base)
+      if (status) params.set('status', status)
+      const url = `/contracts?${params.toString()}`
+      try {
+        const { data } = await cachedGet(buildCacheKey('GET', url), (signal) => api.get(url, { signal }).then((r) => r.data))
+        const total = (data as { data?: { pagination?: { total?: number } } })?.data?.pagination?.total
+        return typeof total === 'number' ? total : null
+      } catch {
+        return null
+      }
+    }
+    void Promise.all([countFor(), countFor('Open'), countFor('Close')]).then(([total, open, close]) => {
+      if (!cancelled) setContractStatusCounts({ total, open, close })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    authReady,
+    userScopeReady,
+    isContractPerformance,
+    searchTerm,
+    columnFilters,
+    selectedIncoterms,
+    selectedProducts,
+    selectedGroups,
+    selectedSuppliers,
+    b2bFlagFilter,
+    presenceFilter,
+    selectedGroupPlants,
+    dateFrom,
+    dateTo,
+    searchParams,
+  ])
+
+  /*
+   * Status, Incoterm and Contract type are multi-selects, the same field as Product, Group and Supplier. No choice means all. Status keeps its single
+   * value underneath (Open, Close or all; both ticked is all), and Contract type travels as a comma list that the list endpoint matches with ANY.
+   * Drawn in the filter row from `lg` up and inside More filters below it, so one builder serves both.
+   */
+  const contractStatusSelected = statusFilter === 'Open' || statusFilter === 'Close' ? [statusFilter] : []
+  const contractTypeSelected = b2bFlagFilter === 'ALL' ? [] : b2bFlagFilter.split(',')
+  const contractStatusSelect = (wrapperClass: string) => (
+    <div className={wrapperClass}>
+      <SearchableMultiSelect
+        label="Status"
+        hideLabel
+        options={['Open', 'Close']}
+        selected={contractStatusSelected}
+        onChange={(values) => {
+          setStatusFilter(values.length === 1 ? values[0] : 'All Status')
+          setCurrentPage(1)
+        }}
+        placeholder="All status"
+        emptyMessage="No status"
+        icon={<CircleDot className="h-4 w-4" />}
+        fieldStyle
+        className="w-full"
+        buttonClassName={listFilterButtonClass(contractStatusSelected.length > 0)}
+      />
+    </div>
+  )
+  const contractIncotermSelect = (wrapperClass: string) => (
+    <div className={wrapperClass}>
+      <SearchableMultiSelect
+        label="Incoterm"
+        hideLabel
+        options={availableIncoterms}
+        selected={selectedIncoterms}
+        onChange={(values) => {
+          setSelectedIncoterms(values)
+          setCurrentPage(1)
+        }}
+        placeholder="All incoterms"
+        emptyMessage="Loading incoterms..."
+        pinSelectedToTop
+        icon={<Anchor className="h-4 w-4" />}
+        fieldStyle
+        className="w-full"
+        buttonClassName={listFilterButtonClass(selectedIncoterms.length > 0)}
+      />
+    </div>
+  )
+
+  /** Whether the period in the header is not the default year to date, for the blue state of that field. */
+  const contractDateScopeChanged =
+    performancePeriod !== 'YTD' || !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo)
+
+  /** "1,240 contracts · 61–80": how many there are and which of them this page shows. */
+  const contractsRangeText = (page: number, perPage: number, total: number): string => {
+    const count = `${total.toLocaleString('en-US')} contracts`
+    if (total <= 0) return count
+    const from = (page - 1) * perPage + 1
+    const to = Math.min(page * perPage, total)
+    return `${count} · ${from.toLocaleString('en-US')}–${to.toLocaleString('en-US')}`
+  }
+
   const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
   const formatNumber = (num: number | string) => {
@@ -3820,18 +3957,6 @@ function ContractsPageContent() {
     })
   }
 
-  // Update desktop table scroll width (for top scrollbar)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const calc = () => {
-      const el = bottomScrollRef.current
-      if (el) setTableScrollWidth(el.scrollWidth)
-    }
-    calc()
-    window.addEventListener('resize', calc)
-    return () => window.removeEventListener('resize', calc)
-  }, [visibleColumns, sortedContracts.length, section3TableLoading])
-
   // If pagination/filtering changes, drop expansions that aren't on the current view to avoid stale set growth
   useEffect(() => {
     setExpandedContractIds(prev => {
@@ -3847,51 +3972,21 @@ function ContractsPageContent() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        {/* Header */}
+        {/* The cargo readiness file input; its Template / Upload icon buttons sit in the filter row below. */}
         {!isContractPerformance && (
-          <div className="flex items-center justify-end">
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                title="Download Cargo Readiness Date template"
-                aria-label="Download Cargo Readiness Date template"
-                onClick={downloadCargoReadinessTemplate}
-                className="border-green-600 text-green-700 hover:bg-green-50"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Template
-              </Button>
-              <input
-                id="cargo-readiness-upload"
-                type="file"
-                accept={CARGO_READINESS_UPLOAD_ACCEPT}
-                onChange={handleCargoReadinessUpload}
-                className="hidden"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                title="Upload Cargo Readiness Date (Excel)"
-                aria-label="Upload Cargo Readiness Date (Excel)"
-                disabled={csvCargoUploading}
-                onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
-              >
-                {csvCargoUploading ? (
-                  <><span className="h-4 w-4 mr-2 inline-block border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />Uploading...</>
-                ) : (
-                  <><Upload className="h-4 w-4 mr-2" />Cargo Readiness</>
-                )}
-              </Button>
-            </div>
-          </div>
+          <input
+            id="cargo-readiness-upload"
+            type="file"
+            accept={CARGO_READINESS_UPLOAD_ACCEPT}
+            onChange={handleCargoReadinessUpload}
+            className="hidden"
+          />
         )}
 
         {isContractPerformance && (
           <>
           <HeaderFilterSlot>
-            <PerformanceContractDateControl
-              header
+            <PerformanceHeaderFilters
               period={performancePeriod}
               options={buildPerformancePeriodOptions()}
               dateFrom={dateFrom}
@@ -3912,45 +4007,77 @@ function ContractsPageContent() {
                 setCurrentPage(1)
               }}
               resolvePeriodRange={resolvePerformancePeriodDateRange}
-            />
-            <SearchableMultiSelect
-              label="Region/Plant"
-              hideLabel
-              portalMenu
-              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-              options={narrowedGroupPlantOptions}
-              selected={contractPerfSelectedGroupPlants}
-              onChange={(values) => {
+              dateActive={contractDateScopeChanged}
+              groupPlantOptions={narrowedGroupPlantOptions}
+              selectedGroupPlants={contractPerfSelectedGroupPlants}
+              onGroupPlantsChange={(values) => {
                 lockSection1FilterChange()
                 handleContractPerfGroupPlantsChange(values)
                 setCurrentPage(1)
               }}
-              placeholder="Region/Plant"
-              emptyMessage="No region/plant values"
-              uppercaseOptionLabels
-            />
-            <SearchableMultiSelect
-              label="Discharge Port"
-              hideLabel
-              portalMenu
-              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-              options={dischargePortDropdownOptions}
-              selected={contractPerfSelectedDischargePorts}
-              onChange={(values) => {
+              dischargePortOptions={dischargePortDropdownOptions}
+              selectedDischargePorts={contractPerfSelectedDischargePorts}
+              onDischargePortsChange={(values) => {
                 lockSection1FilterChange()
                 setContractPerfSelectedDischargePorts(values)
                 setCurrentPage(1)
               }}
-              placeholder="Discharge Port"
-              emptyMessage="No discharge ports"
-              uppercaseOptionLabels
             />
           </HeaderFilterSlot>
-          <ListFilterPanel
-            onReset={resetContractPerformancePage}
-            showReset={
-              performancePeriod !== 'YTD' ||
-              !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo) ||
+          <PerformanceFiltersSection
+            products={{
+              options: narrowedProductOptions,
+              selected: contractPerfSelectedProducts,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                handleContractPerfProductsChange(values)
+                setCurrentPage(1)
+              },
+            }}
+            incoterms={{
+              options: narrowedIncotermOptions,
+              selected: contractPerfSelectedIncoterms,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                setContractPerfSelectedIncoterms(values)
+                setCurrentPage(1)
+              },
+            }}
+            sources={{
+              options: narrowedSourceOptions,
+              selected: contractPerfSelectedSources,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                setContractPerfSelectedSources(values)
+                setCurrentPage(1)
+              },
+            }}
+            supplierGroups={{
+              options: narrowedSupplierGroupOptions,
+              selected: selectedSupplierGroups,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                handleContractPerfSupplierGroupsChange(values)
+                setCurrentPage(1)
+              },
+            }}
+            suppliers={{
+              options: narrowedSupplierOptions,
+              selected: selectedSuppliers,
+              onChange: (values) => {
+                lockSection1FilterChange()
+                setSelectedSuppliers(values)
+                setCurrentPage(1)
+              },
+            }}
+            planningStatuses={selectedPlanningStatuses}
+            onPlanningStatusesChange={(values) => {
+              lockSection1FilterChange()
+              setSelectedPlanningStatuses(values)
+              setCurrentPage(1)
+            }}
+            anyActive={
+              contractDateScopeChanged ||
               contractPerfSelectedGroupPlants.length > 0 ||
               contractPerfSelectedDischargePorts.length > 0 ||
               contractPerfSelectedSources.length > 0 ||
@@ -3960,167 +4087,8 @@ function ContractsPageContent() {
               selectedSuppliers.length > 0 ||
               selectedPlanningStatuses.length > 0
             }
-            chips={[
-              ...(performancePeriod !== 'YTD' ||
-              !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo)
-                ? [
-                    {
-                      id: 'contract-date',
-                      label: formatContractDateScopeLabel(
-                        performancePeriod,
-                        dateFrom,
-                        dateTo,
-                        (p) => resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
-                        { prefix: true },
-                      ),
-                      onRemove: () => {
-                        lockSection1FilterChange()
-                        setPerformancePeriod('YTD')
-                        const ytd = resolvePerformancePeriodDateRange('YTD')
-                        setDateFrom(ytd.dateFrom)
-                        setDateTo(ytd.dateTo)
-                        setCurrentPage(1)
-                      },
-                    },
-                  ]
-                : []),
-              ...selectionChips('Region/Plant', contractPerfSelectedGroupPlants, (values) => {
-                lockSection1FilterChange()
-                handleContractPerfGroupPlantsChange(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Discharge Port', contractPerfSelectedDischargePorts, (values) => {
-                lockSection1FilterChange()
-                setContractPerfSelectedDischargePorts(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Product', contractPerfSelectedProducts, (values) => {
-                lockSection1FilterChange()
-                handleContractPerfProductsChange(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Incoterm', contractPerfSelectedIncoterms, (values) => {
-                lockSection1FilterChange()
-                setContractPerfSelectedIncoterms(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Source', contractPerfSelectedSources, (values) => {
-                lockSection1FilterChange()
-                setContractPerfSelectedSources(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Group', selectedSupplierGroups, (values) => {
-                lockSection1FilterChange()
-                handleContractPerfSupplierGroupsChange(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Supplier', selectedSuppliers, (values) => {
-                lockSection1FilterChange()
-                setSelectedSuppliers(values)
-                setCurrentPage(1)
-              }),
-              ...selectionChips('Planning', selectedPlanningStatuses, (values) => {
-                lockSection1FilterChange()
-                setSelectedPlanningStatuses(values)
-                setCurrentPage(1)
-              }),
-            ]}
-          >
-            <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-              <SearchableMultiSelect
-                label="Product"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedProductOptions}
-                selected={contractPerfSelectedProducts}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  handleContractPerfProductsChange(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No products"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Incoterm"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedIncotermOptions}
-                selected={contractPerfSelectedIncoterms}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  setContractPerfSelectedIncoterms(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No incoterms"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Source"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedSourceOptions}
-                selected={contractPerfSelectedSources}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  setContractPerfSelectedSources(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No sources"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Group Supplier"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedSupplierGroupOptions}
-                selected={selectedSupplierGroups}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  handleContractPerfSupplierGroupsChange(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No supplier groups"
-                uppercaseOptionLabels
-              />
-              <SearchableMultiSelect
-                label="Supplier"
-                className="min-w-[7.5rem] flex-1"
-                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={narrowedSupplierOptions}
-                selected={selectedSuppliers}
-                onChange={(values) => {
-                  lockSection1FilterChange()
-                  setSelectedSuppliers(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All"
-                emptyMessage="No suppliers"
-                uppercaseOptionLabels
-              />
-              <div className="min-w-[7.5rem] flex-1">
-                <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Planning Status</label>
-                <FilterSingleSelect
-                  value={selectedPlanningStatuses[0] ?? 'ALL'}
-                  onChange={(value) => {
-                    lockSection1FilterChange()
-                    setSelectedPlanningStatuses(value === 'ALL' ? [] : [value])
-                    setCurrentPage(1)
-                  }}
-                  options={[
-                    { value: 'ALL', label: 'All' },
-                    ...PLANNING_STATUS_OPTIONS.map((value) => ({ value, label: value })),
-                  ]}
-                  ariaLabel="Planning Status"
-                  className="w-full min-w-0"
-                />
-              </div>
-            </div>
-          </ListFilterPanel>
+            onReset={resetContractPerformancePage}
+          />
           </>
         )}
 
@@ -4137,13 +4105,11 @@ function ContractsPageContent() {
             closeStatusContractCount > 0 ? statusCardSummary.closeAvgDays : null
           return (
             <div className={`transition-opacity duration-200 ${latePerfSummaryLoading ? 'opacity-65' : 'opacity-100'}`}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <PerformanceSection1CardShell
                   variant="open"
-                  title="OPEN"
-                  titleSize="base"
+                  title="Open"
                   selected={openSelected}
-                  className="border-2 shadow-sm"
                   onClick={() => applySummaryStatusCard('Open')}
                   headerEnd={
                     <ContractPerfStatusPctBadges
@@ -4151,51 +4117,41 @@ function ContractsPageContent() {
                       lateCount={statusCardSummary.openLateCount ?? 0}
                     />
                   }
+                  label={
+                    <>
+                      Outstanding Qty
+                      <FieldHelp text={FIELD_HELP.contractPerfOutstandingQty} />
+                    </>
+                  }
+                  value={formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
+                  unit="MT"
                 >
-                  <div className="text-sm text-gray-500 mb-1 flex items-center gap-1">
-                    Outstanding Qty (MT)
-                    <FieldHelp text={FIELD_HELP.contractPerfOutstandingQty} />
-                  </div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">
-                    {formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 items-center">
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Trade:"
-                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgTrade}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(openTradeAvgDays, statusCardSummary.openIsLateContext)}`}>
-                        {formatAvgDays(openTradeAvgDays)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg DP:"
-                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgDp}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.openAvgDpCycle, statusCardSummary.openIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.openAvgDpCycle)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Log:"
-                        help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgLog}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.openAvgLogCycle, statusCardSummary.openIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.openAvgLogCycle)}
-                      </span>
-                    </span>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.6875rem] text-gray-500">
+                    <ContractPerfStatusCardMetric
+                      label="Avg Trade"
+                      help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgTrade}
+                      value={formatAvgDays(openTradeAvgDays)}
+                      textClass={statusCardAvgDaysClass(openTradeAvgDays, statusCardSummary.openIsLateContext)}
+                    />
+                    <ContractPerfStatusCardMetric
+                      label="Avg DP"
+                      help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgDp}
+                      value={formatAvgDays(statusCardSummary.openAvgDpCycle)}
+                      textClass={statusCardAvgDaysClass(statusCardSummary.openAvgDpCycle, statusCardSummary.openIsLateContext)}
+                    />
+                    <ContractPerfStatusCardMetric
+                      label="Avg Log"
+                      help={CONTRACT_PERF_OPEN_STATUS_CARD_METRIC_HELP.avgLog}
+                      value={formatAvgDays(statusCardSummary.openAvgLogCycle)}
+                      textClass={statusCardAvgDaysClass(statusCardSummary.openAvgLogCycle, statusCardSummary.openIsLateContext)}
+                    />
                   </div>
                 </PerformanceSection1CardShell>
 
                 <PerformanceSection1CardShell
                   variant="close"
-                  title="CLOSE"
-                  titleSize="base"
+                  title="Close"
                   selected={closeSelected}
-                  className="border-2 shadow-sm"
                   onClick={() => applySummaryStatusCard('Close')}
                   headerEnd={
                     <ContractPerfStatusPctBadges
@@ -4203,39 +4159,29 @@ function ContractsPageContent() {
                       lateCount={statusCardSummary.closeLateCount ?? 0}
                     />
                   }
+                  label="Contract Qty"
+                  value={formatContractPerfOutstandingMt(statusCardSummary.closeContractQty)}
+                  unit="MT"
                 >
-                  <div className="text-sm text-gray-500 mb-1">Contract Qty (MT)</div>
-                  <div className="text-xl font-bold text-gray-900 mb-3">
-                    {formatContractPerfOutstandingMt(statusCardSummary.closeContractQty)}
-                  </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 items-center">
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Trade:"
-                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgTrade}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(closeTradeAvgDays, statusCardSummary.closeIsLateContext)}`}>
-                        {formatAvgDays(closeTradeAvgDays)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg DP:"
-                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgDp}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.closeAvgDpCycle, statusCardSummary.closeIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.closeAvgDpCycle)}
-                      </span>
-                    </span>
-                    <span>
-                      <ContractPerfStatusCardMetricLabel
-                        label="Avg Log:"
-                        help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgLog}
-                      />{' '}
-                      <span className={`font-semibold ${statusCardAvgDaysClass(statusCardSummary.closeAvgLogCycle, statusCardSummary.closeIsLateContext)}`}>
-                        {formatAvgDays(statusCardSummary.closeAvgLogCycle)}
-                      </span>
-                    </span>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.6875rem] text-gray-500">
+                    <ContractPerfStatusCardMetric
+                      label="Avg Trade"
+                      help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgTrade}
+                      value={formatAvgDays(closeTradeAvgDays)}
+                      textClass={statusCardAvgDaysClass(closeTradeAvgDays, statusCardSummary.closeIsLateContext)}
+                    />
+                    <ContractPerfStatusCardMetric
+                      label="Avg DP"
+                      help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgDp}
+                      value={formatAvgDays(statusCardSummary.closeAvgDpCycle)}
+                      textClass={statusCardAvgDaysClass(statusCardSummary.closeAvgDpCycle, statusCardSummary.closeIsLateContext)}
+                    />
+                    <ContractPerfStatusCardMetric
+                      label="Avg Log"
+                      help={CONTRACT_PERF_CLOSE_STATUS_CARD_METRIC_HELP.avgLog}
+                      value={formatAvgDays(statusCardSummary.closeAvgLogCycle)}
+                      textClass={statusCardAvgDaysClass(statusCardSummary.closeAvgLogCycle, statusCardSummary.closeIsLateContext)}
+                    />
                   </div>
                 </PerformanceSection1CardShell>
               </div>
@@ -4367,7 +4313,7 @@ function ContractsPageContent() {
                               <div className="text-sm font-semibold text-gray-800">{col.title}</div>
                               <div className="text-[0.6875rem] text-gray-500">{subtitle}</div>
                             </div>
-                            <div className="p-2 max-h-80 overflow-y-auto">
+                            <div className="p-2 max-h-60 overflow-y-auto">
                               {renderUnifiedColumnBody()}
                             </div>
                           </div>
@@ -4403,12 +4349,16 @@ function ContractsPageContent() {
               setCurrentPage(1)
             }}
             resolvePeriodRange={resolvePerformancePeriodDateRange}
+            fieldStyle
+            active={contractDateScopeChanged}
           />
           <SearchableMultiSelect
             label="Region/Plant"
             hideLabel
             portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            icon={<MapPin className="h-4 w-4" />}
+            fieldStyle
+            buttonClassName={listFilterButtonClass(selectedGroupPlants.length > 0)}
             options={availableGroupPlants}
             selected={selectedGroupPlants}
             onChange={(values) => {
@@ -4420,157 +4370,180 @@ function ContractsPageContent() {
             uppercaseOptionLabels
           />
         </HeaderFilterSlot>
-        <ListFilterPanel
-          onReset={clearContractsPageFilters}
-          showReset={hasActiveContractsPageFilters || searchDraft.trim().length > 0}
-          chips={[
-            ...(searchTerm.trim()
-              ? [{ id: 'search', label: `Search: ${searchTerm.trim()}`, onRemove: () => { setSearchDraft(''); setSearchTerm(''); setCurrentPage(1) } }]
-              : []),
-            ...(statusFilter !== 'All Status'
-              ? [{ id: 'status', label: `Status: ${statusFilter}`, onRemove: () => { setStatusFilter('All Status'); setCurrentPage(1) } }]
-              : []),
-            ...(b2bFlagFilter !== 'ALL'
-              ? [{ id: 'type', label: `Type: ${b2bFlagFilter}`, onRemove: () => setB2bFlagFilter('ALL') }]
-              : []),
-            ...selectionChips('Incoterm', selectedIncoterms, (values) => { setSelectedIncoterms(values); setCurrentPage(1) }),
-            ...selectionChips('Product', selectedProducts, handleProductsChange),
-            ...selectionChips('Group', selectedGroups, setSelectedGroups),
-            ...selectionChips('Supplier', selectedSuppliers, setSelectedSuppliers),
-            ...selectionChips('Region/Plant', selectedGroupPlants, handleGroupPlantsChange),
-            ...(performancePeriod !== 'YTD' ||
-            !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo)
-              ? [{
-                  id: 'contract-date',
-                  label: formatContractDateScopeLabel(
-                    performancePeriod,
-                    dateFrom,
-                    dateTo,
-                    (p) => resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
-                    { prefix: true },
-                  ),
-                  onRemove: () => {
-                    setPerformancePeriod('YTD')
-                    const ytd = resolvePerformancePeriodDateRange('YTD')
-                    setDateFrom(ytd.dateFrom)
-                    setDateTo(ytd.dateTo)
-                    setCurrentPage(1)
-                  },
-                }]
-              : []),
+        <MasterKpis
+          columns={3}
+          items={[
+            {
+              id: 'total',
+              icon: <FileText className="h-4 w-4" />,
+              label: 'Total contracts',
+              value: contractStatusCounts.total,
+              tone: 'bg-blue-50 text-blue-600',
+              onSelect: () => { setStatusFilter('All Status'); setCurrentPage(1) },
+              active: statusFilter === 'All Status',
+            },
+            {
+              id: 'open',
+              icon: <Clock className="h-4 w-4" />,
+              label: 'Open',
+              value: contractStatusCounts.open,
+              tone: 'bg-amber-50 text-amber-600',
+              onSelect: () => { setStatusFilter('Open'); setCurrentPage(1) },
+              active: statusFilter === 'Open',
+            },
+            {
+              id: 'close',
+              icon: <CircleCheck className="h-4 w-4" />,
+              label: 'Close',
+              value: contractStatusCounts.close,
+              tone: 'bg-emerald-50 text-emerald-600',
+              onSelect: () => { setStatusFilter('Close'); setCurrentPage(1) },
+              active: statusFilter === 'Close',
+            },
           ]}
-        >
-          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-            <div className="min-w-[12rem] flex-[1.4]">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
-              <div className="relative">
-                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    placeholder="Search by Contract ID, Contract Ext No, PO, Supplier, or Product..."
-                    value={searchDraft}
-                    onChange={(e) => setSearchDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        applySearch()
-                      }
-                    }}
-                    className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
-                  />
-                </div>
-              </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Status</label>
-              <FilterSingleSelect
-                value={statusFilter}
-                onChange={(value) => {
-                  setStatusFilter(value)
-                  setCurrentPage(1)
-                }}
-                options={[
-                  { value: 'All Status', label: 'All' },
-                  { value: 'Open', label: 'Open' },
-                  { value: 'Close', label: 'Close' },
-                ]}
-                ariaLabel="Contract status filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Contract Type</label>
-              <FilterSingleSelect
-                value={b2bFlagFilter}
-                onChange={setB2bFlagFilter}
-                options={[
-                  { value: 'ALL', label: 'All' },
-                  ...availableB2bFlags.map((flag) => ({ value: flag, label: flag })),
-                ]}
-                ariaLabel="Contract type filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Incoterm</label>
-              <FilterSingleSelect
-                value={selectedIncoterms[0] ?? 'ALL'}
-                onChange={(value) => {
-                  setSelectedIncoterms(value === 'ALL' ? [] : [value])
-                  setCurrentPage(1)
-                }}
-                options={[
-                  { value: 'ALL', label: 'All' },
-                  ...availableIncoterms.map((inc) => ({ value: inc, label: inc })),
-                ]}
-                ariaLabel="Incoterm filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <PerformanceScopeFilters
-              inlineRow
-              hideGroupPlantFilter
-              uppercaseGroupPlantLabels
-              microLabels
-              showIncoterm={false}
-                  incotermOptions={availableIncoterms}
-                  selectedIncoterms={selectedIncoterms}
-                  onIncotermsChange={setSelectedIncoterms}
-                  showProductFilter
-                  productOptions={availableProducts}
-                  selectedProducts={selectedProducts}
-                  onProductsChange={handleProductsChange}
-                  showGroupFilter
-                  groupOptions={availableGroups}
-                  selectedGroups={selectedGroups}
-                  onGroupsChange={setSelectedGroups}
-                  showSupplierFilter
-                  supplierOptions={availableSuppliers}
-                  selectedSuppliers={selectedSuppliers}
-                  onSuppliersChange={setSelectedSuppliers}
-                  groupPlantOptions={availableGroupPlants}
-                  selectedGroupPlants={selectedGroupPlants}
-                  onGroupPlantsChange={handleGroupPlantsChange}
-                  dateFrom={dateFrom}
-                  dateTo={dateTo}
-                  onDateFromChange={setDateFrom}
-                  onDateToChange={setDateTo}
-                  showDateRange={false}
-                  productPlaceholder="All"
-              groupPlaceholder="All"
-              supplierPlaceholder="All"
-              productEmptyMessage="Loading products..."
-                  groupEmptyMessage="Loading groups..."
-                  supplierEmptyMessage="Loading suppliers..."
-                  groupPlantPlaceholder="All"
-                  groupPlantEmptyMessage="No region/plant values"
+        />
+        <ListFilterBar
+          search={searchDraft}
+          onSearchChange={setSearchDraft}
+          onSearchSubmit={applySearch}
+          placeholder="Search by Contract ID, Contract Ext No, PO, Supplier, or Product..."
+          wide={
+            <>
+              {contractStatusSelect('w-40 shrink-0')}
+              {contractIncotermSelect('w-40 shrink-0')}
+            </>
+          }
+          narrowOnly={
+            <>
+              <ListFilterField label="Status">{contractStatusSelect('w-full')}</ListFilterField>
+              <ListFilterField label="Incoterm">{contractIncotermSelect('w-full')}</ListFilterField>
+            </>
+          }
+          more={
+            <>
+              <ListFilterField label="Contract type">
+                <SearchableMultiSelect
+                  label="Contract type"
+                  hideLabel
+                  options={availableB2bFlags.filter((flag) => !flag.includes(','))}
+                  selected={contractTypeSelected}
+                  onChange={(values) => {
+                    setB2bFlagFilter(values.length > 0 ? values.join(',') : 'ALL')
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All types"
+                  emptyMessage="Loading types..."
+                  icon={<Tag className="h-4 w-4" />}
+                  fieldStyle
+                  className="w-full"
+                  buttonClassName={listFilterButtonClass(contractTypeSelected.length > 0)}
                 />
-          </div>
-        </ListFilterPanel>
+              </ListFilterField>
+              <ListFilterField label="Product">
+                <SearchableMultiSelect
+                  label="Product"
+                  hideLabel
+                  portalMenu
+                  options={availableProducts}
+                  selected={selectedProducts}
+                  onChange={handleProductsChange}
+                  placeholder="All products"
+                  emptyMessage="Loading products..."
+                  pinSelectedToTop
+                  icon={<Package className="h-4 w-4" />}
+                  fieldStyle
+                  className="w-full"
+                  buttonClassName={listFilterButtonClass(selectedProducts.length > 0)}
+                />
+              </ListFilterField>
+              <ListFilterField label="Group">
+                <SearchableMultiSelect
+                  label="Group"
+                  hideLabel
+                  portalMenu
+                  options={availableGroups}
+                  selected={selectedGroups}
+                  onChange={setSelectedGroups}
+                  placeholder="All groups"
+                  emptyMessage="Loading groups..."
+                  pinSelectedToTop
+                  icon={<Layers className="h-4 w-4" />}
+                  fieldStyle
+                  className="w-full"
+                  buttonClassName={listFilterButtonClass(selectedGroups.length > 0)}
+                />
+              </ListFilterField>
+              <ListFilterField label="Supplier">
+                <SearchableMultiSelect
+                  label="Supplier"
+                  hideLabel
+                  portalMenu
+                  options={availableSuppliers}
+                  selected={selectedSuppliers}
+                  onChange={setSelectedSuppliers}
+                  placeholder="All suppliers"
+                  emptyMessage="Loading suppliers..."
+                  pinSelectedToTop
+                  icon={<Factory className="h-4 w-4" />}
+                  fieldStyle
+                  className="w-full"
+                  buttonClassName={listFilterButtonClass(selectedSuppliers.length > 0)}
+                />
+              </ListFilterField>
+            </>
+          }
+          activeMore={
+            (b2bFlagFilter !== 'ALL' ? 1 : 0) +
+            (selectedProducts.length > 0 ? 1 : 0) +
+            (selectedGroups.length > 0 ? 1 : 0) +
+            (selectedSuppliers.length > 0 ? 1 : 0)
+          }
+          activeAll={
+            (b2bFlagFilter !== 'ALL' ? 1 : 0) +
+            (selectedProducts.length > 0 ? 1 : 0) +
+            (selectedGroups.length > 0 ? 1 : 0) +
+            (selectedSuppliers.length > 0 ? 1 : 0) +
+            (statusFilter !== 'All Status' ? 1 : 0) +
+            (selectedIncoterms.length > 0 ? 1 : 0)
+          }
+          anyActive={hasActiveContractsPageFilters || searchDraft.trim().length > 0}
+          onReset={clearContractsPageFilters}
+          actions={
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={iconButtonClass('download')}
+                title="Download Cargo Readiness Date template"
+                aria-label="Download Cargo Readiness Date template"
+                onClick={downloadCargoReadinessTemplate}
+              >
+                <Download className="h-[1.125rem] w-[1.125rem]" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={iconButtonClass('upload')}
+                title="Upload Cargo Readiness Date (Excel)"
+                aria-label="Upload Cargo Readiness Date (Excel)"
+                disabled={csvCargoUploading}
+                onClick={() => document.getElementById('cargo-readiness-upload')?.click()}
+              >
+                {csvCargoUploading ? (
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
+                ) : (
+                  <Upload className="h-[1.125rem] w-[1.125rem]" />
+                )}
+              </Button>
+            </>
+          }
+        />
         </>
         )}
 
         {/* Contracts List */}
-        <Card ref={contractsTableRef}>
-          <CardHeader>
+        <Card ref={contractsTableRef} className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+          <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div>
@@ -4658,31 +4631,34 @@ function ContractsPageContent() {
                 />
                 {isContractPerformance && (
                   <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                    variant="ghost"
+                    size="icon"
+                    className={iconButtonClass('download')}
                     title="Download Data"
                     aria-label="Download Data"
                     onClick={downloadContractPerformanceTable}
                     disabled={listFetching || section3TableLoading || downloadingTable || displayTotalContracts === 0}
                   >
                     {downloadingTable ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden />
                     ) : (
-                      <Download className="h-4 w-4 mr-2" />
+                      <Save className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                     )}
-                    Data
                   </Button>
                 )}
+                {isContractPerformance && <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />}
                 <div className="relative">
                   <Button
-                    variant="outline"
-                    size="sm"
+                    variant="ghost"
+                    size="icon"
+                    className={iconButtonClass('neutral')}
+                    title="Visible columns"
+                    aria-label="Visible columns"
+                    aria-expanded={showColumnsMenu}
                     onClick={() => setShowColumnsMenu(v => !v)}
                     disabled={listFetching || section3TableLoading}
                   >
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
+                    <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
@@ -4776,44 +4752,13 @@ function ContractsPageContent() {
               </div>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-0">
               <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
               <>
                 {/* Desktop compact table (Contracts + Contract Performance): semantic <table>, zebra on <tr>/<td> */}
-                <div className="hidden lg:block border rounded-lg overflow-hidden">
-                  {/* Top scrollbar (synced) */}
+                <div className="hidden lg:block overflow-hidden">
                   <div
-                    ref={topScrollRef}
-                    className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      bottom.scrollLeft = top.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
-                  >
-                    <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-                  </div>
-
-                  <div
-                    ref={bottomScrollRef}
                     className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      top.scrollLeft = bottom.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
                   >
                     <div className="min-w-0">
                       <table
@@ -4822,6 +4767,7 @@ function ContractsPageContent() {
                           COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                           'klip-compact-table--perf-narrow-cols',
                           'klip-actions-w-2',
+                          'klip-table--directory',
                         )}
                       >
                       <colgroup>
@@ -5229,7 +5175,7 @@ function ContractsPageContent() {
 
                       {/* Rows */}
                       <tbody
-                        className={`divide-y divide-gray-200 transition-opacity duration-200 ${
+                        className={`divide-y divide-gray-100 transition-opacity duration-200 ${
                           (listFetching || (isContractPerformance && contractPerfSection3Loading)) &&
                           contracts.length > 0
                             ? 'opacity-65'
@@ -5254,7 +5200,7 @@ function ContractsPageContent() {
                           </tr>
                         ) : (
                           sortedContracts.map((contract, idx) => {
-                            const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                            const stripeClass = 'bg-white'
                             return (
                           <tr key={contract.id} className={stripeClass}>
                                 {visibleColumns.map(col => {
@@ -5350,7 +5296,7 @@ function ContractsPageContent() {
                 </div>
 
                 {/* Mobile/tablet cards */}
-                <div className="lg:hidden space-y-2">
+                <div className="lg:hidden space-y-2 px-4 py-3">
                   {(listFetching ||
                     (isContractPerformance && contractPerfSection3Loading)) &&
                   contracts.length === 0 ? (
@@ -5508,12 +5454,10 @@ function ContractsPageContent() {
               </div>
             
             {/* Pagination */}
-            <ListPager
-              page={currentPage}
-              totalPages={totalPages}
-              onPageChange={handlePageChange}
-              disabled={listFetching || section3TableLoading}
-              summary={`Page ${currentPage}/${totalPages} · ${displayTotalContracts.toLocaleString('en-US')} contracts`}
+            <MasterTableFooter
+              countText={contractsRangeText(currentPage, contractsPerPage, displayTotalContracts)}
+              kinds={[]}
+              pager={{ page: currentPage, totalPages, onPageChange: handlePageChange, disabled: listFetching || section3TableLoading }}
             />
           </CardContent>
         </Card>

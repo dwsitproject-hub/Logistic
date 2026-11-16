@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2, Ban } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2, Ban, MapPin, FileDown, Columns3 } from 'lucide-react'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -117,6 +117,10 @@ import { ContractPerfTableSortHeader } from '@/components/performance/ContractPe
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { refreshDocumentPresence } from '@/lib/documentPresence'
 import { ListPager } from '@/components/performance/ListPager'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { HeaderScopeField } from '@/components/shared/HeaderScopeField'
+import { listRangeText } from '@/lib/listRangeText'
+import { iconButtonClass } from '@/lib/iconButton'
 import { compareByStack, sortEntryFor, sortPriority, type SortEntry, type SortValue } from '@/lib/sortStack'
 import { nextShipmentsSortStack, shipmentsSortStackParam } from '@/lib/shipmentsSortStack'
 import {
@@ -1461,10 +1465,6 @@ function ShipmentsPageContent() {
   )
 
   // Desktop table horizontal scroll sync (top + bottom)
-  const topScrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
-  const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
-  const isSyncingScroll = useRef(false)
 
   // Contract details state for expanded view
   const [contractDetailsMap, setContractDetailsMap] = useState<{ [shipmentId: string]: PortsModalContractDetail[] }>({})
@@ -5556,43 +5556,6 @@ function ShipmentsPageContent() {
   const expandedCount = expandedShipmentIds.size
   const allExpanded = expandedCount > 0 && expandedCount === allVisibleIds.length
 
-  // Sync scroll between top and bottom scrollbars
-  useEffect(() => {
-    const topEl = topScrollRef.current
-    const bottomEl = bottomScrollRef.current
-    if (!topEl || !bottomEl) return
-
-    const handleTopScroll = () => {
-      if (isSyncingScroll.current) return
-      isSyncingScroll.current = true
-      bottomEl.scrollLeft = topEl.scrollLeft
-      setTimeout(() => { isSyncingScroll.current = false }, 50)
-    }
-
-    const handleBottomScroll = () => {
-      if (isSyncingScroll.current) return
-      isSyncingScroll.current = true
-      topEl.scrollLeft = bottomEl.scrollLeft
-      setTimeout(() => { isSyncingScroll.current = false }, 50)
-    }
-
-    topEl.addEventListener('scroll', handleTopScroll)
-    bottomEl.addEventListener('scroll', handleBottomScroll)
-
-    return () => {
-      topEl.removeEventListener('scroll', handleTopScroll)
-      bottomEl.removeEventListener('scroll', handleBottomScroll)
-    }
-  }, [visibleColumns, sortedShipments.length])
-
-  // Update table scroll width when content changes
-  useEffect(() => {
-    const bottomEl = bottomScrollRef.current
-    if (bottomEl) {
-      setTableScrollWidth(bottomEl.scrollWidth)
-    }
-  }, [visibleColumns, sortedShipments.length, editingId])
-
   // Vessel loading port functions
   const buildShipmentInfoFromShipment = (s: Record<string, unknown>) => ({
     quantity_delivered: s.quantity_delivered,
@@ -6520,96 +6483,6 @@ function ShipmentsPageContent() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-end gap-4">
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <VesselIdleInsightChip
-              count={vesselIdleCount}
-              loading={vesselIdleLoading}
-              error={vesselIdleError}
-              onClick={handleVesselIdleClick}
-            />
-            {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
-              <Button
-                size="sm"
-                variant="outline"
-                title="Download Template"
-                aria-label="Download Template"
-                onClick={downloadTemplate}
-                className="border-green-600 text-green-700 hover:bg-green-50"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Template
-              </Button>
-            ) : null}
-            {canExportShipments && (
-              <Button
-                size="sm"
-                variant="outline"
-                title="Export Data"
-                aria-label="Export Data"
-                onClick={exportFilteredData}
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Export
-              </Button>
-            )}
-            {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
-            <>
-              <input
-                type="file"
-                accept=".csv"
-                onChange={handleBulkUpload}
-                className="hidden"
-                disabled={uploading}
-                id="bulk-upload-input"
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                title="Upload CSV"
-                aria-label="Upload CSV"
-                onClick={() => document.getElementById('bulk-upload-input')?.click()}
-                disabled={uploading}
-              >
-                {uploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    CSV
-                  </>
-                )}
-              </Button>
-            </>
-            ) : null}
-            <Button
-              size="sm"
-              onClick={() => {
-                // Allow opening the modal immediately; permissions load async and may fail open for admin workflows.
-                if (perms.loaded && !canOpenAddShipmentModal) {
-                  alert(
-                    'You need Create or Edit permission on Shipments (data.shipments) to add a shipment. Ask an admin to update your role.'
-                  )
-                  return
-                }
-                setPlotShipmentFromTable(null)
-                setAddShipmentPrefilledPOs(null)
-                setAddShipmentPrefilledSto(null)
-                setAddShipmentPrefilledContractNumbers(null)
-                setAddShipmentPrePlannedGroupId(null)
-                setShowAddShipment(true)
-              }}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Add New Shipment
-            </Button>
-          </div>
-        </div>
-
         <HeaderFilterSlot>
           <PerformanceContractDateControl
             header
@@ -6627,29 +6500,29 @@ function ShipmentsPageContent() {
             onDateFromChange={onGlobalDateFromChange}
             onDateToChange={onGlobalDateToChange}
             resolvePeriodRange={resolvePerformancePeriodDateRange}
+            fieldStyle
+            active={
+              shipmentPeriod !== 'YTD' ||
+              dateFrom !== shipmentYtdRange.dateFrom ||
+              dateTo !== shipmentYtdRange.dateTo
+            }
           />
-          <SearchableMultiSelect
+          <HeaderScopeField
             label="Region/Plant"
-            hideLabel
-            portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             options={availableGroupPlants}
             selected={selectedGroupPlants}
             onChange={onGroupPlantsChangeWithPageReset}
-            placeholder="Region/Plant"
             emptyMessage="No region/plant values"
+            icon={<MapPin className="h-4 w-4" />}
             uppercaseOptionLabels
           />
-          <SearchableMultiSelect
+          <HeaderScopeField
             label="Discharge Port"
-            hideLabel
-            portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             options={dischargePortDropdownOptions}
             selected={selectedDischargePorts}
             onChange={onDischargePortsChangeWithPageReset}
-            placeholder="Discharge Port"
             emptyMessage="No discharge ports"
+            icon={<Anchor className="h-4 w-4" />}
             uppercaseOptionLabels
           />
         </HeaderFilterSlot>
@@ -6696,6 +6569,14 @@ function ShipmentsPageContent() {
           }}
           hasActiveFilters={hasActiveShipmentFilters}
           onClearFilters={clearShipmentFilters}
+          actions={
+            <VesselIdleInsightChip
+              count={vesselIdleCount}
+              loading={vesselIdleLoading}
+              error={vesselIdleError}
+              onClick={handleVesselIdleClick}
+            />
+          }
         />
 
         {section1LoadError ? (
@@ -7285,10 +7166,10 @@ function ShipmentsPageContent() {
         />
 
         {/* Shipments List */}
-        <Card>
-          <CardHeader>
+        <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+          <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
+              <div className="min-w-0 sm:flex-1">
                 <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                   <span>All Shipments</span>
                   {listFetching || tableScopeLoading ? (
@@ -7350,7 +7231,7 @@ function ShipmentsPageContent() {
                     ) : null}
                   </p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 sm:shrink-0 sm:flex-nowrap">
                 {statusFilter === 'UNPLANNED' && selectedManualGroupContractIds.size > 0 ? (
                   <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5">
                     <span className="text-xs font-medium text-blue-800 whitespace-nowrap">
@@ -7391,10 +7272,65 @@ function ShipmentsPageContent() {
                     setPage(1)
                   }}
                 />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                                {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
+                  <Button variant="ghost" size="icon" className={iconButtonClass('download')}
+                    title="Download Template"
+                    aria-label="Download Template"
+                    onClick={downloadTemplate}
+                  >
+                    <FileDown className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+                  </Button>
+                ) : null}
+                {canExportShipments && (
+                  <Button variant="ghost" size="icon" className={iconButtonClass('download')}
+                    title="Export Data"
+                    aria-label="Export Data"
+                    onClick={exportFilteredData}
+                  >
+                    <Download className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+                  </Button>
+                )}
+                {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
+                <>
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleBulkUpload}
+                    className="hidden"
+                    disabled={uploading}
+                    id="bulk-upload-input"
+                  />
+                  <Button variant="ghost" size="icon" className={iconButtonClass('upload')}
+                    title="Upload CSV"
+                    aria-label="Upload CSV"
+                    onClick={() => document.getElementById('bulk-upload-input')?.click()}
+                    disabled={uploading}
+                  >
+                    {uploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Upload className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                  </Button>
+                </>
+                ) : null}
+                <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="Add New Shipment" aria-label="Add New Shipment"
+                  onClick={() => {
+                    // Allow opening the modal immediately; permissions load async and may fail open for admin workflows.
+                    if (perms.loaded && !canOpenAddShipmentModal) {
+                      alert(
+                        'You need Create or Edit permission on Shipments (data.shipments) to add a shipment. Ask an admin to update your role.'
+                      )
+                      return
+                    }
+                    setPlotShipmentFromTable(null)
+                    setAddShipmentPrefilledPOs(null)
+                    setAddShipmentPrefilledSto(null)
+                    setAddShipmentPrefilledContractNumbers(null)
+                    setAddShipmentPrePlannedGroupId(null)
+                    setShowAddShipment(true)
+                  }}
+                >
+                  <Plus className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+                </Button>
+
+                <Button variant="ghost" size="icon" className={iconButtonClass('download')}
                   title="Download Data"
                   aria-label="Download Data"
                   onClick={() => void downloadShipmentViewTable()}
@@ -7406,13 +7342,9 @@ function ShipmentsPageContent() {
                     visibleColumns.length === 0
                   }
                 >
-                  {downloadingTable ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4 mr-2" />
-                  )}
-                  Data
+                  {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Save className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </Button>
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <input
                   ref={groupingUploadInputRef}
                   type="file"
@@ -7424,64 +7356,46 @@ function ShipmentsPageContent() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                      <Button variant="ghost" size="icon" className={`${iconButtonClass('download')} disabled:pointer-events-none`}
                         title={groupingTemplateEnabled ? 'Download Unplanned' : undefined}
                         aria-label="Download Unplanned"
                         onClick={() => void downloadGroupingTemplate()}
                         disabled={!groupingTemplateEnabled || groupingTemplateDownloading}
                       >
-                        {groupingTemplateDownloading ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Download className="h-4 w-4 mr-2" />
-                        )}
-                        Unplan
+                        {groupingTemplateDownloading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Download className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                       </Button>
                     </span>
                   </TooltipTrigger>
                   {!groupingTemplateEnabled ? (
-                    <TooltipContent side="top">{SHIPMENT_GROUPING_DOWNLOAD_DISABLED_TOOLTIP}</TooltipContent>
+                    <TooltipContent side="top">Download Unplanned: {SHIPMENT_GROUPING_DOWNLOAD_DISABLED_TOOLTIP}</TooltipContent>
                   ) : null}
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-red-600 text-red-700 hover:bg-red-50 hover:text-red-700 disabled:opacity-50 disabled:pointer-events-none"
+                      <Button variant="ghost" size="icon" className={`${iconButtonClass('upload')} disabled:pointer-events-none`}
                         title={groupingTemplateEnabled ? 'Upload Planning' : undefined}
                         aria-label="Upload Planning"
                         onClick={() => groupingUploadInputRef.current?.click()}
                         disabled={!groupingTemplateEnabled || groupingTemplateUploading}
                       >
-                        {groupingTemplateUploading ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Upload className="h-4 w-4 mr-2" />
-                        )}
-                        Plan
+                        {groupingTemplateUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Upload className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                       </Button>
                     </span>
                   </TooltipTrigger>
                   {!groupingTemplateEnabled ? (
-                    <TooltipContent side="top">{SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP}</TooltipContent>
+                    <TooltipContent side="top">Upload Planning: {SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP}</TooltipContent>
                   ) : null}
                 </Tooltip>
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <div className="relative">
-                  <Button
-                    variant="outline"
-                    size="sm"
+                  <Button variant="ghost" size="icon" className={iconButtonClass('neutral')}
                     title="Columns"
                     aria-label="Columns"
                     onClick={() => setShowColumnsMenu(v => !v)}
                     disabled={listFetching || section3TableLoading}
                   >
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
+                    <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
@@ -7553,45 +7467,14 @@ function ShipmentsPageContent() {
               </div>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-0">
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
                 {/* Desktop compact table */}
-                <div className="hidden lg:block border rounded-lg overflow-hidden">
-                  {/* Top scrollbar (synced) */}
+                <div className="hidden lg:block overflow-hidden">
                   <div
-                    ref={topScrollRef}
-                    className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      bottom.scrollLeft = top.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
-                  >
-                    <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-                  </div>
-
-                  <div
-                    ref={bottomScrollRef}
                     className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      top.scrollLeft = bottom.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
                   >
-                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}>
+                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols klip-table--directory`}>
                         <colgroup>
                           {showStoExpandColumn ? (
                             <col style={{ width: SHIPMENT_EXPAND_COL_WIDTH_PX }} />
@@ -7671,7 +7554,7 @@ function ShipmentsPageContent() {
                         </tr>
                         </thead>
                         <tbody
-                          className={`transition-opacity duration-200 ${
+                          className={`divide-y divide-gray-100 transition-opacity duration-200 ${
                             listFetching && shipments.length > 0 ? 'opacity-65' : 'opacity-100'
                           }`}
                         >
@@ -7700,7 +7583,7 @@ function ShipmentsPageContent() {
                             return sortedPrePlannedTableGroups.map((group) => {
                               const rep = getPrePlannedGroupRepresentativeMember(group)
                               const cancelGroupId = resolvePrePlannedCancelGroupId(group)
-                              const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                              const rowBg = 'bg-white'
                               stripeIdx += 1
                               return (
                                 <tr key={group.groupKey} className={rowBg}>
@@ -7812,7 +7695,7 @@ function ShipmentsPageContent() {
                               const tableInlineEditActive =
                                 isEditing && SHIPMENTS_TABLE_LEGACY_INLINE_EDIT_ENABLED
                               const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
-                              const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                              const rowBg = 'bg-white'
                               stripeIdx += 1
                               const isStoChildRow = isMultiStoGroup
                               nodes.push(
@@ -7961,7 +7844,7 @@ function ShipmentsPageContent() {
                                           const currentStatus = String(shipment.status || '').toUpperCase()
                                           if (currentStatus === 'CANCELLED') {
                                             return (
-                                              <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                              <Badge className={getStatusColor('CANCELLED')}>Cancelled</Badge>
                                             )
                                           }
                                           const selected =
@@ -8181,7 +8064,7 @@ function ShipmentsPageContent() {
                 </div>
 
                 {/* Mobile/tablet cards */}
-                <div className="lg:hidden space-y-2">
+                <div className="lg:hidden space-y-2 px-4 py-3">
                   {section3TableLoading || (listFetching && shipments.length === 0) ? (
                     <div className="rounded-lg border bg-white">
                       <TableInitialLoadPlaceholderContent icon={Package} />
@@ -8491,14 +8374,15 @@ function ShipmentsPageContent() {
                   )}
                   </div>
 
-                <ListPager
-                  page={page}
-                  totalPages={totalPages}
-                  onPageChange={handlePageChange}
-                  disabled={listFetching || section3TableLoading}
-                  summary={`Showing page ${page} of ${totalPages} (${tableShipmentCount.toLocaleString('en-US')} ${
-                    statusFilter === 'PREPLANNED' ? (tableShipmentCount === 1 ? 'grouping' : 'groupings') : 'total shipments'
-                  })`}
+                <MasterTableFooter
+                  countText={listRangeText(
+                    tableShipmentCount,
+                    page,
+                    pageSize,
+                    statusFilter === 'PREPLANNED' ? (tableShipmentCount === 1 ? 'grouping' : 'groupings') : 'shipments',
+                  )}
+                  kinds={[]}
+                  pager={{ page, totalPages, onPageChange: handlePageChange, disabled: listFetching || section3TableLoading }}
                 />
             </div>
           </CardContent>

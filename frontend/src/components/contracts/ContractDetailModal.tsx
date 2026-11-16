@@ -12,6 +12,7 @@ import { previewMimeType } from '@/lib/documentView'
 import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/shared/DocumentPreviewDialog'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, formatRupiah } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
   formatLogCycleDays,
@@ -121,6 +122,36 @@ export interface DocumentItem {
   created_at?: string
 }
 
+interface StoTypeSummaryRow {
+  sto_type: 'V' | 'T'
+  sto_count: number
+  total_sto_quantity: number
+}
+
+const STO_TYPE_LABEL: Record<'V' | 'T', string> = { V: 'Vessel', T: 'Truck' }
+
+/** SAP STO Type as a small chip: V (vessel, blue) or T (truck, amber); the word shows on hover. */
+function StoTypeChip({ type }: { type: 'V' | 'T' | null | undefined }) {
+  if (type !== 'V' && type !== 'T') return <span className="text-gray-400">-</span>
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={`inline-flex h-5 min-w-[1.25rem] cursor-help items-center justify-center rounded-md px-1.5 text-xs font-semibold ${
+            type === 'V' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
+          }`}
+          aria-label={`STO Type ${type} = ${STO_TYPE_LABEL[type]}`}
+        >
+          {type}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {type} = {STO_TYPE_LABEL[type]} (SAP STO Type)
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 export interface StoInfoRow {
   type: 'shipment' | 'trucking'
   id?: string | null
@@ -129,6 +160,8 @@ export interface StoInfoRow {
   late_indicator: string
   status: string
   sto_quantity: number
+  /** SAP STO Type: V = vessel, T = truck; null when SAP has none. */
+  sto_type?: 'V' | 'T' | null
   quantity_delivered?: number
   quantity_receive?: number
   vessel_name?: string
@@ -479,6 +512,8 @@ export function ContractDetailModal({
   const [stoQtySummary, setStoQtySummary] = useState<{
     sto_count: number
     total_sto_quantity: number
+    /** Only when the cargo travels in two legs (a V and a T STO): each leg's own total. */
+    by_type: Array<{ sto_type: 'V' | 'T'; sto_count: number; total_sto_quantity: number }>
   } | null>(null)
   const [stoDetailRow, setStoDetailRow] = useState<StoInfoRow | null>(null)
   const [stoDetailData, setStoDetailData] = useState<Record<string, unknown> | null>(null)
@@ -600,12 +635,13 @@ export function ContractDetailModal({
         if (cancelled || !res.data?.data?.stos) return
         setStoInfo(res.data.data.stos)
         const summary = res.data.data.summary as
-          | { sto_count?: number; total_sto_quantity?: number }
+          | { sto_count?: number; total_sto_quantity?: number; by_type?: StoTypeSummaryRow[] }
           | undefined
         if (summary && typeof summary.sto_count === 'number') {
           setStoQtySummary({
             sto_count: summary.sto_count,
             total_sto_quantity: Number(summary.total_sto_quantity) || 0,
+            by_type: Array.isArray(summary.by_type) ? summary.by_type : [],
           })
         }
       })
@@ -1281,6 +1317,7 @@ export function ContractDetailModal({
                           <th className="text-left p-2 font-medium">STO No</th>
                           <th className="text-left p-2 font-medium">Operation ID</th>
                           <th className="text-left p-2 font-medium">Type</th>
+                          <th className="text-left p-2 font-medium">STO Type</th>
                           <th className="text-left p-2 font-medium">Late Indicator</th>
                           <th className="text-left p-2 font-medium">Status</th>
                           <th className="text-left p-2 font-medium">STO Qty</th>
@@ -1359,6 +1396,9 @@ export function ContractDetailModal({
                               >
                                 {row.type === 'shipment' ? 'Shipment' : 'Trucking'}
                               </Badge>
+                            </td>
+                            <td className="p-2">
+                              <StoTypeChip type={row.sto_type} />
                             </td>
                             <td className="p-2">
                               <Badge
@@ -1472,6 +1512,17 @@ export function ContractDetailModal({
                       Total STO Quantity ({displayStoCount} STO{displayStoCount !== 1 ? 's' : ''})
                     </div>
                     <div className="font-medium mt-1 text-base">{formatQtyMtFromKg(displayTotalStoQty)}</div>
+                    {stoQtySummary && stoQtySummary.by_type.length > 0 ? (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
+                        {stoQtySummary.by_type.map((leg) => (
+                          <span key={leg.sto_type} className="inline-flex items-center gap-1.5">
+                            <StoTypeChip type={leg.sto_type} />
+                            <span className="tabular-nums">{formatQtyMtFromKg(leg.total_sto_quantity)}</span>
+                            <span className="text-gray-400">({leg.sto_count} STO{leg.sto_count !== 1 ? 's' : ''})</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="p-3 bg-gray-50 rounded">
                     <div className="text-gray-500">Delivery Quantity</div>
@@ -2030,6 +2081,7 @@ export function ContractDetailModal({
                   setStoQtySummary({
                     sto_count: Number(res.data.data.summary.sto_count ?? 0),
                     total_sto_quantity: Number(res.data.data.summary.total_sto_quantity ?? 0),
+                    by_type: Array.isArray(res.data.data.summary.by_type) ? res.data.data.summary.by_type : [],
                   })
                 }
               }
@@ -2083,6 +2135,7 @@ export function ContractDetailModal({
                     setStoQtySummary({
                       sto_count: Number(res.data.data.summary.sto_count ?? 0),
                       total_sto_quantity: Number(res.data.data.summary.total_sto_quantity ?? 0),
+                      by_type: Array.isArray(res.data.data.summary.by_type) ? res.data.data.summary.by_type : [],
                     })
                   }
                 }

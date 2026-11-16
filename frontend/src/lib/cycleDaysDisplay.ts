@@ -129,3 +129,13 @@ export function formatLateIndicatorLabel(value: string | null | undefined): stri
   if (value === 'On Time') return 'Ahead'
   return value
 }
+
+/**
+ * The soft pill behind an average on the status cards, in the colour of its text class: green when on time, red when late, grey when there is no value.
+ * Takes the class the page already computed (CYCLE_DAYS_*_CLASS or one of the helpers above), so the colour rule stays in one place.
+ */
+export function cycleDaysPillClass(textClass: string): string {
+  if (textClass.includes('red')) return 'bg-red-50 text-red-700'
+  if (textClass.includes('green')) return 'bg-green-50 text-green-700'
+  return 'bg-gray-100 text-gray-600'
+}

@@ -8,8 +8,6 @@ export default function AuditPage() {
   return (
     <Layout>
       <div className="space-y-6">
-        <p className="text-gray-600">Track all system activities and changes</p>
-
         <Card>
           <CardHeader>
             <CardTitle>Activity Log</CardTitle>

@@ -19,6 +19,12 @@
 # Separate from /app/uploads deliberately: that volume holds KLIP's own documents and must stay
 # writable. This is a second, unrelated mount.
 #
+# The Claim Data folder (IT's \\172.30.1.94\APPs\dev\KLIP\import-data\claim) is on the SAME Synology share, so it rides on this overlay as a
+# second read-only mount: KLIP_CLAIM_IMPORT_MOUNT (default /mnt/synology-apps/dev/KLIP/import-data/claim) -> /mnt/claim-import. The claim
+# auto-import reads /mnt/claim-import/original and writes nothing there. It stays OFF until /opt/klip/.env says so:
+#   CLAIM_AUTO_IMPORT_ENABLED=true     (07:00 Asia/Jakarta; CLAIM_AUTO_IMPORT_CRON changes it)
+# Check it the same way:  docker exec klip-backend ls /mnt/claim-import/original
+#
 # Permissions to check before expecting this to work - the share's folders are mode 0550 owned by
 # uid/gid 1001, so the container's user has to BE 1001 or be in group 1001, or every read is
 # denied and the scan reports an empty folder:
@@ -29,3 +35,4 @@ services:
   backend:
     volumes:
       - "${KLIP_SAP_IMPORT_MOUNT:-/mnt/synology-apps/dev/KLIP/import-data/logistics-report}:/mnt/sap-import:ro"
+      - "${KLIP_CLAIM_IMPORT_MOUNT:-/mnt/synology-apps/dev/KLIP/import-data/claim}:/mnt/claim-import:ro"

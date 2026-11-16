@@ -90,3 +90,18 @@ export function outstandingQtyMtColorClass(
   return 'text-gray-500'
 }
 
+
+/**
+ * A status as a badge shows it: a value that arrives in capitals (CANCELLED, ON GOING, IN_PROGRESS) is written as words with a capital first letter (Cancelled, On Going,
+ * In Progress). A value that already has lower case in it is left as it is, and an empty one stays empty.
+ */
+export function statusBadgeText(value: string | null | undefined): string {
+  const text = String(value ?? '').trim()
+  if (!text || text !== text.toUpperCase()) return text
+  return text
+    .toLowerCase()
+    .split(/[\s_]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}

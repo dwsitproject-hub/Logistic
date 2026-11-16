@@ -3,7 +3,12 @@
 import { useMemo } from 'react'
 import { Loader2, Ship } from 'lucide-react'
 import { StitchAlertIcon } from '@/components/shared/stitchIcons'
-import { Card, CardContent } from '@/components/ui/card'
+import {
+  OutstandingStripBucket,
+  OutstandingStripFrame,
+  OutstandingStripHeadline,
+  type OutstandingStripPart,
+} from '@/components/shared/OutstandingQtyStrip'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { cn, formatOutstandingQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
@@ -97,63 +102,12 @@ type ShipmentOutstandingQtySummaryProps = {
   onEtcNoAtcDueClick?: () => void
 }
 
-function formatQtyOrPending(
-  kg: number | undefined,
-  pending: boolean,
-): string {
-  if (pending) return formatOutstandingQtyMtFromKg(0, { maxFractionDigits: 0 })
-  return formatOutstandingQtyMtFromKg(kg, { maxFractionDigits: 0 })
-}
-
-function BucketColumn({
-  title,
-  bucket,
-  pending,
-}: {
-  title: string
-  bucket: ShipmentOutstandingQtyBucket | null
-  pending: boolean
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
-      <div className="mt-2 space-y-1 text-sm text-gray-600">
-        <div className="flex items-baseline justify-between gap-3">
-          <span>FOB</span>
-          <span
-            className={cn(
-              'font-semibold tabular-nums',
-              pending ? 'text-gray-400' : outstandingQtyMtColorClass(bucket?.fobKg),
-            )}
-          >
-            {formatQtyOrPending(bucket?.fobKg, pending)}
-          </span>
-        </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <span>CIF</span>
-          <span
-            className={cn(
-              'font-semibold tabular-nums',
-              pending ? 'text-gray-400' : outstandingQtyMtColorClass(bucket?.cifKg),
-            )}
-          >
-            {formatQtyOrPending(bucket?.cifKg, pending)}
-          </span>
-        </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <span>CFR</span>
-          <span
-            className={cn(
-              'font-semibold tabular-nums',
-              pending ? 'text-gray-400' : outstandingQtyMtColorClass(bucket?.cfrKg),
-            )}
-          >
-            {formatQtyOrPending(bucket?.cfrKg, pending)}
-          </span>
-        </div>
-      </div>
-    </div>
-  )
+function shipmentParts(bucket: ShipmentOutstandingQtyBucket | null): OutstandingStripPart[] {
+  return [
+    { key: 'fob', label: 'FOB', kg: bucket?.fobKg, dot: 'bg-blue-600' },
+    { key: 'cif', label: 'CIF', kg: bucket?.cifKg, dot: 'bg-amber-400' },
+    { key: 'cfr', label: 'CFR', kg: bucket?.cfrKg, dot: 'bg-sky-300' },
+  ]
 }
 
 export function ShipmentOutstandingQtySummary({
@@ -173,107 +127,61 @@ export function ShipmentOutstandingQtySummary({
   const etcOsKg = Number(etcNoAtcDue?.outstandingQtyKg ?? 0) || 0
 
   return (
-    <Card>
-      <CardContent className="p-4 md:p-5">
-        <div
+    <OutstandingStripFrame
+      className="md:grid-cols-[minmax(11rem,0.8fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]"
+      loading={loading || etcNoAtcDueLoading}
+    >
+      <div className="p-2.5">
+        <button
+          type="button"
+          onClick={onEtcNoAtcDueClick}
+          disabled={!onEtcNoAtcDueClick}
           className={cn(
-            'grid grid-cols-1 items-stretch gap-4 transition-opacity duration-200',
-            'md:grid-cols-[minmax(8.5rem,0.65fr)_minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)] md:gap-4',
-            loading || etcNoAtcDueLoading ? 'opacity-65' : 'opacity-100',
+            'flex h-full w-full min-w-0 items-center gap-3 rounded-lg border border-rose-100 bg-rose-50/70 px-3 py-2 text-left transition-colors',
+            onEtcNoAtcDueClick &&
+              'cursor-pointer hover:border-rose-200 hover:bg-rose-100/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-1',
+            etcNoAtcDueActive && 'border-red-300 ring-2 ring-red-400 ring-offset-1',
+            !onEtcNoAtcDueClick && 'cursor-default',
           )}
+          title="Late ATC — Overdue / Due ≤7d"
         >
-          <button
-            type="button"
-            onClick={onEtcNoAtcDueClick}
-            disabled={!onEtcNoAtcDueClick}
-            className={cn(
-              'flex h-full min-w-0 flex-col rounded-xl border border-rose-200 bg-gradient-to-br from-white to-rose-50/40 p-3 text-left shadow-sm transition-all',
-              onEtcNoAtcDueClick &&
-                'cursor-pointer hover:border-red-300 hover:from-red-100 hover:to-rose-100 hover:shadow-md hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2',
-              etcNoAtcDueActive && 'ring-2 ring-red-400 ring-offset-2 shadow-md',
-              !onEtcNoAtcDueClick && 'cursor-default',
-            )}
-            title="Late ATC — Overdue / Due ≤7d"
-          >
-            <div className="flex items-start gap-2">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-100/80 text-rose-600">
-                <StitchAlertIcon className="h-6 w-6" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-1 text-[0.6875rem] font-semibold leading-tight text-red-950">
-                  <span>Late ATC</span>
-                  <FieldHelp text={FIELD_HELP.shipmentEtcNoAtcDueWithin7d} />
-                  {etcNoAtcDueLoading ? (
-                    <Loader2
-                      className="h-3 w-3 shrink-0 animate-spin text-red-700"
-                      aria-label="Loading late ATC KPI"
-                    />
-                  ) : null}
-                </div>
-                <div
-                  className={cn(
-                    'mt-1 text-xl font-bold tabular-nums text-red-950',
-                    etcPending && 'text-red-400',
-                  )}
-                >
-                  {etcPending ? '—' : etcCount.toLocaleString('en-US')}
-                </div>
-                <p className="mt-0.5 text-[0.625rem] font-medium text-red-950/75">Shipments</p>
-                <div className="mt-2 border-t border-red-200/70 pt-1.5 text-[0.625rem] leading-snug text-red-950">
-                  <div className="font-medium opacity-75">OS Qty</div>
-                  <div
-                    className={cn(
-                      'mt-0.5 text-sm font-semibold tabular-nums',
-                      etcPending ? 'text-red-400' : outstandingQtyMtColorClass(etcOsKg),
-                    )}
-                  >
-                    {etcPending
-                      ? formatOutstandingQtyMtFromKg(0, { maxFractionDigits: 0 })
-                      : formatOutstandingQtyMtFromKg(etcOsKg, { maxFractionDigits: 0 })}
-                  </div>
-                </div>
-              </div>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-rose-600 shadow-sm" aria-hidden>
+            <StitchAlertIcon className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1 text-xs font-medium text-rose-900">
+              <span>Late ATC</span>
+              <FieldHelp text={FIELD_HELP.shipmentEtcNoAtcDueWithin7d} />
+              {etcNoAtcDueLoading ? (
+                <Loader2 className="h-3 w-3 shrink-0 animate-spin text-rose-700" aria-label="Loading late ATC KPI" />
+              ) : null}
             </div>
-          </button>
-
-          <div className="flex h-full min-w-0 items-start gap-3 rounded-xl border border-blue-200 bg-gradient-to-br from-white to-blue-50/30 p-4">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-blue-100/80 text-blue-600">
-              <Ship className="h-6 w-6" />
+            <div className="mt-0.5 flex items-baseline gap-1.5">
+              <span className={cn('text-2xl font-semibold tabular-nums text-rose-950', etcPending && 'text-rose-300')}>
+                {etcPending ? '—' : etcCount.toLocaleString('en-US')}
+              </span>
+              <span className="text-xs text-rose-900/70">shipments</span>
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <span>Outstanding Qty</span>
-                <FieldHelp text={helpText} />
-                {loading ? (
-                  <Loader2
-                    className="h-3.5 w-3.5 shrink-0 animate-spin text-sky-600"
-                    aria-label="Loading outstanding qty"
-                  />
-                ) : null}
-              </div>
-              <div
-                className={cn(
-                  'mt-1 text-2xl font-bold tabular-nums',
-                  pending ? 'text-gray-400' : outstandingQtyMtColorClass(summary?.totalKg),
-                )}
-              >
-                {formatQtyOrPending(summary?.totalKg, pending)}
-              </div>
-              <p className="mt-1 text-[0.6875rem] leading-snug text-gray-500">
-                Matches status-card OS sum · 3rd Party + Interco + Other (in help) = Total
-              </p>
+            <div className="mt-0.5 truncate text-[0.6875rem] text-rose-900/70">
+              OS{' '}
+              <span className={cn('font-semibold tabular-nums', etcPending ? 'text-rose-300' : 'text-rose-950')}>
+                {formatOutstandingQtyMtFromKg(etcPending ? 0 : etcOsKg, { maxFractionDigits: 0 })}
+              </span>
             </div>
           </div>
+        </button>
+      </div>
 
-          <div className="h-full rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <BucketColumn title="3rd Party" bucket={summary?.thirdParty ?? null} pending={pending} />
-          </div>
-
-          <div className="h-full rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <BucketColumn title="Interco" bucket={summary?.interco ?? null} pending={pending} />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+      <OutstandingStripHeadline
+        icon={<Ship className="h-5 w-5" />}
+        help={helpText}
+        loading={loading}
+        pending={pending}
+        kg={summary?.totalKg}
+        hint="Sum of the status cards · 3rd Party + Interco"
+      />
+      <OutstandingStripBucket title="3rd Party" parts={shipmentParts(summary?.thirdParty ?? null)} pending={pending} />
+      <OutstandingStripBucket title="Interco" parts={shipmentParts(summary?.interco ?? null)} pending={pending} />
+    </OutstandingStripFrame>
   )
 }

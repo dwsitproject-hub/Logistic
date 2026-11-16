@@ -128,6 +128,11 @@ services:
       # read-only, or when two environments read the same folder and would overwrite each other.
       SAP_AUTO_IMPORT_RESULTS_ROOT: "${SAP_AUTO_IMPORT_RESULTS_ROOT:-}"
       SAP_AUTO_IMPORT_EXTRA_RECIPIENTS: ${SAP_AUTO_IMPORT_EXTRA_RECIPIENTS:-}
+      # Claim Data folder (SAP OSCLAIM export), imported as the outstanding snapshot. Off until switched on: the first run REPLACES the snapshot.
+      CLAIM_AUTO_IMPORT_ENABLED: ${CLAIM_AUTO_IMPORT_ENABLED:-false}
+      CLAIM_AUTO_IMPORT_CRON: ${CLAIM_AUTO_IMPORT_CRON:-0 7 * * *}
+      CLAIM_AUTO_IMPORT_ROOT: "${CLAIM_AUTO_IMPORT_ROOT:-/mnt/claim-import}"
+      CLAIM_AUTO_IMPORT_FILE_PATTERN: "${CLAIM_AUTO_IMPORT_FILE_PATTERN:-}"
       # DHM hub (vessel). Set real keys in /opt/klip/.env or backend/.env — never commit them.
       DHM_ENABLED: ${DHM_ENABLED:-false}
       DHM_BASE_URL: ${DHM_BASE_URL:-}

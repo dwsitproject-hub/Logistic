@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Filter, X, Truck, Save, Loader2, Download, Eye, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
+import { Filter, X, Truck, Save, Loader2, Download, Eye, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical, MapPin, Anchor, Package, Factory, CircleDot, Timer, Database, Scale, CalendarClock, FileDown, Columns3 } from 'lucide-react'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
@@ -21,6 +21,7 @@ import api from '@/lib/api'
 import { previewMimeType } from '@/lib/documentView'
 import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/shared/DocumentPreviewDialog'
 import { describeTruckingSummaryFreshness } from '@/lib/truckingSummaryFreshness'
+import { FieldHelp } from '@/components/FieldHelp'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache, isCacheFresh, peekCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -64,6 +65,13 @@ import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { SortStackSummary } from '@/components/performance/SortStackSummary'
 import { ListPager } from '@/components/performance/ListPager'
+import { MasterTableFooter } from '@/components/master/MasterTableFooter'
+import { ViewToggle } from '@/components/shared/ViewToggle'
+import { HeaderScopeField } from '@/components/shared/HeaderScopeField'
+import { ListFilterBar, ListFilterField } from '@/components/shared/ListFilterBar'
+import { MultiValueField, SingleValueField } from '@/components/shared/ListFilterFields'
+import { listRangeText } from '@/lib/listRangeText'
+import { iconButtonClass } from '@/lib/iconButton'
 import { TruckingDocumentsButton } from '@/components/trucking/TruckingDocumentsButton'
 import { refreshDocumentPresence } from '@/lib/documentPresence'
 import {
@@ -2016,10 +2024,6 @@ function TruckingPageContent() {
   const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Desktop table horizontal scroll sync
-  const topScrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
-  const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
-  const isSyncingScroll = useRef(false)
 
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
@@ -3809,156 +3813,50 @@ function TruckingPageContent() {
     })
   }
 
-  // Calculate table scroll width (match semantic table width for top scrollbar sync)
-  useEffect(() => {
-    const calculateWidth = () => {
-      const table = bottomScrollRef.current?.querySelector('[data-trucking-list-table]') as HTMLElement | null
-      if (table) {
-        setTableScrollWidth(table.offsetWidth)
-        return
-      }
-      const bottom = bottomScrollRef.current
-      if (bottom) setTableScrollWidth(bottom.scrollWidth)
-    }
-    calculateWidth()
-    const t = window.setTimeout(calculateWidth, 0)
-    window.addEventListener('resize', calculateWidth)
-    return () => {
-      window.clearTimeout(t)
-      window.removeEventListener('resize', calculateWidth)
-    }
-  }, [visibleColumns, sortedOperations, editingId])
-
   const truckingViewToggle = TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED ? (
-    <div className="inline-flex rounded-lg border bg-white p-1">
-      <button
-        type="button"
-        onClick={() => setActiveTab('list')}
-        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'list' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-      >
-        List
-      </button>
-      <button
-        type="button"
-        onClick={() => setActiveTab('calendar')}
-        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${activeTab === 'calendar' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-      >
-        Daily Planning Deliverables
-      </button>
-    </div>
+    <ViewToggle
+      ariaLabel="Trucking view"
+      value={activeTab}
+      onChange={setActiveTab}
+      options={[
+        { value: 'list', label: 'List' },
+        { value: 'calendar', label: 'Daily Planning Deliverables' },
+      ]}
+    />
   ) : null
   const dailyPlanningUploadEligible = isDailyPlanningTemplateMode(statusFilter)
   const sapImportUploadBlockedTitle = SAP_IMPORT_IN_PROGRESS_MESSAGE
+
+  const truckingStatusField = (wrapperClass: string) => (
+    <SingleValueField
+      label="Status"
+      options={TRUCKING_GLOBAL_STATUS_OPTIONS}
+      value={mapTruckingStatusToGlobalBucket(statusFilter)}
+      onChange={(value) => {
+        beginTableScopeRefresh()
+        setPage(1)
+        setHasMore(true)
+        setStatusFilter(normalizeTruckingSummaryStatusFilter(value) || 'ALL')
+      }}
+      icon={<CircleDot className="h-4 w-4" />}
+      wrapperClass={wrapperClass}
+    />
+  )
+  const truckingLateField = (wrapperClass: string) => (
+    <SingleValueField
+      label="Late Indicator"
+      options={TRUCKING_LATE_INDICATOR_OPTIONS}
+      value={lateIndicatorFilter}
+      onChange={setLateIndicatorFilter}
+      icon={<Timer className="h-4 w-4" />}
+      wrapperClass={wrapperClass}
+    />
+  )
 
   return (
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-end gap-4">
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <input
-              type="file"
-              accept=".csv,.xlsx,.xls"
-              className="hidden"
-              id="bulk-create-trucking-input"
-              onChange={handleBulkCreateFileChange}
-              disabled={bulkCreateUploading || sapImportActive}
-            />
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              className="hidden"
-              id="wb-rekap-upload-input"
-              onChange={handleWbRekapFileChange}
-              disabled={wbUploading || sapImportActive}
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
-              aria-label="Upload WB"
-              onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
-              disabled={wbUploading || sapImportActive}
-              title={
-                sapImportActive
-                  ? sapImportUploadBlockedTitle
-                  : 'Supported files: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
-              }
-            >
-              {wbUploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  WB
-                </>
-              )}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-red-600 text-red-700 hover:bg-red-50 disabled:border-red-200 disabled:bg-red-50/40 disabled:text-red-300 disabled:opacity-100 disabled:pointer-events-none"
-              aria-label="Upload Daily Planning"
-              onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-              disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
-              title={
-                sapImportActive
-                  ? sapImportUploadBlockedTitle
-                  : dailyPlanningUploadEligible
-                    ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
-                    : 'Upload Daily Planning tersedia pada status Unplanned atau Planned'
-              }
-            >
-              {bulkCreateUploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  Daily Planning
-                </>
-              )}
-            </Button>
-            {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
-              <>
-                {!isUnplannedPlanningTemplateMode(statusFilter) ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    title="Upload CSV"
-                    aria-label="Upload CSV"
-                    onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-                    disabled={bulkCreateUploading}
-                  >
-                    {bulkCreateUploading ? (
-                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
-                    ) : (
-                      <><Upload className="h-4 w-4 mr-2" />CSV</>
-                    )}
-                  </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setPlotTruckingFromTable(null)
-                    setEditTruckingFromTable(null)
-                    setShowCreateForm(true)
-                  }}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Create New
-                </Button>
-              </>
-            ) : null}
-          </div>
-        </div>
-
         {/* Section 1: Global Filters */}
         <HeaderFilterSlot>
           <PerformanceContractDateControl
@@ -3984,143 +3882,99 @@ function TruckingPageContent() {
               setPage(1)
             }}
             resolvePeriodRange={resolvePerformancePeriodDateRange}
+            fieldStyle
+            active={dateFrom !== defaultContractDateRange.from || dateTo !== defaultContractDateRange.to}
           />
-          <SearchableMultiSelect
+          <HeaderScopeField
             label="Region/Plant"
-            hideLabel
-            portalMenu
-            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
             options={availableGroupPlants}
             selected={selectedGroupPlants}
             onChange={handleGroupPlantsChange}
-            placeholder="Region/Plant"
             emptyMessage="No region/plant values"
+            icon={<MapPin className="h-4 w-4" />}
             uppercaseOptionLabels
           />
         </HeaderFilterSlot>
-        <ListFilterPanel
-          onReset={clearTruckingFilters}
-          showReset={hasActiveTruckingFilters || searchDraft.trim().length > 0}
-          chips={[
-            ...(searchTerm.trim()
-              ? [{ id: 'search', label: `Search: ${searchTerm.trim()}`, onRemove: () => { setSearchDraft(''); setSearchTerm(''); setPage(1) } }]
-              : []),
-            ...(mapTruckingStatusToGlobalBucket(statusFilter) !== 'ALL'
-              ? [{ id: 'status', label: `Status: ${mapTruckingStatusToGlobalBucket(statusFilter) === 'OPEN' ? 'Open' : 'Close'}`, onRemove: () => { setStatusFilter('ALL'); setPage(1) } }]
-              : []),
-            ...(lateIndicatorFilter !== 'ALL'
-              ? [{ id: 'late', label: `Late: ${TRUCKING_LATE_INDICATOR_OPTIONS.find((o) => o.value === lateIndicatorFilter)?.label ?? lateIndicatorFilter}`, onRemove: () => setLateIndicatorFilter('ALL') }]
-              : []),
-            ...(sourceTypeFilter !== 'ALL'
-              ? [{ id: 'source', label: `Source: ${sourceTypeFilter}`, onRemove: () => setSourceTypeFilter('ALL') }]
-              : []),
-            ...selectionChips('Incoterm', selectedIncoterms, setSelectedIncoterms),
-            ...selectionChips('Product', selectedProducts, handleProductsChange),
-            ...selectionChips('Supplier', selectedSuppliers, onSuppliersChange),
-            ...selectionChips('Region/Plant', selectedGroupPlants, handleGroupPlantsChange),
-            ...(dateFrom !== defaultContractDateRange.from || dateTo !== defaultContractDateRange.to
-              ? [{ id: 'contract-date', label: `Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`, onRemove: () => { setTruckingPeriod('YTD'); setDateFrom(defaultContractDateRange.from); setDateTo(defaultContractDateRange.to) } }]
-              : []),
-          ]}
-        >
-          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-            <div className="min-w-[12rem] flex-[1.4]">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
-              <div className="relative">
-                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input
-                  placeholder="Contract, PO, STO"
-                  value={searchDraft}
-                  onChange={(e) => setSearchDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      applySearch()
-                    }
-                  }}
-                  className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+        <ListFilterBar
+          search={searchDraft}
+          onSearchChange={setSearchDraft}
+          onSearchSubmit={applySearch}
+          placeholder="Contract, PO, STO"
+          wide={
+            <>
+              {truckingStatusField('w-40 shrink-0')}
+              {truckingLateField('w-44 shrink-0')}
+            </>
+          }
+          narrowOnly={
+            <>
+              <ListFilterField label="Status">{truckingStatusField('w-full')}</ListFilterField>
+              <ListFilterField label="Late indicator">{truckingLateField('w-full')}</ListFilterField>
+            </>
+          }
+          more={
+            <>
+              <ListFilterField label="Source">
+                <SingleValueField
+                  label="Source"
+                  options={LOGISTICS_SOURCE_FILTER_OPTIONS}
+                  value={sourceTypeFilter}
+                  onChange={setSourceTypeFilter}
+                  icon={<Database className="h-4 w-4" />}
                 />
-              </div>
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Status</label>
-              <FilterSingleSelect
-                value={mapTruckingStatusToGlobalBucket(statusFilter)}
-                onChange={(value) => {
-                  beginTableScopeRefresh()
-                  setPage(1)
-                  setHasMore(true)
-                  setStatusFilter(normalizeTruckingSummaryStatusFilter(value) || 'ALL')
-                }}
-                options={TRUCKING_GLOBAL_STATUS_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.value === 'ALL' ? 'All' : option.label,
-                }))}
-                ariaLabel="Trucking status filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Late Indicator</label>
-              <FilterSingleSelect
-                value={lateIndicatorFilter}
-                onChange={setLateIndicatorFilter}
-                options={TRUCKING_LATE_INDICATOR_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.value === 'ALL' ? 'All' : option.label,
-                }))}
-                ariaLabel="Late indicator filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <div className="min-w-[7.5rem] flex-1">
-              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Source</label>
-              <FilterSingleSelect
-                value={sourceTypeFilter}
-                onChange={setSourceTypeFilter}
-                options={LOGISTICS_SOURCE_FILTER_OPTIONS.map((option) => ({
-                  value: option.value,
-                  label: option.value === 'ALL' ? 'All' : option.label,
-                }))}
-                ariaLabel="Source filter"
-                className="w-full min-w-0"
-              />
-            </div>
-            <PerformanceScopeFilters
-              inlineRow
-              microLabels
-              hideGroupPlantFilter
-              incotermOptions={availableIncoterms}
-              selectedIncoterms={selectedIncoterms}
-              onIncotermsChange={setSelectedIncoterms}
-              showProductFilter
-              productOptions={availableProducts}
-              selectedProducts={selectedProducts}
-              onProductsChange={handleProductsChange}
-              showSupplierFilter
-              supplierOptions={availableSuppliers}
-              selectedSuppliers={selectedSuppliers}
-              onSuppliersChange={onSuppliersChange}
-              groupPlantOptions={availableGroupPlants}
-              uppercaseGroupPlantLabels
-              selectedGroupPlants={selectedGroupPlants}
-              onGroupPlantsChange={handleGroupPlantsChange}
-              dateFrom={dateFrom}
-              dateTo={dateTo}
-              onDateFromChange={setDateFrom}
-              onDateToChange={setDateTo}
-              showDateRange={false}
-              incotermPlaceholder="All"
-              productPlaceholder="All"
-              supplierPlaceholder="All"
-              incotermEmptyMessage="Loading incoterms..."
-              productEmptyMessage="Loading products..."
-              supplierEmptyMessage="Loading suppliers..."
-              groupPlantPlaceholder="All"
-              groupPlantEmptyMessage="No region/plant values"
-            />
-          </div>
-        </ListFilterPanel>
+              </ListFilterField>
+              <ListFilterField label="Incoterm">
+                <MultiValueField
+                  label="Incoterm"
+                  options={filterIncotermOptions(availableIncoterms)}
+                  selected={selectedIncoterms}
+                  onChange={setSelectedIncoterms}
+                  placeholder="All incoterms"
+                  emptyMessage="Loading incoterms..."
+                  icon={<Anchor className="h-4 w-4" />}
+                />
+              </ListFilterField>
+              <ListFilterField label="Product">
+                <MultiValueField
+                  label="Product"
+                  options={availableProducts}
+                  selected={selectedProducts}
+                  onChange={handleProductsChange}
+                  placeholder="All products"
+                  emptyMessage="Loading products..."
+                  icon={<Package className="h-4 w-4" />}
+                />
+              </ListFilterField>
+              <ListFilterField label="Supplier">
+                <MultiValueField
+                  label="Supplier"
+                  options={availableSuppliers}
+                  selected={selectedSuppliers}
+                  onChange={onSuppliersChange}
+                  placeholder="All suppliers"
+                  emptyMessage="Loading suppliers..."
+                  icon={<Factory className="h-4 w-4" />}
+                />
+              </ListFilterField>
+            </>
+          }
+          activeMore={
+            (sourceTypeFilter !== 'ALL' ? 1 : 0) +
+            (selectedIncoterms.length > 0 ? 1 : 0) +
+            (selectedProducts.length > 0 ? 1 : 0) +
+            (selectedSuppliers.length > 0 ? 1 : 0)
+          }
+          activeAll={
+            (sourceTypeFilter !== 'ALL' ? 1 : 0) +
+            (selectedIncoterms.length > 0 ? 1 : 0) +
+            (selectedProducts.length > 0 ? 1 : 0) +
+            (selectedSuppliers.length > 0 ? 1 : 0) +
+            (mapTruckingStatusToGlobalBucket(statusFilter) !== 'ALL' ? 1 : 0) +
+            (lateIndicatorFilter !== 'ALL' ? 1 : 0)
+          }
+          anyActive={hasActiveTruckingFilters || searchDraft.trim().length > 0}
+          onReset={clearTruckingFilters}
+        />
 
         {ATTENTION_INSIGHTS_SECTION_ENABLED ? (
         <TruckingAttentionInsightsSection
@@ -4152,19 +4006,6 @@ function TruckingPageContent() {
           rendered when the figures really did come from the snapshot - a badge that is always
           there is a badge nobody reads.
         */}
-        {truckingSummaryFreshnessNote ? (
-          <p
-            className={
-              truckingSummaryFreshnessNote.tone === 'pending'
-                ? 'px-1 text-xs text-amber-700'
-                : 'px-1 text-xs text-muted-foreground'
-            }
-            title={truckingSummaryFreshnessNote.detail}
-          >
-            {truckingSummaryFreshnessNote.label} — {truckingSummaryFreshnessNote.detail}
-          </p>
-        ) : null}
-
         {/* Section 3: Main View Table — calendar or list tab below */}
 
         {TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED && activeTab === 'calendar' && (
@@ -4696,17 +4537,23 @@ function TruckingPageContent() {
 
         {/* Trucking Operations List */}
         {(!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED || activeTab === 'list') && (
-        <Card>
-          <CardHeader className="space-y-2">
+        <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
+          <CardHeader className="space-y-2 border-b border-gray-200 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
               <CardTitle className="text-base flex items-center gap-2 flex-wrap shrink-0">
                 All Trucking
+                {truckingSummaryFreshnessNote ? (
+                  <FieldHelp
+                    text={`${truckingSummaryFreshnessNote.label}\n\n${truckingSummaryFreshnessNote.detail}`}
+                    iconClassName={truckingSummaryFreshnessNote.tone === 'pending' ? 'text-amber-500 hover:text-amber-700' : undefined}
+                  />
+                ) : null}
                 {listFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
               </CardTitle>
               {truckingViewToggle}
-              <div className="flex flex-wrap items-center gap-2 ml-auto">
+              <div className="flex flex-wrap items-center gap-1.5 ml-auto sm:flex-nowrap">
                 <SortStackSummary
                   stack={sortStack}
                   labelFor={(key) => compactColumns.find((c) => c.id === key)?.label ?? key}
@@ -4715,10 +4562,58 @@ function TruckingPageContent() {
                     setPage(1)
                   }}
                 />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                                <input
+                  type="file"
+                  accept=".csv,.xlsx,.xls"
+                  className="hidden"
+                  id="bulk-create-trucking-input"
+                  onChange={handleBulkCreateFileChange}
+                  disabled={bulkCreateUploading || sapImportActive}
+                />
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  id="wb-rekap-upload-input"
+                  onChange={handleWbRekapFileChange}
+                  disabled={wbUploading || sapImportActive}
+                />
+                <Button variant="ghost" size="icon" className={iconButtonClass('orange')}
+                  aria-label="Upload WB"
+                  onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
+                  disabled={wbUploading || sapImportActive}
+                  title={
+                    sapImportActive
+                      ? `Upload WB: ${sapImportUploadBlockedTitle}`
+                      : 'Upload WB: supported files are Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
+                  }
+                >
+                  {wbUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Scale className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                </Button>
+                {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
+                  <>
+                    {!isUnplannedPlanningTemplateMode(statusFilter) ? (
+                      <Button variant="ghost" size="icon" className={iconButtonClass('upload')}
+                        title="Upload CSV"
+                        aria-label="Upload CSV"
+                        onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                        disabled={bulkCreateUploading}
+                      >
+                        {bulkCreateUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Upload className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                      </Button>
+                    ) : null}
+                    <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="Create New Trucking" aria-label="Create New Trucking"
+                      onClick={() => {
+                        setPlotTruckingFromTable(null)
+                        setEditTruckingFromTable(null)
+                        setShowCreateForm(true)
+                      }}
+                    >
+                      <Plus className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+                    </Button>
+                  </>
+                ) : null}
+                <Button variant="ghost" size="icon" className={iconButtonClass('download')}
                   title="Download Data"
                   aria-label="Download Data"
                   onClick={() => void downloadTruckingViewTable()}
@@ -4730,20 +4625,13 @@ function TruckingPageContent() {
                     visibleColumns.length === 0
                   }
                 >
-                  {downloadingTable ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4 mr-2" />
-                  )}
-                  Data
+                  {downloadingTable ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <Save className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </Button>
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                      <Button variant="ghost" size="icon" className={`${iconButtonClass('download')} disabled:pointer-events-none`}
                         title={isListActualsTemplateDownloadEnabled ? 'Download Template' : undefined}
                         aria-label="Download Template"
                         onClick={downloadFilteredActualsTemplate}
@@ -4751,30 +4639,37 @@ function TruckingPageContent() {
                           !isListActualsTemplateDownloadEnabled || listFetching || templateDownloading
                         }
                       >
-                        {templateDownloading ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Download className="h-4 w-4 mr-2" />
-                        )}
-                        Template
+                        {templateDownloading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <FileDown className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                       </Button>
                     </span>
                   </TooltipTrigger>
                   {!isListActualsTemplateDownloadEnabled ? (
-                    <TooltipContent side="top">{DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP}</TooltipContent>
+                    <TooltipContent side="top">Download Template: {DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP}</TooltipContent>
                   ) : null}
                 </Tooltip>
+                <Button variant="ghost" size="icon" className={iconButtonClass('pink')}
+                  aria-label="Upload Daily Planning"
+                  onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+                  disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
+                  title={
+                    sapImportActive
+                      ? `Upload Daily Planning: ${sapImportUploadBlockedTitle}`
+                      : dailyPlanningUploadEligible
+                        ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
+                        : 'Upload Daily Planning: tersedia pada status Unplanned atau Planned'
+                  }
+                >
+                  {bulkCreateUploading ? <Loader2 className="h-[1.125rem] w-[1.125rem] animate-spin" aria-hidden /> : <CalendarClock className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
+                </Button>
+                <span className="hidden h-5 w-px bg-gray-200 sm:inline-block" aria-hidden />
                 <div className="relative">
-                  <Button
-                    variant="outline"
-                    size="sm"
+                  <Button variant="ghost" size="icon" className={iconButtonClass('neutral')}
                     title="Columns"
                     aria-label="Columns"
                     onClick={() => setShowColumnsMenu(v => !v)}
                     disabled={listFetching}
                   >
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
+                    <Columns3 className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                   </Button>
                   {showColumnsMenu && (
                     <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
@@ -4872,7 +4767,7 @@ function TruckingPageContent() {
               ) : null}
             </p>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-0">
             {showCreateForm ? (
               <div className="text-center py-8 text-gray-500">
                 Create form is open. Close it to view the trucking list.
@@ -4880,44 +4775,13 @@ function TruckingPageContent() {
             ) : (
               <div className="min-h-[480px]">
                 {/* Desktop compact table */}
-                <div className="hidden lg:block border rounded-lg overflow-hidden">
-                  {/* Top scrollbar (synced) */}
+                <div className="hidden lg:block overflow-hidden">
                   <div
-                    ref={topScrollRef}
-                    className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      bottom.scrollLeft = top.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
-                  >
-                    <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-                  </div>
-
-                  <div
-                    ref={bottomScrollRef}
                     className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      top.scrollLeft = bottom.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
                   >
                     <table
                       data-trucking-list-table
-                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}
+                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols klip-table--directory`}
                     >
                       <colgroup>
                         {visibleColumns.map((col) => (
@@ -4992,7 +4856,7 @@ function TruckingPageContent() {
                       </thead>
 
                       <tbody
-                        className={`divide-y divide-gray-200 transition-opacity duration-200 ${
+                        className={`divide-y divide-gray-100 transition-opacity duration-200 ${
                           (listFetching || tableScopeLoading) && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
                         }`}
                       >
@@ -5011,7 +4875,7 @@ function TruckingPageContent() {
                           </tr>
                         ) : sortedOperations.map((operation, idx) => {
                           const isEditing = editingId === operation.id
-                          const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                          const stripeClass = 'bg-white'
                           // PO-grain: one React key per operation id.
                           return (
                               <tr key={`${operation.id}|${idx}`} className={stripeClass}>
@@ -5035,7 +4899,7 @@ function TruckingPageContent() {
                                   const cellContent =
                                     isStatusEdit ? (
                                         truckingDbStatus(operation) === 'CANCELLED' ? (
-                                          <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                          <Badge className={getStatusColor('CANCELLED')}>Cancelled</Badge>
                                         ) : (
                                           <select
                                             value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}
@@ -5162,7 +5026,7 @@ function TruckingPageContent() {
 
                 {/* Mobile card view */}
                 <div
-                  className={`lg:hidden space-y-4 min-h-[480px] transition-opacity duration-200 ${
+                  className={`lg:hidden space-y-4 min-h-[480px] px-4 py-3 transition-opacity duration-200 ${
                     (listFetching || tableScopeLoading) && truckingOperations.length > 0 ? 'opacity-65' : 'opacity-100'
                   }`}
                 >
@@ -5192,7 +5056,7 @@ function TruckingPageContent() {
                             <h3 className="font-semibold text-lg">{operation.operation_id}</h3>
                             {isEditing ? (
                               truckingDbStatus(operation) === 'CANCELLED' ? (
-                                <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                <Badge className={getStatusColor('CANCELLED')}>Cancelled</Badge>
                               ) : (
                                 <select
                                   value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}
@@ -5468,12 +5332,10 @@ function TruckingPageContent() {
                 })}
               </div>
 
-                <ListPager
-                  page={page}
-                  totalPages={totalPages}
-                  onPageChange={handlePageChange}
-                  disabled={listFetching}
-                  summary={`Showing page ${page} of ${totalPages} (${tableHeaderCount.value.toLocaleString('en-US')} total ${tableHeaderCount.noun})`}
+                <MasterTableFooter
+                  countText={listRangeText(tableHeaderCount.value, page, pageSize, tableHeaderCount.noun)}
+                  kinds={[]}
+                  pager={{ page, totalPages, onPageChange: handlePageChange, disabled: listFetching }}
                 />
               </div>
             )}

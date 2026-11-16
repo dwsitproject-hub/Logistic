@@ -3,6 +3,7 @@ import multer from 'multer';
 import { authenticateToken, authorize } from '../middleware/auth';
 import {
   listMasterVessels,
+  getMasterVesselSummary,
   getMasterVesselFilterOptions,
   createMasterVessel,
   updateMasterVessel,
@@ -21,6 +22,8 @@ router.use(authenticateToken);
 
 router.get('/', listMasterVessels);
 router.get('/filter-options', getMasterVesselFilterOptions);
+// the cards above the list; before the '/:id' routes below
+router.get('/summary', getMasterVesselSummary);
 // vessels KLIP registered itself from a SAP vessel name and is not sure of (services/registerVesselFromSap.service.ts)
 router.get('/review', listReviewVessels);
 router.post('/:id/review/approve', authorize('ADMIN'), approveReviewVessel);

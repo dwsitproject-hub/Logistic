@@ -117,3 +117,31 @@ describe('...unless every one of those STOs has discharged', () => {
     expect(withoutArm).toContain('<= 1');
   });
 });
+
+describe('an ATC finishes a contract only when every live shipment of it has one', () => {
+  /*
+   * PO 1001032275 (production 2026-11-16): voyage one discharged on 2026-11-10 (377 MT of 1,000 MT) and a second shipment, created two days later, is the plan for the
+   * rest. sto_count was empty (counted as one STO), so the one ATC filed the contract under Close on Contract Performance while Contracts kept it Open with 622 MT.
+   */
+  const twoVoyages = {
+    import_status: 'Open',
+    outstanding_quantity: 621_955,
+    last_ata_vessel_complete_discharge: '2026-11-10',
+  };
+
+  it('keeps a contract open while a live shipment still has no ATC', () => {
+    expect(isContractEffectivelyDone({ ...twoVoyages, live_shipment_without_atc: true })).toBe(false);
+    expect(resolveContractEffectiveStatusText({ ...twoVoyages, live_shipment_without_atc: true })).toBe('OPEN');
+  });
+
+  it('finishes it once every live shipment has its ATC, and where the flag is absent or unknown', () => {
+    expect(isContractEffectivelyDone({ ...twoVoyages, live_shipment_without_atc: false })).toBe(true);
+    expect(isContractEffectivelyDone({ ...twoVoyages, live_shipment_without_atc: null })).toBe(true);
+    expect(isContractEffectivelyDone(twoVoyages)).toBe(true);
+  });
+
+  it('leaves the other two arms alone: nothing outstanding, or every vessel STO finished, still finishes it', () => {
+    expect(isContractEffectivelyDone({ ...twoVoyages, outstanding_quantity: 0, live_shipment_without_atc: true })).toBe(true);
+    expect(isContractEffectivelyDone({ ...twoVoyages, vessel_stos_finished: true, live_shipment_without_atc: true })).toBe(true);
+  });
+});

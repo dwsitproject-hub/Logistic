@@ -51,7 +51,7 @@ export const OIL_LOSS_ALL_CONTRACT_COLUMN_WIDTH_PX: Readonly<Record<string, numb
   r4: 96,
   loss_pct: 96,
   /** the status chip ("COMPLETED", upper case, chip padding) is about 90 px wide; 80 px clipped its right edge */
-  status: 112,
+  status: 128,
   transport_mode: 72,
   group_name: 88,
   supplier: 120,

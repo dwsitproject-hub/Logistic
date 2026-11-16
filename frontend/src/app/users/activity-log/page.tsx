@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Badge } from '@/components/ui/badge'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
@@ -159,16 +160,7 @@ function UserActivityLogPageContent() {
           <Button variant="ghost" size="icon" onClick={() => router.push('/users')} title="Back to Users">
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <div>
-            <p className="text-gray-500 text-sm">
-              Daily summary of user actions and active time (idle after {USER_ACTIVITY_IDLE_MINUTES} minutes).
-            </p>
-          </div>
         </div>
-        <Button variant="outline" onClick={() => void fetchSummary(page, dateFrom, dateTo)}>
-          <RefreshCw className="h-4 w-4 mr-2" />
-          Refresh
-        </Button>
       </div>
 
       <Card>
@@ -196,7 +188,19 @@ function UserActivityLogPageContent() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle>Daily activity summary</CardTitle>
-          <span className="text-sm text-gray-500">{total.toLocaleString('en-US')} day record(s)</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-500">{total.toLocaleString('en-US')} day record(s) · idle after {USER_ACTIVITY_IDLE_MINUTES} min</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={iconButtonClass('sync')}
+              title="Refresh"
+              aria-label="Refresh"
+              onClick={() => void fetchSummary(page, dateFrom, dateTo)}
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden />
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (

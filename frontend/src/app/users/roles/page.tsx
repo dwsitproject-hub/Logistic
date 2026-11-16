@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Button } from '@/components/ui/button'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -329,18 +330,23 @@ export default function RolesPage() {
         {/* Header */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <Button variant="outline" size="sm" onClick={() => guardUnsaved(() => router.push('/users'))}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Users
+            <Button
+              variant="ghost"
+              size="icon"
+              className={iconButtonClass('neutral')}
+              title="Back to Users"
+              aria-label="Back to Users"
+              onClick={() => guardUnsaved(() => router.push('/users'))}
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden />
             </Button>
             <h2 className="mt-3 text-lg font-semibold text-gray-900">Roles and access</h2>
             <p className="mt-0.5 text-sm text-gray-500">
               Pick a role, then choose what it can view, create, edit and delete.
             </p>
           </div>
-          <Button size="sm" onClick={() => setShowAddRole(true)}>
-            <Plus className="mr-2 h-4 w-4" aria-hidden />
-            Add Role
+          <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="Add Role" aria-label="Add Role" onClick={() => setShowAddRole(true)}>
+            <Plus className="h-4 w-4" aria-hidden />
           </Button>
         </div>
 

@@ -239,3 +239,8 @@ export function sapAutoImportShareFailedPath(fileName: string): string {
 export function shouldSkipCompletedSapAutoImport(status: string | null | undefined): boolean {
   return String(status || '').toLowerCase() === 'completed';
 }
+
+/** The same case-insensitive folder lookup, for the other IT-owned import folders on the share (the Claim Data folder uses it). */
+export function resolveAutoImportSubdir(root: string, canonical: string): string {
+  return resolveSubdir(root, canonical);
+}

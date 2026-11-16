@@ -98,6 +98,11 @@ services:
       # read-only, or when two environments read the same folder and would overwrite each other.
       SAP_AUTO_IMPORT_RESULTS_ROOT: "${SAP_AUTO_IMPORT_RESULTS_ROOT:-}"
       SAP_AUTO_IMPORT_EXTRA_RECIPIENTS: ${SAP_AUTO_IMPORT_EXTRA_RECIPIENTS:-}
+      # Claim Data folder (SAP OSCLAIM export). Off by default locally.
+      CLAIM_AUTO_IMPORT_ENABLED: ${CLAIM_AUTO_IMPORT_ENABLED:-false}
+      CLAIM_AUTO_IMPORT_CRON: ${CLAIM_AUTO_IMPORT_CRON:-0 7 * * *}
+      CLAIM_AUTO_IMPORT_ROOT: "${CLAIM_AUTO_IMPORT_ROOT:-/app/uploads/claim}"
+      CLAIM_AUTO_IMPORT_FILE_PATTERN: "${CLAIM_AUTO_IMPORT_FILE_PATTERN:-}"
       DHM_ENABLED: ${DHM_ENABLED:-false}
       DHM_BASE_URL: ${DHM_BASE_URL:-}
       DHM_PUBLIC_KEY: ${DHM_PUBLIC_KEY:-}

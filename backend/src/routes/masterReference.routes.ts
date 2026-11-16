@@ -3,6 +3,7 @@ import { authenticateToken, authorize } from '../middleware/auth';
 import {
   createMasterReference,
   deleteMasterReference,
+  getMasterReferenceSummary,
   listMasterReferences,
   updateMasterReference,
 } from '../controllers/masterReference.controller';
@@ -12,6 +13,7 @@ const router = express.Router();
 router.use(authenticateToken);
 
 router.get('/:kind', listMasterReferences);
+router.get('/:kind/summary', getMasterReferenceSummary);
 router.post('/:kind', authorize('ADMIN'), createMasterReference);
 router.put('/:kind/:id', authorize('ADMIN'), updateMasterReference);
 router.delete('/:kind/:id', authorize('ADMIN'), deleteMasterReference);

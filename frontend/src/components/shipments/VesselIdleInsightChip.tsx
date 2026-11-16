@@ -14,8 +14,8 @@ export interface VesselIdleInsightChipProps {
 }
 
 /**
- * Compact fleet insight control — separate from pipeline status circles because
- * vessel idle is reference data, not a shipment execution stage filter.
+ * Compact fleet insight control: a red ship icon button with a round red badge holding the count (a spinner while it loads, "!" when it could not).
+ * Separate from the pipeline status circles because vessel idle is reference data, not a shipment execution stage filter. The tooltip names it "Vessel Idle".
  */
 export function VesselIdleInsightChip({
   count,
@@ -23,27 +23,26 @@ export function VesselIdleInsightChip({
   error = false,
   onClick,
 }: VesselIdleInsightChipProps) {
-  const displayCount = error ? '—' : count
   return (
     <Tooltip delayDuration={200}>
       <TooltipTrigger asChild>
         <button
           type="button"
           onClick={onClick}
-          className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-amber-200/90 bg-gradient-to-r from-amber-50 to-orange-50 px-3 py-1.5 text-sm shadow-sm transition-all hover:border-amber-300 hover:from-amber-100 hover:to-orange-100 hover:shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2"
-          aria-label={`Vessel idle: ${loading ? 'loading' : error ? 'unavailable' : count} vessels`}
+          className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+          aria-label={`Vessel Idle: ${loading ? 'loading' : error ? 'unavailable' : count} vessels`}
         >
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-800">
-            <Ship className="h-4 w-4" aria-hidden />
-          </span>
-          <span className="hidden font-medium text-amber-950 sm:inline">Vessel Idle</span>
-          <span className="inline-flex min-w-[1.5rem] items-center justify-center rounded-md bg-amber-600 px-1.5 py-0.5 text-xs font-bold tabular-nums text-white">
-            {loading ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : displayCount}
+          <Ship className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+          <span className="absolute -right-0.5 -top-0.5 inline-flex h-[1.125rem] min-w-[1.125rem] items-center justify-center rounded-full bg-red-600 px-1 text-[0.625rem] font-bold leading-none tabular-nums text-white ring-2 ring-white">
+            {loading ? <Loader2 className="h-2.5 w-2.5 animate-spin" aria-hidden /> : error ? '!' : count}
           </span>
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="max-w-xs whitespace-pre-wrap text-xs leading-relaxed">
-        {error ? 'Vessel idle data could not be loaded. Try again or check backend logs.' : VESSEL_IDLE_TOOLTIP}
+        <div className="font-semibold">Vessel Idle</div>
+        <div className="mt-0.5">
+          {error ? 'Vessel idle data could not be loaded. Try again or check backend logs.' : VESSEL_IDLE_TOOLTIP}
+        </div>
       </TooltipContent>
     </Tooltip>
   )

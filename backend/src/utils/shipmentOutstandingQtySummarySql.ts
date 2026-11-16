@@ -11,6 +11,7 @@ import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 import { sqlIsContractSapClosedExpr,
   sqlContractAtcFinishesExpr,
 } from './contractDeliveryStatus';
+import { sqlContractLiveShipmentWithoutAtcExpr } from './contractsListCycleSql';
 import { sqlShipmentActiveStageRankExpr } from './shipmentActiveStageRank';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
@@ -339,7 +340,13 @@ export function sqlShipmentExecutionOsPerContractCtes(
     SELECT sa_f.sto_count FROM contract_sto_agg_snapshot sa_f
     WHERE sa_f.contract_number = r.contract_number
   )`;
-  const contractAtcFinished = sqlContractAtcFinishesExpr(contractAtc, contractStoCount);
+  // Same rule as Contract Performance, so the two cannot disagree: an ATC finishes the contract only when no live shipment of it is still without one.
+  const contractAtcFinished = sqlContractAtcFinishesExpr(
+    contractAtc,
+    contractStoCount,
+    undefined,
+    sqlContractLiveShipmentWithoutAtcExpr({ contractNumberExpr: 'r.contract_number' }),
+  );
   return `
     execution_os_contracts AS (
       SELECT

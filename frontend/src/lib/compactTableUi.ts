@@ -56,7 +56,7 @@ export const COMPACT_OPERATIONAL_TABLE_CLASS =
 export const COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS = 'klip-compact-table--row-vcenter'
 
 /** Horizontal scroll wrapper for Shipments / Trucking list tables */
-export const COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS = 'w-full min-w-0 overflow-x-auto'
+export const COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS = 'klip-scroll-x w-full min-w-0 overflow-x-auto'
 
 export const COMPACT_OPERATIONAL_TABLE_CELL_CLASS = 'klip-compact-table-cell'
 

@@ -192,7 +192,7 @@ export default function OilLossDrilldownSection({
                         {subtitle}
                       </div>
                     </div>
-                    <div className="p-2 max-h-80 overflow-y-auto">{body}</div>
+                    <div className="p-2 max-h-60 overflow-y-auto">{body}</div>
                   </div>
                 )
               })}

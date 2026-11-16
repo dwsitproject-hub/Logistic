@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { iconButtonClass } from '@/lib/iconButton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -371,59 +372,6 @@ export default function SupplierPage() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-gray-600">
-              Maintain reference data for suppliers and their production estimates.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-green-600 text-green-700 hover:bg-green-50"
-              title="Download Template"
-              aria-label="Download Template"
-              onClick={downloadTemplate}
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Template
-            </Button>
-            <input
-              id="supplier-upload"
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="hidden"
-              onChange={handleUpload}
-              disabled={uploading}
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              title="Upload CSV"
-              aria-label="Upload CSV"
-              onClick={() => document.getElementById('supplier-upload')?.click()}
-              disabled={uploading}
-            >
-              {uploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  CSV
-                </>
-              )}
-            </Button>
-            <Button size="sm" onClick={openAdd}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Supplier
-            </Button>
-          </div>
-        </div>
-
         {error && <div className="text-red-600 text-sm">{error}</div>}
         {success && <div className="text-green-600 text-sm">{success}</div>}
 
@@ -486,6 +434,40 @@ export default function SupplierPage() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 border-r border-gray-200 pr-2">
+                  <input
+                    id="supplier-upload"
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    onChange={handleUpload}
+                    disabled={uploading}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={iconButtonClass('download')}
+                    title="Download Template"
+                    aria-label="Download Template"
+                    onClick={downloadTemplate}
+                  >
+                    <Download className="h-4 w-4" aria-hidden />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={iconButtonClass('upload')}
+                    title={uploading ? 'Uploading...' : 'Upload CSV'}
+                    aria-label={uploading ? 'Uploading' : 'Upload CSV'}
+                    onClick={() => document.getElementById('supplier-upload')?.click()}
+                    disabled={uploading}
+                  >
+                    {uploading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Upload className="h-4 w-4" aria-hidden />}
+                  </Button>
+                  <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="Add Supplier" aria-label="Add Supplier" onClick={openAdd}>
+                    <Plus className="h-4 w-4" aria-hidden />
+                  </Button>
+                </div>
                 <ListPageColumnsMenu
                   columns={supplierColumns.menuColumns}
                   visibleIds={supplierColumns.visibleIds}

@@ -110,6 +110,56 @@
   }
 
   /*
+   * The sideways scrollbar under a list table: thin, a soft grey thumb on a clear track, a little darker when pointed at. Standard properties
+   * first (Chrome 121+, Firefox); the -webkit rules cover older Chrome and Edge.
+   */
+  .klip-scroll-x {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(203 213 225) transparent;
+  }
+  .klip-scroll-x:hover {
+    scrollbar-color: rgb(148 163 184) transparent;
+  }
+  @supports not (scrollbar-width: thin) {
+    .klip-scroll-x::-webkit-scrollbar {
+      height: 8px;
+    }
+    .klip-scroll-x::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .klip-scroll-x::-webkit-scrollbar-thumb {
+      background-color: rgb(203 213 225);
+      border-radius: 9999px;
+    }
+    .klip-scroll-x::-webkit-scrollbar-thumb:hover {
+      background-color: rgb(148 163 184);
+    }
+  }
+
+  /*
+   * Contracts list: the look of the Master lists (header in normal case, quiet grey, 14px cells, hairline rows, a wash on hover, no zebra),
+   * on top of the compact operational table so the column widths and sticky Actions keep working. Added only by the Contracts page.
+   */
+  .klip-table--directory thead th {
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: rgb(107 114 128);
+    background-color: rgb(249 250 251);
+  }
+  .klip-table--directory tbody td {
+    font-size: 0.875rem;
+  }
+  .klip-table--directory tbody tr:hover > td {
+    background-color: rgb(249 250 251);
+  }
+  .klip-table--directory th:first-child,
+  .klip-table--directory td:first-child {
+    padding-left: 1rem;
+  }
+
+  /*
    * Operational list tables (Shipments, Trucking): shrink-wrap columns to the longest
    * unbreakable word/token in each column; wrap-type columns absorb leftover width.
    */
@@ -454,7 +504,9 @@
 
   /* Icon-only status columns (DHM status, Klip transaction): the width of a one-icon Actions column (56px, 12px each side), the same on every master table. */
   .klip-compact-table--operational th.klip-op-col--icon,
-  .klip-compact-table--operational td.klip-op-col--icon {
+  .klip-compact-table--operational td.klip-op-col--icon,
+  /* the master list tables size their cells to their values ("fit-values": width auto, inner width max-content): those rules are stronger, so this one repeats the class chain to win */
+  .klip-master-list-table.klip-master-fit-values td.klip-compact-table-cell.klip-op-col--icon {
     width: 56px;
     min-width: 56px;
     max-width: 56px;
@@ -465,6 +517,17 @@
   .klip-compact-table--operational td.klip-op-col--icon {
     padding-left: 0.75rem;
     padding-right: 0.75rem;
+  }
+
+  /* The inner wrapper of a data cell is shrink-wrapped and left-aligned, which put the icon 12px from the left edge and 16px from the right one: centre it so both gaps are the same. */
+  .klip-compact-table--operational td.klip-op-col--icon .klip-compact-table-cell-inner,
+  .klip-master-list-table.klip-master-fit-values td.klip-compact-table-cell.klip-op-col--icon .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
   }
 
   /* The header only has to fit "DHM" and its sort arrow. */

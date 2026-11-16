@@ -5,6 +5,11 @@ import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { NON_NUMERIC_PORT_NAME_FILTER } from '../utils/portDisplaySql';
+import { masterDhmFilterClause, parseMasterDhmFilter } from '../utils/masterDhmFilter';
+import { masterSummarySql, toMasterSummaryCounts } from '../utils/masterSummary';
+
+const PORT_DHM = { table: 'master_loading_ports', kind: 'port' } as const;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import {
   assertSapNamesAvailable,
   attachSapNames,
@@ -74,7 +79,7 @@ const NON_NUMERIC_SAP = NON_NUMERIC_PORT_NAME_FILTER('sap.port_text');
 
 export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { search, page = 1, limit = 50, masterOnly, excludeDeleted } = req.query as any;
+    const { search, page = 1, limit = 50, masterOnly, excludeDeleted, dhm, site } = req.query as any;
     const offset = (Number(page) - 1) * Number(limit);
     const searchTerm = typeof search === 'string' ? search.trim() : '';
     const catalogOnly = String(masterOnly ?? '').toLowerCase() === 'true' || String(masterOnly ?? '') === '1';
@@ -92,13 +97,25 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
     const catalogSearch = searchTerm.length > 0
       ? `AND (p.port ILIKE $1 OR p.region ILIKE $1 OR p.code_klip ILIKE $1 OR p.code_dhm ILIKE $1 OR s.site_name ILIKE $1)`
       : '';
+    // The Master Port page's filters (catalog list only): the DHM status and the Site a port is linked to. Judged here in SQL; their parameters are added
+    // BEFORE the LIMIT/OFFSET placeholders below are numbered, so params.length is final when the SQL text is built.
+    let catalogExtra = '';
+    if (catalogOnly) {
+      const dhmClause = masterDhmFilterClause(parseMasterDhmFilter(dhm), { table: 'p', kind: 'port' });
+      if (dhmClause) catalogExtra += ` AND ${dhmClause}`;
+      if (typeof site === 'string' && UUID_RE.test(site.trim())) {
+        params.push(site.trim());
+        catalogExtra += ` AND p.site_id = $${params.length}::uuid`;
+      }
+    }
     const catalogListSql = `
-      SELECT p.id::text AS id, p.port, p.region, p.code_klip, p.code_dhm, p.dhm_site_code,
+      SELECT p.id::text AS id, p.port, p.region, p.code_klip, p.code_dhm, p.dhm_id::text AS dhm_id, p.dhm_site_code,
              p.site_id::text AS site_id, s.site_name AS site
       FROM master_loading_ports p
       LEFT JOIN master_sites s ON s.id = p.site_id
       WHERE ${NON_NUMERIC_PORT_NAME_FILTER('p.port')}
         ${catalogSearch}
+        ${catalogExtra}
         ${hideDhmDeleted ? 'AND COALESCE(p.dhm_is_deleted, FALSE) IS NOT TRUE' : ''}
       ORDER BY p.port
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
@@ -109,6 +126,7 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
       LEFT JOIN master_sites s ON s.id = p.site_id
       WHERE ${NON_NUMERIC_PORT_NAME_FILTER('p.port')}
         ${catalogSearch}
+        ${catalogExtra}
         ${hideDhmDeleted ? 'AND COALESCE(p.dhm_is_deleted, FALSE) IS NOT TRUE' : ''}
     `;
 
@@ -261,6 +279,41 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
   } catch (error) {
     logger.error('List master loading ports error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to fetch master ports' } });
+  }
+};
+
+/**
+ * The cards above the Master Port list (GET /master-loading-ports/summary): how many ports there are, how many DHM has, how many it does not, how many failed to
+ * deliver, and how many KLIP actually uses (a port a shipment loads at or discharges at - shipments.loading_master_port_id / discharge_master_port_id - or one a
+ * vessel's port rotation points at - vessel_loading_ports.master_port_id). Same set of rows as the list (numeric SAP port codes left out), and the Sites the ports
+ * are linked to, for the Site filter. Counts are over ALL ports, not the filters on screen.
+ */
+export const getMasterLoadingPortSummary = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const only = NON_NUMERIC_PORT_NAME_FILTER('master_loading_ports.port');
+    const used = `EXISTS (SELECT 1 FROM shipments s WHERE s.loading_master_port_id = master_loading_ports.id OR s.discharge_master_port_id = master_loading_ports.id)
+                OR EXISTS (SELECT 1 FROM vessel_loading_ports v WHERE v.master_port_id = master_loading_ports.id)`;
+    const [counts, sites] = await Promise.all([
+      query(`${masterSummarySql(PORT_DHM, used)} WHERE ${only}`),
+      query(
+        `SELECT st.id::text AS id, st.site_name AS name, COUNT(*)::int AS ports
+         FROM master_loading_ports p
+         JOIN master_sites st ON st.id = p.site_id
+         WHERE ${NON_NUMERIC_PORT_NAME_FILTER('p.port')}
+         GROUP BY st.id, st.site_name
+         ORDER BY st.site_name`,
+      ),
+    ]);
+    res.json({
+      success: true,
+      data: {
+        ...toMasterSummaryCounts(counts.rows[0]),
+        sites: sites.rows.map((r: { id: string; name: string; ports: number }) => ({ id: r.id, name: r.name, ports: Number(r.ports) })),
+      },
+    });
+  } catch (error) {
+    logger.error('Master port summary error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the Master Port summary' } });
   }
 };
 

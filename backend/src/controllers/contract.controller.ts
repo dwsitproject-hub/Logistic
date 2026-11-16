@@ -60,6 +60,7 @@ import {
 import {
   sqlContractEveryStoDischargedExpr, buildVesselStosFinishedCte,
   sqlLastAtaVesselCompleteDischargeForContract,
+  sqlContractLiveShipmentWithoutAtcExpr, sqlLiveShipmentWithoutAtcFlagColumn,
 } from '../utils/contractsListCycleSql';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
 import { filterContractUpdatesForRole } from '../utils/contractUpdateFields';
@@ -131,14 +132,19 @@ import {
   sqlContractStoListShipmentMatchRank,
   sqlSapQtyDeliveredForStoKeyExpr,
   sqlSapQtyDeliveredKgFromSpd,
+  sqlSapTruckingDeliveredForStoKeyExpr,
   sqlSapQtyReceiveForStoKeyExpr,
   sqlSapStoQtyForContractPoExpr,
 } from '../utils/contractLogisticsStoDetailSql';
+import { shipmentResolvedStoTypeForNumberExpr } from '../utils/shipmentStoTypeSql'
 import {
+  normalizeContractLogisticsStoType,
   resolveContractLogisticsOperationId,
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
+  resolveSharedShipmentStoDelivered,
   summarizeContractLogisticsStoQty,
+  summarizeContractLogisticsStoQtyByType,
 } from '../utils/contractLogisticsStoDisplay';
 import {
   sqlContractImportStatusExpr,
@@ -553,6 +559,8 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
             stoCountExpr: 'base.sto_count',
             everyStoDischargedExpr: sqlContractEveryStoDischargedExpr('base.contract_id', 'base.sto_count'),
             vesselStosFinishedExpr: 'base.vessel_stos_finished',
+            // a contract delivered in two voyages is finished only once both have their ATC (PO 1001032275)
+            liveShipmentWithoutAtcExpr: sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: 'base.id' }),
           })
         : undefined;
     if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
@@ -670,11 +678,13 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
-    if (b2bFlag) {
+    // One contract type, or several as a comma list (the Contracts page's Contract type filter is a multi-select): any of them matches.
+    const b2bFlagValues = parseCommaSeparatedQuery(b2bFlag);
+    if (b2bFlagValues.length > 0) {
       queryText += ` AND (
-        COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '') = $${paramIndex}
+        COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '') = ANY($${paramIndex}::text[])
       )`;
-      queryParams.push(b2bFlag);
+      queryParams.push(b2bFlagValues);
       paramIndex++;
     }
 
@@ -916,6 +926,8 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     const listQuery = queryText + filteredClosedAndPage + buildContractsListOuterSql(deferCycleFieldsToPage, {
       compact: listCompact,
       includeListTotal: !needNodePostProcess,
+      // Contract Performance only (the one caller that sends requireRegionSite): its JavaScript Open/Close reading needs the flag the SQL predicate uses
+      liveShipmentWithoutAtc: cpVesselStos,
     });
     const listParams = [...queryParams, Number(limit), offset];
 
@@ -1228,6 +1240,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       delete (row as any).last_trucking_daily_deliverable_date;
       delete (row as any).first_ata_vessel_completed_loading;
       delete (row as any).last_ata_vessel_complete_discharge;
+      delete (row as any).live_shipment_without_atc;
       delete (row as any).last_eta_vessel_complete_discharge;
       delete (row as any).last_vessel_name;
       delete (row as any).last_eta_vessel_completed_loading;
@@ -1672,7 +1685,8 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         GROUP BY c.contract_id
       )
       SELECT
-        base.*
+        base.*,
+        ${sqlLiveShipmentWithoutAtcFlagColumn('base')} AS live_shipment_without_atc
       FROM base
       WHERE 1=1
       ${B2B_CHILD_EXCLUSION_SQL}
@@ -1690,6 +1704,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             atcExpr: 'base.last_ata_vessel_complete_discharge',
             stoCountExpr: 'base.sto_count',
             vesselStosFinishedExpr: 'base.vessel_stos_finished',
+            liveShipmentWithoutAtcExpr: sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: 'base.id' }),
           }),
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
@@ -1701,6 +1716,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             atcExpr: 'base.last_ata_vessel_complete_discharge',
             stoCountExpr: 'base.sto_count',
             vesselStosFinishedExpr: 'base.vessel_stos_finished',
+            liveShipmentWithoutAtcExpr: sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: 'base.id' }),
           }),
         )}`;
       } else {
@@ -2447,6 +2463,20 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           )},
           0
         ) AS quantity_delivered,
+        -- This STO's own SAP delivery (the incoterm-picked arm, then the trucking arm). The row above can only
+        -- hold the shipment's quantity, which is the whole cargo; see resolveSharedShipmentStoDelivered.
+        COALESCE(
+          NULLIF((${sqlSapQtyDeliveredForStoKeyExpr({
+            contractAlias: 'c_po',
+            stoKeyExpr: 'sk.sto_key',
+            contractQtyExpr: 'c_po.quantity_ordered',
+          })}), 0),
+          NULLIF((${sqlSapTruckingDeliveredForStoKeyExpr({
+            contractAlias: 'c_po',
+            stoKeyExpr: 'sk.sto_key',
+          })}), 0),
+          0
+        ) AS sap_delivered_kg,
         COALESCE(
           ${sqlShipmentResolvedReceiveKg(
             sqlIsContractSapClosedForStoExpr('c_po', 'sk.sto_key'),
@@ -2691,7 +2721,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       ? await query(truckingStosQuery, [id])
       : { rows: [] };
 
-    const shipmentStos = shipmentRows.rows.map((r: any) => {
+    const shipmentStos = resolveSharedShipmentStoDelivered(shipmentRows.rows).map((r: any) => {
       const lateIndicator = computeLateIndicatorText(
         deliveryEnd,
         r.ata_discharge_complete,
@@ -2890,8 +2920,34 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         };
       });
 
-    const stos = [...shipmentStos, ...truckingStos, ...sapOnlyStos];
-    const summary = summarizeContractLogisticsStoQty(stos);
+    const stosWithoutType = [...shipmentStos, ...truckingStos, ...sapOnlyStos];
+
+    // SAP STO Type (V vessel / T truck) per real STO number: contract_stos first, then the SAP row (the same resolution the Shipments scope uses).
+    const realStoNumbers = [
+      ...new Set(stosWithoutType.map((row) => row.sto_number).filter((sto) => sto && sto !== '-')),
+    ];
+    const stoTypeByNumber = new Map<string, 'V' | 'T'>();
+    if (realStoNumbers.length > 0) {
+      const typeRows = await query(
+        `SELECT sk.sto, ${shipmentResolvedStoTypeForNumberExpr('c_t', 'sk.sto')} AS sto_type
+         FROM unnest($2::text[]) AS sk(sto)
+         CROSS JOIN contracts c_t
+         WHERE c_t.id = $1`,
+        [id, realStoNumbers],
+      );
+      for (const r of typeRows.rows as Array<{ sto: string; sto_type: unknown }>) {
+        const type = normalizeContractLogisticsStoType(r.sto_type);
+        if (type) stoTypeByNumber.set(String(r.sto).trim(), type);
+      }
+    }
+    const stos = stosWithoutType.map((row) => ({
+      ...row,
+      sto_type: stoTypeByNumber.get(String(row.sto_number).trim()) ?? null,
+    }));
+    const summary = {
+      ...summarizeContractLogisticsStoQty(stos),
+      by_type: summarizeContractLogisticsStoQtyByType(stos),
+    };
     return res.json({ success: true, data: { stos, summary } });
   } catch (error) {
     logger.error('Get contract STO information error:', error);

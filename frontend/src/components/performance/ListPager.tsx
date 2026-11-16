@@ -24,6 +24,18 @@ export function pagerWindow(page: number, totalPages: number): number[] {
 }
 
 /**
+ * The page buttons with the ends kept: up to seven numbers when there are few pages, otherwise the first and last page, the current one with
+ * a neighbour each side, and a 'gap' (drawn as an ellipsis) where pages are left out. Page 1 of 62 gives 1 2 3 4 5 ... 62, page 4 gives
+ * 1 ... 3 4 5 ... 62, page 61 gives 1 ... 58 59 60 61 62.
+ */
+export function pagerItems(page: number, totalPages: number): Array<number | 'gap'> {
+  if (totalPages <= 7) return Array.from({ length: Math.max(0, totalPages) }, (_, i) => i + 1)
+  if (page <= 3) return [1, 2, 3, 4, 5, 'gap', totalPages]
+  if (page >= totalPages - 2) return [1, 'gap', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+  return [1, 'gap', page - 1, page, page + 1, 'gap', totalPages]
+}
+
+/**
  * The footer under a list table: "Previous 1 2 3 4 5 Next" with a summary on the left. One component for Shipments, Contracts,
  * Shipping Performance and Trucking, so the card header holds only the title, the counts, the actions and the sort line.
  */

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { iconButtonClass } from '@/lib/iconButton'
 
 interface SyncPayload {
   total?: number
@@ -38,7 +39,8 @@ function summary(data: SyncPayload | undefined): string {
   return parts.join('. ')
 }
 
-export function MasterDhmSyncButton({ master, onDone }: { master: string; onDone?: () => void }) {
+/** `iconOnly` is the quiet icon button of the Users-style master pages (the word is in the tooltip); the default keeps the labelled button the other pages use. */
+export function MasterDhmSyncButton({ master, onDone, iconOnly = false }: { master: string; onDone?: () => void; iconOnly?: boolean }) {
   const [busy, setBusy] = useState(false)
 
   const sync = async () => {
@@ -68,6 +70,23 @@ export function MasterDhmSyncButton({ master, onDone }: { master: string; onDone
     } finally {
       setBusy(false)
     }
+  }
+
+  if (iconOnly) {
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={iconButtonClass('sync')}
+        disabled={busy}
+        onClick={() => void sync()}
+        title={busy ? 'Syncing to DHM...' : 'Sync to DHM'}
+        aria-label={busy ? 'Syncing to DHM' : 'Sync to DHM'}
+      >
+        <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} aria-hidden />
+      </Button>
+    )
   }
 
   return (

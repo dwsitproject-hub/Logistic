@@ -12,8 +12,6 @@ export default function SapDataEntryPage() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <p className="text-gray-600">Complete missing fields from SAP imports</p>
-
         <SapDataEntry userRole={userRole} />
       </div>
     </AppLayout>

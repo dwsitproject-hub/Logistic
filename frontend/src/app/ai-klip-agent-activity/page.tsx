@@ -131,10 +131,6 @@ function AiKlipAgentActivityPageContent() {
 
   return (
     <div className="space-y-6">
-      <p className="text-gray-500 text-sm">
-        Audit trail of AI Klip Agent actions (Shipment Planner and Chat).
-      </p>
-
       <Card>
         <CardHeader>
           <CardTitle>Filter</CardTitle>

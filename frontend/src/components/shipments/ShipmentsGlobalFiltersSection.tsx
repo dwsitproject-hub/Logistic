@@ -1,15 +1,10 @@
 'use client'
 
-import { StitchSearchIcon } from '@/components/shared/stitchIcons'
-import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
-import { FilterSingleSelect } from '@/components/FilterSingleSelect'
-import { Input } from '@/components/ui/input'
-import {
-  LIST_FILTER_FIELD_LABEL_CLASS,
-  ListFilterPanel,
-  selectionChips,
-  LIST_FILTER_FIELDS_ROW_CLASS,
-} from '@/components/shared/ListFilterPanel'
+import type { ReactNode } from 'react'
+import { Anchor, CircleDot, Database, Factory, Package, Ship, Timer } from 'lucide-react'
+import { ListFilterBar, ListFilterField } from '@/components/shared/ListFilterBar'
+import { MultiValueField, SingleValueField } from '@/components/shared/ListFilterFields'
+import { filterIncotermOptions } from '@/lib/globalScopeFilters'
 import type { ShipmentsPipelineStageFilter } from '@/lib/shipmentsPageFilterState'
 import {
   mapShipmentPipelineStageToGlobalStatusBucket,
@@ -52,6 +47,8 @@ export interface ShipmentsGlobalFiltersSectionProps {
   onClearFilters: () => void
   dateRangeActive?: boolean
   onResetDateRange?: () => void
+  /** Icon buttons at the right end of the filter row. */
+  actions?: ReactNode
 }
 
 const LATE_INDICATOR_OPTIONS = [
@@ -61,6 +58,7 @@ const LATE_INDICATOR_OPTIONS = [
   { value: 'NA', label: 'N/A' },
 ] as const
 
+/** The Shipments search and filters: one row (search, Status, Late Indicator, More filters, icon buttons), the rest in the More filters panel. */
 export function ShipmentsGlobalFiltersSection({
   searchDraft,
   onSearchDraftChange,
@@ -82,164 +80,119 @@ export function ShipmentsGlobalFiltersSection({
   availableSuppliers,
   selectedSuppliers,
   onSuppliersChange,
-  availableGroupPlants,
-  selectedGroupPlants,
-  onGroupPlantsChange,
-  selectedDischargePorts,
-  onDischargePortsChange,
-  dateFrom,
-  dateTo,
-  onDateFromChange,
-  onDateToChange,
   hasActiveFilters,
   onClearFilters,
-  dateRangeActive = false,
-  onResetDateRange,
+  actions,
 }: ShipmentsGlobalFiltersSectionProps) {
   const globalStatusValue = mapShipmentPipelineStageToGlobalStatusBucket(pipelineStage)
 
-  const statusLabel = SHIPMENT_GLOBAL_STATUS_OPTIONS.find((option) => option.value === globalStatusValue)?.label
-  const lateLabel = LATE_INDICATOR_OPTIONS.find((option) => option.value === lateIndicatorFilter)?.label
-  const charterLabel = SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS.find((option) => option.value === charterTypeFilter)?.label
-  const sourceLabel = LOGISTICS_SOURCE_FILTER_OPTIONS.find((option) => option.value === sourceTypeFilter)?.label
+  const statusField = (wrapperClass: string) => (
+    <SingleValueField
+      label="Status"
+      options={SHIPMENT_GLOBAL_STATUS_OPTIONS}
+      value={globalStatusValue}
+      onChange={(value) => onPipelineStageChange(value as ShipmentsPipelineStageFilter)}
+      icon={<CircleDot className="h-4 w-4" />}
+      wrapperClass={wrapperClass}
+    />
+  )
+  const lateField = (wrapperClass: string) => (
+    <SingleValueField
+      label="Late Indicator"
+      options={LATE_INDICATOR_OPTIONS}
+      value={lateIndicatorFilter}
+      onChange={onLateIndicatorChange}
+      icon={<Timer className="h-4 w-4" />}
+      wrapperClass={wrapperClass}
+    />
+  )
+
+  const wideOn = (globalStatusValue !== 'ALL' ? 1 : 0) + (lateIndicatorFilter !== 'ALL' ? 1 : 0)
+  const moreOn =
+    (charterTypeFilter !== 'ALL' ? 1 : 0) +
+    (sourceTypeFilter !== 'ALL' ? 1 : 0) +
+    (selectedIncoterms.length > 0 ? 1 : 0) +
+    (selectedProducts.length > 0 ? 1 : 0) +
+    (selectedSuppliers.length > 0 ? 1 : 0)
 
   return (
-    <ListFilterPanel
-      onReset={onClearFilters}
-      showReset={hasActiveFilters}
-      chips={[
-        ...(globalStatusValue !== 'ALL' && statusLabel
-          ? [{ id: 'status', label: `Status: ${statusLabel}`, onRemove: () => onPipelineStageChange('ALL') }]
-          : []),
-        ...(lateIndicatorFilter !== 'ALL' && lateLabel
-          ? [{ id: 'late', label: `Late: ${lateLabel}`, onRemove: () => onLateIndicatorChange('ALL') }]
-          : []),
-        ...(charterTypeFilter !== 'ALL' && charterLabel
-          ? [{ id: 'charter', label: `Charter: ${charterLabel}`, onRemove: () => onCharterTypeChange('ALL') }]
-          : []),
-        ...(sourceTypeFilter !== 'ALL' && sourceLabel
-          ? [{ id: 'source', label: `Source: ${sourceLabel}`, onRemove: () => onSourceTypeChange('ALL') }]
-          : []),
-        ...selectionChips('Incoterm', selectedIncoterms, onIncotermsChange),
-        ...selectionChips('Product', selectedProducts, onProductsChange),
-        ...selectionChips('Supplier', selectedSuppliers, onSuppliersChange),
-        ...selectionChips('Region/Plant', selectedGroupPlants, onGroupPlantsChange),
-        ...selectionChips('Discharge Port', selectedDischargePorts, onDischargePortsChange),
-        ...(dateRangeActive && onResetDateRange
-          ? [{
-              id: 'contract-date',
-              label: `Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`,
-              onRemove: onResetDateRange,
-            }]
-          : []),
-      ]}
-    >
-      <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
-        <div className="min-w-[12rem] flex-[1.4]">
-          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
-          <div className="relative">
-            <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <Input
-              placeholder="Contract, PO, STO, Operation ID, vessel"
-              title="Contract, PO, STO, Operation ID (OP-…) or vessel. Operation ID finds a shipment whose STO SAP left empty."
-              value={searchDraft}
-              onChange={(e) => onSearchDraftChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  onSearchApply()
-                }
-              }}
-              className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+    <ListFilterBar
+      search={searchDraft}
+      onSearchChange={onSearchDraftChange}
+      onSearchSubmit={onSearchApply}
+      placeholder="Contract, PO, STO, Operation ID, vessel"
+      wide={
+        <>
+          {statusField('w-40 shrink-0')}
+          {lateField('w-44 shrink-0')}
+        </>
+      }
+      narrowOnly={
+        <>
+          <ListFilterField label="Status">{statusField('w-full')}</ListFilterField>
+          <ListFilterField label="Late indicator">{lateField('w-full')}</ListFilterField>
+        </>
+      }
+      more={
+        <>
+          <ListFilterField label="Charter type">
+            <SingleValueField
+              label="Charter Type"
+              options={SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS}
+              value={charterTypeFilter}
+              onChange={onCharterTypeChange}
+              icon={<Ship className="h-4 w-4" />}
             />
-          </div>
-        </div>
-        <div className="min-w-[7.5rem] flex-1">
-          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Status</label>
-          <FilterSingleSelect
-            value={globalStatusValue}
-            onChange={(value) => onPipelineStageChange(value as ShipmentsPipelineStageFilter)}
-            options={SHIPMENT_GLOBAL_STATUS_OPTIONS.map((option) => ({
-              value: option.value,
-              label: option.value === 'ALL' ? 'All' : option.label,
-            }))}
-            ariaLabel="Pipeline status filter"
-            className="w-full min-w-0"
-          />
-        </div>
-        <div className="min-w-[7.5rem] flex-1">
-          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Late Indicator</label>
-          <FilterSingleSelect
-            value={lateIndicatorFilter}
-            onChange={onLateIndicatorChange}
-            options={LATE_INDICATOR_OPTIONS.map((option) => ({
-              value: option.value,
-              label: option.value === 'ALL' ? 'All' : option.label,
-            }))}
-            ariaLabel="Late indicator filter"
-            className="w-full min-w-0"
-          />
-        </div>
-        <div className="min-w-[7.5rem] flex-1">
-          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Charter Type</label>
-          <FilterSingleSelect
-            value={charterTypeFilter}
-            onChange={onCharterTypeChange}
-            options={SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS.map((option) => ({
-              value: option.value,
-              label: option.value === 'ALL' ? 'All' : option.label,
-            }))}
-            ariaLabel="Charter type filter"
-            className="w-full min-w-0"
-          />
-        </div>
-        <div className="min-w-[7.5rem] flex-1">
-          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Source</label>
-          <FilterSingleSelect
-            value={sourceTypeFilter}
-            onChange={onSourceTypeChange}
-            options={LOGISTICS_SOURCE_FILTER_OPTIONS.map((option) => ({
-              value: option.value,
-              label: option.value === 'ALL' ? 'All' : option.label,
-            }))}
-            ariaLabel="Source filter"
-            className="w-full min-w-0"
-          />
-        </div>
-        <PerformanceScopeFilters
-          inlineRow
-          microLabels
-          hideGroupPlantFilter
-          incotermOptions={availableIncoterms}
-          selectedIncoterms={selectedIncoterms}
-          onIncotermsChange={onIncotermsChange}
-          showProductFilter
-          productOptions={availableProducts}
-          selectedProducts={selectedProducts}
-          onProductsChange={onProductsChange}
-          showSupplierFilter
-          supplierOptions={availableSuppliers}
-          selectedSuppliers={selectedSuppliers}
-          onSuppliersChange={onSuppliersChange}
-          groupPlantOptions={availableGroupPlants}
-          uppercaseGroupPlantLabels
-          selectedGroupPlants={selectedGroupPlants}
-          onGroupPlantsChange={onGroupPlantsChange}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-          onDateFromChange={onDateFromChange}
-          onDateToChange={onDateToChange}
-          showDateRange={false}
-          incotermPlaceholder="All"
-          productPlaceholder="All"
-          supplierPlaceholder="All"
-          incotermEmptyMessage="Loading incoterms..."
-          productEmptyMessage="Loading products..."
-          supplierEmptyMessage="Loading suppliers..."
-          groupPlantPlaceholder="All"
-          groupPlantEmptyMessage="No region/plant values"
-        />
-      </div>
-    </ListFilterPanel>
+          </ListFilterField>
+          <ListFilterField label="Source">
+            <SingleValueField
+              label="Source"
+              options={LOGISTICS_SOURCE_FILTER_OPTIONS}
+              value={sourceTypeFilter}
+              onChange={onSourceTypeChange}
+              icon={<Database className="h-4 w-4" />}
+            />
+          </ListFilterField>
+          <ListFilterField label="Incoterm">
+            <MultiValueField
+              label="Incoterm"
+              options={filterIncotermOptions(availableIncoterms)}
+              selected={selectedIncoterms}
+              onChange={onIncotermsChange}
+              placeholder="All incoterms"
+              emptyMessage="Loading incoterms..."
+              icon={<Anchor className="h-4 w-4" />}
+            />
+          </ListFilterField>
+          <ListFilterField label="Product">
+            <MultiValueField
+              label="Product"
+              options={availableProducts}
+              selected={selectedProducts}
+              onChange={onProductsChange}
+              placeholder="All products"
+              emptyMessage="Loading products..."
+              icon={<Package className="h-4 w-4" />}
+            />
+          </ListFilterField>
+          <ListFilterField label="Supplier">
+            <MultiValueField
+              label="Supplier"
+              options={availableSuppliers}
+              selected={selectedSuppliers}
+              onChange={onSuppliersChange}
+              placeholder="All suppliers"
+              emptyMessage="Loading suppliers..."
+              icon={<Factory className="h-4 w-4" />}
+            />
+          </ListFilterField>
+        </>
+      }
+      activeMore={moreOn}
+      activeAll={moreOn + wideOn}
+      anyActive={hasActiveFilters || searchDraft.trim().length > 0}
+      onReset={onClearFilters}
+      actions={actions}
+    />
   )
 }

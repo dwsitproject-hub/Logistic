@@ -3,6 +3,11 @@ import { attachDhmPushState, pushMasterCompanyToDhm } from '../dhm';
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
+import { masterDhmFilterClause, parseMasterDhmFilter } from '../utils/masterDhmFilter';
+import { masterSummarySql, toMasterSummaryCounts } from '../utils/masterSummary';
+
+const COMPANY_DHM = { table: 'company', kind: 'company' } as const;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function textOrNull(value: unknown): string | null {
   const text = String(value ?? '').trim();
@@ -35,7 +40,8 @@ async function replaceCompanySites(companyId: string, ids: string[]): Promise<vo
 const listSelect = `
   SELECT company.id, company.code_klip, company.code_dhm, company.company_code, company.company_name, company.dhm_id,
          COALESCE(array_agg(site.id::text ORDER BY site.site_name) FILTER (WHERE site.id IS NOT NULL), '{}') AS site_ids,
-         COALESCE(string_agg(site.site_name, ', ' ORDER BY site.site_name), '') AS site
+         COALESCE(string_agg(site.site_name, ', ' ORDER BY site.site_name), '') AS site,
+         COALESCE(array_agg(site.site_name ORDER BY site.site_name) FILTER (WHERE site.id IS NOT NULL), '{}') AS site_names
   FROM master_companies company
   LEFT JOIN master_company_sites link ON link.company_id = company.id
   LEFT JOIN master_sites site ON site.id = link.site_id
@@ -43,7 +49,13 @@ const listSelect = `
 
 export const listMasterCompanies = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { search, page = 1, limit = 50 } = req.query as { search?: string; page?: string; limit?: string };
+    const { search, page = 1, limit = 50, dhm, site } = req.query as {
+      search?: string;
+      page?: string;
+      limit?: string;
+      dhm?: string;
+      site?: string;
+    };
     const offset = (Number(page) - 1) * Number(limit);
     const params: unknown[] = [];
     let where = 'WHERE 1=1';
@@ -62,6 +74,13 @@ export const listMasterCompanies = async (req: AuthRequest, res: Response): Prom
             AND matched_site.site_name ILIKE $${params.length}
         )
       )`;
+    }
+    // DHM status and the Site a company works in: judged here, not on the rows on screen, because the list is paged.
+    const dhmClause = masterDhmFilterClause(parseMasterDhmFilter(dhm), COMPANY_DHM);
+    if (dhmClause) where += ` AND ${dhmClause}`;
+    if (site && UUID_RE.test(site.trim())) {
+      params.push(site.trim());
+      where += ` AND EXISTS (SELECT 1 FROM master_company_sites site_filter WHERE site_filter.company_id = company.id AND site_filter.site_id = $${params.length}::uuid)`;
     }
     const [listResult, countResult] = await Promise.all([
       query(
@@ -88,6 +107,36 @@ export const listMasterCompanies = async (req: AuthRequest, res: Response): Prom
   } catch (error) {
     logger.error('List master companies error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to fetch master companies' } });
+  }
+};
+
+/**
+ * The cards above the Master Company list (GET /master-companies/summary): all companies, how many DHM has, how many it does not, how many failed to deliver,
+ * and how many KLIP uses (a company that has a plant: master_plants.company_id). Also the Sites that have companies, for the Site filter.
+ * Counts are over ALL companies, not the page or the filters on screen.
+ */
+export const getMasterCompanySummary = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const [counts, sites] = await Promise.all([
+      query(masterSummarySql({ table: 'master_companies', kind: 'company' }, 'EXISTS (SELECT 1 FROM master_plants p WHERE p.company_id = master_companies.id)')),
+      query(
+        `SELECT s.id::text AS id, s.site_name, COUNT(*)::int AS companies
+         FROM master_sites s
+         JOIN master_company_sites l ON l.site_id = s.id
+         GROUP BY s.id, s.site_name
+         ORDER BY s.site_name`,
+      ),
+    ]);
+    res.json({
+      success: true,
+      data: {
+        ...toMasterSummaryCounts(counts.rows[0]),
+        sites: sites.rows.map((s: { id: string; site_name: string; companies: number }) => ({ id: s.id, name: s.site_name, companies: Number(s.companies) })),
+      },
+    });
+  } catch (error) {
+    logger.error('Master company summary error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the Master Company summary' } });
   }
 };
 

@@ -62,7 +62,7 @@ export function formatSapFolderTime(iso: string | null | undefined): string {
  * The run a Sync click started: the newest run that began at or after the click (clock skew allowance) - not just the newest
  * run, which can be an earlier cron run while the new one has not been written yet.
  */
-export function findRunStartedSince(runs: SapFolderRun[], sinceMs: number, skewMs = 15_000): SapFolderRun | null {
+export function findRunStartedSince<T extends { started_at: string }>(runs: T[], sinceMs: number, skewMs = 15_000): T | null {
   const cutoff = sinceMs - skewMs
   return runs.find((r) => new Date(r.started_at).getTime() >= cutoff) ?? null
 }

@@ -546,6 +546,12 @@ export function isContractEffectivelyDone(row: Record<string, unknown> | null | 
   const atc = row.last_ata_vessel_complete_discharge;
   if (atc == null || String(atc).trim() === '') return false;
   /*
+   * ...and an ATC finishes the contract only when no LIVE shipment of it is still without one: a contract delivered in two voyages is finished once BOTH have
+   * their ATC (PO 1001032275: voyage one discharged 2026-11-10, voyage two planned for the remaining 622 MT). Optional column, like the ones around it: a row that
+   * does not carry it keeps the rule exactly as it was. sqlContractLiveShipmentWithoutAtcExpr is where it comes from.
+   */
+  if (row.live_shipment_without_atc === true) return false;
+  /*
    * An ATC only finishes the PO when the PO has one STO.
    *
    * `last_ata_vessel_complete_discharge` is a MAX across the PO, so on a PO carrying several STOs
@@ -605,8 +611,11 @@ export function sqlContractAtcFinishesExpr(
   atcExpr: string,
   stoCountExpr?: string,
   everyStoDischargedExpr?: string,
+  /** True when a live shipment of the contract still has no ATC (sqlContractLiveShipmentWithoutAtcExpr); then one ATC does not finish the contract. */
+  liveShipmentWithoutAtcExpr?: string,
 ): string {
-  if (!stoCountExpr) return `(${atcExpr}) IS NOT NULL`;
+  const everyVoyageDone = liveShipmentWithoutAtcExpr ? ` AND NOT COALESCE((${liveShipmentWithoutAtcExpr}), FALSE)` : '';
+  if (!stoCountExpr) return `((${atcExpr}) IS NOT NULL${everyVoyageDone})`;
   /*
    * `everyStoDischargedExpr` is the direct test the sto_count guard has been standing in for, so
    * when a caller can supply it the guard stops rejecting a multi-STO contract that has genuinely
@@ -614,7 +623,7 @@ export function sqlContractAtcFinishesExpr(
    */
   const oneSto = `COALESCE((${stoCountExpr})::numeric, 1) <= 1`;
   const finished = everyStoDischargedExpr ? `(${oneSto} OR (${everyStoDischargedExpr}))` : oneSto;
-  return `((${atcExpr}) IS NOT NULL AND ${finished})`;
+  return `((${atcExpr}) IS NOT NULL AND ${finished}${everyVoyageDone})`;
 }
 
 export function sqlContractEffectivelyDoneExpr(opts: {
@@ -626,11 +635,14 @@ export function sqlContractEffectivelyDoneExpr(opts: {
   everyStoDischargedExpr?: string;
   /** Every vessel STO has a finished shipment (sqlContractVesselStosFinishedExpr): done on its own, trucking STOs aside. */
   vesselStosFinishedExpr?: string;
+  /** A live shipment of the contract still has no ATC (sqlContractLiveShipmentWithoutAtcExpr): the ATC arm then does not finish it. */
+  liveShipmentWithoutAtcExpr?: string;
 }): string {
   const atcArm = sqlContractAtcFinishesExpr(
     opts.atcExpr,
     opts.stoCountExpr,
     opts.everyStoDischargedExpr,
+    opts.liveShipmentWithoutAtcExpr,
   );
   return `(
     ((${opts.outstandingKgExpr}) IS NOT NULL
