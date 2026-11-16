@@ -112,6 +112,7 @@ import { iconButtonClass } from '@/lib/iconButton'
 import { cycleDaysPillClass } from '@/lib/cycleDaysDisplay'
 import { listRangeText } from '@/lib/listRangeText'
 import { compactTableActionsColWidthPx } from '@/lib/compactTableUi'
+import { useStretchedColumnWidths } from '@/lib/useStretchedColumnWidths'
 import {
   clickSortStack,
   serializeSortStack,
@@ -2413,6 +2414,18 @@ function ShippingPerformancePageContent() {
   )
   const showTableActionsColumn = tableViewMode !== 'by_vessel'
   const showTopRankColumn = tableViewMode === 'by_vessel'
+  // The compact width of each shown column; a screen wider than they add up to shares the leftover between them (Rank and Actions keep their own width).
+  const compactColWidthsPx = useMemo(
+    () =>
+      tableColumnKeys.map((key) =>
+        shippingPerfTableColumnWidthPx(String(key), getColumnHeaderLabel(COLUMN_MAP[String(key)])),
+      ),
+    [tableColumnKeys, getColumnHeaderLabel],
+  )
+  const { ref: tableScrollRef, widths: stretchedColWidthsPx } = useStretchedColumnWidths(
+    compactColWidthsPx,
+    (showTopRankColumn ? 64 : 0) + (showTableActionsColumn ? compactTableActionsColWidthPx(2) : 0),
+  )
   const tableColSpan =
     (tableColumnKeys.length || 0) + (showTableActionsColumn ? 2 : 0) + (showTopRankColumn ? 1 : 0)
 
@@ -3006,6 +3019,7 @@ function ShippingPerformancePageContent() {
             <div className="overflow-hidden">
               {/* Table */}
               <div
+                ref={tableScrollRef}
                 className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
               >
                 <div className="min-w-0">
@@ -3020,22 +3034,13 @@ function ShippingPerformancePageContent() {
                 >
                   <colgroup>
                     {showTopRankColumn ? <col style={{ width: 64 }} /> : null}
-                    {tableColumnKeys.map((key) => {
-                      const col = COLUMN_MAP[String(key)]
-                      const columnLabel = getColumnHeaderLabel(col)
-                      return (
-                        <col
-                          key={String(key)}
-                          style={{
-                            width: compactTableColWidthCss(
-                              shippingPerfTableColumnWidthPx(String(key), columnLabel),
-                            ),
-                          }}
-                        />
-                      )
-                    })}
-                    {/* An empty column with no width takes the slack, so Actions keeps its own width on a wide screen. */}
-                    {showTableActionsColumn ? <col /> : null}
+                    {tableColumnKeys.map((key, colIdx) => (
+                      <col
+                        key={String(key)}
+                        style={{ width: compactTableColWidthCss(stretchedColWidthsPx[colIdx] ?? compactColWidthsPx[colIdx]) }}
+                      />
+                    ))}
+                    {/* No slack column: the data columns share the room, and Actions keeps its own width. */}
                     {showTableActionsColumn ? <col style={{ width: compactTableActionsColWidthPx(2) }} /> : null}
                   </colgroup>
                   <thead>
@@ -3107,7 +3112,9 @@ function ShippingPerformancePageContent() {
                       ) : null}
                     </tr>
                   </thead>
+                  {/* Keyed by the view: All Shipments and By Vessel never share row DOM, so rows of one view cannot be left behind in the other. */}
                   <tbody
+                    key={tableViewMode}
                     className={`${SHIPPING_PERF_TABLE_BODY_CLASS.replace('divide-gray-200', 'divide-gray-100')} ${
                       summaryFetching && rows.length > 0 ? 'opacity-65' : 'opacity-100'
                     }`}
@@ -3127,7 +3134,11 @@ function ShippingPerformancePageContent() {
                       paginatedRows.map((row, rowIdx) => {
                         const stripeClass = 'bg-white'
                         return (
-                        <tr key={row.id} className={stripeClass}>
+                        // An Unplanned row has no shipment id (null): a null key is no key, so it gets one from the contract and PO it stands for.
+                        <tr
+                          key={String(row.id || '').trim() || `${tableViewMode}:${row.contract_number ?? ''}:${row.po_number ?? ''}:${rowIdx}`}
+                          className={stripeClass}
+                        >
                           {showTopRankColumn ? (
                             <td
                               className={cn(

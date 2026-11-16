@@ -74,6 +74,7 @@ import { cn, formatQtyMtFromKg, statusBadgeText } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import { compactTableActionsColWidthPx } from '@/lib/compactTableUi'
+import { useStretchedColumnWidths } from '@/lib/useStretchedColumnWidths'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
@@ -1854,6 +1855,23 @@ export default function OilLossPage() {
     return picked
   }, [viewMode, visibleColumnIds, columnOrderIds])
 
+  // The compact width of each shown column. On a screen wider than they add up to, the leftover is spread over them (useStretchedColumnWidths) instead of an empty strip.
+  const compactColWidthsPx = useMemo(
+    () =>
+      visibleColumns.map((col) =>
+        viewMode === 'by_transporter'
+          ? oilLossByTransporterTableColumnWidthPx(col.id, col.label, { hasFormulaHelp: Boolean(col.formulaHelp) })
+          : viewMode === 'by_supplier'
+            ? oilLossBySupplierTableColumnWidthPx(col.id, col.label, { hasFormulaHelp: Boolean(col.formulaHelp) })
+            : oilLossAllContractTableColumnWidthPx(col.id, col.label, { hasFormulaHelp: Boolean(col.formulaHelp) }),
+      ),
+    [visibleColumns, viewMode],
+  )
+  const { ref: tableScrollRef, widths: stretchedColWidthsPx } = useStretchedColumnWidths(
+    compactColWidthsPx,
+    OIL_LOSS_ACTIONS_COL_WIDTH_PX,
+  )
+
   const filteredRows = useMemo(() => {
     const sortCol = activeCompactColumns.find((c) => c.id === sortKey)
     if (!sortCol) return aggregatedRows
@@ -2277,6 +2295,7 @@ export default function OilLossPage() {
             <div className={tableLoading ? 'min-h-[480px]' : undefined}>
                 <div className="hidden lg:block overflow-hidden">
                   <div
+                    ref={tableScrollRef}
                     className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
                   >
                     <table
@@ -2291,28 +2310,13 @@ export default function OilLossPage() {
                       )}
                     >
                       <colgroup>
-                        {visibleColumns.map((col) => {
-                          const widthPx =
-                            viewMode === 'by_transporter'
-                              ? oilLossByTransporterTableColumnWidthPx(col.id, col.label, {
-                                  hasFormulaHelp: Boolean(col.formulaHelp),
-                                })
-                              : viewMode === 'by_supplier'
-                                ? oilLossBySupplierTableColumnWidthPx(col.id, col.label, {
-                                    hasFormulaHelp: Boolean(col.formulaHelp),
-                                  })
-                                : oilLossAllContractTableColumnWidthPx(col.id, col.label, {
-                                    hasFormulaHelp: Boolean(col.formulaHelp),
-                                  })
-                          return (
-                            <col
-                              key={col.id}
-                              style={{ width: compactTableColWidthCss(widthPx) }}
-                            />
-                          )
-                        })}
-                        {/* An empty column with no width takes the slack, so Actions keeps its own width on a wide screen. */}
-                        <col />
+                        {visibleColumns.map((col, colIdx) => (
+                          <col
+                            key={col.id}
+                            style={{ width: compactTableColWidthCss(stretchedColWidthsPx[colIdx] ?? compactColWidthsPx[colIdx]) }}
+                          />
+                        ))}
+                        {/* No slack column: the data columns share the room, and Actions keeps its own width. */}
                         <col style={{ width: compactTableColWidthCss(OIL_LOSS_ACTIONS_COL_WIDTH_PX) }} />
                       </colgroup>
                       <thead>
