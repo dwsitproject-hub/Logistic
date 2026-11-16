@@ -21,6 +21,8 @@ if (!DIST) {
 const load = (m) => require(path.join(DIST, m));
 
 (async () => {
+  // The Integrations menu keeps its settings in the database; this is a separate process, so it reads them too (otherwise it shows only .env).
+  await load('integrations/settingsStore').loadIntegrationSettings();
   const pool = load('database/connection').default;
   const { isJpsEnabled, jpsRetryFailed } = load('jps/config');
   console.log(`JPS enabled: ${isJpsEnabled()}   JPS_RETRY_FAILED: ${jpsRetryFailed()}\n`);
