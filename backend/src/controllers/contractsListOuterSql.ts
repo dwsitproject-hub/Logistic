@@ -1,5 +1,5 @@
 import { sqlContractOutstandingSignedExpr, sqlSapGrPoStatusFromJson } from '../utils/sapIncotermMetrics';
-import { buildContractsListOuterCycleFieldSelectSql } from '../utils/contractsListCycleSql';
+import { buildContractsListOuterCycleFieldSelectSql, sqlLiveShipmentWithoutAtcFlagColumn } from '../utils/contractsListCycleSql';
 import { sqlContractImportStatusIsCancelledExpr } from '../utils/contractDeliveryStatus';
 import { sqlShipmentStatusColumnExpr, sqlTruckingStatusColumnExpr } from '../utils/contractPlanningStatusSql';
 
@@ -26,6 +26,11 @@ export type ContractsListOuterSqlOptions = {
    * empties the whole table.
    */
   includeListTotal?: boolean;
+  /**
+   * Carry `live_shipment_without_atc` (sqlLiveShipmentWithoutAtcFlagColumn) on the page rows, for the JavaScript Open/Close classification of Contract
+   * Performance. Off for the plain Contracts page, which keeps its own behaviour.
+   */
+  liveShipmentWithoutAtc?: boolean;
 };
 
 const CONTRACTS_LIST_PAYMENT_AND_COUNT_PROJECTION = `
@@ -58,6 +63,9 @@ const CONTRACTS_LIST_PAYMENT_SAP_ONLY_PROJECTION = `
  */
 function buildContractsListRowProjection(options: ContractsListOuterSqlOptions = {}): string {
   const listTotal = options.includeListTotal ? '        base.__list_total,\n' : '';
+  const liveShipmentColumn = options.liveShipmentWithoutAtc
+    ? `        ${sqlLiveShipmentWithoutAtcFlagColumn('base')} AS live_shipment_without_atc,\n`
+    : '';
   const paymentBlock = options.compact
     ? CONTRACTS_LIST_PAYMENT_SAP_ONLY_PROJECTION
     : CONTRACTS_LIST_PAYMENT_AND_COUNT_PROJECTION;
@@ -126,7 +134,7 @@ ${listTotal}        base.contract_id,
         base.last_trucking_daily_deliverable_date,
         base.first_ata_vessel_completed_loading,
         base.last_ata_vessel_complete_discharge,
-        base.last_eta_vessel_complete_discharge,
+${liveShipmentColumn}        base.last_eta_vessel_complete_discharge,
         NULLIF(TRIM(base.last_vessel_name), '') AS vessel_name,
         base.last_eta_vessel_completed_loading AS eta_vessel_completed_loading,
         base.last_eta_vessel_complete_discharge AS eta_vessel_complete_discharge,

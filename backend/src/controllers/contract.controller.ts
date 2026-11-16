@@ -60,6 +60,7 @@ import {
 import {
   sqlContractEveryStoDischargedExpr, buildVesselStosFinishedCte,
   sqlLastAtaVesselCompleteDischargeForContract,
+  sqlContractLiveShipmentWithoutAtcExpr, sqlLiveShipmentWithoutAtcFlagColumn,
 } from '../utils/contractsListCycleSql';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
 import { filterContractUpdatesForRole } from '../utils/contractUpdateFields';
@@ -558,6 +559,8 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
             stoCountExpr: 'base.sto_count',
             everyStoDischargedExpr: sqlContractEveryStoDischargedExpr('base.contract_id', 'base.sto_count'),
             vesselStosFinishedExpr: 'base.vessel_stos_finished',
+            // a contract delivered in two voyages is finished only once both have their ATC (PO 1001032275)
+            liveShipmentWithoutAtcExpr: sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: 'base.id' }),
           })
         : undefined;
     if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
@@ -923,6 +926,8 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     const listQuery = queryText + filteredClosedAndPage + buildContractsListOuterSql(deferCycleFieldsToPage, {
       compact: listCompact,
       includeListTotal: !needNodePostProcess,
+      // Contract Performance only (the one caller that sends requireRegionSite): its JavaScript Open/Close reading needs the flag the SQL predicate uses
+      liveShipmentWithoutAtc: cpVesselStos,
     });
     const listParams = [...queryParams, Number(limit), offset];
 
@@ -1235,6 +1240,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       delete (row as any).last_trucking_daily_deliverable_date;
       delete (row as any).first_ata_vessel_completed_loading;
       delete (row as any).last_ata_vessel_complete_discharge;
+      delete (row as any).live_shipment_without_atc;
       delete (row as any).last_eta_vessel_complete_discharge;
       delete (row as any).last_vessel_name;
       delete (row as any).last_eta_vessel_completed_loading;
@@ -1679,7 +1685,8 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         GROUP BY c.contract_id
       )
       SELECT
-        base.*
+        base.*,
+        ${sqlLiveShipmentWithoutAtcFlagColumn('base')} AS live_shipment_without_atc
       FROM base
       WHERE 1=1
       ${B2B_CHILD_EXCLUSION_SQL}
@@ -1697,6 +1704,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             atcExpr: 'base.last_ata_vessel_complete_discharge',
             stoCountExpr: 'base.sto_count',
             vesselStosFinishedExpr: 'base.vessel_stos_finished',
+            liveShipmentWithoutAtcExpr: sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: 'base.id' }),
           }),
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
@@ -1708,6 +1716,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             atcExpr: 'base.last_ata_vessel_complete_discharge',
             stoCountExpr: 'base.sto_count',
             vesselStosFinishedExpr: 'base.vessel_stos_finished',
+            liveShipmentWithoutAtcExpr: sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: 'base.id' }),
           }),
         )}`;
       } else {

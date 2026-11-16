@@ -3,6 +3,7 @@ import {
   sqlContractImportStatusIsCancelledExpr,
   sqlContractImportStatusIsClosedExpr,
 } from './contractDeliveryStatus';
+import { sqlContractLiveShipmentWithoutAtcExpr } from './contractsListCycleSql';
 import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
 
 /**
@@ -168,7 +169,12 @@ export function sqlContractFinishedExpr(
            * string assertion in the tests still passed.
            */
           ...(options.everyStoDischarged
-            ? { everyStoDischargedExpr: `${alias}.all_stos_discharged`, vesselStosFinishedExpr: `${alias}.vessel_stos_finished` }
+            ? {
+                everyStoDischargedExpr: `${alias}.all_stos_discharged`,
+                vesselStosFinishedExpr: `${alias}.vessel_stos_finished`,
+                // the same Open/Close rule as Contract Performance: one ATC does not finish a contract whose second voyage has none (needs ${alias}.id on the row set)
+                liveShipmentWithoutAtcExpr: sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: `${alias}.id` }),
+              }
             : {}),
         })
       : undefined,

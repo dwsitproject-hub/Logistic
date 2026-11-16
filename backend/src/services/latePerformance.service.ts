@@ -22,7 +22,12 @@ import {
 } from '../services/contractLatestSpdSnapshot.service';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
 import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
-import { buildVesselStosFinishedCte, sqlContractEveryStoDischargedExpr } from '../utils/contractsListCycleSql';
+import {
+  buildVesselStosFinishedCte,
+  sqlContractEveryStoDischargedExpr,
+  sqlContractLiveShipmentWithoutAtcExpr,
+  sqlLiveShipmentWithoutAtcFlagColumn,
+} from '../utils/contractsListCycleSql';
 import {
   sqlContractImportStatusIsClosedExpr,
   sqlContractEffectivelyDoneExpr,
@@ -487,7 +492,8 @@ ${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS 
           grClosedPrecomputed: 'COALESCE(lgs.is_closed, false)',
           cancelledPrecomputed: 'COALESCE(lgs.is_cancelled, false)',
           closedForShipmentBacklogPrecomputed: 'COALESCE(lgs.is_closed_for_shipment_backlog, false)',
-        })}) AS in_logistics_open_os
+        })}) AS in_logistics_open_os,
+        ${sqlLiveShipmentWithoutAtcFlagColumn('base')} AS live_shipment_without_atc
       FROM base
       LEFT JOIN logistics_gr_status lgs ON lgs.id = base.id
 `;
@@ -706,7 +712,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         WHERE 1=1
         ${snapshotDateWhere}${snapshotPresenceWhere}
       )
-      SELECT base.*
+      SELECT base.*, ${sqlLiveShipmentWithoutAtcFlagColumn('base')} AS live_shipment_without_atc
       FROM base
 `;
 
@@ -734,6 +740,8 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           stoCountExpr: 'base.sto_count',
           everyStoDischargedExpr: 'base.all_stos_discharged',
           vesselStosFinishedExpr: 'base.vessel_stos_finished',
+          // a contract delivered in two voyages is finished only once both have their ATC (PO 1001032275)
+          liveShipmentWithoutAtcExpr: sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: 'base.id' }),
         }),
       )}`;
     } else if (sqlStatusNorm === 'Close' || sqlStatusNorm === 'CLOSE') {
@@ -746,6 +754,8 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           stoCountExpr: 'base.sto_count',
           everyStoDischargedExpr: 'base.all_stos_discharged',
           vesselStosFinishedExpr: 'base.vessel_stos_finished',
+          // a contract delivered in two voyages is finished only once both have their ATC (PO 1001032275)
+          liveShipmentWithoutAtcExpr: sqlContractLiveShipmentWithoutAtcExpr({ contractIdExpr: 'base.id' }),
         }),
       )}`;
     } else {
