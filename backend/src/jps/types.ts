@@ -6,6 +6,10 @@
  * v5.7 (2026-10-29) follows the vessel through five stages after approval: `Allocated` (jetty assigned), `Berthed` (TB set), `Start Cargo` (cargo window started: Hose On),
  * `Cargo Done` (cargo and final checks finished) and `Sailed Off` (cast off). `Sailed` was renamed `Sailed Off`; a row stored before that keeps the old text. A stage is derived
  * from times on the JPS side, so it can move BACK when an operator clears one.
+ *
+ * The production catalog (read 2026-11-16) lists two more stages: `Hose On` (Opening, cargo_ops_start_at) and `Hose Off` (Closing, cargo_ops_end_at), with `Start Cargo` now meaning
+ * cargo operations started. The order is Allocated, Berthed, Hose On, Start Cargo, Cargo Done, Hose Off, Sailed Off; a later stage wins. Both are live: a vessel at Hose Off
+ * has not sailed, and the poller must keep asking for it.
  */
 export type JpsPartnerStatus =
   | 'Pending'
@@ -14,8 +18,10 @@ export type JpsPartnerStatus =
   | 'Deleted'
   | 'Allocated'
   | 'Berthed'
+  | 'Hose On'
   | 'Start Cargo'
   | 'Cargo Done'
+  | 'Hose Off'
   | 'Sailed Off'
   | 'Sailed';
 
@@ -24,7 +30,7 @@ export type JpsPartnerStatus =
  * poller used to stop at `Berthed` (it knew only Pending / Approved / Allocated), so the cargo window and the departure would have reached KLIP only by webhook.
  * The terminal ones are `Rejected`, `Deleted`, `Sailed Off` and the older `Sailed`.
  */
-export const JPS_LIVE_STATUSES = ['Pending', 'Approved', 'Allocated', 'Berthed', 'Start Cargo', 'Cargo Done'] as const;
+export const JPS_LIVE_STATUSES = ['Pending', 'Approved', 'Allocated', 'Berthed', 'Hose On', 'Start Cargo', 'Cargo Done', 'Hose Off'] as const;
 
 /** SQL list of JPS_LIVE_STATUSES for an IN (...); constants only, never user input. */
 export const JPS_LIVE_STATUSES_SQL = JPS_LIVE_STATUSES.map((s) => `'${s}'`).join(', ');

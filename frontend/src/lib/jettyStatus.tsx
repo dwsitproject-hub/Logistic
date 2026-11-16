@@ -56,8 +56,11 @@ const BADGE_CLASS: Record<string, string> = {
   Allocated: 'bg-green-100 text-green-800',
   // JPS v5.7 stages after Allocated, shown as JPS gives them: berthed, hoses on, cargo and final checks done.
   Berthed: 'bg-emerald-100 text-emerald-800',
+  'Hose On': 'bg-sky-100 text-sky-800',
   'Start Cargo': 'bg-cyan-100 text-cyan-800',
   'Cargo Done': 'bg-teal-100 text-teal-800',
+  // JPS's own Hose Off stage (the Closing time), from the catalog read on 2026-11-16; the derived 'Completed (Hose Off)' below is only for a JPS that does not report it.
+  'Hose Off': 'bg-teal-100 text-teal-800',
   // Discharge finished, vessel not sailed yet: a stage of its own, so it must not read like Allocated. Only for a JPS that does not yet report v5.7's own stages
   // (see jettyStatusSql.ts); on v5.7 the status is shown as JPS gives it.
   'Completed (Hose Off)': 'bg-teal-100 text-teal-800',
@@ -95,14 +98,13 @@ export function jettyStatusLabel(row: JettyStatusFields | null | undefined): str
 }
 
 /**
- * What a badge or a sentence SAYS for a status: the stage JPS gave, with what it means on the berth where JPS's own name does not say it. Start Cargo is the hoses
- * going on (the Opening time). Cargo Done is NOT the hoses coming off: JPS says Hose Off is the Closing time an operator records in Post-Checking, often after Cargo Done and
+ * What a badge or a sentence SAYS for a status: the stage JPS gave, with what it means on the berth where JPS's own name does not say it. The production catalog (2026-11-16)
+ * has Hose On and Hose Off as stages of their own, so Start Cargo no longer stands for Hose On (it read "Start Cargo (Hose On)" while v5.7 had no Hose On stage); add an entry
+ * here only where JPS's own name does not say what it is. Cargo Done is NOT the hoses coming off: JPS says Hose Off is the Closing time an operator records in Post-Checking, often after Cargo Done and
  * sometimes never, while Cargo Done is cargo work plus final checks finished - so it reads as it is. Every other status reads as it is. jettyStatusLabel stays the value to compare, sort and colour by:
  * this is display only.
  */
-const JETTY_STAGE_MEANING: Record<string, string> = {
-  'Start Cargo': 'Start Cargo (Hose On)',
-}
+const JETTY_STAGE_MEANING: Record<string, string> = {}
 
 export function jettyStatusText(row: JettyStatusFields | null | undefined): string {
   const label = jettyStatusLabel(row)
@@ -132,7 +134,7 @@ export function jettySubmitMode(row: JettyStatusFields | null | undefined): Jett
  */
 export function jettyCanRefresh(row: JettyStatusFields | null | undefined): boolean {
   const status = String(row?.jetty_status ?? '').trim()
-  return ['Pending', 'Approved', 'Allocated', 'Berthed', 'Start Cargo', 'Cargo Done', 'Completed (Hose Off)'].includes(status)
+  return ['Pending', 'Approved', 'Allocated', 'Berthed', 'Hose On', 'Start Cargo', 'Cargo Done', 'Hose Off', 'Completed (Hose Off)'].includes(status)
 }
 
 /**

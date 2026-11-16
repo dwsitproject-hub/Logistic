@@ -19,8 +19,8 @@ describe('which instructions the poller keeps asking about', () => {
     queryMock.mockResolvedValue({ rows: [] });
   });
 
-  it('every stage that can still move: Pending, Approved, Allocated, Berthed, Start Cargo, Cargo Done', async () => {
-    expect([...JPS_LIVE_STATUSES]).toEqual(['Pending', 'Approved', 'Allocated', 'Berthed', 'Start Cargo', 'Cargo Done']);
+  it('every stage that can still move: Pending, Approved, Allocated, Berthed, Hose On, Start Cargo, Cargo Done, Hose Off', async () => {
+    expect([...JPS_LIVE_STATUSES]).toEqual(['Pending', 'Approved', 'Allocated', 'Berthed', 'Hose On', 'Start Cargo', 'Cargo Done', 'Hose Off']);
     await pollSubmittedInstructions();
     const sql = String(queryMock.mock.calls[0][0]);
     for (const status of JPS_LIVE_STATUSES) expect(sql).toContain(`'${status}'`);
@@ -34,21 +34,21 @@ describe('which instructions the poller keeps asking about', () => {
   });
 
   it('the SQL list is the constant, quoted, for an IN (...)', () => {
-    expect(JPS_LIVE_STATUSES_SQL).toBe("'Pending', 'Approved', 'Allocated', 'Berthed', 'Start Cargo', 'Cargo Done'");
+    expect(JPS_LIVE_STATUSES_SQL).toBe("'Pending', 'Approved', 'Allocated', 'Berthed', 'Hose On', 'Start Cargo', 'Cargo Done', 'Hose Off'");
   });
 
   it('closed (a new instruction under the next revision) stays Rejected and Deleted; the stages are not closed', () => {
     expect(isJpsClosedStatus('Rejected')).toBe(true);
     expect(isJpsClosedStatus('Deleted')).toBe(true);
-    for (const s of ['Berthed', 'Start Cargo', 'Cargo Done', 'Sailed Off', 'Sailed']) expect(isJpsClosedStatus(s)).toBe(false);
+    for (const s of ['Berthed', 'Hose On', 'Start Cargo', 'Cargo Done', 'Hose Off', 'Sailed Off', 'Sailed']) expect(isJpsClosedStatus(s)).toBe(false);
   });
 });
 
-describe('the partial index behind the poll (migration 251) has the same predicate', () => {
+describe('the partial index behind the poll (migration 268, which rebuilt 251) has the same predicate', () => {
   it('lists exactly the live statuses', async () => {
     const fs = await import('fs');
     const path = await import('path');
-    const sql = fs.readFileSync(path.join(__dirname, '..', 'database', 'migrations', '251_jps_poll_index_v57_statuses.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(__dirname, '..', 'database', 'migrations', '268_jps_poll_index_hose_stages.sql'), 'utf8');
     expect(sql).toContain(`jps_status IN (${JPS_LIVE_STATUSES_SQL})`);
   });
 });

@@ -73,7 +73,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       }
     }
     const nextCursor = data && data.nextCursor ? data.nextCursor : null;
-    if (APPLY && nextCursor) await saveDhmSyncCursor('commodity', nextCursor, newestUpdatedAt);
+    // The cursor only moves while every record was written: that is the bug being repaired (a pull that failed to write moved the cursor on, so the records were never asked for again).
+    if (APPLY && nextCursor && notWritten === 0) await saveDhmSyncCursor('commodity', nextCursor, newestUpdatedAt);
     const next = data && data.hasMore && nextCursor ? nextCursor : null;
     if (pages % 5 === 0) console.log(`  ... page ${pages}, ${seen} records`);
     if (!next) break;
