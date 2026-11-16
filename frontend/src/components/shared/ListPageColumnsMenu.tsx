@@ -1,9 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { GripVertical, SlidersHorizontal, X } from 'lucide-react'
+import { Columns3, GripVertical, SlidersHorizontal, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { iconButtonClass } from '@/lib/iconButton'
 import type { ListColumnDef } from '@/lib/listColumnLayout'
 
 type ListPageColumnsMenuProps = {
@@ -15,6 +16,8 @@ type ListPageColumnsMenuProps = {
   onUnselectAll: () => void
   onReset: () => void
   onReorder: (dragId: string, dropId: string) => void
+  /** Only the Columns icon (no outline, no label), like the icon buttons of the redesigned lists. */
+  iconOnly?: boolean
 }
 
 /** Columns menu copied from the Contracts view table: select, reset, and drag order. */
@@ -27,6 +30,7 @@ export function ListPageColumnsMenu({
   onUnselectAll,
   onReset,
   onReorder,
+  iconOnly = false,
 }: ListPageColumnsMenuProps) {
   const [open, setOpen] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
@@ -34,10 +38,25 @@ export function ListPageColumnsMenu({
 
   return (
     <div className="relative">
-      <Button variant="outline" size="sm" onClick={() => setOpen((value) => !value)} disabled={disabled}>
-        <SlidersHorizontal className="h-4 w-4 mr-2" />
-        Columns
-      </Button>
+      {iconOnly ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className={iconButtonClass('neutral')}
+          title="Columns"
+          aria-label="Columns"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+          disabled={disabled}
+        >
+          <Columns3 className="h-4 w-4" aria-hidden />
+        </Button>
+      ) : (
+        <Button variant="outline" size="sm" onClick={() => setOpen((value) => !value)} disabled={disabled}>
+          <SlidersHorizontal className="h-4 w-4 mr-2" />
+          Columns
+        </Button>
+      )}
       {open ? (
         <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
           <div className="flex items-center justify-between gap-2 mb-2">

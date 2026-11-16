@@ -8,8 +8,16 @@ import type { ShipmentAtaApiField } from '../utils/shipmentAtaOverrideFields';
  *
  *   ta                  Time of Arrival (operator arrival log)             -> ATA at DP        (partner ATA)
  *   tb                  Time of Berthing, actual (berthing log)            -> ATB              (partner ATB)
- *   cargo_ops_start_at  Hose On: Cargo Operations window START             -> ATS Discharge    (partner ATS)
- *   cargo_ops_end_at    Hose Off: Cargo Operations window END     (v5.5)   -> ATC Discharge    (partner ATC)
+ *   cargo_ops_start_at  Hose On: the earliest OPENING start                -> ATS Discharge    (partner ATS)
+ *   cargo_ops_end_at    Hose Off: the CLOSING time                         -> ATC Discharge    (partner ATC)
+ *
+ * JPS's own words (2026-11-16, API still 5.7; the v5.5-5.7 guide still says "operation window", which was the PREVIOUS source of both): Hose On is Opening and
+ * Hose Off is Closing. Closing is a time an operator records in Post-Checking. It is NOT filled when cargo operations end, when the status becomes Cargo Done or
+ * when the vessel sails, and it is often recorded after Cargo Done - so null on a Cargo Done or Sailed Off instruction is expected, and ATC stays
+ * cargo_ops_end_at: JPS says not to substitute cargo_done_at or tc. There is no ordering guarantee between start, end and cargo_done_at. Values are
+ * recalculated from current data on every GET (Opening can still change after the vessel finished; clearing Closing sends schedule.updated with
+ * cargo_ops_end_at null), so a time KLIP stored from an earlier poll can differ from GET today: the lane and the stored copy are rewritten from what JPS
+ * sends, null included, and a sailed vessel is still polled for a while (poll.ts).
  *
  * What moved since v5.0:
  *   - Start Discharging used to be unmapped ("JPS has no such event"); v5.4 added `cargo_ops_start_at`, and v5.5 made it

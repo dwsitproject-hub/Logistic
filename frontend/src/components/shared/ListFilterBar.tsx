@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 
 /** The look of a searchable multi-select button in the Contracts filters: 36px, round, blue when something is chosen. Pass it as `buttonClassName`. */
 export function listFilterButtonClass(active: boolean): string {
-  return `flex h-9 w-full items-center gap-2 rounded-[10px] border px-2.5 text-left text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
+  return `flex h-9 w-full items-center gap-2 rounded-[10px] border px-2.5 text-left text-sm focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200 ${
     active ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white hover:bg-gray-50'
   }`
 }

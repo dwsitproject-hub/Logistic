@@ -62,7 +62,7 @@ export function MultiValueCell({ values, rowTitle, columnLabel, plural }: Props)
         }}
         title={`Show all ${values.length} ${plural}`}
         aria-label={`${rowTitle}: show the ${values.length} ${plural}`}
-        className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-blue-200 bg-blue-50 py-0.5 pl-2 pr-1.5 text-xs font-medium normal-case tabular-nums text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+        className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-blue-200 bg-blue-50 py-0.5 pl-2 pr-1.5 text-xs font-medium normal-case tabular-nums text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-200"
       >
         {multiValueMoreLabel(values.length)}
         <ChevronRight className="h-3 w-3" aria-hidden />

@@ -18,7 +18,6 @@ import { Columns3, Eye, GripVertical, Loader2, MessageSquare, Package, SlidersHo
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
-import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import {
@@ -1263,8 +1262,8 @@ function buildInitialColumnPrefsByMode(): ShippingPerfColumnPrefsByMode {
 
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
 
-/** What the table is sorted by when it opens, and what Reset returns to: the biggest total delay first. */
-const DEFAULT_SHIPPING_PERF_SORT: SortEntry<ShippingPerfColumnKey>[] = [{ key: 'total_delta_days', dir: 'desc' }]
+/** What the table is sorted by when it opens, and what Reset returns to: the newest contract first (the biggest delay is two clicks on Total Delta Days away). */
+const DEFAULT_SHIPPING_PERF_SORT: SortEntry<ShippingPerfColumnKey>[] = [{ key: 'contract_date', dir: 'desc' }]
 
 function isColumnEligibleForView(key: string, tableViewMode: TableViewMode): boolean {
   const col = COLUMN_MAP[key]
@@ -2322,51 +2321,18 @@ function ShippingPerformancePageContent() {
     [resolveTableColumnLabel, tableViewMode],
   )
 
+  /**
+   * The scope of the table in plain words, for the header beside the title: the period, the card (On Going / Completed), the filters that are on - the same
+   * segments the drilldown used to show under its own title - then the drilldown the table follows.
+   */
   const tableScopeParts = useMemo(() => {
-    const parts: string[] =
-      perfCardFilter === 'all' ? [] : [SHIPPING_PERF_CARD_TITLES[perfCardFilter]]
-    if (SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) {
-      if (selectedIncoterms.length > 0) {
-        parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
-      }
-      if (selectedGroupPlants.length > 0) {
-        parts.push(`Region/Plant: ${selectedGroupPlants.map(displayGroupLabel).join(', ')}`)
-      }
-      if (selectedVessels.length > 0) {
-        parts.push(`Vessel: ${selectedVessels.map(displayGroupLabel).join(', ')}`)
-      }
-      if (dateFrom || dateTo) {
-        parts.push(
-          formatContractDateScopeLabel(
-            performancePeriod,
-            dateFrom,
-            dateTo,
-            (p) => resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
-            { prefix: true },
-          ),
-        )
-      }
-      if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
-    }
+    const parts: string[] = [...shippingPerfDrilldownScopeSegments]
     if (drilldownFilters.product) parts.push(`Product: ${displayGroupLabel(drilldownFilters.product)}`)
-    if (drilldownFilters.plant) parts.push(`Region/Plant node: ${displayGroupLabel(drilldownFilters.plant)}`)
-    if (drilldownFilters.incoterm) parts.push(`Incoterm node: ${displayGroupLabel(drilldownFilters.incoterm)}`)
+    if (drilldownFilters.plant) parts.push(`Region/Plant: ${displayGroupLabel(drilldownFilters.plant)}`)
+    if (drilldownFilters.incoterm) parts.push(`Incoterm: ${displayGroupLabel(drilldownFilters.incoterm)}`)
     if (drilldownFilters.vessel) parts.push(`Vessel: ${drilldownFilters.vessel}`)
     return parts
-  }, [
-    perfCardFilter,
-    selectedIncoterms,
-    selectedGroupPlants,
-    selectedSuppliers,
-    selectedSupplierGroups,
-    selectedPlanningStatuses,
-    selectedVessels,
-    performancePeriod,
-    dateFrom,
-    dateTo,
-    drilldownFilters,
-    statusFilter,
-  ])
+  }, [shippingPerfDrilldownScopeSegments, drilldownFilters])
 
   /** Section 3 only — resolve port columns (shipment operation → SAP fallback) before sort/render. */
   const drilldownStoRows = useMemo(
@@ -2623,7 +2589,6 @@ function ShippingPerformancePageContent() {
                     : 'Shipping Performance Drilldown (ATA)'}
                 </span>
               </CardTitle>
-              <PerformanceDrilldownScopeLine segments={shippingPerfDrilldownScopeSegments} />
             </div>
           </CardHeader>
           <CardContent className="pt-2">
@@ -2784,7 +2749,7 @@ function ShippingPerformancePageContent() {
                         setSearchTerm(searchDraft)
                       }
                     }}
-                    className="h-10 rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+                    className="h-10 rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-200"
                   />
                 </div>
               </div>
@@ -2796,7 +2761,7 @@ function ShippingPerformancePageContent() {
                   id="shipping-perf-status-filter"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as TableStatusFilter)}
-                  className="flex h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  className="flex h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
                 >
                   <option value="All">All</option>
                   <option value="Open">Open</option>
@@ -2855,12 +2820,39 @@ function ShippingPerformancePageContent() {
         <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
           <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-              <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel'}</span>
                 {summaryFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
               </CardTitle>
+                <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">{scopedUniqueContractCount.toLocaleString('en-US')}</span>{' '}
+                  unique contracts
+                </span>
+                <span className="text-gray-400" aria-hidden>
+                  ·
+                </span>
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">
+                    {(tableViewMode === 'all' ? drilldownStoRows.length : tableRows.length).toLocaleString('en-US')}
+                  </span>{' '}
+                  {tableViewMode === 'all' ? 'shipments' : `vessel${tableRows.length === 1 ? '' : 's'}`}
+                </span>
+                {tableScopeParts.length > 0 && (
+                  <>
+                    <span className="text-gray-400" aria-hidden>
+                      ·
+                    </span>
+                    <span className="whitespace-nowrap text-gray-600 font-medium">
+                      {tableScopeParts.join(' · ')}
+                    </span>
+                  </>
+                )}
+              </p>
+              </div>
               <div className="flex flex-wrap items-center gap-1.5 ml-auto sm:flex-nowrap">
               <SortStackSummary
                 stack={sortStack}
@@ -2982,37 +2974,6 @@ function ShippingPerformancePageContent() {
               </div>
               </div>
             </div>
-            <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
-                <span className="whitespace-nowrap tabular-nums text-gray-700">
-                  <span className="font-semibold">{scopedUniqueContractCount.toLocaleString('en-US')}</span>{' '}
-                  unique contracts
-                </span>
-                <span className="text-gray-400" aria-hidden>
-                  ·
-                </span>
-                <span className="whitespace-nowrap tabular-nums text-gray-700">
-                  <span className="font-semibold">
-                    {(tableViewMode === 'all' ? drilldownStoRows.length : tableRows.length).toLocaleString('en-US')}
-                  </span>{' '}
-                  {tableViewMode === 'all' ? 'shipments' : `vessel${tableRows.length === 1 ? '' : 's'}`}
-                </span>
-                <span className="text-gray-400" aria-hidden>
-                  ·
-                </span>
-                <span className="whitespace-nowrap tabular-nums">
-                  Page {currentPage}/{totalPages} · {paginatedRows.length} rows
-                </span>
-                {tableScopeParts.length > 0 && (
-                  <>
-                    <span className="text-gray-400" aria-hidden>
-                      ·
-                    </span>
-                    <span className="whitespace-nowrap text-gray-600 font-medium">
-                      {tableScopeParts.join(' · ')}
-                    </span>
-                  </>
-                )}
-              </p>
           </CardHeader>
           <CardContent className="p-0">
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>

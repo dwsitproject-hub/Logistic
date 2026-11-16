@@ -637,7 +637,7 @@ function CommercialDocumentsPageContent() {
           label="Region/Plant"
           hideLabel
           portalMenu
-          buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+          buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
           options={availablePlants}
           selected={selectedPlants}
           onChange={handleGroupPlantsChange}
@@ -695,7 +695,7 @@ function CommercialDocumentsPageContent() {
                 placeholder="Contract Ext No, PO, Supplier"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+                className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-200"
               />
             </div>
           </div>

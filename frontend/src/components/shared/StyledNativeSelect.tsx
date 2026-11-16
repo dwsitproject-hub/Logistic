@@ -24,7 +24,7 @@ export type StyledNativeSelectProps<T extends string = string> = {
 }
 
 export const STYLED_NATIVE_SELECT_TRIGGER_CLASS =
-  'h-10 w-full appearance-none rounded-md border border-gray-300 bg-white pl-3 pr-9 py-2 text-sm text-gray-900 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 [&::-ms-expand]:hidden'
+  'h-10 w-full appearance-none rounded-md border border-gray-300 bg-white pl-3 pr-9 py-2 text-sm text-gray-900 hover:bg-gray-50 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200 [&::-ms-expand]:hidden'
 
 export function StyledNativeSelect<T extends string = string>({
   label,

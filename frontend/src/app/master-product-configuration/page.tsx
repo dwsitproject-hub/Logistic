@@ -320,7 +320,7 @@ export default function MasterProductConfigurationPage() {
                   ? { all: scopeTotal, synced: dhmSynced, not_synced: dhmNotSynced, failed: dhmFailed }
                   : undefined
               }
-              extraActive={scope !== 'used'}
+              extraActive={scope !== 'used'} extraLabel="Products shown"
               onClear={() => {
                 setSearch('')
                 setDhm('all')

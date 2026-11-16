@@ -93,7 +93,7 @@ export function MasterVesselGlobalFiltersSection({
                   onSearchApply()
                 }
               }}
-              className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+              className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-200"
             />
           </div>
         </div>

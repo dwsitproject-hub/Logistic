@@ -4012,7 +4012,7 @@ function TruckingPageContent() {
           <>
           <Card>
             <CardHeader className="space-y-3">
-              <div>
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
                 <CardTitle className="text-base flex flex-wrap items-center gap-2">
                   Daily Planning Deliverables — Calendar
                   {calendarLoading ? (
@@ -4020,7 +4020,7 @@ function TruckingPageContent() {
                   ) : null}
                   <Badge variant="outline" className="text-[0.625rem]">Daily qty: MT</Badge>
                 </CardTitle>
-                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                   <span className="whitespace-nowrap tabular-nums text-gray-700">
                     <span className="font-semibold">{calendarRows.length.toLocaleString('en-US')}</span> operations
                   </span>
@@ -4540,7 +4540,8 @@ function TruckingPageContent() {
         <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
           <CardHeader className="space-y-2 border-b border-gray-200 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-              <CardTitle className="text-base flex items-center gap-2 flex-wrap shrink-0">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap shrink-0">
                 All Trucking
                 {truckingSummaryFreshnessNote ? (
                   <FieldHelp
@@ -4552,6 +4553,23 @@ function TruckingPageContent() {
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
               </CardTitle>
+                <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+              <span className="whitespace-nowrap tabular-nums text-gray-700">
+                <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
+                {tableHeaderCount.noun}
+              </span>
+              {truckingActiveFilterScopeLabel ? (
+                <>
+                  <span className="text-gray-400" aria-hidden>
+                    ·
+                  </span>
+                  <span className="whitespace-nowrap font-medium text-blue-700">
+                    {truckingActiveFilterScopeLabel}
+                  </span>
+                </>
+              ) : null}
+            </p>
+              </div>
               {truckingViewToggle}
               <div className="flex flex-wrap items-center gap-1.5 ml-auto sm:flex-nowrap">
                 <SortStackSummary
@@ -4744,28 +4762,6 @@ function TruckingPageContent() {
                 </div>
               </div>
             </div>
-            <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
-              <span className="whitespace-nowrap tabular-nums text-gray-700">
-                <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
-                {tableHeaderCount.noun}
-              </span>
-              <span className="text-gray-400" aria-hidden>
-                ·
-              </span>
-              <span className="whitespace-nowrap tabular-nums">
-                Page {page}/{totalPages}
-              </span>
-              {truckingActiveFilterScopeLabel ? (
-                <>
-                  <span className="text-gray-400" aria-hidden>
-                    ·
-                  </span>
-                  <span className="whitespace-nowrap font-medium text-blue-700">
-                    {truckingActiveFilterScopeLabel}
-                  </span>
-                </>
-              ) : null}
-            </p>
           </CardHeader>
           <CardContent className="p-0">
             {showCreateForm ? (
@@ -4904,7 +4900,7 @@ function TruckingPageContent() {
                                           <select
                                             value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}
                                             onChange={(e) => handleFieldChange('status', e.target.value)}
-                                            className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-full bg-white"
+                                            className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200 w-full bg-white"
                                           >
                                             <option value="">Select Status</option>
                                             <option value="CANCELLED">CANCELLED</option>

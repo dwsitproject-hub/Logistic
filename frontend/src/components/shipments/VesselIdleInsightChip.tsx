@@ -29,7 +29,7 @@ export function VesselIdleInsightChip({
         <button
           type="button"
           onClick={onClick}
-          className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+          className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-red-600 transition-colors hover:bg-red-50 hover:text-red-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-400"
           aria-label={`Vessel Idle: ${loading ? 'loading' : error ? 'unavailable' : count} vessels`}
         >
           <Ship className="h-[1.125rem] w-[1.125rem]" aria-hidden />

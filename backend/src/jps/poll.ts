@@ -25,6 +25,10 @@ async function markInstructionGone(rowId: string, message: string): Promise<void
   );
 }
 
+/** How long after the sailing an instruction is still polled (see pollSubmittedInstructions), and how often. */
+export const SAILED_POLL_WINDOW_DAYS = 14;
+export const SAILED_POLL_EVERY_HOURS = 6;
+
 export interface JpsPollSummary {
   polled: number;
   changed: number;
@@ -54,7 +58,26 @@ export async function pollSubmittedInstructions(limit = 50): Promise<JpsPollSumm
     [jpsMinPollIntervalMs(), limit],
   );
 
-  for (const row of due.rows as Array<Record<string, unknown>>) {
+  /*
+   * A vessel that has sailed is still looked at for a while. JPS's answer of 2026-11-16: Closing (Hose Off, our ATC) is recorded by an operator in
+   * Post-Checking and "is often recorded after Cargo Done", and Opening can still be edited after the vessel has finished. A webhook carries it when it
+   * happens; this poll is the net under it, because a delivery can be missed and webhooks are not replayed. Slow (every few hours) and bounded (a window
+   * after the sailing), so a long-finished voyage costs nothing.
+   */
+  const sailed = await query(
+    `SELECT id, sto_key, jps_id, external_reference, jps_status
+     FROM jps_shipping_instructions
+     WHERE state = 'SUBMITTED'
+       AND jps_status IN ('Sailed Off', 'Sailed')
+       AND jps_id IS NOT NULL
+       AND COALESCE(schedule_sailed_at, updated_at) > NOW() - ($1::int || ' days')::interval
+       AND (last_polled_at IS NULL OR last_polled_at < NOW() - ($2::int || ' hours')::interval)
+     ORDER BY last_polled_at NULLS FIRST
+     LIMIT $3`,
+    [SAILED_POLL_WINDOW_DAYS, SAILED_POLL_EVERY_HOURS, Math.max(5, Math.floor(limit / 5))],
+  );
+
+  for (const row of [...(due.rows as Array<Record<string, unknown>>), ...(sailed.rows as Array<Record<string, unknown>>)]) {
     const jpsId = row.jps_id == null ? null : Number(row.jps_id);
     const audit = { audit: { stoKey: String(row.sto_key), kind: 'poll' as const } };
     const res = jpsId

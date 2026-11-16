@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { jettyCanRefresh, jettySendStateTooltip, jettyStatusLabel, jettyStatusText, jettyStatusTooltip, jettySubmitMode } from './jettyStatus'
 
 describe('Jetty Status text: the stage JPS gave, with what it means on the berth', () => {
-  it('Start Cargo reads Hose On and Cargo Done reads Hose Off; the value to compare and sort by stays JPS\'s own', () => {
+  it('Start Cargo reads Hose On; Cargo Done stays plain because it is NOT Hose Off (JPS 2026-11-16: Closing is recorded separately, often after Cargo Done); the value to compare and sort by stays JPS\'s own', () => {
     expect(jettyStatusText({ jetty_status: 'Start Cargo' })).toBe('Start Cargo (Hose On)')
-    expect(jettyStatusText({ jetty_status: ' Cargo Done ' })).toBe('Cargo Done (Hose Off)')
+    expect(jettyStatusText({ jetty_status: ' Cargo Done ' })).toBe('Cargo Done')
     expect(jettyStatusLabel({ jetty_status: 'Start Cargo' })).toBe('Start Cargo')
     expect(jettyStatusLabel({ jetty_status: 'Cargo Done' })).toBe('Cargo Done')
   })

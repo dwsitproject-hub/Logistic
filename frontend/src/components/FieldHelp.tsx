@@ -20,7 +20,7 @@ export function FieldHelp({ text, className, iconClassName, side = 'top' }: Prop
           role="button"
           tabIndex={0}
           className={cn(
-            'inline-flex shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary/30',
+            'inline-flex shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary/30',
             className
           )}
           aria-label="How this field is calculated"

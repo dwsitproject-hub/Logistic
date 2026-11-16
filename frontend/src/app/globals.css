@@ -110,29 +110,34 @@
   }
 
   /*
-   * The sideways scrollbar under a list table: thin, a soft grey thumb on a clear track, a little darker when pointed at. Standard properties
-   * first (Chrome 121+, Firefox); the -webkit rules cover older Chrome and Edge.
+   * Scrollbars, everywhere (the page, the sidebar, the list tables, menus, modals, text areas): a slim pill, a soft grey on a clear track, a shade darker under the pointer.
+   * The thumb is drawn with a transparent border and background-clip so it reads 4px wide inside a 10px strip that is easy to grab. Chrome and Edge take the -webkit
+   * rules; Firefox takes the standard properties. The two are not mixed on purpose: Chrome 121+ ignores the -webkit rules as soon as scrollbar-width or scrollbar-color is
+   * set, and that would give back the flat square thumb.
    */
-  .klip-scroll-x {
-    scrollbar-width: thin;
-    scrollbar-color: rgb(203 213 225) transparent;
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
   }
-  .klip-scroll-x:hover {
-    scrollbar-color: rgb(148 163 184) transparent;
+  *::-webkit-scrollbar-track {
+    background: transparent;
   }
-  @supports not (scrollbar-width: thin) {
-    .klip-scroll-x::-webkit-scrollbar {
-      height: 8px;
-    }
-    .klip-scroll-x::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    .klip-scroll-x::-webkit-scrollbar-thumb {
-      background-color: rgb(203 213 225);
-      border-radius: 9999px;
-    }
-    .klip-scroll-x::-webkit-scrollbar-thumb:hover {
-      background-color: rgb(148 163 184);
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: rgb(209 213 219);
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(156 163 175);
+  }
+  @supports (-moz-appearance: none) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgb(209 213 219) transparent;
     }
   }
 

@@ -45,11 +45,11 @@ export function FilterSingleSelect({
         className={stitchControlClass(
           dense
             ? cn(
-                'h-9 w-full appearance-none rounded-[10px] border py-0 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+                'h-9 w-full appearance-none rounded-[10px] border py-0 pr-8 text-sm focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200',
                 icon ? 'pl-9' : 'pl-3',
                 active ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-900 hover:bg-gray-50',
               )
-            : 'h-10 w-full appearance-none rounded-md border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm text-gray-900 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+            : 'h-10 w-full appearance-none rounded-md border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm text-gray-900 hover:bg-gray-50 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200',
           stitch,
         )}
       >

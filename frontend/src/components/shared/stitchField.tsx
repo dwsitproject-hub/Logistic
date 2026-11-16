@@ -21,5 +21,4 @@ export function stitchControlClass(base: string, stitch: boolean) {
     .replaceAll('border-gray-300', 'border-slate-200')
     .replaceAll('ring-blue-500', 'ring-blue-600')
     .replaceAll('focus:border-slate-500', 'focus:border-blue-600')
-    .replaceAll('focus:ring-slate-500', 'focus:ring-blue-600')
 }

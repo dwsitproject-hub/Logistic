@@ -142,7 +142,6 @@ import {
   type PerfSegmentFilter,
 } from '@/components/contract-performance/ContractPerfUnifiedNodeCard'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
-import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import {
   CONTRACT_PERF_COLUMN_LAYOUT_VERSION,
   CONTRACT_PERF_COLUMN_LAYOUT_VERSION_KEY,
@@ -350,15 +349,6 @@ interface Contract {
   eta_vessel_complete_discharge?: string | null
   /** Last date from trucking daily planning deliverables (LAND). */
   last_planning_delivery_date?: string | null
-}
-
-function contractsListTableScopeLabel(
-  statusFilter: string,
-): { text: string; emphasized: boolean } {
-  if (statusFilter !== 'All Status') {
-    return { text: `Table · ${statusFilter}`, emphasized: false }
-  }
-  return { text: 'Table · All status', emphasized: false }
 }
 
 function getStatusColor(status: string) {
@@ -909,7 +899,7 @@ function ContractPerfQtyReconciliationTooltip({
           type="button"
           data-testid="cp-qty-reconciliation-trigger"
           title="Qty reconciliation"
-          className={`inline-flex shrink-0 items-center justify-center rounded-md border p-1 focus:outline-none focus:ring-2 focus:ring-primary/30 ${triggerTone}`}
+          className={`inline-flex shrink-0 items-center justify-center rounded-md border p-1 focus:outline-none focus:ring-1 focus:ring-primary/30 ${triggerTone}`}
           aria-label={`${title}${productSuffix}. ${hasGap ? 'Qty gap detected' : 'Qty totals match'}`}
         >
           <ClipboardCheck className="h-4 w-4" strokeWidth={2.25} aria-hidden />
@@ -997,7 +987,7 @@ function ContractPerfDrilldownSectionHelp({
       <TooltipTrigger asChild>
         <button
           type="button"
-          className="inline-flex shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          className="inline-flex shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary/30"
           aria-label="Contract performance drilldown help"
         >
           <HelpCircle className="h-4 w-4" />
@@ -1662,9 +1652,18 @@ function ContractsPageContent() {
     [isContractPerformance, contractPerfSection3Loading, loading, contracts.length],
   )
 
+  /** The scope of the Contracts table in plain words: the period, then the status. */
   const contractsTableScope = useMemo(
-    () => contractsListTableScopeLabel(statusFilter),
-    [statusFilter],
+    () => ({
+      text: [
+        formatContractDateScopeLabel(performancePeriod, dateFrom, dateTo, (p) =>
+          resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
+        ),
+        statusFilter !== 'All Status' ? statusFilter : 'All status',
+      ].join(' · '),
+      emphasized: false,
+    }),
+    [performancePeriod, dateFrom, dateTo, statusFilter],
   )
 
   const contractPerfTableFetchScope = contractPerfPipeline.tableFetchScope
@@ -4216,7 +4215,6 @@ function ContractsPageContent() {
                       </span>
                     )}
                   </div>
-                  <PerformanceDrilldownScopeLine segments={contractPerfDrilldownScopeSegments} />
                   {/*
                     Shown only when it is ambiguous. With Open or Close selected the tree carries one
                     measure and the tooltip names it; with neither, the figure adds Outstanding Qty to
@@ -4546,7 +4544,7 @@ function ContractsPageContent() {
           <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div>
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
                   <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                     <span>
                       {isContractPerformance
@@ -4558,7 +4556,7 @@ function ContractsPageContent() {
                     ) : null}
                   </CardTitle>
                   {isContractPerformance ? (
-                    <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                    <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                       <span className="whitespace-nowrap tabular-nums text-gray-700">
                         <span className="font-semibold">
                           {displayTotalContracts.toLocaleString('en-US')}
@@ -4568,31 +4566,31 @@ function ContractsPageContent() {
                       <span className="text-gray-400" aria-hidden>
                         ·
                       </span>
-                      {section3FilterMode === 'linked' ? (
-                        <span className="whitespace-nowrap text-blue-700 font-medium">
-                          Linked
-                          {contractPerfAppliedDrilldownLabel
-                            ? ` · ${contractPerfAppliedDrilldownLabel}`
-                            : ''}
-                        </span>
-                      ) : summaryCardStatus !== 'All' ? (
-                        <span className="whitespace-nowrap text-gray-600 font-medium">
-                          Global · {summaryCardStatus}
-                        </span>
-                      ) : contractPerfSection3FilterApplied ? (
-                        <span className="whitespace-nowrap text-gray-600 font-medium">Global · Filtered</span>
-                      ) : (
-                        <span className="whitespace-nowrap text-gray-600 font-medium">Global · All</span>
-                      )}
-                      <span className="text-gray-400" aria-hidden>
-                        ·
+                      {/* The scope of the table in plain words: the period, Open / Close, the filters that are on, then the drilldown the table follows (the line that used to sit under the Drilldown title). */}
+                      <span className="whitespace-nowrap text-gray-600 font-medium">
+                        {contractPerfDrilldownScopeSegments.join(' · ')}
                       </span>
-                      <span className="whitespace-nowrap tabular-nums">
-                        Page {currentPage}/{totalPages} · {filteredContracts.length} rows
-                      </span>
+                      {section3FilterMode === 'linked' && contractPerfAppliedDrilldownLabel ? (
+                        <>
+                          <span className="text-gray-400" aria-hidden>
+                            ·
+                          </span>
+                          <span className="whitespace-nowrap text-blue-700 font-medium">
+                            Drilldown: {contractPerfAppliedDrilldownLabel}
+                          </span>
+                        </>
+                      ) : null}
+                      {section3FilterMode !== 'linked' && contractPerfSection3FilterApplied ? (
+                        <>
+                          <span className="text-gray-400" aria-hidden>
+                            ·
+                          </span>
+                          <span className="whitespace-nowrap text-gray-600 font-medium">Filtered</span>
+                        </>
+                      ) : null}
                     </p>
                   ) : (
-                    <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                    <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                       <span className="whitespace-nowrap tabular-nums text-gray-700">
                         <span className="font-semibold">
                           {displayTotalContracts.toLocaleString('en-US')}
@@ -4609,12 +4607,6 @@ function ContractsPageContent() {
                         )}
                       >
                         {contractsTableScope.text}
-                      </span>
-                      <span className="text-gray-400" aria-hidden>
-                        ·
-                      </span>
-                      <span className="whitespace-nowrap tabular-nums">
-                        Page {currentPage}/{totalPages} · {filteredContracts.length} rows
                       </span>
                     </p>
                   )}

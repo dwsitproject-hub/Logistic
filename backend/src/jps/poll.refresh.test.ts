@@ -108,7 +108,8 @@ describe('NOT_FOUND: an instruction JPS no longer holds is marked Deleted, so it
   it('the sweep poll closes each instruction JPS answers NOT_FOUND for, counts it as changed, and leaves the others alone', async () => {
     const { pollSubmittedInstructions } = await import('./poll');
     queryMock.mockImplementation(async (text: string) => {
-      if (/FROM jps_shipping_instructions\s+WHERE state = 'SUBMITTED'/.test(String(text))) {
+      // the live poll query only; the grace poll of sailed vessels reads the same table and gets nothing here
+      if (/FROM jps_shipping_instructions\s+WHERE state = 'SUBMITTED'\s+AND COALESCE\(jps_status/.test(String(text))) {
         return {
           rows: [
             { id: 'r1', sto_key: 'OP-1', jps_id: 103, external_reference: 'KLIP-OP-1-R1', jps_status: 'Pending' },
@@ -134,7 +135,7 @@ describe('NOT_FOUND: an instruction JPS no longer holds is marked Deleted, so it
   it('the sweep poll: an unreachable JPS is an error to retry, not a deletion', async () => {
     const { pollSubmittedInstructions } = await import('./poll');
     queryMock.mockImplementation(async (text: string) =>
-      /FROM jps_shipping_instructions\s+WHERE state = 'SUBMITTED'/.test(String(text))
+      /FROM jps_shipping_instructions\s+WHERE state = 'SUBMITTED'\s+AND COALESCE\(jps_status/.test(String(text))
         ? { rows: [{ id: 'r1', sto_key: 'OP-1', jps_id: 103, external_reference: 'KLIP-OP-1-R1', jps_status: 'Approved' }] }
         : { rows: [] },
     );
@@ -142,5 +143,24 @@ describe('NOT_FOUND: an instruction JPS no longer holds is marked Deleted, so it
     const summary = await pollSubmittedInstructions();
     expect(summary).toMatchObject({ errors: 1, changed: 0 });
     expect(closedWrites()).toHaveLength(0);
+  });
+
+  it('a vessel that sailed is still read for a while, slowly: Closing and Opening can still be recorded or edited (JPS, 2026-11-16)', async () => {
+    const { pollSubmittedInstructions, SAILED_POLL_WINDOW_DAYS, SAILED_POLL_EVERY_HOURS } = await import('./poll');
+    queryMock.mockImplementation(async (text: string, params?: unknown[]) => {
+      if (/jps_status IN \('Sailed Off', 'Sailed'\)/.test(String(text))) {
+        // the window and the interval are what the query is asked for, not hard-coded in the SQL text
+        expect(params?.slice(0, 2)).toEqual([SAILED_POLL_WINDOW_DAYS, SAILED_POLL_EVERY_HOURS]);
+        return { rows: [{ id: 's1', sto_key: 'OP-9', jps_id: 55, external_reference: 'KLIP-OP-9-R2', jps_status: 'Sailed Off' }] };
+      }
+      return { rows: [] };
+    });
+    jpsRequestMock.mockResolvedValue({ ok: true, data: { id: 55, status: 'Sailed Off', schedule: { cargo_ops_end_at: '2026-11-17T03:00:00Z' } } });
+    const summary = await pollSubmittedInstructions();
+    expect(summary).toMatchObject({ polled: 1, changed: 0, errors: 0 });
+    expect(applyMock).toHaveBeenCalledTimes(1);
+    expect(applyMock.mock.calls[0][0]).toBe('s1');
+    expect(SAILED_POLL_WINDOW_DAYS).toBeGreaterThanOrEqual(7);
+    expect(SAILED_POLL_EVERY_HOURS).toBeGreaterThanOrEqual(1);
   });
 });

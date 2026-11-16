@@ -420,7 +420,7 @@ export default function MasterPlantPage() {
               setPage(1)
             }}
             dhmCounts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
-            extraActive={company !== ''}
+            extraActive={company !== ''} extraLabel="Company"
             onClear={() => {
               setSearch('')
               setDhm('all')

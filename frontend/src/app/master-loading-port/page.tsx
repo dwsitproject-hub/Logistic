@@ -429,7 +429,7 @@ export default function MasterLoadingPortPage() {
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">VESSEL PORT (SAP)</label>
                   <textarea
-                    className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:bg-slate-50"
+                    className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 focus-visible:outline-none focus-visible:border-blue-400 focus-visible:ring-1 focus-visible:ring-blue-200 disabled:bg-slate-50"
                     rows={4}
                     placeholder={SAP_NAMES_PLACEHOLDER}
                     value={(form.vessel_port_sap ?? []).join('\n')}
@@ -473,7 +473,7 @@ export default function MasterLoadingPortPage() {
               setPage(1)
             }}
             dhmCounts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
-            extraActive={site !== ''}
+            extraActive={site !== ''} extraLabel="Site"
             onClear={() => {
               setSearch('')
               setDhm('all')

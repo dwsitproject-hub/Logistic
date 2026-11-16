@@ -649,9 +649,9 @@ type ShipmentDetailRow = {
   quantity_receive_sap: number | null
   /** Shipment Plan Qty entered at Add New Shipment, editable here (a plan, not a delivery). */
   quantity_shipment_plan: number | null
-  /** KLIP delivered seed (editable without SLD/SDD). */
+  /** KLIP delivered seed (editable directly). */
   quantity_delivered_klip: number | null
-  /** KLIP receive seed (editable after SLD/SDD). */
+  /** KLIP receive seed (editable directly; SLD/SDD no longer gate it). */
   quantity_receive_klip: number | null
   /** SAP Vessel OA Budget (IDR/KG) for this PO line. */
   vessel_oa_budget_sap: number | null
@@ -995,6 +995,11 @@ export function EditShipmentModal({
   const jpsCoversShipment = Object.values(jettyStatus?.jps_ata ?? {}).some((v) => Boolean(v))
   const [ataFields, setAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [originalAtaFields, setOriginalAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
+  // The latest of both, for refreshJettyStatus: it runs after an await, when the closure of the render that started it is already old.
+  const ataFieldsRef = useRef<ShipmentAtaFields>(ataFields)
+  const originalAtaFieldsRef = useRef<ShipmentAtaFields>(originalAtaFields)
+  ataFieldsRef.current = ataFields
+  originalAtaFieldsRef.current = originalAtaFields
   const [ataSapReference, setAtaSapReference] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [loadingPortAtaByKey, setLoadingPortAtaByKey] = useState<Record<string, LoadingAtaFields>>({})
   const [originalLoadingPortAtaByKey, setOriginalLoadingPortAtaByKey] = useState<
@@ -1285,7 +1290,30 @@ export function EditShipmentModal({
     try {
       // The Jetty answer is keyed on the shipment's STO, so no `sto` hint is needed to re-read it.
       const res = await api.get(`/shipments/${shipmentId}/edit-payload`)
-      setJettyStatus((res.data?.data as { jettyStatus?: JettyStatusFields | null } | null)?.jettyStatus ?? null)
+      const payload = res.data?.data as { jettyStatus?: JettyStatusFields | null; shipmentInfo?: Record<string, unknown> | null } | null
+      setJettyStatus(payload?.jettyStatus ?? null)
+      /*
+       * JPS can report an actual while this modal is open (Hose On logged, a webhook, the Refresh icon). The Jetty status above then carries it, but the date fields
+       * were read once when the modal opened, so the new JPS date showed only as the small reference line under an EMPTY field. Take the fresh effective dates into
+       * every ATA field the user has not touched (its value still equals what was loaded); a field the user edited keeps the edit, and the baseline moves with the
+       * fields that moved, so the save does not read a JPS date as a KLIP edit.
+       */
+      if (payload?.shipmentInfo) {
+        const fresh = ataFieldsFromShipmentInfo(payload.shipmentInfo)
+        const current = ataFieldsRef.current
+        const baseline = originalAtaFieldsRef.current
+        const nextCurrent = { ...current }
+        const nextBaseline = { ...baseline }
+        for (const key of Object.keys(fresh) as Array<keyof ShipmentAtaFields>) {
+          if (current[key] === baseline[key]) {
+            nextCurrent[key] = fresh[key]
+            nextBaseline[key] = fresh[key]
+          }
+        }
+        setAtaFields(nextCurrent)
+        setOriginalAtaFields(nextBaseline)
+        setAtaSapReference(ataSapReferenceFromShipmentInfo(payload.shipmentInfo))
+      }
     } catch {
       /* the badge refreshes the next time the modal opens */
     }
@@ -1868,7 +1896,7 @@ export function EditShipmentModal({
         stoQtyAssignedKg: 0,
         reopenOperation,
       })
-      const baseMessage = 'PO added. Set Delivered Qty (Klip) on the row; Received Qty (Klip) needs SLD/SDD.'
+      const baseMessage = 'PO added. Set Delivered Qty (Klip) and Received Qty (Klip) on the row.'
       if (outcome.reopenedFromAta && outcome.remainingAta) {
         // A manual clear only overrides: SAP / JPS / the discharge port row still carry a discharge-complete ATA, so the operation did not reopen.
         setNotification({
@@ -2882,7 +2910,7 @@ export function EditShipmentModal({
                       </div>
                     ) : null}
                     <p className="text-xs italic text-gray-500">
-                      Search by PO, contract, supplier, or product (min. 2 characters). Delivered Qty (Klip) can be edited directly; Received Qty (Klip) needs SLD/SDD or Upload Planning.
+                      Search by PO, contract, supplier, or product (min. 2 characters). Delivered Qty (Klip) and Received Qty (Klip) can be edited directly on the row.
                     </p>
                   </div>
                 )}

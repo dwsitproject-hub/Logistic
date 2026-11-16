@@ -59,7 +59,7 @@ export function SapImportDropZone({
       onDrop={onDrop}
       className={[
         'flex items-center gap-4 rounded-xl border-2 border-dashed px-5 py-5 outline-none transition-colors',
-        'focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
+        'focus-visible:ring-1 focus-visible:ring-blue-200',
         disabled
           ? 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-60'
           : over

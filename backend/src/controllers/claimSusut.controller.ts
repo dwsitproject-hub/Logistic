@@ -499,7 +499,7 @@ export const getClaimSusutTree = async (req: AuthRequest, res: Response) => {
 export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
   try {
     const filters = claimSusutQueryFromReq(req);
-    const sortKeyRaw = String((req.query as any).sortKey || 'os_days').trim();
+    const sortKeyRaw = String((req.query as any).sortKey || 'cr_date').trim();
     const sortDirRaw = String((req.query as any).sortDir || 'desc').trim().toLowerCase();
     const sortDir = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
     const limitRaw = parseInt(String((req.query as any).limit || '200'), 10);
@@ -545,7 +545,7 @@ export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
       a_61_90: `a_61_90`,
       a_gt_90: `a_gt_90`,
     };
-    const sortKey = SORT_SQL[sortKeyRaw] ? sortKeyRaw : 'os_days';
+    const sortKey = SORT_SQL[sortKeyRaw] ? sortKeyRaw : 'cr_date';
     const sortExpr = SORT_SQL[sortKey];
     const orderBy = `${sortExpr} ${sortDir} NULLS LAST, id DESC`;
 

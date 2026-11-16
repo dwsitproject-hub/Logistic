@@ -17,7 +17,11 @@ import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { MultiValueCell } from '@/components/shared/MultiValueCell'
 import { MasterKpis } from '@/components/master/MasterKpis'
-import { MasterFilterBar } from '@/components/master/MasterFilterBar'
+import { MasterDhmSelect, MasterSearchInput } from '@/components/master/MasterFilterBar'
+import { FitFilterBar } from '@/components/shared/FitFilterBar'
+import { ListFilterField } from '@/components/shared/ListFilterBar'
+import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
+import { useListColumnLayout, type ListColumnDef } from '@/lib/listColumnLayout'
 import { MasterTableFooter } from '@/components/master/MasterTableFooter'
 import { MasterDhmChip, MasterIdentityCell, MasterListTable, type MasterTableColumn } from '@/components/master/MasterListTable'
 import { formatVesselCapacity, formatVesselMetres } from '@/lib/masterVesselColumns'
@@ -50,7 +54,45 @@ const KLIP_TRANSACTION_FILTER_OPTIONS = ['Yes', 'No']
 
 /** A multi-select that looks like the Select next to it in the filter row: one 36px field, the name as the placeholder. */
 const FILTER_BUTTON_CLASS =
-  'w-full flex items-center justify-between gap-2 h-9 px-3 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
+  'w-full flex items-center justify-between gap-2 h-9 px-3 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200'
+
+/**
+ * Every column of the vessel list. The first seven are the default view; the others are what a vessel also holds (the Vessel, Type and Capacity cells fold some of
+ * them into a second line) and are one tick away in the Columns menu. The choice and the order are kept in this browser.
+ */
+const VESSEL_COLUMN_DEFS: readonly ListColumnDef[] = [
+  { id: 'vessel_name', label: 'Vessel' },
+  { id: 'vessel_code', label: 'Codes' },
+  { id: 'vessel_codes_sap', label: 'SAP codes' },
+  { id: 'vessel_type', label: 'Type' },
+  { id: 'vessel_capacity_mt', label: 'Capacity' },
+  { id: 'klip_transaction', label: 'In KLIP' },
+  { id: 'dhm_status', label: 'DHM' },
+  { id: 'owner', label: 'Owner', defaultVisible: false },
+  { id: 'sap_vendor_code', label: 'SAP vendor code', defaultVisible: false },
+  { id: 'owner_group', label: 'Owner group', defaultVisible: false },
+  { id: 'terms', label: 'Term / charter', defaultVisible: false },
+  { id: 'lambung_type', label: 'Hull layout', defaultVisible: false },
+  { id: 'heating', label: 'Heating', defaultVisible: false },
+  { id: 'draft', label: 'Draft (m)', defaultVisible: false },
+  { id: 'loa', label: 'LOA (m)', defaultVisible: false },
+  { id: 'hull_type', label: 'Hull type', defaultVisible: false },
+  { id: 'registration_year', label: 'Registration year', defaultVisible: false },
+  { id: 'year_of_creation', label: 'Year of creation', defaultVisible: false },
+  { id: 'pair_partner', label: 'Paired with', defaultVisible: false },
+  { id: 'pair_last_used', label: 'Pair last used', defaultVisible: false },
+]
+
+function plainCell(value: string | number | null | undefined) {
+  const text = value == null || String(value).trim() === '' ? '-' : String(value)
+  return <span className="text-sm">{text}</span>
+}
+
+function shortDate(value: string | null | undefined): string {
+  if (!value) return '-'
+  const at = new Date(value)
+  return Number.isNaN(at.getTime()) ? String(value) : at.toLocaleDateString('en-GB')
+}
 
 type VesselSortKey = 'vessel_name' | 'vessel_code' | 'vessel_codes_sap' | 'vessel_type' | 'vessel_capacity_mt' | 'klip_transaction' | 'dhm_status'
 
@@ -247,7 +289,7 @@ export default function MasterVesselPage() {
     [filterOptions.terms],
   )
 
-  const columns: MasterTableColumn<MasterVessel>[] = [
+  const allColumns: MasterTableColumn<MasterVessel>[] = [
     {
       id: 'vessel_name',
       label: 'Vessel',
@@ -309,7 +351,26 @@ export default function MasterVesselPage() {
     },
     { id: 'klip_transaction', label: 'In KLIP', sortable: true, className: 'whitespace-nowrap', render: (row) => <KlipTransactionBadge value={row.klip_transaction} /> },
     { id: 'dhm_status', label: 'DHM', sortable: true, className: 'whitespace-nowrap', render: (row) => <MasterDhmChip row={row} /> },
+    { id: 'owner', label: 'Owner', render: (row) => plainCell(row.vessel_owner) },
+    { id: 'sap_vendor_code', label: 'SAP vendor code', className: 'whitespace-nowrap', render: (row) => plainCell(row.sap_vendor_code) },
+    { id: 'owner_group', label: 'Owner group', render: (row) => plainCell(row.vessel_owner_group) },
+    { id: 'terms', label: 'Term / charter', className: 'whitespace-nowrap', render: (row) => plainCell(row.terms) },
+    { id: 'lambung_type', label: 'Hull layout', className: 'whitespace-nowrap', render: (row) => plainCell(row.lambung_type) },
+    { id: 'heating', label: 'Heating', className: 'whitespace-nowrap', render: (row) => plainCell(row.heating == null ? null : row.heating ? 'Yes' : 'No') },
+    { id: 'draft', label: 'Draft (m)', className: 'whitespace-nowrap', render: (row) => plainCell(row.vessel_draft != null ? formatVesselMetres(row.vessel_draft) : null) },
+    { id: 'loa', label: 'LOA (m)', className: 'whitespace-nowrap', render: (row) => plainCell(row.vessel_length_overall ? formatVesselMetres(row.vessel_length_overall) : null) },
+    { id: 'hull_type', label: 'Hull type', className: 'whitespace-nowrap', render: (row) => plainCell(row.vessel_hull_type) },
+    { id: 'registration_year', label: 'Registration year', className: 'whitespace-nowrap', render: (row) => plainCell(row.vessel_registration_year) },
+    { id: 'year_of_creation', label: 'Year of creation', className: 'whitespace-nowrap', render: (row) => plainCell(row.year_of_creation) },
+    { id: 'pair_partner', label: 'Paired with', render: (row) => plainCell(row.pair_partner_name) },
+    { id: 'pair_last_used', label: 'Pair last used', className: 'whitespace-nowrap', render: (row) => plainCell(shortDate(row.pair_last_used)) },
   ]
+
+  const columnLayout = useListColumnLayout('master-vessel.columns.v1', VESSEL_COLUMN_DEFS)
+  const columnById = new Map(allColumns.map((col) => [col.id, col]))
+  const columns = columnLayout.orderedVisibleIds
+    .map((id) => columnById.get(id))
+    .filter((col): col is MasterTableColumn<MasterVessel> => Boolean(col))
 
   const kpis = [
     { id: 'total', icon: <Ship className="h-4 w-4" />, label: 'Total vessels', value: summary?.total ?? null, tone: 'bg-blue-50 text-blue-600', hint: 'all master vessels' },
@@ -356,77 +417,74 @@ export default function MasterVesselPage() {
               <MasterKpis items={kpis} />
 
               <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-                <MasterFilterBar
-                  search={searchDraft}
-                  onSearch={setSearchDraft}
-                  placeholder="Search vessel code or name"
-                  ariaLabel="Search vessels"
-                  dhm={dhm}
-                  onDhm={setDhm}
-                  dhmCounts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
-                  extraActive={extraFiltersOn}
-                  onClear={clearFilters}
+                <FitFilterBar
+                  bare
+                  anyActive={filtersOn}
+                  onReset={clearFilters}
+                  items={[
+                    {
+                      key: 'search',
+                      width: 12,
+                      grow: 3,
+                      maxRem: null,
+                      priority: 1000,
+                      active: searchDraft.trim() !== '',
+                      row: <MasterSearchInput value={searchDraft} onChange={setSearchDraft} placeholder="Search vessel code or name" ariaLabel="Search vessels" />,
+                      panel: (
+                        <ListFilterField label="Search">
+                          <MasterSearchInput value={searchDraft} onChange={setSearchDraft} placeholder="Search vessel code or name" ariaLabel="Search vessels" />
+                        </ListFilterField>
+                      ),
+                    },
+                    ...[
+                      { key: 'owner', width: 9.5, maxRem: 14, priority: 500, label: 'Owner', active: selectedOwners.length > 0, field: (
+                        <SearchableMultiSelect label="Owner" hideLabel buttonClassName={FILTER_BUTTON_CLASS} options={filterOptions.owners} selected={selectedOwners} onChange={setSelectedOwners} placeholder="All owners" emptyMessage="No owners" uppercaseOptionLabels />
+                      ) },
+                      { key: 'type', width: 8.75, maxRem: 14, priority: 600, label: 'Vessel type', active: selectedVesselTypes.length > 0, field: (
+                        <SearchableMultiSelect label="Vessel Type" hideLabel buttonClassName={FILTER_BUTTON_CLASS} options={filterOptions.vesselTypes} selected={selectedVesselTypes} onChange={setSelectedVesselTypes} placeholder="All types" emptyMessage="No types" />
+                      ) },
+                      { key: 'charter', width: 9.5, maxRem: 14, priority: 800, label: 'Term / charter', active: selectedTerms.length > 0, field: (
+                        <SearchableMultiSelect label="Term / Charter" hideLabel buttonClassName={FILTER_BUTTON_CLASS} options={termOptions} selected={selectedTerms} onChange={setSelectedTerms} placeholder="All charters" emptyMessage="No terms" />
+                      ) },
+                      { key: 'klip', width: 9, maxRem: 14, priority: 700, label: 'In KLIP', active: selectedKlipTransaction.length > 0, field: (
+                        <SearchableMultiSelect label="Klip Transaction" hideLabel buttonClassName={FILTER_BUTTON_CLASS} options={KLIP_TRANSACTION_FILTER_OPTIONS} selected={selectedKlipTransaction} onChange={setSelectedKlipTransaction} placeholder="In KLIP: all" emptyMessage="No options" />
+                      ) },
+                      { key: 'dhm', width: 12, maxRem: 14.5, priority: 900, label: 'DHM status', active: dhm !== 'all', field: (
+                        <MasterDhmSelect value={dhm} onChange={setDhm} counts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined} />
+                      ) },
+                    ].map((f) => ({
+                      key: f.key,
+                      width: f.width,
+                      maxRem: f.maxRem,
+                      priority: f.priority,
+                      active: f.active,
+                      row: f.field,
+                      panel: <ListFilterField label={f.label}>{f.field}</ListFilterField>,
+                    })),
+                  ]}
                   actions={
-                    isAdmin ? (
-                      <>
-                        <MasterDhmSyncButton master="vessel" onDone={refresh} iconOnly />
-                        <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="New vessel" aria-label="New vessel" onClick={openNew}>
-                          <Plus className="h-4 w-4" aria-hidden />
-                        </Button>
-                      </>
-                    ) : null
+                    <>
+                      <ListPageColumnsMenu
+                        iconOnly
+                        columns={columnLayout.menuColumns}
+                        visibleIds={columnLayout.visibleIds}
+                        onToggle={columnLayout.toggle}
+                        onSelectAll={columnLayout.selectAll}
+                        onUnselectAll={columnLayout.unselectAll}
+                        onReset={columnLayout.reset}
+                        onReorder={columnLayout.reorder}
+                      />
+                      {isAdmin ? (
+                        <>
+                          <MasterDhmSyncButton master="vessel" onDone={refresh} iconOnly />
+                          <Button variant="ghost" size="icon" className={iconButtonClass('add')} title="New vessel" aria-label="New vessel" onClick={openNew}>
+                            <Plus className="h-4 w-4" aria-hidden />
+                          </Button>
+                        </>
+                      ) : null}
+                    </>
                   }
-                >
-                  <div className="w-[150px] shrink-0">
-                  <SearchableMultiSelect
-                    label="Owner"
-                    hideLabel
-                    buttonClassName={FILTER_BUTTON_CLASS}
-                    options={filterOptions.owners}
-                    selected={selectedOwners}
-                    onChange={setSelectedOwners}
-                    placeholder="All owners"
-                    emptyMessage="No owners"
-                    uppercaseOptionLabels
-                  />
-                  </div>
-                  <div className="w-[140px] shrink-0">
-                  <SearchableMultiSelect
-                    label="Vessel Type"
-                    hideLabel
-                    buttonClassName={FILTER_BUTTON_CLASS}
-                    options={filterOptions.vesselTypes}
-                    selected={selectedVesselTypes}
-                    onChange={setSelectedVesselTypes}
-                    placeholder="All types"
-                    emptyMessage="No types"
-                  />
-                  </div>
-                  <div className="w-[150px] shrink-0">
-                  <SearchableMultiSelect
-                    label="Term / Charter"
-                    hideLabel
-                    buttonClassName={FILTER_BUTTON_CLASS}
-                    options={termOptions}
-                    selected={selectedTerms}
-                    onChange={setSelectedTerms}
-                    placeholder="All charters"
-                    emptyMessage="No terms"
-                  />
-                  </div>
-                  <div className="w-[140px] shrink-0">
-                  <SearchableMultiSelect
-                    label="Klip Transaction"
-                    hideLabel
-                    buttonClassName={FILTER_BUTTON_CLASS}
-                    options={KLIP_TRANSACTION_FILTER_OPTIONS}
-                    selected={selectedKlipTransaction}
-                    onChange={setSelectedKlipTransaction}
-                    placeholder="In KLIP: all"
-                    emptyMessage="No options"
-                  />
-                  </div>
-                </MasterFilterBar>
+                />
 
                 <MasterListTable
                   rows={items}
@@ -438,7 +496,7 @@ export default function MasterVesselPage() {
                   sortDir={sortDir}
                   onSort={handleSortChange}
                   onRowClick={openEdit}
-                  minWidthPx={900}
+                  minWidthPx={Math.max(900, columns.length * 130)}
                   renderActions={(row) => (
                     <Button
                       variant="outline"

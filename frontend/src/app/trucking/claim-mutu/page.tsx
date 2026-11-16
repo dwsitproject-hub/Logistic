@@ -207,7 +207,7 @@ export default function ClaimMutuPage() {
   const [metodeOptions, setMetodeOptions] = useState<string[]>([])
 
   const [page, setPage] = useState(1)
-  const [sortKey, setSortKey] = useState<string>('os_days')
+  const [sortKey, setSortKey] = useState<string>('cr_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set(CLAIM_MUTU_DEFAULT_VISIBLE_IDS))
@@ -578,12 +578,12 @@ export default function ClaimMutuPage() {
           <Card className="overflow-hidden rounded-xl border-gray-200 shadow-none">
             <CardHeader className="space-y-0 border-b border-gray-200 px-4 py-3">
               <div className="flex items-center justify-between gap-3">
-                <div>
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
                   <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                     <span>All Quality Claim</span>
                     {loading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
                   </CardTitle>
-                  <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                  <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                     <span className="whitespace-nowrap tabular-nums text-gray-700">
                       <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> rows
                       {claimedCount > 0 ? (
@@ -594,7 +594,11 @@ export default function ClaimMutuPage() {
                     </span>
                     <span className="text-gray-400" aria-hidden>·</span>
                     <span className="whitespace-nowrap font-medium text-gray-600">
-                      {selectedB2bStatuses.length > 0 ? `B2B: ${selectedB2bStatuses.join(', ')}` : b2b === 'include' ? 'Include B2B' : 'Exclude B2B'} · {anyFilter ? 'Filtered' : 'All'}
+                      {period === 'ALL' ? 'All periods' : resolveClaimSusutPeriodRange(period).label}
+                    </span>
+                    <span className="text-gray-400" aria-hidden>·</span>
+                    <span className="whitespace-nowrap font-medium text-gray-600">
+                      {selectedB2bStatuses.length > 0 ? `B2B: ${selectedB2bStatuses.join(', ')}` : b2b === 'include' ? 'Include B2B' : 'Exclude B2B'}· {anyFilter ? 'Filtered' : 'All'}
                     </span>
                     {selectedImport?.file_name ? (
                       <>
@@ -604,10 +608,6 @@ export default function ClaimMutuPage() {
                         </span>
                       </>
                     ) : null}
-                    <span className="text-gray-400" aria-hidden>·</span>
-                    <span className="whitespace-nowrap tabular-nums">
-                      Page {page}/{totalPages} · {rows.length} rows
-                    </span>
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

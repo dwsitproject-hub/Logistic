@@ -173,7 +173,7 @@ function LayoutChrome({
         aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
         aria-expanded={sidebarOpen}
         title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-        className="absolute -right-3 top-1/2 z-30 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+        className="absolute -right-3 top-1/2 z-30 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-800 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-200"
       >
         {sidebarOpen ? <ChevronLeft className="h-3.5 w-3.5" aria-hidden /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden />}
       </button>
@@ -206,7 +206,7 @@ function LayoutChrome({
                         'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-blue-200/90 shadow-sm transition-all',
                         'bg-gradient-to-r from-blue-50 to-indigo-50',
                         'hover:border-blue-300 hover:from-blue-100 hover:to-indigo-100',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2',
+                        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-200',
                       )}
                     >
                       <BookOpen className="h-4 w-4 text-blue-700" aria-hidden />
@@ -227,7 +227,7 @@ function LayoutChrome({
                         'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200/90 shadow-sm transition-all',
                         'bg-gradient-to-r from-red-50 to-rose-50',
                         'hover:border-red-300 hover:from-red-100 hover:to-rose-100',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2',
+                        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-400',
                       )}
                     >
                       <Bug className="h-4 w-4 text-red-700" aria-hidden />
@@ -246,7 +246,7 @@ function LayoutChrome({
                       'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-violet-200/90 shadow-sm transition-all',
                       'bg-gradient-to-r from-violet-50 to-purple-50',
                       'hover:border-violet-300 hover:from-violet-100 hover:to-purple-100',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2',
+                      'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-violet-400',
                     )}
                   >
                     <LogOut className="h-4 w-4 text-violet-700" aria-hidden />
