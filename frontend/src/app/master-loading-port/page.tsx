@@ -473,7 +473,7 @@ export default function MasterLoadingPortPage() {
               setPage(1)
             }}
             dhmCounts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
-            extraActive={site !== ''}
+            extraActive={site !== ''} extraLabel="Site"
             onClear={() => {
               setSearch('')
               setDhm('all')

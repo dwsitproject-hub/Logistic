@@ -250,7 +250,7 @@ export default function MasterCompanyPage() {
                 setPage(1)
               }}
               dhmCounts={summary ? { all: summary.total, synced: summary.synced, not_synced: summary.notSynced, failed: summary.failed } : undefined}
-              extraActive={siteFilter !== ''}
+              extraActive={siteFilter !== ''} extraLabel="Site"
               onClear={() => {
                 setSearch('')
                 setDhm('all')
