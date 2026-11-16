@@ -87,7 +87,7 @@ export function TruckingOutstandingQtySummary({
   )
 
   return (
-    <OutstandingStripFrame className="md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]" loading={loading}>
+    <OutstandingStripFrame className="lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]" loading={loading}>
       <OutstandingStripHeadline
         icon={<StitchNavIcons.trucking className="h-5 w-5" />}
         help={helpText}
