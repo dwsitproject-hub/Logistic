@@ -1784,9 +1784,11 @@ function TruckingPageContent() {
    * Incoterm, Product, Supplier). Every sortable column here is one the server orders by, so any of them may stack.
    * sortKey / sortDir are the PRIMARY entry, so every use below keeps working unchanged.
    */
-  const defaultSortStack: SortEntry[] = [{ key: 'created_at', dir: 'desc' }]
+  // Newest CONTRACT first (it was created_at, when KLIP made the operation): an old contract whose operation was created late - a second STO that arrived with a later import,
+  // an operation rebuilt - sat above the day's new ones. Measured on production 2026-11-16: 7.3 s cold, then served from the page cache (about 0 s); created_at was 1.1 s cold.
+  const defaultSortStack: SortEntry[] = [{ key: 'contract_date', dir: 'desc' }]
   const [sortStack, setSortStack] = useState<SortEntry[]>(defaultSortStack)
-  const sortKey = sortStack[0]?.key ?? 'created_at'
+  const sortKey = sortStack[0]?.key ?? 'contract_date'
   const sortDir: 'asc' | 'desc' = sortStack[0]?.dir ?? 'desc'
   /** The `sort` request parameter: only when more than one column is stacked. */
   const sortStackParam = sortStack.length > 1 ? serializeSortStack(sortStack) : ''
