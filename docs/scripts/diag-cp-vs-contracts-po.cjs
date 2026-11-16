@@ -118,5 +118,36 @@ const today = new Date().toISOString().slice(0, 10);
   } else {
     console.log('The Contracts list did not return this PO even with no filter: search by this PO text may not match, or it is outside the default scope.');
   }
+  // Contract Performance moves a contract to Close when it has "effectively finished" (contractDeliveryStatus.sqlContractEffectivelyDoneExpr): any ONE of
+  //   (1) outstanding inside the zero band, (2) an ATC at discharge with every STO discharged, (3) every vessel STO's shipment finished.
+  // The Contracts page does not apply this, which is the usual reason a contract is Open on one page and Close on the other. Each arm is evaluated here.
+  try {
+    const cyc = load('utils/contractsListCycleSql');
+    const tol = load('utils/qtyZeroTolerance').OUTSTANDING_QTY_ZERO_TOLERANCE_KG;
+    const cid = String(rows.rows[0].contract_id);
+    const arms = await pool.query(
+      `SELECT ${cyc.sqlLastAtaVesselCompleteDischargeForContract('(SELECT c_done.id FROM contracts c_done WHERE c_done.contract_id = $1::text ORDER BY c_done.created_at DESC LIMIT 1)')} AS atc_at_discharge,
+              COALESCE((${cyc.sqlContractVesselStosFinishedExpr('$1::text')}), FALSE) AS every_vessel_sto_finished`,
+      [cid],
+    );
+    const os = firstRow ? Number(firstRow.outstanding_quantity) : null;
+    console.log('\n--- why Contract Performance may call it Close (any ONE arm is enough)');
+    console.table([{
+      outstanding_kg: os,
+      arm1_os_inside_zero_band: os !== null && os <= Number(tol) ? 'YES (<= ' + tol + ' kg)' : 'no (needs <= ' + tol + ' kg)',
+      arm2_atc_at_discharge: arms.rows[0].atc_at_discharge ? String(arms.rows[0].atc_at_discharge).slice(0, 10) : 'none',
+      arm3_every_vessel_sto_finished: arms.rows[0].every_vessel_sto_finished ? 'YES' : 'no',
+      sto_count_in_list: firstRow ? firstRow.sto_count : null,
+    }]);
+    const ships = await pool.query(
+      `SELECT s.operation_id, s.sto_number, s.status, s.ata_discharge_complete::date AS ata_discharge_complete, s.quantity_delivered, s.quantity_delivered_klip, s.actual_vessel_qty_receive
+         FROM shipments s WHERE s.contract_id IN (SELECT id FROM contracts WHERE contract_id = $1::text) ORDER BY s.created_at`,
+      [cid],
+    );
+    console.log('--- shipments of this contract');
+    console.table(ships.rows);
+  } catch (e) {
+    console.log('\n--- effectively-done arms: skipped (' + (e && e.message ? e.message : e) + ')');
+  }
   process.exit(0);
 })().catch((e) => { console.error('FAILED:', e && e.message ? e.message : e); process.exit(1); });
