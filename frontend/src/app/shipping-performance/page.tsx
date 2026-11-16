@@ -2749,7 +2749,7 @@ function ShippingPerformancePageContent() {
                         setSearchTerm(searchDraft)
                       }
                     }}
-                    className="h-10 rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+                    className="h-10 rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-200"
                   />
                 </div>
               </div>
@@ -2761,7 +2761,7 @@ function ShippingPerformancePageContent() {
                   id="shipping-perf-status-filter"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as TableStatusFilter)}
-                  className="flex h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  className="flex h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
                 >
                   <option value="All">All</option>
                   <option value="Open">Open</option>

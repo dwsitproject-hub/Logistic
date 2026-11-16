@@ -101,7 +101,7 @@ function chipTone(total: number, items: MissingEtaAlertUnit[]): {
       icon: 'text-gray-500',
       label: 'text-gray-700',
       badge: 'bg-gray-500',
-      ring: 'focus-visible:ring-gray-400',
+      ring: 'focus-visible:ring-blue-200',
     }
   }
 

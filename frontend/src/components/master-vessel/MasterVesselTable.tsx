@@ -166,7 +166,7 @@ export function MasterVesselTable({
                   return (
                     <tr
                       key={row.id}
-                      className={cn(stripe, 'group cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-500')}
+                      className={cn(stripe, 'group cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-200')}
                       tabIndex={0}
                       onClick={() => {
                         // a drag over the text is a selection, not a click on the row

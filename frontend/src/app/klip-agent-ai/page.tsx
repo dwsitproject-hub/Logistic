@@ -229,7 +229,7 @@ export default function KlipAgentAiPage() {
                 }
               }}
               placeholder="Ask anything about logistics/commercial data..."
-              className="min-h-[88px] w-full rounded-xl border border-input bg-background px-4 py-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="min-h-[88px] w-full rounded-xl border border-input bg-background px-4 py-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:border-blue-400 focus-visible:ring-1 focus-visible:ring-blue-200"
             />
             <div className="flex flex-col md:flex-row gap-3 md:items-center">
               <div className="flex-1">

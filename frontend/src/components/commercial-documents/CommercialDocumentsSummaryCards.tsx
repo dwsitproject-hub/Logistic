@@ -44,7 +44,7 @@ export function CommercialDocumentsSummaryCards({ summary, loading = false, acti
               onClick={() => onSelect(type)}
               aria-pressed={active}
               title={`Show contracts with ${label} uploaded`}
-              className="min-w-0 text-left cursor-pointer rounded-lg focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+              className="min-w-0 text-left cursor-pointer rounded-lg focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-200"
             >
               <Card
                 className={cn(

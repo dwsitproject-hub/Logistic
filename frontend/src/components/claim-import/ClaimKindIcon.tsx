@@ -30,7 +30,7 @@ export function ClaimKindIcon({ kind, size = 'md' }: { kind: ClaimDataKind; size
           role="img"
           aria-label={`${hover}. ${detail}`}
           tabIndex={0}
-          className={`inline-flex ${box} shrink-0 cursor-help items-center justify-center rounded-full outline-none focus-visible:ring-1 focus-visible:ring-blue-400 ${tone}`}
+          className={`inline-flex ${box} shrink-0 cursor-help items-center justify-center rounded-full outline-none focus-visible:ring-1 focus-visible:ring-blue-200 ${tone}`}
         >
           <Icon className={size === 'sm' ? 'h-3.5 w-3.5' : 'h-4 w-4'} aria-hidden />
         </span>

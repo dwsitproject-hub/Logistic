@@ -7730,7 +7730,7 @@ function ShipmentsPageContent() {
                                                   setEditedData(next)
                                                 }
                                               }}
-                                              className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 w-full bg-white"
+                                              className="h-8 text-sm px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200 w-full bg-white"
                                               title="Status lowered automatically. Can only be cancelled manually."
                                             >
                                               <option value={currentStatus}>{formatShipmentStatusLabel(shipment.status)}</option>
