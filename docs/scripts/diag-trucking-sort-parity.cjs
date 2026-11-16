@@ -30,7 +30,8 @@ const base = { limit: '20', skipSapJoin: 'true', dateFrom: `${year}-01-01`, date
       const data = await resolveTruckingListForRequest(req);
       const rows = Array.isArray(data && data.truckingOperations) ? data.truckingOperations : [];
       rows.forEach((r, i) => {
-        const cd = r.contract_date ? String(r.contract_date).slice(0, 10) : 'NULL';
+        // the driver hands a Date: print it as YYYY-MM-DD (String(Date) is "Tue Jan 06 ...", which drops the year and is no use for comparing)
+        const cd = r.contract_date instanceof Date ? r.contract_date.toISOString().slice(0, 10) : r.contract_date ? String(r.contract_date).slice(0, 10) : 'NULL';
         lines.push(`${dir} p${page} #${String(i + 1).padStart(2, '0')} ${String(r.status).padEnd(12)} ${String(r.po_number ?? r.contract_number ?? '').padEnd(12)} ${String(r.sto_number ?? '').slice(0, 24).padEnd(24)} ${cd}`);
       });
     }
