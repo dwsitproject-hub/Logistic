@@ -55,10 +55,14 @@ const call = (mod, name, fallback) => (typeof mod[name] === 'function' ? mod[nam
   console.table((await query(`SELECT kind, response_status, ok, COALESCE(error_code,'-') AS error_code, LEFT(COALESCE(error_message,'-'), 70) AS error_message, COUNT(*)::int AS n, MAX(created_at)::timestamp(0) AS last_at FROM jps_api_calls WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY 1,2,3,4,5 ORDER BY n DESC LIMIT 15`)).rows);
 
   // 3. Which STOs would go, and does the cargo code resolve
-  const ports = cfg.jpsEnabledPortNames();
-  console.log('JPS enabled:', cfg.isJpsEnabled(), '| ports switched on:', ports.join(', ') || '(none)');
+  // With no port switched on the sweep sends nothing, but this report only READS: it looks at every port that is configured, so the answer is there before one is switched on.
+  let ports = cfg.jpsEnabledPortNames();
+  const switchedOn = ports.length > 0;
+  if (!switchedOn && typeof cfg.jpsPorts === 'function') ports = cfg.jpsPorts().map((x) => x.port);
+  console.log('JPS enabled:', cfg.isJpsEnabled(), '| ports switched on:', switchedOn ? ports.join(', ') : '(none)');
+  if (!switchedOn) console.log('No port is switched on, so the sweep sends nothing. Reading the configured ports instead:', ports.join(', ') || '(none configured)');
   if (ports.length === 0) {
-    console.log('No port is switched on, so nothing is eligible. Switch one on in Integrations > JPS > Ports, or stop here.');
+    console.log('No port is configured either (Integrations > JPS > Ports), so there is nothing to look at.');
     process.exit(0);
   }
   const eligible = await findEligibleStos(ports, 5000, {});
@@ -113,6 +117,12 @@ const call = (mod, name, fallback) => (typeof mod[name] === 'function' ? mod[nam
   console.table([...unknownToJps.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([key, n]) => ({ code_product_material: key, lines: n })));
   console.log('--- samples that resolve');
   console.table(samples);
+
+  console.log('--- calls JPS refused or that failed, last 30 days (what JPS said)');
+  const failed = await query(`SELECT created_at::timestamp(0) AS at, kind, response_status AS status, COALESCE(sto_key,'-') AS sto_key, COALESCE(error_code,'-') AS code, LEFT(COALESCE(response_body::text, error_message, '-'), 600) AS what_jps_said FROM jps_api_calls WHERE ok = false AND created_at > NOW() - INTERVAL '30 days' ORDER BY created_at DESC LIMIT 8`);
+  for (const r of failed.rows) console.log(`${r.at} ${r.kind} ${r.status} sto=${r.sto_key} ${r.code}
+    ${r.what_jps_said}`);
+  if (failed.rows.length === 0) console.log('(none)');
 
   const states = await query(`SELECT state, COUNT(*)::int AS n FROM jps_shipping_instructions GROUP BY 1 ORDER BY n DESC`);
   console.log('--- instructions already recorded, by state');
