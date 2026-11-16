@@ -44,6 +44,9 @@ const fieldRow = (f) => ({
 });
 
 (async () => {
+  // The Integrations menu keeps its settings (ports, "send automatically", retry, the key) in the database, and the server reads them at start. This script is a
+  // separate process, so it must read them too - otherwise it sees only .env and reports ports and switches that are not the ones in force.
+  await load('integrations/settingsStore').loadIntegrationSettings();
   const { jpsRequest } = load('jps/client');
   const { jpsBaseUrl, jpsApiKey, isJpsEnabled, jpsEnabledPortNames } = load('jps/config');
   let host = '(not set)';
