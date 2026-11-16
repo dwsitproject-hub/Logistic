@@ -60,6 +60,7 @@ const today = new Date().toISOString().slice(0, 10);
   const isOurs = (c) => contractIds.has(String(c.contract_id)) || String(c.po_numbers || '').split(',').map((s) => s.trim()).includes(PO);
 
   const base = { page: '1', limit: '50', search: PO };
+  const cpOpen = { ...base, scope: 'filtered', dateFrom: sameYtdFrom, dateTo: today, requireRegionSite: 'true', compact: 'true', status: 'Open' };
   const variants = [
     ['Contracts page: no status, no date, no region rule', { ...base }],
     ['+ date range year-to-date only', { ...base, dateFrom: sameYtdFrom, dateTo: today }],
@@ -69,6 +70,13 @@ const today = new Date().toISOString().slice(0, 10);
     ['status Open alone (no region rule)', { ...base, status: 'Open' }],
     ['status Close alone (no region rule)', { ...base, status: 'Close' }],
     ['CP exactly: YTD + region rule + status Open', { ...base, scope: 'filtered', dateFrom: sameYtdFrom, dateTo: today, requireRegionSite: 'true', compact: 'true', status: 'Open' }],
+    // The Late / On Time tabs of the CP table send lateOnTimeFilter and excludeUnscheduled=true; "all" sends excludeUnscheduled=false.
+    ['CP + Late tab (lateOnTimeFilter=LATE, excludeUnscheduled)', { ...cpOpen, lateOnTimeFilter: 'LATE', excludeUnscheduled: 'true' }],
+    ['CP + On Time tab (lateOnTimeFilter=ON_TIME, excludeUnscheduled)', { ...cpOpen, lateOnTimeFilter: 'ON_TIME', excludeUnscheduled: 'true' }],
+    ['CP + all, excludeUnscheduled=false (what the page sends with no Late/On Time tab)', { ...cpOpen, lateOnTimeFilter: 'ALL', excludeUnscheduled: 'false' }],
+    // Planning Status is a CP filter too (one value only); the PO's shipment status is UNPLANNED when it has no shipment yet.
+    ['CP + Planning Status = Planned', { ...cpOpen, planningStatuses: 'PLANNED' }],
+    ['CP + Planning Status = Unplanned', { ...cpOpen, planningStatuses: 'UNPLANNED' }],
   ];
 
   const out = [];
@@ -86,6 +94,21 @@ const today = new Date().toISOString().slice(0, 10);
   }
   console.log('\n--- where it drops out');
   console.table(out);
+
+  // The cards and the Product > Region/Plant > Incoterm drilldown come from the tree endpoint, not the list.
+  try {
+    const { getLatePerformanceTree } = load('controllers/contract.controller');
+    const tr = await ask(getLatePerformanceTree, { scope: 'filtered', dateFrom: sameYtdFrom, dateTo: today });
+    const text = JSON.stringify((tr.body && tr.body.data) || tr.body || {});
+    const plantHint = firstRow && firstRow.plant_site ? String(firstRow.plant_site) : '';
+    console.log('\n--- drilldown tree (late-performance/tree, YTD): HTTP ' + tr.code + ', ' + text.length + ' chars' + (plantHint ? ', mentions ' + plantHint + ': ' + text.toUpperCase().includes(plantHint.toUpperCase()) : ''));
+    if (plantHint) {
+      const i = text.toUpperCase().indexOf(plantHint.toUpperCase());
+      if (i >= 0) console.log('  around it: ' + text.slice(Math.max(0, i - 200), i + 500));
+    }
+  } catch (e) {
+    console.log('\n--- drilldown tree: skipped (' + (e && e.message ? e.message : e) + ')');
+  }
 
   if (firstRow) {
     console.log('--- the row as the list returns it (the fields the CP rules read)');
