@@ -135,12 +135,17 @@ const today = new Date().toISOString().slice(0, 10);
     console.table([{
       outstanding_kg: os,
       arm1_os_inside_zero_band: os !== null && os <= Number(tol) ? 'YES (<= ' + tol + ' kg)' : 'no (needs <= ' + tol + ' kg)',
-      arm2_atc_at_discharge: arms.rows[0].atc_at_discharge ? String(arms.rows[0].atc_at_discharge).slice(0, 10) : 'none',
+      arm2_atc_at_discharge: arms.rows[0].atc_at_discharge ? new Date(arms.rows[0].atc_at_discharge).toISOString().slice(0, 10) : 'none',
       arm3_every_vessel_sto_finished: arms.rows[0].every_vessel_sto_finished ? 'YES' : 'no',
       sto_count_in_list: firstRow ? firstRow.sto_count : null,
     }]);
+    // Where the ATC comes from, shipment by shipment: the resolver reads the JPS lane, then the KLIP override, then the shipment's own column, then the discharge leg.
     const ships = await pool.query(
-      `SELECT s.operation_id, s.sto_number, s.status, s.ata_discharge_complete::date AS ata_discharge_complete, s.quantity_delivered, s.quantity_delivered_klip, s.actual_vessel_qty_receive
+      `SELECT s.operation_id, s.shipment_id, s.status, s.created_at::date AS created,
+              s.ata_discharge_complete::date AS shipment_ata_col,
+              (SELECT MAX(v.ata_loading_completed)::date FROM vessel_loading_ports v WHERE v.shipment_id = s.id AND COALESCE(v.is_discharge_port, FALSE) = TRUE) AS discharge_leg_ata,
+              LEFT(COALESCE((SELECT to_jsonb(o)::text FROM shipment_ata_overrides o WHERE o.shipment_id = s.id LIMIT 1), '-'), 330) AS override_row,
+              s.quantity_delivered, s.quantity_delivered_klip, s.actual_vessel_qty_receive
          FROM shipments s WHERE s.contract_id IN (SELECT id FROM contracts WHERE contract_id = $1::text) ORDER BY s.created_at`,
       [cid],
     );
