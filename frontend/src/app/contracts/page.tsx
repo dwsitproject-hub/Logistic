@@ -4313,7 +4313,7 @@ function ContractsPageContent() {
                               <div className="text-sm font-semibold text-gray-800">{col.title}</div>
                               <div className="text-[0.6875rem] text-gray-500">{subtitle}</div>
                             </div>
-                            <div className="p-2 max-h-80 overflow-y-auto">
+                            <div className="p-2 max-h-60 overflow-y-auto">
                               {renderUnifiedColumnBody()}
                             </div>
                           </div>

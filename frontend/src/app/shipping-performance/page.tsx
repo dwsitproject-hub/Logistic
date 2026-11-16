@@ -2744,7 +2744,7 @@ function ShippingPerformancePageContent() {
                       return (
                         <div key={col.level} className={`rounded-lg border ${style.border} overflow-hidden`}>
                           {panelHeader}
-                          <div className="p-2 max-h-80 overflow-y-auto">{body}</div>
+                          <div className="p-2 max-h-60 overflow-y-auto">{body}</div>
                         </div>
                       )
                     })}
