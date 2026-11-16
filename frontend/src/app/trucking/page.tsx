@@ -21,6 +21,7 @@ import api from '@/lib/api'
 import { previewMimeType } from '@/lib/documentView'
 import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/shared/DocumentPreviewDialog'
 import { describeTruckingSummaryFreshness } from '@/lib/truckingSummaryFreshness'
+import { FieldHelp } from '@/components/FieldHelp'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache, isCacheFresh, peekCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -4005,19 +4006,6 @@ function TruckingPageContent() {
           rendered when the figures really did come from the snapshot - a badge that is always
           there is a badge nobody reads.
         */}
-        {truckingSummaryFreshnessNote ? (
-          <p
-            className={
-              truckingSummaryFreshnessNote.tone === 'pending'
-                ? 'px-1 text-xs text-amber-700'
-                : 'px-1 text-xs text-muted-foreground'
-            }
-            title={truckingSummaryFreshnessNote.detail}
-          >
-            {truckingSummaryFreshnessNote.label} — {truckingSummaryFreshnessNote.detail}
-          </p>
-        ) : null}
-
         {/* Section 3: Main View Table — calendar or list tab below */}
 
         {TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED && activeTab === 'calendar' && (
@@ -4554,6 +4542,12 @@ function TruckingPageContent() {
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
               <CardTitle className="text-base flex items-center gap-2 flex-wrap shrink-0">
                 All Trucking
+                {truckingSummaryFreshnessNote ? (
+                  <FieldHelp
+                    text={`${truckingSummaryFreshnessNote.label}\n\n${truckingSummaryFreshnessNote.detail}`}
+                    iconClassName={truckingSummaryFreshnessNote.tone === 'pending' ? 'text-amber-500 hover:text-amber-700' : undefined}
+                  />
+                ) : null}
                 {listFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
