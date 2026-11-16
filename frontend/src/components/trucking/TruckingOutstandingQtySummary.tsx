@@ -1,11 +1,14 @@
 'use client'
 
 import { useMemo } from 'react'
-import { Loader2 } from 'lucide-react'
 import { StitchNavIcons } from '@/components/shared/stitchIcons'
-import { Card, CardContent } from '@/components/ui/card'
-import { FieldHelp } from '@/components/FieldHelp'
-import { cn, formatOutstandingQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
+import {
+  OutstandingStripBucket,
+  OutstandingStripFrame,
+  OutstandingStripHeadline,
+  type OutstandingStripPart,
+} from '@/components/shared/OutstandingQtyStrip'
+import { formatOutstandingQtyMtFromKg } from '@/lib/utils'
 
 export interface TruckingOutstandingQtyBucket {
   frcKg: number
@@ -58,32 +61,11 @@ type TruckingOutstandingQtySummaryProps = {
   data: TruckingOutstandingQtySummaryData | null | undefined
 }
 
-function BucketColumn({
-  title,
-  bucket,
-}: {
-  title: string
-  bucket: TruckingOutstandingQtyBucket
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
-      <div className="mt-2 space-y-1 text-sm text-gray-600">
-        <div className="flex items-baseline justify-between gap-3">
-          <span>FRC</span>
-          <span className={cn('font-semibold tabular-nums', outstandingQtyMtColorClass(bucket.frcKg))}>
-            {formatOutstandingQtyMtFromKg(bucket.frcKg, { maxFractionDigits: 0 })}
-          </span>
-        </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <span>LCO</span>
-          <span className={cn('font-semibold tabular-nums', outstandingQtyMtColorClass(bucket.lcoKg))}>
-            {formatOutstandingQtyMtFromKg(bucket.lcoKg, { maxFractionDigits: 0 })}
-          </span>
-        </div>
-      </div>
-    </div>
-  )
+function truckingParts(bucket: TruckingOutstandingQtyBucket): OutstandingStripPart[] {
+  return [
+    { key: 'frc', label: 'FRC', kg: bucket.frcKg, dot: 'bg-sky-500' },
+    { key: 'lco', label: 'LCO', kg: bucket.lcoKg, dot: 'bg-indigo-400' },
+  ]
 }
 
 /**
@@ -105,52 +87,17 @@ export function TruckingOutstandingQtySummary({
   )
 
   return (
-    <Card>
-      <CardContent className="p-4 md:p-5">
-        <div
-          className={cn(
-            'grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-6 transition-opacity duration-200',
-            loading ? 'opacity-65' : 'opacity-100',
-          )}
-        >
-          <div className="flex min-w-0 items-start gap-3 rounded-xl border border-blue-200 bg-gradient-to-br from-white to-blue-50/30 p-4">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-blue-100/80 text-blue-600">
-              <StitchNavIcons.trucking className="h-6 w-6" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <span>Outstanding Qty</span>
-                <FieldHelp text={helpText} />
-                {loading ? (
-                  <Loader2
-                    className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600"
-                    aria-label="Loading outstanding qty"
-                  />
-                ) : null}
-              </div>
-              <div
-                className={cn(
-                  'mt-1 text-2xl font-bold tabular-nums',
-                  outstandingQtyMtColorClass(summary.totalKg),
-                )}
-              >
-                {formatOutstandingQtyMtFromKg(summary.totalKg, { maxFractionDigits: 0 })}
-              </div>
-              <p className="mt-1 text-[0.6875rem] leading-snug text-gray-500">
-                Unplanned OS + Planned OS
-              </p>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <BucketColumn title="3rd Party" bucket={summary.thirdParty} />
-          </div>
-
-          <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <BucketColumn title="Interco" bucket={summary.interco} />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    <OutstandingStripFrame className="md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]" loading={loading}>
+      <OutstandingStripHeadline
+        icon={<StitchNavIcons.trucking className="h-5 w-5" />}
+        help={helpText}
+        loading={loading}
+        pending={false}
+        kg={summary.totalKg}
+        hint="Unplanned OS + Planned OS"
+      />
+      <OutstandingStripBucket title="3rd Party" parts={truckingParts(summary.thirdParty)} pending={false} />
+      <OutstandingStripBucket title="Interco" parts={truckingParts(summary.interco)} pending={false} />
+    </OutstandingStripFrame>
   )
 }

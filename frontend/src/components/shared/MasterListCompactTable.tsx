@@ -108,10 +108,6 @@ export function MasterListCompactTable<T>({
   onRowClick,
   rowClickHint,
 }: MasterListCompactTableProps<T>) {
-  const topScrollRef = useRef<HTMLDivElement>(null)
-  const bottomScrollRef = useRef<HTMLDivElement>(null)
-  const isSyncingScroll = useRef(false)
-  const [tableScrollWidth, setTableScrollWidth] = useState(0)
   const colSpan = columns.length + (renderActions ? 1 : 0)
   // The DHM status icon is frozen on the right edge like the Actions column, so it always stays last, whatever order the user dragged the others into.
   const orderedColumns = useMemo(
@@ -121,46 +117,12 @@ export function MasterListCompactTable<T>({
   // When an Actions column is also frozen, the DHM status sits just left of it.
   const dhmStickyRight = renderActions ? (tightActions ? MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX : MASTER_VESSEL_ACTIONS_COL_WIDTH_PX) : 0
 
-  useEffect(() => {
-    const table = bottomScrollRef.current?.querySelector('table')
-    if (table) setTableScrollWidth(table.scrollWidth)
-  }, [rows.length, columns])
-
   return (
     <div className={loading && rows.length === 0 ? 'min-h-[240px]' : undefined}>
       {onRowClick && rowClickHint ? <p className="mb-1.5 text-xs text-gray-500">{rowClickHint}</p> : null}
       <div className="border rounded-lg overflow-hidden">
         <div
-          ref={topScrollRef}
-          className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
-          onScroll={() => {
-            if (isSyncingScroll.current) return
-            const top = topScrollRef.current
-            const bottom = bottomScrollRef.current
-            if (!top || !bottom) return
-            isSyncingScroll.current = true
-            bottom.scrollLeft = top.scrollLeft
-            window.requestAnimationFrame(() => {
-              isSyncingScroll.current = false
-            })
-          }}
-        >
-          <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-        </div>
-        <div
-          ref={bottomScrollRef}
           className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-          onScroll={() => {
-            if (isSyncingScroll.current) return
-            const top = topScrollRef.current
-            const bottom = bottomScrollRef.current
-            if (!top || !bottom) return
-            isSyncingScroll.current = true
-            top.scrollLeft = bottom.scrollLeft
-            window.requestAnimationFrame(() => {
-              isSyncingScroll.current = false
-            })
-          }}
         >
           <table
             className={cn(

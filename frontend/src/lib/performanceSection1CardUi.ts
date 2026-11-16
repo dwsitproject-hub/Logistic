@@ -17,12 +17,12 @@ export interface PerformanceSection1CardAccent {
   focus: string
 }
 
-const AMBER: Omit<PerformanceSection1CardAccent, 'icon'> = {
+const BLUE: Omit<PerformanceSection1CardAccent, 'icon'> = {
   surface: 'border-gray-200 bg-white',
-  chip: 'bg-amber-50 text-amber-600',
-  selected: 'border-amber-400 bg-white ring-1 ring-amber-200',
+  chip: 'bg-blue-50 text-blue-600',
+  selected: 'border-blue-400 bg-white ring-1 ring-blue-200',
   hover: 'hover:bg-gray-50',
-  focus: 'focus-visible:ring-2 focus-visible:ring-amber-200',
+  focus: 'focus-visible:ring-2 focus-visible:ring-blue-200',
 }
 
 const EMERALD: Omit<PerformanceSection1CardAccent, 'icon'> = {
@@ -35,15 +35,15 @@ const EMERALD: Omit<PerformanceSection1CardAccent, 'icon'> = {
 
 /**
  * Visual tokens for the Section 1 status cards of Contract Performance (Open / Close), Shipping Performance (On Going / Completed) and the claim pages.
- * The same card as the Contracts and master pages: white, a grey outline, a small icon tile. Open / On Going follow the Open card of Contracts (amber, a clock or
+ * The same card as the Contracts and master pages: white, a grey outline, a small icon tile. Open / On Going follow the Open card of Contracts (blue, a clock or
  * a ship); Close / Completed follow its Close card (green, a check).
  */
 export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
   PerformanceSection1CardVariant,
   PerformanceSection1CardAccent
 > = {
-  open: { icon: Clock, ...AMBER },
+  open: { icon: Clock, ...BLUE },
   close: { icon: CircleCheck, ...EMERALD },
-  ongoing: { icon: Ship, ...AMBER },
+  ongoing: { icon: Ship, ...BLUE },
   completed: { icon: CircleCheck, ...EMERALD },
 }

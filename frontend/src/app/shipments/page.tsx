@@ -1465,10 +1465,6 @@ function ShipmentsPageContent() {
   )
 
   // Desktop table horizontal scroll sync (top + bottom)
-  const topScrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
-  const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
-  const isSyncingScroll = useRef(false)
 
   // Contract details state for expanded view
   const [contractDetailsMap, setContractDetailsMap] = useState<{ [shipmentId: string]: PortsModalContractDetail[] }>({})
@@ -5560,43 +5556,6 @@ function ShipmentsPageContent() {
   const expandedCount = expandedShipmentIds.size
   const allExpanded = expandedCount > 0 && expandedCount === allVisibleIds.length
 
-  // Sync scroll between top and bottom scrollbars
-  useEffect(() => {
-    const topEl = topScrollRef.current
-    const bottomEl = bottomScrollRef.current
-    if (!topEl || !bottomEl) return
-
-    const handleTopScroll = () => {
-      if (isSyncingScroll.current) return
-      isSyncingScroll.current = true
-      bottomEl.scrollLeft = topEl.scrollLeft
-      setTimeout(() => { isSyncingScroll.current = false }, 50)
-    }
-
-    const handleBottomScroll = () => {
-      if (isSyncingScroll.current) return
-      isSyncingScroll.current = true
-      topEl.scrollLeft = bottomEl.scrollLeft
-      setTimeout(() => { isSyncingScroll.current = false }, 50)
-    }
-
-    topEl.addEventListener('scroll', handleTopScroll)
-    bottomEl.addEventListener('scroll', handleBottomScroll)
-
-    return () => {
-      topEl.removeEventListener('scroll', handleTopScroll)
-      bottomEl.removeEventListener('scroll', handleBottomScroll)
-    }
-  }, [visibleColumns, sortedShipments.length])
-
-  // Update table scroll width when content changes
-  useEffect(() => {
-    const bottomEl = bottomScrollRef.current
-    if (bottomEl) {
-      setTableScrollWidth(bottomEl.scrollWidth)
-    }
-  }, [visibleColumns, sortedShipments.length, editingId])
-
   // Vessel loading port functions
   const buildShipmentInfoFromShipment = (s: Record<string, unknown>) => ({
     quantity_delivered: s.quantity_delivered,
@@ -7512,39 +7471,8 @@ function ShipmentsPageContent() {
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
                 {/* Desktop compact table */}
                 <div className="hidden lg:block overflow-hidden">
-                  {/* Top scrollbar (synced) */}
                   <div
-                    ref={topScrollRef}
-                    className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      bottom.scrollLeft = top.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
-                  >
-                    <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-                  </div>
-
-                  <div
-                    ref={bottomScrollRef}
                     className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      top.scrollLeft = bottom.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
                   >
                       <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols klip-table--directory`}>
                         <colgroup>
@@ -7916,7 +7844,7 @@ function ShipmentsPageContent() {
                                           const currentStatus = String(shipment.status || '').toUpperCase()
                                           if (currentStatus === 'CANCELLED') {
                                             return (
-                                              <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                              <Badge className={getStatusColor('CANCELLED')}>Cancelled</Badge>
                                             )
                                           }
                                           const selected =

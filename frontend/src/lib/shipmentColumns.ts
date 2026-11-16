@@ -149,7 +149,7 @@ export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayou
 
 export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
 
-  jetty_status: 112,
+  jetty_status: 128,
 
   jetty_sync_dates: 176,
 
@@ -172,7 +172,7 @@ export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
 
   product: 88,
 
-  status: 80,
+  status: 132,
 
   contract_qty: 96,
 

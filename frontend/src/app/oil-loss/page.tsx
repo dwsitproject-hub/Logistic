@@ -70,7 +70,7 @@ import {
   OIL_LOSS_COLUMN_PREFS_USER_KEY,
   parseOilLossColumnPrefsFromApiValue,
 } from '@/lib/oilLossColumnPrefs'
-import { cn, formatQtyMtFromKg } from '@/lib/utils'
+import { cn, formatQtyMtFromKg, statusBadgeText } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import { compactTableActionsColWidthPx } from '@/lib/compactTableUi'
@@ -434,7 +434,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       sortable: true,
       getSortValue: (r) => r.status || '',
       render: (r) => (
-        <Badge className={getStatusColor(r.status || '')}>{r.status || '-'}</Badge>
+        <Badge className={getStatusColor(r.status || '')}>{statusBadgeText(r.status) || '-'}</Badge>
       ),
     },
     {
@@ -679,7 +679,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('status' in r ? r.status : '') || '',
       render: (r) => (
         <Badge className={getStatusColor(('status' in r && r.status) || '')}>
-          {('status' in r && r.status) || '-'}
+          {statusBadgeText('status' in r ? r.status : '') || '-'}
         </Badge>
       ),
     },
@@ -935,7 +935,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('status' in r ? r.status : '') || '',
       render: (r) => (
         <Badge className={getStatusColor(('status' in r && r.status) || '')}>
-          {('status' in r && r.status) || '-'}
+          {statusBadgeText('status' in r ? r.status : '') || '-'}
         </Badge>
       ),
     },
@@ -1230,10 +1230,6 @@ export default function OilLossPage() {
   const tableLoading = (loading && rows.length === 0) || viewTransitionLoading
 
   const columnsMenuRef = useRef<HTMLDivElement | null>(null)
-  const topScrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
-  const isSyncingScroll = useRef(false)
-  const [tableScrollWidth, setTableScrollWidth] = useState(0)
 
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
@@ -1895,15 +1891,6 @@ export default function OilLossPage() {
     dateTo,
   ])
 
-  useEffect(() => {
-    const calc = () => {
-      if (bottomScrollRef.current) setTableScrollWidth(bottomScrollRef.current.scrollWidth)
-    }
-    calc()
-    window.addEventListener('resize', calc)
-    return () => window.removeEventListener('resize', calc)
-  }, [visibleColumns, paginatedRows.length, tableLoading])
-
   const handlePageChange = (p: number) => {
     if (p >= 1 && p <= totalPages) {
       setCurrentPage(p)
@@ -2299,37 +2286,7 @@ export default function OilLossPage() {
             <div className={tableLoading ? 'min-h-[480px]' : undefined}>
                 <div className="hidden lg:block overflow-hidden">
                   <div
-                    ref={topScrollRef}
-                    className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      bottom.scrollLeft = top.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
-                  >
-                    <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-                  </div>
-
-                  <div
-                    ref={bottomScrollRef}
                     className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      top.scrollLeft = bottom.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
                   >
                     <table
                       data-oil-loss-table={viewMode}

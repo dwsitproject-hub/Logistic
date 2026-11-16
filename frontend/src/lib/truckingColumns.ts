@@ -48,7 +48,7 @@ export const TRUCKING_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   contract_ext_no: 120,
   po_number: 72,
   supplier: 152,
-  status: 80,
+  status: 132,
   sto_number: 72,
   product: 88,
   incoterm: 72,

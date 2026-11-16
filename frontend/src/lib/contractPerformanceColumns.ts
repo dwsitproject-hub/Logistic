@@ -172,7 +172,7 @@ export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   month_delivery_end: 96,
   contract_id: 120,
   group_name: 120,
-  status_overall: 88,
+  status_overall: 118,
   received_qty: 120,
   outstanding_qty: 120,
   over_under_delivery_status: 140,

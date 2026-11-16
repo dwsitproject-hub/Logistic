@@ -226,10 +226,6 @@ export default function ClaimMutuPage() {
   const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const columnsRef = useRef<HTMLDivElement>(null)
-  const topScrollRef = useRef<HTMLDivElement>(null)
-  const bottomScrollRef = useRef<HTMLDivElement>(null)
-  const isSyncingScroll = useRef(false)
-  const [tableScrollWidth, setTableScrollWidth] = useState(0)
 
   const scopeFilters: ClaimMutuApiFilters = useMemo(
     () => ({
@@ -283,16 +279,6 @@ export default function ClaimMutuPage() {
   }, [columnOrderIds, visibleColumnIds])
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
-
-  useEffect(() => {
-    const calc = () => {
-      const el = bottomScrollRef.current
-      if (el) setTableScrollWidth(el.scrollWidth)
-    }
-    calc()
-    window.addEventListener('resize', calc)
-    return () => window.removeEventListener('resize', calc)
-  }, [visibleColumns, rows.length, loading])
 
   useEffect(() => {
     try {
@@ -701,36 +687,7 @@ export default function ClaimMutuPage() {
             <CardContent className="p-0">
               <div className="overflow-hidden">
                 <div
-                  ref={topScrollRef}
-                  className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
-                  onScroll={() => {
-                    if (isSyncingScroll.current) return
-                    const top = topScrollRef.current
-                    const bottom = bottomScrollRef.current
-                    if (!top || !bottom) return
-                    isSyncingScroll.current = true
-                    bottom.scrollLeft = top.scrollLeft
-                    window.requestAnimationFrame(() => {
-                      isSyncingScroll.current = false
-                    })
-                  }}
-                >
-                  <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-                </div>
-                <div
-                  ref={bottomScrollRef}
                   className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-                  onScroll={() => {
-                    if (isSyncingScroll.current) return
-                    const top = topScrollRef.current
-                    const bottom = bottomScrollRef.current
-                    if (!top || !bottom) return
-                    isSyncingScroll.current = true
-                    top.scrollLeft = bottom.scrollLeft
-                    window.requestAnimationFrame(() => {
-                      isSyncingScroll.current = false
-                    })
-                  }}
                 >
                   <table className={cn(COMPACT_OPERATIONAL_TABLE_CLASS, COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS, 'klip-compact-table--perf-narrow-cols', 'klip-table--directory')}>
                     <colgroup>

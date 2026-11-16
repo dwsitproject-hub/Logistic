@@ -1520,10 +1520,6 @@ function ShippingPerformancePageContent() {
   const [currentPage, setCurrentPage] = useState(1)
   const pageSize = 20
   const columnsMenuRef = useRef<HTMLDivElement | null>(null)
-  const topScrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
-  const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
-  const isSyncingScroll = useRef(false)
   const [statusFilter, setStatusFilter] = useState<TableStatusFilter>('All')
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
@@ -2443,17 +2439,6 @@ function ShippingPerformancePageContent() {
     sortStackKey,
   ])
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const calc = () => {
-      const el = bottomScrollRef.current
-      if (el) setTableScrollWidth(el.scrollWidth)
-    }
-    calc()
-    window.addEventListener('resize', calc)
-    return () => window.removeEventListener('resize', calc)
-  }, [tableColumnKeys, paginatedRows.length])
-
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
       setCurrentPage(newPage)
@@ -3032,36 +3017,9 @@ function ShippingPerformancePageContent() {
           <CardContent className="p-0">
             <div className={section3TableLoading ? 'min-h-[480px]' : undefined}>
             <div className="overflow-hidden">
-              {/* Top scrollbar */}
-              <div
-                ref={topScrollRef}
-                className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
-                onScroll={() => {
-                  if (isSyncingScroll.current) return
-                  const top = topScrollRef.current
-                  const bottom = bottomScrollRef.current
-                  if (!top || !bottom) return
-                  isSyncingScroll.current = true
-                  bottom.scrollLeft = top.scrollLeft
-                  window.requestAnimationFrame(() => { isSyncingScroll.current = false })
-                }}
-              >
-                <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-              </div>
-
               {/* Table */}
               <div
-                ref={bottomScrollRef}
                 className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-                onScroll={() => {
-                  if (isSyncingScroll.current) return
-                  const top = topScrollRef.current
-                  const bottom = bottomScrollRef.current
-                  if (!top || !bottom) return
-                  isSyncingScroll.current = true
-                  top.scrollLeft = bottom.scrollLeft
-                  window.requestAnimationFrame(() => { isSyncingScroll.current = false })
-                }}
               >
                 <div className="min-w-0">
                 <table

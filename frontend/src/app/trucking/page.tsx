@@ -2023,10 +2023,6 @@ function TruckingPageContent() {
   const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Desktop table horizontal scroll sync
-  const topScrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
-  const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
-  const isSyncingScroll = useRef(false)
 
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
@@ -3816,26 +3812,6 @@ function TruckingPageContent() {
     })
   }
 
-  // Calculate table scroll width (match semantic table width for top scrollbar sync)
-  useEffect(() => {
-    const calculateWidth = () => {
-      const table = bottomScrollRef.current?.querySelector('[data-trucking-list-table]') as HTMLElement | null
-      if (table) {
-        setTableScrollWidth(table.offsetWidth)
-        return
-      }
-      const bottom = bottomScrollRef.current
-      if (bottom) setTableScrollWidth(bottom.scrollWidth)
-    }
-    calculateWidth()
-    const t = window.setTimeout(calculateWidth, 0)
-    window.addEventListener('resize', calculateWidth)
-    return () => {
-      window.clearTimeout(t)
-      window.removeEventListener('resize', calculateWidth)
-    }
-  }, [visibleColumns, sortedOperations, editingId])
-
   const truckingViewToggle = TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED ? (
     <ViewToggle
       ariaLabel="Trucking view"
@@ -4806,39 +4782,8 @@ function TruckingPageContent() {
               <div className="min-h-[480px]">
                 {/* Desktop compact table */}
                 <div className="hidden lg:block overflow-hidden">
-                  {/* Top scrollbar (synced) */}
                   <div
-                    ref={topScrollRef}
-                    className={`${COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS} border-b bg-white`}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      bottom.scrollLeft = top.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
-                  >
-                    <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-                  </div>
-
-                  <div
-                    ref={bottomScrollRef}
                     className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      top.scrollLeft = bottom.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
                   >
                     <table
                       data-trucking-list-table
@@ -4960,7 +4905,7 @@ function TruckingPageContent() {
                                   const cellContent =
                                     isStatusEdit ? (
                                         truckingDbStatus(operation) === 'CANCELLED' ? (
-                                          <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                          <Badge className={getStatusColor('CANCELLED')}>Cancelled</Badge>
                                         ) : (
                                           <select
                                             value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}
@@ -5117,7 +5062,7 @@ function TruckingPageContent() {
                             <h3 className="font-semibold text-lg">{operation.operation_id}</h3>
                             {isEditing ? (
                               truckingDbStatus(operation) === 'CANCELLED' ? (
-                                <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
+                                <Badge className={getStatusColor('CANCELLED')}>Cancelled</Badge>
                               ) : (
                                 <select
                                   value={editedData.status === 'CANCELLED' ? 'CANCELLED' : ''}

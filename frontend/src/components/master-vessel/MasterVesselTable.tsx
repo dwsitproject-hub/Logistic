@@ -61,20 +61,11 @@ export function MasterVesselTable({
   onColumnDragEnd,
   onColumnDrop,
 }: MasterVesselTableProps) {
-  const topScrollRef = useRef<HTMLDivElement>(null)
-  const bottomScrollRef = useRef<HTMLDivElement>(null)
-  const isSyncingScroll = useRef(false)
-  const [tableScrollWidth, setTableScrollWidth] = useState(sumMasterVesselTableWidthPx())
   // The DHM status icon is frozen on the right edge, so it always stays last, whatever order the user dragged the others into.
   const orderedColumnIds = useMemo(
     () => [...columnIds.filter((id) => id !== 'dhm_status'), ...columnIds.filter((id) => id === 'dhm_status')],
     [columnIds],
   )
-
-  useEffect(() => {
-    const el = bottomScrollRef.current?.querySelector('table')
-    if (el) setTableScrollWidth(el.scrollWidth)
-  }, [items.length, loading])
 
   const handleSort = (colId: MasterVesselColumnId) => {
     onSortChange(colId)
@@ -85,36 +76,7 @@ export function MasterVesselTable({
       <p className="mb-1.5 text-xs text-gray-500">Click a row to {isAdmin ? 'edit' : 'view'} it</p>
       <div className="border rounded-lg overflow-hidden">
         <div
-          ref={topScrollRef}
-          className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
-          onScroll={() => {
-            if (isSyncingScroll.current) return
-            const top = topScrollRef.current
-            const bottom = bottomScrollRef.current
-            if (!top || !bottom) return
-            isSyncingScroll.current = true
-            bottom.scrollLeft = top.scrollLeft
-            requestAnimationFrame(() => {
-              isSyncingScroll.current = false
-            })
-          }}
-        >
-          <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-        </div>
-        <div
-          ref={bottomScrollRef}
           className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-          onScroll={() => {
-            if (isSyncingScroll.current) return
-            const top = topScrollRef.current
-            const bottom = bottomScrollRef.current
-            if (!top || !bottom) return
-            isSyncingScroll.current = true
-            top.scrollLeft = bottom.scrollLeft
-            requestAnimationFrame(() => {
-              isSyncingScroll.current = false
-            })
-          }}
         >
           <table
             className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols klip-master-vessel-table`}

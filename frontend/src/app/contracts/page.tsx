@@ -1092,10 +1092,6 @@ function ContractsPageContent() {
   const contractsTableRef = useRef<HTMLDivElement | null>(null)
 
   // Desktop table horizontal scroll sync (top + bottom)
-  const topScrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomScrollRef = useRef<HTMLDivElement | null>(null)
-  const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
-  const isSyncingScroll = useRef(false)
   const [statusFilter, setStatusFilter] = useState<string>(() =>
     resolveContractsListInitialStatusFilter(pathname),
   )
@@ -3961,18 +3957,6 @@ function ContractsPageContent() {
     })
   }
 
-  // Update desktop table scroll width (for top scrollbar)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const calc = () => {
-      const el = bottomScrollRef.current
-      if (el) setTableScrollWidth(el.scrollWidth)
-    }
-    calc()
-    window.addEventListener('resize', calc)
-    return () => window.removeEventListener('resize', calc)
-  }, [visibleColumns, sortedContracts.length, section3TableLoading])
-
   // If pagination/filtering changes, drop expansions that aren't on the current view to avoid stale set growth
   useEffect(() => {
     setExpandedContractIds(prev => {
@@ -4773,39 +4757,8 @@ function ContractsPageContent() {
               <>
                 {/* Desktop compact table (Contracts + Contract Performance): semantic <table>, zebra on <tr>/<td> */}
                 <div className="hidden lg:block overflow-hidden">
-                  {/* Top scrollbar (synced) */}
                   <div
-                    ref={topScrollRef}
-                    className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      bottom.scrollLeft = top.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
-                  >
-                    <div style={{ width: tableScrollWidth || 0, height: 1 }} />
-                  </div>
-
-                  <div
-                    ref={bottomScrollRef}
                     className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
-                    onScroll={() => {
-                      if (isSyncingScroll.current) return
-                      const top = topScrollRef.current
-                      const bottom = bottomScrollRef.current
-                      if (!top || !bottom) return
-                      isSyncingScroll.current = true
-                      top.scrollLeft = bottom.scrollLeft
-                      window.requestAnimationFrame(() => {
-                        isSyncingScroll.current = false
-                      })
-                    }}
                   >
                     <div className="min-w-0">
                       <table

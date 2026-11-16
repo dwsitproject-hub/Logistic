@@ -28,12 +28,12 @@ describe('performanceSection1CardUi', () => {
     }
   })
 
-  it('follows the Open and Close cards of Contracts: amber for open and on going, green for close and completed', () => {
+  it('follows the Open and Close cards of Contracts: blue for open and on going, green for close and completed', () => {
     for (const variant of ['open', 'ongoing'] as const) {
       const accent = PERFORMANCE_SECTION1_CARD_ACCENTS[variant]
-      expect(accent.chip).toContain('amber')
-      expect(accent.selected).toContain('border-amber-400')
-      expect(accent.focus).toContain('amber')
+      expect(accent.chip).toContain('blue')
+      expect(accent.selected).toContain('border-blue-400')
+      expect(accent.focus).toContain('blue')
     }
     for (const variant of ['close', 'completed'] as const) {
       const accent = PERFORMANCE_SECTION1_CARD_ACCENTS[variant]
