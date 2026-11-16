@@ -129,6 +129,11 @@ import {
 } from '@/lib/shippingPerformancePorts'
 import { cn } from '@/lib/utils'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
+import {
+  ContractDetailModal,
+  fetchContractForDetailModal,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
 import { HistoricalRemarksModal } from '@/components/shared/HistoricalRemarksModal'
 import { hasEntityRemarks } from '@/lib/entityRemarks'
 import {
@@ -1563,6 +1568,27 @@ function ShippingPerformancePageContent() {
   const [remarksModal, setRemarksModal] = useState<{ shipmentId: string; subtitle: string } | null>(
     null,
   )
+  /** Contract Details, opened from an Unplanned row: a contract with no shipment yet has no shipment to view. */
+  const [contractDetailTarget, setContractDetailTarget] = useState<ContractDetailModalContract | null>(null)
+
+  const openContractDetailFromRow = useCallback(async (row: ShippingPerformanceRow) => {
+    const contractNumber = String(row.contract_number || '').split(',')[0]?.trim() || ''
+    if (!contractNumber) {
+      alert('Contract number is required to open Contract Details.')
+      return
+    }
+    try {
+      const detail = await fetchContractForDetailModal(contractNumber)
+      if (!detail) {
+        alert(`Contract ${contractNumber} was not found.`)
+        return
+      }
+      setContractDetailTarget(detail)
+    } catch (err) {
+      console.error('openContractDetailFromRow:', err)
+      alert('Failed to open Contract Details.')
+    }
+  }, [])
 
   const openViewShipmentFromRow = useCallback((row: ShippingPerformanceRow) => {
     const shipmentId = String(row.id || '').trim()
@@ -3355,6 +3381,29 @@ function ShippingPerformancePageContent() {
                                       </Button>
                                     </span>
                                   </>
+                                ) : shippingPerfRowIsUnplannedBacklog(row) ? (
+                                  <>
+                                    {/* An Unplanned row is a contract with no shipment: View opens its Contract Details, and Remarks (kept on the shipment) is shown but off. */}
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      onClick={() => void openContractDetailFromRow(row)}
+                                      title="View contract details"
+                                      className="h-8 w-8 border-transparent bg-transparent text-green-600 hover:bg-green-50"
+                                    >
+                                      <Eye className="h-4 w-4" />
+                                    </Button>
+                                    <span className="inline-flex" title="No remarks yet">
+                                      <Button
+                                        variant="outline"
+                                        size="icon"
+                                        disabled
+                                        className="h-8 w-8 border-transparent bg-transparent text-orange-600 hover:bg-orange-50 disabled:opacity-40"
+                                      >
+                                        <MessageSquare className="h-4 w-4" />
+                                      </Button>
+                                    </span>
+                                  </>
                                 ) : null}
                               </div>
                             </td>
@@ -3407,6 +3456,8 @@ function ShippingPerformancePageContent() {
             void fetchShippingPerformanceDashboard()
           }}
         />
+
+        <ContractDetailModal contract={contractDetailTarget} onClose={() => setContractDetailTarget(null)} stacked />
 
         <HistoricalRemarksModal
           open={remarksModal != null}
