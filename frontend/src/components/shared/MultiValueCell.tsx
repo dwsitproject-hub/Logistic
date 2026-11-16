@@ -1,11 +1,11 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Check, Copy, Layers, Search } from 'lucide-react'
+import { Check, ChevronRight, Copy, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { filterMultiValues, multiValuePillLabel } from '@/lib/multiValueCell'
+import { filterMultiValues, multiValueMoreLabel } from '@/lib/multiValueCell'
 
 interface Props {
   /** Already sorted A-Z (see multiValuesOf). */
@@ -19,8 +19,8 @@ interface Props {
 }
 
 /**
- * A master table cell with several values: nothing for none, the value itself for one, and for two or more ONE pill with the count ("20 companies").
- * The pill opens a dialog with every value, one per row, A-Z, with a search and a copy button, so the table keeps one line per row.
+ * A master table cell with several values: nothing for none, the value itself for one, and for two or more the first value (A-Z) with a "+N" chip for the rest.
+ * The chip opens a dialog with every value, one per row, A-Z, with a search and a copy button, so the table keeps one line per row.
  *
  * The cell sits in a clickable row (it opens the row's edit dialog), so clicks and keys in the pill AND in the dialog (a portal, which still bubbles through
  * React to the row) stop here.
@@ -46,22 +46,26 @@ export function MultiValueCell({ values, rowTitle, columnLabel, plural }: Props)
 
   return (
     <span
+      className="inline-flex max-w-full items-center gap-2"
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
     >
+      <span className="min-w-0 max-w-[20rem] truncate text-sm" title={values[0]}>
+        {values[0]}
+      </span>
       <button
         type="button"
         onClick={() => {
           setQuery('')
           setOpen(true)
         }}
-        title={`Show the ${values.length} ${plural}`}
+        title={`Show all ${values.length} ${plural}`}
         aria-label={`${rowTitle}: show the ${values.length} ${plural}`}
-        className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-xs font-medium normal-case text-slate-700 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+        className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-blue-200 bg-blue-50 py-0.5 pl-2 pr-1.5 text-xs font-medium normal-case tabular-nums text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
       >
-        <Layers className="h-3.5 w-3.5 text-slate-400" aria-hidden />
-        {multiValuePillLabel(values.length, plural)}
+        {multiValueMoreLabel(values.length)}
+        <ChevronRight className="h-3 w-3" aria-hidden />
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>

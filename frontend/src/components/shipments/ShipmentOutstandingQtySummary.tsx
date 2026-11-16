@@ -104,9 +104,9 @@ type ShipmentOutstandingQtySummaryProps = {
 
 function shipmentParts(bucket: ShipmentOutstandingQtyBucket | null): OutstandingStripPart[] {
   return [
-    { key: 'fob', label: 'FOB', kg: bucket?.fobKg, dot: 'bg-sky-500' },
-    { key: 'cif', label: 'CIF', kg: bucket?.cifKg, dot: 'bg-indigo-400' },
-    { key: 'cfr', label: 'CFR', kg: bucket?.cfrKg, dot: 'bg-teal-400' },
+    { key: 'fob', label: 'FOB', kg: bucket?.fobKg, dot: 'bg-blue-600' },
+    { key: 'cif', label: 'CIF', kg: bucket?.cifKg, dot: 'bg-amber-400' },
+    { key: 'cfr', label: 'CFR', kg: bucket?.cfrKg, dot: 'bg-sky-300' },
   ]
 }
 

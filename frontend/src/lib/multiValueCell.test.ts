@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterMultiValues, multiValuePillLabel, multiValuesOf, multiValueSortKey, multiValueText, sortMultiValues } from './multiValueCell'
+import { filterMultiValues, multiValueMoreLabel, multiValuePillLabel, multiValuesOf, multiValueSortKey, multiValueText, sortMultiValues } from './multiValueCell'
 
 describe('multiValueSortKey', () => {
   it('drops a leading PT, with or without the dot and spaces', () => {
@@ -42,6 +42,10 @@ describe('text and labels', () => {
   it('joins the sorted values, "-" for none', () => {
     expect(multiValueText(['a', 'b'])).toBe('a, b')
     expect(multiValueText([])).toBe('-')
+  })
+  it('builds the +N chip from the values after the first', () => {
+    expect(multiValueMoreLabel(20)).toBe('+19')
+    expect(multiValueMoreLabel(2)).toBe('+1')
   })
   it('builds the pill label', () => {
     expect(multiValuePillLabel(20, 'companies')).toBe('20 companies')

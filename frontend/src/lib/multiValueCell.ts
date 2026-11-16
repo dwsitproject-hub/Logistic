@@ -1,6 +1,6 @@
 /**
  * A master table cell that holds several values (a Site's companies, a Company's sites, a port's SAP names).
- * The table shows ONE pill with the count ("20 companies"); a click opens a dialog with the full list, A-Z. Pure rules here, so they are tested without the page.
+ * The table shows the first value (A-Z) and a "+N" chip for the others; a click on the chip opens a dialog with the full list, A-Z. Pure rules here, so they are tested without the page.
  */
 
 /**
@@ -49,6 +49,11 @@ export function multiValueText(values: readonly string[]): string {
 /** "20 companies", "2 sites" (the singular never shows: one value is shown as itself). */
 export function multiValuePillLabel(count: number, plural: string): string {
   return `${count} ${plural}`
+}
+
+/** The chip next to the first value: "+19" for 20 values (the first one is already on screen). */
+export function multiValueMoreLabel(count: number): string {
+  return `+${Math.max(0, count - 1)}`
 }
 
 /** The dialog's search: case-insensitive, and the PT prefix does not have to be typed. */

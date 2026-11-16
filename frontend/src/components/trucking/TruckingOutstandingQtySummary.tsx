@@ -63,8 +63,8 @@ type TruckingOutstandingQtySummaryProps = {
 
 function truckingParts(bucket: TruckingOutstandingQtyBucket): OutstandingStripPart[] {
   return [
-    { key: 'frc', label: 'FRC', kg: bucket.frcKg, dot: 'bg-sky-500' },
-    { key: 'lco', label: 'LCO', kg: bucket.lcoKg, dot: 'bg-indigo-400' },
+    { key: 'frc', label: 'FRC', kg: bucket.frcKg, dot: 'bg-blue-600' },
+    { key: 'lco', label: 'LCO', kg: bucket.lcoKg, dot: 'bg-amber-400' },
   ]
 }
 
