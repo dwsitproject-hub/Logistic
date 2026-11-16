@@ -21,7 +21,7 @@ if (!DIST) {
 const load = (m) => require(path.join(DIST, m));
 
 // The statuses KLIP handles (jps/types.ts). Kept here as plain text so the script does not depend on a type that is erased at build time.
-const KLIP_KNOWN_STATUSES = ['Pending', 'Approved', 'Rejected', 'Deleted', 'Allocated', 'Berthed', 'Start Cargo', 'Cargo Done', 'Sailed Off', 'Sailed'];
+const KLIP_KNOWN_STATUSES = ['Pending', 'Approved', 'Rejected', 'Deleted', 'Allocated', 'Berthed', 'Hose On', 'Start Cargo', 'Cargo Done', 'Hose Off', 'Sailed Off', 'Sailed'];
 
 // jpsRequest already hands back the envelope's data.
 const unwrap = (d) => d;
