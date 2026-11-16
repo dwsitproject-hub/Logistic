@@ -224,13 +224,13 @@ function LayoutChrome({
                       onClick={() => hubOpenBugReport()}
                       aria-label="Report a bug"
                       className={cn(
-                        'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200/90 shadow-sm transition-all',
-                        'bg-gradient-to-r from-slate-50 to-gray-50',
-                        'hover:border-slate-300 hover:from-slate-100 hover:to-gray-100',
-                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2',
+                        'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200/90 shadow-sm transition-all',
+                        'bg-gradient-to-r from-red-50 to-rose-50',
+                        'hover:border-red-300 hover:from-red-100 hover:to-rose-100',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2',
                       )}
                     >
-                      <Bug className="h-4 w-4 text-slate-700" aria-hidden />
+                      <Bug className="h-4 w-4 text-red-700" aria-hidden />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">Report a bug</TooltipContent>
@@ -243,13 +243,13 @@ function LayoutChrome({
                     onClick={handleLogout}
                     aria-label="Log out"
                     className={cn(
-                      'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-amber-200/90 shadow-sm transition-all',
-                      'bg-gradient-to-r from-amber-50 to-orange-50',
-                      'hover:border-amber-300 hover:from-amber-100 hover:to-orange-100',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2',
+                      'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-violet-200/90 shadow-sm transition-all',
+                      'bg-gradient-to-r from-violet-50 to-purple-50',
+                      'hover:border-violet-300 hover:from-violet-100 hover:to-purple-100',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-2',
                     )}
                   >
-                    <LogOut className="h-4 w-4 text-amber-700" aria-hidden />
+                    <LogOut className="h-4 w-4 text-violet-700" aria-hidden />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Log out</TooltipContent>
