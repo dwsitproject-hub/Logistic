@@ -128,7 +128,7 @@ export function ShipmentOutstandingQtySummary({
 
   return (
     <OutstandingStripFrame
-      className="md:grid-cols-[minmax(11rem,0.8fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)]"
+      className="lg:grid-cols-[minmax(10rem,0.75fr)_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.2fr)]"
       loading={loading || etcNoAtcDueLoading}
     >
       <div className="p-2.5">

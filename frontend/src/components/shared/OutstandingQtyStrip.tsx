@@ -29,7 +29,7 @@ export function OutstandingStripFrame({
     <section
       className={cn(
         'grid grid-cols-1 overflow-hidden rounded-xl border border-gray-200 bg-white transition-opacity duration-200',
-        '[&>*+*]:border-t [&>*+*]:border-gray-100 md:[&>*+*]:border-l md:[&>*+*]:border-t-0',
+        '[&>*+*]:border-t [&>*+*]:border-gray-100 lg:[&>*+*]:border-l lg:[&>*+*]:border-t-0',
         className,
         loading ? 'opacity-65' : 'opacity-100',
       )}
@@ -55,7 +55,7 @@ export function OutstandingStripHeadline({
   hint: string
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-3 px-5 py-4">
+    <div className="flex min-w-0 items-center gap-3 px-4 py-4 xl:px-5">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600" aria-hidden>
         {icon}
       </div>
@@ -92,11 +92,11 @@ export function OutstandingStripBucket({ title, parts, pending }: { title: strin
   const weights = parts.map((part) => (pending ? 0 : Math.max(0, Number(part.kg) || 0)))
   const sum = weights.reduce((a, b) => a + b, 0)
   return (
-    <div className="min-w-0 px-5 py-4">
+    <div className="min-w-0 px-4 py-4 xl:px-5">
       <div className="text-xs font-medium uppercase tracking-wide text-gray-500">{title}</div>
-      <div className="mt-2 grid gap-x-3" style={{ gridTemplateColumns: `repeat(${parts.length}, minmax(0, 1fr))` }}>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-2">
         {parts.map((part) => (
-          <div key={part.key} className="min-w-0">
+          <div key={part.key} className="shrink-0">
             <div className="flex items-center gap-1.5 text-xs text-gray-500">
               <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', part.dot)} aria-hidden />
               {part.label}
