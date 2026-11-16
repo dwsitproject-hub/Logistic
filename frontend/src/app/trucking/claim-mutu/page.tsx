@@ -207,7 +207,7 @@ export default function ClaimMutuPage() {
   const [metodeOptions, setMetodeOptions] = useState<string[]>([])
 
   const [page, setPage] = useState(1)
-  const [sortKey, setSortKey] = useState<string>('os_days')
+  const [sortKey, setSortKey] = useState<string>('cr_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set(CLAIM_MUTU_DEFAULT_VISIBLE_IDS))

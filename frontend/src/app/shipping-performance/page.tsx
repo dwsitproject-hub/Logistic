@@ -1262,8 +1262,8 @@ function buildInitialColumnPrefsByMode(): ShippingPerfColumnPrefsByMode {
 
 const COLUMN_MAP = Object.fromEntries(COLUMN_DEFS.map((col) => [col.key, col])) as Record<string, ColumnDef>
 
-/** What the table is sorted by when it opens, and what Reset returns to: the biggest total delay first. */
-const DEFAULT_SHIPPING_PERF_SORT: SortEntry<ShippingPerfColumnKey>[] = [{ key: 'total_delta_days', dir: 'desc' }]
+/** What the table is sorted by when it opens, and what Reset returns to: the newest contract first (the biggest delay is two clicks on Total Delta Days away). */
+const DEFAULT_SHIPPING_PERF_SORT: SortEntry<ShippingPerfColumnKey>[] = [{ key: 'contract_date', dir: 'desc' }]
 
 function isColumnEligibleForView(key: string, tableViewMode: TableViewMode): boolean {
   const col = COLUMN_MAP[key]

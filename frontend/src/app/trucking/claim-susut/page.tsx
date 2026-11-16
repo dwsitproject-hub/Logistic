@@ -180,7 +180,7 @@ export default function ClaimSusutPage() {
   const [groupTransportRows, setGroupTransportRows] = useState<ClaimSusutGroupTransportRow[]>([])
 
   const [page, setPage] = useState(1)
-  const [sortKey, setSortKey] = useState<string>('os_days')
+  const [sortKey, setSortKey] = useState<string>('cr_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(

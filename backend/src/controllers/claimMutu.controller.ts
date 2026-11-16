@@ -524,7 +524,7 @@ export const listClaimMutuRows = async (req: AuthRequest, res: Response) => {
   try {
     const f = filtersOf(req);
     const q = req.query as Record<string, unknown>;
-    const sortKey = ROW_SORT[String(q.sortKey ?? '')] ? String(q.sortKey) : 'os_days';
+    const sortKey = ROW_SORT[String(q.sortKey ?? '')] ? String(q.sortKey) : 'cr_date';
     const sortDir = String(q.sortDir ?? 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
     const limitRaw = parseInt(String(q.limit ?? '200'), 10);
     const offsetRaw = parseInt(String(q.offset ?? '0'), 10);
