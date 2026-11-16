@@ -731,16 +731,19 @@ export default function ClaimSusutPage() {
                     ) : null}
                   </span>
                   <span className="text-gray-400" aria-hidden>·</span>
+                  {/* The scope in plain words: the period, then whether any other filter is on (the filters themselves are in the bar above). */}
                   <span className="whitespace-nowrap font-medium text-gray-600">
-                    {period !== 'ALL' ||
-                    selectedPlants.length > 0 ||
-                    selectedProducts.length > 0 ||
-                    selectedVendors.length > 0 ||
-                    selectedClaimStatuses.length > 0 ||
-                    selectedB2b.length > 0 ||
-                    selectedGroupsOfTransport.length > 0
-                      ? 'Global · Filtered'
-                      : 'Global · All'}
+                    {[
+                      period === 'ALL' ? 'All periods' : resolveClaimSusutPeriodRange(period).label,
+                      ...(selectedPlants.length > 0 ||
+                      selectedProducts.length > 0 ||
+                      selectedVendors.length > 0 ||
+                      selectedClaimStatuses.length > 0 ||
+                      selectedB2b.length > 0 ||
+                      selectedGroupsOfTransport.length > 0
+                        ? ['Filtered']
+                        : []),
+                    ].join(' · ')}
                   </span>
                 </p>
               </div>

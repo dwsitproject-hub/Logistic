@@ -3,7 +3,6 @@
 import { useMemo } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { formatOilLossAvgPct } from '@/lib/oilLossFormat'
 import {
@@ -21,8 +20,6 @@ type OilLossDrilldownSectionProps = {
   rows: OilLossSourceRow[]
   filters: OilLossDrilldownFilters
   onFiltersChange: (filters: OilLossDrilldownFilters) => void
-  /** Active global scope tokens under the title (period, region/plant, product, loading port). */
-  scopeSegments?: readonly string[]
   loading?: boolean
   dataFetching?: boolean
 }
@@ -44,7 +41,6 @@ export default function OilLossDrilldownSection({
   rows,
   filters,
   onFiltersChange,
-  scopeSegments = [],
   loading = false,
   dataFetching = false,
 }: OilLossDrilldownSectionProps) {
@@ -111,7 +107,6 @@ export default function OilLossDrilldownSection({
             <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
           ) : null}
         </CardTitle>
-        <PerformanceDrilldownScopeLine segments={scopeSegments} />
       </CardHeader>
       <CardContent className="pt-2">
         {showBlocking ? (

@@ -594,7 +594,11 @@ export default function ClaimMutuPage() {
                     </span>
                     <span className="text-gray-400" aria-hidden>·</span>
                     <span className="whitespace-nowrap font-medium text-gray-600">
-                      {selectedB2bStatuses.length > 0 ? `B2B: ${selectedB2bStatuses.join(', ')}` : b2b === 'include' ? 'Include B2B' : 'Exclude B2B'} · {anyFilter ? 'Filtered' : 'All'}
+                      {period === 'ALL' ? 'All periods' : resolveClaimSusutPeriodRange(period).label}
+                    </span>
+                    <span className="text-gray-400" aria-hidden>·</span>
+                    <span className="whitespace-nowrap font-medium text-gray-600">
+                      {selectedB2bStatuses.length > 0 ? `B2B: ${selectedB2bStatuses.join(', ')}` : b2b === 'include' ? 'Include B2B' : 'Exclude B2B'}· {anyFilter ? 'Filtered' : 'All'}
                     </span>
                     {selectedImport?.file_name ? (
                       <>

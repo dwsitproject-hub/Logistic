@@ -1970,6 +1970,16 @@ export default function OilLossPage() {
     setCurrentPage(1)
   }
 
+  /** The scope of the table in plain words (period, FOB, the filters that are on); it sat under the Drilldown title before. */
+  const oilLossScopeSegments = [
+    formatContractDateScopeLabel(globalPeriod, dateFrom, dateTo, (p) => resolveOilLossPeriodDateRange(p as OilLossGlobalPeriodKey)),
+    'FOB',
+    ...(selectedGroupPlants.length > 0 ? [selectedGroupPlants.join(', ')] : []),
+    ...(selectedDischargePorts.length > 0 ? [`Discharge ${selectedDischargePorts.join(', ')}`] : []),
+    ...(selectedProducts.length > 0 ? [selectedProducts.join(', ')] : []),
+    ...(selectedLoadingPorts.length > 0 ? [selectedLoadingPorts.join(', ')] : []),
+  ]
+
   return (
     <Layout>
       <StitchFields>
@@ -2118,16 +2128,6 @@ export default function OilLossPage() {
           rows={globallyFilteredRows}
           filters={drilldownFilters}
           onFiltersChange={applyOilLossDrilldownChange}
-          scopeSegments={[
-            formatContractDateScopeLabel(globalPeriod, dateFrom, dateTo, (p) =>
-              resolveOilLossPeriodDateRange(p as OilLossGlobalPeriodKey),
-            ),
-            'FOB',
-            ...(selectedGroupPlants.length > 0 ? [selectedGroupPlants.join(', ')] : []),
-            ...(selectedDischargePorts.length > 0 ? [`Discharge ${selectedDischargePorts.join(', ')}`] : []),
-            ...(selectedProducts.length > 0 ? [selectedProducts.join(', ')] : []),
-            ...(selectedLoadingPorts.length > 0 ? [selectedLoadingPorts.join(', ')] : []),
-          ]}
           loading={showBlockingLoad}
           dataFetching={dataFetching}
         />
@@ -2152,6 +2152,10 @@ export default function OilLossPage() {
               <span className="whitespace-nowrap tabular-nums text-gray-700">
                   <span className="font-semibold">{filteredRows.length.toLocaleString('en-US')}</span> entries
                 </span>
+                <span className="text-gray-400" aria-hidden>
+                  ·
+                </span>
+                <span className="whitespace-nowrap text-gray-600 font-medium">{oilLossScopeSegments.join(' · ')}</span>
               {hasActiveDrilldown ? (
                 <>
                   <span className="text-gray-400" aria-hidden>

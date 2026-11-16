@@ -18,7 +18,6 @@ import { Columns3, Eye, GripVertical, Loader2, MessageSquare, Package, SlidersHo
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
-import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import {
@@ -2322,51 +2321,18 @@ function ShippingPerformancePageContent() {
     [resolveTableColumnLabel, tableViewMode],
   )
 
+  /**
+   * The scope of the table in plain words, for the header beside the title: the period, the card (On Going / Completed), the filters that are on - the same
+   * segments the drilldown used to show under its own title - then the drilldown the table follows.
+   */
   const tableScopeParts = useMemo(() => {
-    const parts: string[] =
-      perfCardFilter === 'all' ? [] : [SHIPPING_PERF_CARD_TITLES[perfCardFilter]]
-    if (SHIPPING_PERF_GLOBAL_FILTERS_ENABLED) {
-      if (selectedIncoterms.length > 0) {
-        parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
-      }
-      if (selectedGroupPlants.length > 0) {
-        parts.push(`Region/Plant: ${selectedGroupPlants.map(displayGroupLabel).join(', ')}`)
-      }
-      if (selectedVessels.length > 0) {
-        parts.push(`Vessel: ${selectedVessels.map(displayGroupLabel).join(', ')}`)
-      }
-      if (dateFrom || dateTo) {
-        parts.push(
-          formatContractDateScopeLabel(
-            performancePeriod,
-            dateFrom,
-            dateTo,
-            (p) => resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
-            { prefix: true },
-          ),
-        )
-      }
-      if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
-    }
+    const parts: string[] = [...shippingPerfDrilldownScopeSegments]
     if (drilldownFilters.product) parts.push(`Product: ${displayGroupLabel(drilldownFilters.product)}`)
-    if (drilldownFilters.plant) parts.push(`Region/Plant node: ${displayGroupLabel(drilldownFilters.plant)}`)
-    if (drilldownFilters.incoterm) parts.push(`Incoterm node: ${displayGroupLabel(drilldownFilters.incoterm)}`)
+    if (drilldownFilters.plant) parts.push(`Region/Plant: ${displayGroupLabel(drilldownFilters.plant)}`)
+    if (drilldownFilters.incoterm) parts.push(`Incoterm: ${displayGroupLabel(drilldownFilters.incoterm)}`)
     if (drilldownFilters.vessel) parts.push(`Vessel: ${drilldownFilters.vessel}`)
     return parts
-  }, [
-    perfCardFilter,
-    selectedIncoterms,
-    selectedGroupPlants,
-    selectedSuppliers,
-    selectedSupplierGroups,
-    selectedPlanningStatuses,
-    selectedVessels,
-    performancePeriod,
-    dateFrom,
-    dateTo,
-    drilldownFilters,
-    statusFilter,
-  ])
+  }, [shippingPerfDrilldownScopeSegments, drilldownFilters])
 
   /** Section 3 only — resolve port columns (shipment operation → SAP fallback) before sort/render. */
   const drilldownStoRows = useMemo(
@@ -2623,7 +2589,6 @@ function ShippingPerformancePageContent() {
                     : 'Shipping Performance Drilldown (ATA)'}
                 </span>
               </CardTitle>
-              <PerformanceDrilldownScopeLine segments={shippingPerfDrilldownScopeSegments} />
             </div>
           </CardHeader>
           <CardContent className="pt-2">
