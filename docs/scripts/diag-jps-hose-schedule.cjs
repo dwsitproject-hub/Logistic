@@ -6,7 +6,7 @@
  * JPS told us the mechanism from Hose On to Hose Off changed. The partner doc (v5.7) says both are the Cargo Operations OPERATION WINDOW start / end; the live catalog now describes
  * them as "Hose On (Opening), earliest Opening start" and "Hose Off (Closing), Closing time". This shows what the real instructions look like so the mapping can be judged on data:
  *   1. the stages and times KLIP stored for the instructions that got past allocation (newest first),
- *   2. oddities in them: Hose Off before Hose On, Hose Off set while the stage is still Start Cargo, a stage with its time missing, Hose Off after sailing,
+ *   2. oddities in them: Hose Off before Hose On, Hose Off set while the stage is still Start Cargo, a stage with its time missing, Hose Off after sailing (a null Hose Off at Cargo Done / Sailed Off is NOT one: JPS 2026-11-16, Closing is recorded by an operator and often never is),
  *   3. the same instructions read from JPS NOW (GET /shipping-instructions/{id}), side by side with the stored values, so a changed meaning shows as a difference.
  * Makes only GET calls through KLIP's own client (they show in Integrations > JPS > History). Writes nothing.
  */
@@ -57,7 +57,6 @@ const wib = (v) => (v ? new Date(new Date(v).getTime() + 7 * 3600e3).toISOString
     if (on && off && off < on) why.push('Hose Off BEFORE Hose On');
     if (['Start Cargo'].includes(r.jps_status) && off) why.push('Hose Off already set while the stage is still Start Cargo');
     if (['Start Cargo', 'Cargo Done', 'Sailed Off', 'Sailed'].includes(r.jps_status) && !on) why.push('stage past Start Cargo but no Hose On');
-    if (['Cargo Done', 'Sailed Off', 'Sailed'].includes(r.jps_status) && !off) why.push('stage past Cargo Done but no Hose Off');
     if (off && t(r.schedule_cast_off_at) && t(r.schedule_cast_off_at) < off) why.push('cast off BEFORE Hose Off');
     if (off && t(r.schedule_tc) && Math.abs(t(r.schedule_tc) - off) > 60 * 60 * 1000) why.push('tc differs from Hose Off by more than 1 h');
     if (why.length) odd.push({ sto: String(r.sto_key).slice(0, 14), status: r.jps_status, hose_on: wib(r.schedule_cargo_ops_start_at), hose_off: wib(r.schedule_cargo_ops_end_at), what: why.join('; ') });
