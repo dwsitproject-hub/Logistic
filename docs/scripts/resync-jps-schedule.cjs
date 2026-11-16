@@ -72,5 +72,26 @@ const same = (a, b) => wib(a) === wib(b);
   }
   console.table(out);
   console.log(APPLY ? `${changed} instruction(s) rewritten from what JPS reports now.` : `${changed} instruction(s) would change. Run again with -e APPLY=1 to write.`);
+
+  if (APPLY && changed > 0) {
+    // Rewriting the lane SCHEDULES the snapshot refreshes (Contract Performance, oil loss and the ~50 s pipeline summary) and they still need this connection:
+    // exiting now would leave them stale. Poll the three stale flags and leave only when they are clear twice in a row (or after 5 minutes).
+    const staleNow = async () => Number((await pool.query(
+      `SELECT (SELECT COUNT(*) FROM pipeline_summary_refresh_meta WHERE is_stale) +
+              (SELECT COUNT(*) FROM contract_performance_snapshot_meta WHERE is_stale) +
+              (SELECT COUNT(*) FROM oil_loss_snapshot_meta WHERE is_stale) AS n`,
+    )).rows[0].n);
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    console.log('waiting for the snapshots to refresh (up to 5 minutes)...');
+    await sleep(4000); // the stale flags are set asynchronously right after the write
+    const deadline = Date.now() + 300000;
+    let clearPolls = 0;
+    let remaining = await staleNow();
+    while (Date.now() < deadline && clearPolls < 2) {
+      clearPolls = remaining === 0 ? clearPolls + 1 : 0;
+      if (clearPolls < 2) { await sleep(3000); remaining = await staleNow(); }
+    }
+    console.log(remaining === 0 ? 'snapshots refreshed.' : `${remaining} snapshot flag(s) still stale after 5 minutes - they rebuild on the next refresh.`);
+  }
   process.exit(0);
 })().catch((e) => { console.error('FAILED:', e && e.message ? e.message : e); process.exit(1); });
