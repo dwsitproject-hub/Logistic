@@ -83,8 +83,8 @@ describe('filters the snapshot cannot express never reach it', () => {
 describe('snapshot-served page sorts', () => {
   const src = readFileSync(join(__dirname, 'truckingUnplannedHybridList.service.ts'), 'utf8');
 
-  it('admits exactly the two sorts the snapshot has columns for', () => {
-    expect(src).toContain("if (sortKey === 'supplier' || sortKey === 'created_at') return sortKey;");
+  it('admits exactly the sorts the snapshot has columns for: supplier, created_at and contract_date', () => {
+    expect(src).toContain("if (sortKey === 'supplier' || sortKey === 'created_at' || sortKey === 'contract_date') return sortKey;");
     expect(src).toContain('const snapshotSort = ctx.thenBy.length === 0 ? snapshotPageSortField(ctx.sortKey) : null;');
   });
 
