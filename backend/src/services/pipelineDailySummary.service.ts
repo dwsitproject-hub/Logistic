@@ -1206,10 +1206,13 @@ export async function loadTruckingBacklogSummaryFromSnapshot(
 }
 
 /**
- * The sorts a snapshot-served page can order by - the only two the snapshot stores a column for.
+ * The sorts a snapshot-served page can order by - the only ones the snapshot stores a column for.
  * Every other sort keeps the live ranking, which reads columns the snapshot does not carry.
+ *
+ * `contract_date` was added on 2026-11-16 when the list's default moved from created_at to Contract Date (newest first): on production that sort took 7.3 s cold on the live ranking
+ * (1.1 s on created_at; a global merge that fetched the backlog half too, as `supplier` does, took 0.8 s, so the cost was the execution half's live ranking).
  */
-export type TruckingSnapshotPageSortField = 'supplier' | 'created_at';
+export type TruckingSnapshotPageSortField = 'supplier' | 'created_at' | 'contract_date';
 
 /**
  * A page of row keys from the stage snapshot, plus the total for that scope.
@@ -1286,10 +1289,16 @@ export async function loadTruckingStagePageFromSnapshot(
     : sql;
   const baseParams = stageParam === null ? [...params] : [...params, stageParam];
   const dir = sortDir === 'DESC' ? 'DESC' : 'ASC';
+  /*
+   * `contract_date` is NOT NULL in the snapshot with 1970-01-01 standing for "none" (migration 106); the live ranking has a real NULL and puts it last in BOTH directions, so the
+   * placeholder is turned back into NULL here for the same order. Ties then break the way the live order does: created_at DESC, then the operation.
+   */
   const orderBy =
     sortField === 'created_at'
       ? `created_at ${dir} NULLS LAST, operation_id`
-      : `supplier ${dir} NULLS LAST, created_at DESC NULLS LAST, operation_id`;
+      : sortField === 'contract_date'
+        ? `NULLIF(contract_date, DATE '1970-01-01') ${dir} NULLS LAST, created_at DESC NULLS LAST, operation_id`
+        : `supplier ${dir} NULLS LAST, created_at DESC NULLS LAST, operation_id`;
   const limitIdx = baseParams.length + 1;
   const offsetIdx = limitIdx + 1;
   const pageParams = [...baseParams, limit, offset];

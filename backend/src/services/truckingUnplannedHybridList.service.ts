@@ -327,7 +327,7 @@ async function fetchContractBacklogPage(
 
 /** The request's sort, when the snapshot can order by it; null sends the page to live. */
 function snapshotPageSortField(sortKey: string): TruckingSnapshotPageSortField | null {
-  if (sortKey === 'supplier' || sortKey === 'created_at') return sortKey;
+  if (sortKey === 'supplier' || sortKey === 'created_at' || sortKey === 'contract_date') return sortKey;
   return null;
 }
 
@@ -359,8 +359,8 @@ async function fetchExecutionPage(
    * operation. With the keys handed over, `trucking_source` is referenced once and the planner
    * pushes the key restriction into it.
    *
-   * Only `supplier` and `created_at`: those are the columns the snapshot carries, and the two
-   * orders were each compared against live before being wired. Anything else keeps the live
+   * Only `supplier`, `created_at` and `contract_date`: those are the columns the snapshot carries, and the
+   * orders were each compared against live before being wired (contract_date: docs/scripts/diag-trucking-sort-parity.cjs). Anything else keeps the live
    * ranking below.
    *
    * Verified on pages 1 and 2 of the default YTD scope: same 20 ids in the same order as the
