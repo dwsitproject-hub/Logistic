@@ -9,6 +9,8 @@ interface Props {
   description: string
   usesRegionScope: boolean
   isAdmin: boolean
+  /** False for Administrator and Management: one permission set, no level or transport to pick. */
+  hasLevel: boolean
   level: string
   onLevel: (value: string) => void
   levelOptions: readonly string[]
@@ -22,7 +24,7 @@ interface Props {
 
 /** Who the permissions below belong to: the role, and the level and transport that pick WHICH set of permissions is being edited. */
 export function RoleHeader(props: Props) {
-  const { displayName, roleName, description, usesRegionScope, isAdmin, level, onLevel, levelOptions, transport, onTransport, transportOptions, hint, loading } = props
+  const { displayName, roleName, description, usesRegionScope, isAdmin, hasLevel, level, onLevel, levelOptions, transport, onTransport, transportOptions, hint, loading } = props
   return (
     <div className="border-b border-gray-200 px-5 py-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -44,6 +46,7 @@ export function RoleHeader(props: Props) {
       </div>
       {description ? <p className="mt-1 text-sm text-gray-500">{description}</p> : null}
 
+      {hasLevel ? (
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium text-gray-500">Editing the permissions of</span>
         <Select value={level} onValueChange={onLevel}>
@@ -72,6 +75,7 @@ export function RoleHeader(props: Props) {
           </SelectContent>
         </Select>
       </div>
+      ) : null}
       <p className="mt-2 text-xs text-gray-500">{hint}</p>
     </div>
   )

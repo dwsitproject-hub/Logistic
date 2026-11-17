@@ -7,6 +7,7 @@ import { AuthRequest } from '../middleware/auth';
 import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
 import { canonicalizeUserRegionSites } from '../utils/userRegionSite';
 import { findAssignableRole } from '../services/roleAssignment.service';
+import { roleUsesLevel } from '../utils/rolePermissionScope';
 import { AuditService } from '../services/audit.service';
 import { issueToken, unusablePasswordHash } from '../services/authToken.service';
 import { authEmailAppFrom, sendInvitationEmail, sendPasswordResetEmail } from '../services/authEmail.service';
@@ -275,7 +276,8 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const normRole = String(role || '').toUpperCase();
-    const normLevel = String(level || '').trim();
+    // Administrator and Management are not ranked: whatever level arrives is dropped (ROLES_WITHOUT_LEVEL).
+    const normLevel = roleUsesLevel(normRole) ? String(level || '').trim() : '';
     const requiresTransport = normRole === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(normLevel);
     // LOGISTICS Section Head/Staff/Admin must carry a transport type: it picks the permission scope (rolePermissionScope.ts), and an account with none would match only
     // the unscoped permission rows. The Add User form no longer asks, so nothing sent means ALL; a value that is sent must still be valid.
@@ -334,7 +336,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
         role,
         phone,
         department,
-        level || null,
+        normLevel || null,
         nextTransportType,
         null,
       ]
@@ -451,7 +453,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       role || existingUser.rows[0].role,
     ]);
     const nextRoleUsesRegionScope = Boolean(nextRoleRow.rows[0]?.uses_region_scope);
-    const nextLevel = String(level ?? existingUser.rows[0].level ?? '').trim();
+    const nextLevel = roleUsesLevel(nextRole) ? String(level ?? existingUser.rows[0].level ?? '').trim() : '';
     const validLevels = ['Dept Head', 'Section Head', 'Staff', 'Admin'];
     if (level != null && level !== '' && !validLevels.includes(String(level))) {
       res.status(400).json({
@@ -525,12 +527,14 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       role,
       phone,
       department,
-      level ?? null,
+      roleUsesLevel(nextRole) ? (level ?? null) : null,
       nextTransportType,
       is_active,
       id,
     ];
 
+    // A role without levels clears the level (its $7 is sent as NULL; COALESCE alone could never empty one); any other role keeps the old value when none is sent.
+    const levelClause = roleUsesLevel(nextRole) ? 'level = COALESCE($7, level),' : 'level = $7,';
     const plantClause = shouldSyncPlants ? 'plant = $11,' : '';
     if (shouldSyncPlants) {
       updateParams.push(plantSummary);
@@ -544,7 +548,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
            role = COALESCE($4, role),
            phone = COALESCE($5, phone),
            department = COALESCE($6, department),
-           level = COALESCE($7, level),
+           ${levelClause}
            transport_type = COALESCE($8, transport_type),
            ${plantClause}
            is_active = COALESCE($9, is_active),

@@ -1,6 +1,18 @@
 export const VALID_ROLE_LEVELS = ['Dept Head', 'Section Head', 'Staff', 'Admin'] as const;
 export const VALID_ROLE_TRANSPORT_TYPES = ['SEA', 'LAND', 'ALL', 'MIX'] as const;
 
+/**
+ * Roles whose users carry NO level: the Administrator and Management are not ranked, so their permissions are one set (level NULL) and a user's level is always empty.
+ * Every other role is scoped per level (Dept Head / Section Head / Staff / Admin).
+ */
+export const ROLES_WITHOUT_LEVEL = ['ADMIN', 'MANAGEMENT'] as const;
+
+/** False for the roles in ROLES_WITHOUT_LEVEL; true for every other role, and for an unknown one (the safe side: a level may still be asked for). */
+export function roleUsesLevel(roleName: unknown): boolean {
+  const name = String(roleName ?? '').trim().toUpperCase();
+  return !(ROLES_WITHOUT_LEVEL as readonly string[]).includes(name);
+}
+
 export type RoleLevel = (typeof VALID_ROLE_LEVELS)[number];
 export type RoleTransportType = (typeof VALID_ROLE_TRANSPORT_TYPES)[number];
 
@@ -51,11 +63,20 @@ export function parseRoleScopeQuery(query: {
   return { scope: { level, transportType } };
 }
 
-/** Admin role editor: level is mandatory; transport remains optional (all transport = unscoped). */
-export function parseAdminRoleScopeQuery(query: {
-  level?: unknown;
-  transportType?: unknown;
-}): { scope: ParsedRoleScope; error?: string } {
+/**
+ * Admin role editor: level is mandatory; transport remains optional (all transport = unscoped).
+ * For a role in ROLES_WITHOUT_LEVEL neither level nor transport is asked for or used: the scope is always level NULL / transport NULL, whatever the query carries.
+ */
+export function parseAdminRoleScopeQuery(
+  query: {
+    level?: unknown;
+    transportType?: unknown;
+  },
+  roleName?: unknown,
+): { scope: ParsedRoleScope; error?: string } {
+  if (roleName != null && !roleUsesLevel(roleName)) {
+    return { scope: { level: null, transportType: null } };
+  }
   const hasLevel = query.level != null && String(query.level).trim() !== '';
   if (!hasLevel) {
     return {
