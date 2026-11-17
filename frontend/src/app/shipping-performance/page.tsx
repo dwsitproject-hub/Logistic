@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Columns3, Eye, GripVertical, Loader2, MessageSquare, Package, SlidersHorizontal, X } from 'lucide-react'
+import { Columns3, Eye, FileSignature, GripVertical, Loader2, MessageSquare, Package, SlidersHorizontal, X } from 'lucide-react'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
@@ -1470,10 +1470,19 @@ function TopRankBadge({ rank }: { rank: number | null | undefined }) {
   )
 }
 
-/** The contract count at the right of the On Going / Completed cards: the same soft chip as the On Time and Late chips of Contract Performance. */
-function ShippingPerfContractsBadge({ count }: { count: number }) {
+/**
+ * The contract count at the right of the On Going / Completed cards: a soft chip in the card's own colour (blue for On Going, green for Completed, the tones of the
+ * icon tile) with the small contract icon the Contracts menu uses.
+ */
+function ShippingPerfContractsBadge({ count, variant }: { count: number; variant: 'ongoing' | 'completed' }) {
   return (
-    <span className="whitespace-nowrap rounded-full bg-gray-100 px-2 py-0.5 text-[0.6875rem] font-medium text-gray-700">
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[0.6875rem] font-medium',
+        variant === 'ongoing' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700',
+      )}
+    >
+      <FileSignature className="h-3 w-3 shrink-0" aria-hidden />
       Contracts {count.toLocaleString('en-US')}
     </span>
   )
@@ -2593,7 +2602,7 @@ function ShippingPerformancePageContent() {
                   selected={perfCardFilter === 'ongoing'}
                   onClick={() => togglePerfCardFilter('ongoing')}
                   className="min-w-0 flex-1"
-                  headerEnd={<ShippingPerfContractsBadge count={ongoingPerformanceSummary.contractCount} />}
+                  headerEnd={<ShippingPerfContractsBadge variant="ongoing" count={ongoingPerformanceSummary.contractCount} />}
                   label="Total Vessels"
                   value={ongoingPerformanceSummary.vesselCount.toLocaleString('en-US')}
                 >
@@ -2606,7 +2615,7 @@ function ShippingPerformancePageContent() {
                   selected={perfCardFilter === 'close'}
                   onClick={() => togglePerfCardFilter('close')}
                   className="min-w-0 flex-1"
-                  headerEnd={<ShippingPerfContractsBadge count={closePerformanceSummary.contractCount} />}
+                  headerEnd={<ShippingPerfContractsBadge variant="completed" count={closePerformanceSummary.contractCount} />}
                   label="Total Vessels"
                   value={closePerformanceSummary.vesselCount.toLocaleString('en-US')}
                 >
