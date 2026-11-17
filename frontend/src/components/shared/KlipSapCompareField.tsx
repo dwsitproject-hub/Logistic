@@ -86,6 +86,22 @@ export function KlipSapSourceBadge({
   return null
 }
 
+/** The gap between the KLIP value and the reference value, as a small badge: green when KLIP is above it (+), amber when below (-). Just the signed number, no symbol. */
+export function KlipSapDeltaBadge({ delta, title }: { delta: string; title?: string }) {
+  const negative = delta.trim().startsWith('-')
+  return (
+    <span
+      title={title}
+      className={cn(
+        'shrink-0 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums',
+        negative ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800',
+      )}
+    >
+      {delta}
+    </span>
+  )
+}
+
 export function KlipSapReferenceFooter({
   sapValue,
   format,
@@ -109,9 +125,7 @@ export function KlipSapReferenceFooter({
         {textDisplay && format === 'text' ? textDisplay(shown) : shown}
       </span>
       {delta ? (
-        <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
-          Δ {delta}
-        </span>
+        <KlipSapDeltaBadge delta={delta} />
       ) : null}
     </div>
   )
