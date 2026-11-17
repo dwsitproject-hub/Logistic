@@ -84,7 +84,7 @@ function createDiscardingResponse(): Response {
 
 /**
  * The query a default browser load sends, as the warmers replay it. Exported so a test can lock
- * it against the frontend's defaults - `shipments.compact.sort` defaults to created_at/desc in
+ * it against the frontend's defaults - `shipments.compact.sort` defaults to contract_date/desc in
  * `frontend/src/lib/shipmentsCompactSort.ts`, and the page sends compact/limit/page/includeSummary
  * exactly as below. If either side drifts, the warmers populate a key nobody reads.
  */
@@ -98,7 +98,7 @@ export function shipmentWarmerBaseQuery(
     includeSummary: 'false',
     limit: '20',
     page: '1',
-    sortKey: 'created_at',
+    sortKey: 'contract_date',
     sortDir: 'desc',
     dateFrom,
     dateTo,
@@ -157,7 +157,7 @@ function scopeToExtraQuery(scope: {
 }
 
 /**
- * Compact list shell (skipSapJoin) — default created_at then persisted vessel_name sort.
+ * Compact list shell (skipSapJoin) — default contract_date desc (the sort the View Table opens on), then vessel_name.
  *
  * The hydrate variant is warmed too. `skipSapJoin` is part of the list cache key, and every
  * warmer here inherits `skipSapJoin: 'true'` from buildSyntheticRequest, so before this the
@@ -166,9 +166,9 @@ function scopeToExtraQuery(scope: {
  * variant, and a persisted non-default sort is picked up by PAGE_KEEP_WARM after its first use.
  */
 export async function startShipmentListShellCacheWarmer(): Promise<void> {
-  await warmOne('list shell', { sortKey: 'created_at', sortDir: 'desc' });
+  await warmOne('list shell', { sortKey: 'contract_date', sortDir: 'desc' });
   await warmOne('list shell vessel_name', { sortKey: 'vessel_name', sortDir: 'asc' });
-  await warmOne('list hydrate', { skipSapJoin: 'false', sortKey: 'created_at', sortDir: 'desc' });
+  await warmOne('list hydrate', { skipSapJoin: 'false', sortKey: 'contract_date', sortDir: 'desc' });
 }
 
 /**

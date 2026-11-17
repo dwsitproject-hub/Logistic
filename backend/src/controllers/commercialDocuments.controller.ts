@@ -4,6 +4,7 @@ import path from 'path';
 import multer from 'multer';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
+import { uploadsRootProblem } from '../utils/uploadsGuard';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import {
   buildCommercialDocumentStoredName,
@@ -846,6 +847,18 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     if (finalAbsPath !== file.path) {
       fs.renameSync(file.path, finalAbsPath);
     }
+    // Do not record a document whose bytes are not on the disk: the row would say "uploaded" while View says "File not found". The size is read back from
+    // the final path (on the share, a rename can succeed and the file still not be there when the share is unhealthy).
+    let landedSize = -1;
+    try {
+      landedSize = fs.statSync(finalAbsPath).size;
+    } catch {
+      /* not there */
+    }
+    if (landedSize !== file.size) {
+      logger.error(`Upload not saved: expected ${file.size} bytes at ${finalAbsPath}, found ${landedSize}`);
+      return res.status(500).json({ success: false, error: { message: 'The file could not be saved on the server. Nothing was recorded; please try again.' } });
+    }
 
     const relativePath = toRelativeUploadPath(finalAbsPath);
     const userId = req.user?.id ?? null;
@@ -894,6 +907,10 @@ async function streamCommercialFile(req: AuthRequest, res: Response, disposition
     const doc = result.rows[0];
     const absPath = resolveUploadAbsolutePath(doc.file_path);
     if (!fs.existsSync(absPath)) {
+      // A missing file while the share is not mounted is a storage fault, not a missing file: say so, so it is reported as one.
+      if (uploadsRootProblem()) {
+        return res.status(503).json({ success: false, error: { message: 'Document storage is not available right now. The files are safe; please tell the administrator.' } });
+      }
       return res.status(404).json({ success: false, error: { message: 'File not found on server' } });
     }
     auditCommercial(req, disposition === 'inline' ? 'VIEW' : 'DOWNLOAD', doc.id, {

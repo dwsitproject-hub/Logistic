@@ -14,6 +14,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
+import { JpsEstimateField, jpsEstimateIso } from '@/components/shared/JpsEstimateField'
 import {
   JETTY_SEND_FAILED,
   JettyStatusBadge,
@@ -3530,7 +3531,14 @@ export function EditShipmentModal({
                         </span>
                       </div>
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-                        {DISCHARGE_ETA_FIELD_ROWS.map(({ key, label }) => (
+                        {DISCHARGE_ETA_FIELD_ROWS.map(({ key, label }) => jpsEstimateIso(jettyStatus?.jps_est, key) ? (
+                          <JpsEstimateField
+                            key={key}
+                            label={label}
+                            jpsIso={jpsEstimateIso(jettyStatus?.jps_est, key)}
+                            klipIso={dischargeEtaFields[key]}
+                          />
+                        ) : (
                           <div key={key}>
                             <label className="mb-1 block text-[0.625rem] font-medium text-gray-600">
                               {label}
@@ -3602,7 +3610,14 @@ export function EditShipmentModal({
                       </div>
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-                      {ETA_FIELD_ROWS.map(({ key, label }) => (
+                      {ETA_FIELD_ROWS.map(({ key, label }) => jpsEstimateIso(jettyStatus?.jps_est, key) ? (
+                        <JpsEstimateField
+                          key={key}
+                          label={label}
+                          jpsIso={jpsEstimateIso(jettyStatus?.jps_est, key)}
+                          klipIso={activeEtaBlock.fields[key]}
+                        />
+                      ) : (
                         <div key={key}>
                           <label className="mb-1 block text-[0.625rem] font-medium text-gray-600">{label}</label>
                           {canModifyCoreSections ? (

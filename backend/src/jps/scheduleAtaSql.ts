@@ -67,3 +67,22 @@ export function sqlJpsAtaJsonExpr(alias: string): string {
   );
   return `jsonb_build_object(${pairs.join(', ')})`;
 }
+
+/**
+ * JPS's ESTIMATES for the discharge port, as `{ <KLIP estimation field>: 'YYYY-MM-DD' | null }`, dated in WIB like the actuals above.
+ *
+ *   eta  Estimated time of arrival      -> eta_vessel_arrive_at_discharge_port   (ETA at Discharge Port)
+ *   etb  Estimated time of berthing     -> eta_vessel_berthed_at_discharge_port  (ETB at Discharge Port)
+ *   etc  Estimated time of completion   -> eta_vessel_complete_discharge         (ETC at Discharge Port)
+ *
+ * They are what the JPS operators plan, and they move after KLIP sent its own ETA, so the Edit / View Shipment modal draws them as the main value with
+ * the JPS badge and keeps KLIP's own estimate small underneath. Display only: nothing here is written to the shipment, and no list reads it.
+ * `alias` is a jps_shipping_instructions row (schedule_eta / schedule_etb / schedule_etc, migration 188).
+ */
+export function sqlJpsEstimateJsonExpr(alias: string): string {
+  return `jsonb_build_object(
+    'eta_vessel_arrive_at_discharge_port', ((${alias}.schedule_eta AT TIME ZONE 'Asia/Jakarta')::date)::text,
+    'eta_vessel_berthed_at_discharge_port', ((${alias}.schedule_etb AT TIME ZONE 'Asia/Jakarta')::date)::text,
+    'eta_vessel_complete_discharge', ((${alias}.schedule_etc AT TIME ZONE 'Asia/Jakarta')::date)::text
+  )`;
+}

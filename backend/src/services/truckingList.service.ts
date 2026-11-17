@@ -293,7 +293,8 @@ export function buildTruckingListFilterCacheKey(input: {
     skipSapJoin: false,
     page: 1,
     limit: 1,
-    sortKey: 'created_at',
+    // the sort the View Table opens on (contract_date desc since 2026-11-16): the cache key carries it
+    sortKey: 'contract_date',
     sortDir: 'desc',
   });
 }
@@ -516,10 +517,10 @@ export function startTruckingListCacheWarmer(): Promise<void> {
       limit: '1',
       page: '1',
       /*
-       * Same sort the View Table now opens on, because the response cache keys on it. Warming
-       * `supplier` while the page asks for `created_at` warms a key nobody requests.
+       * Same sort the View Table now opens on (Contract Date, newest first), because the response cache keys on it. Warming
+       * `supplier` while the page asks for `contract_date` warms a key nobody requests.
        */
-      sortKey: 'created_at',
+      sortKey: 'contract_date',
       sortDir: 'desc',
       dateFrom,
       dateTo,

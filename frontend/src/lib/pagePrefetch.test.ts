@@ -43,7 +43,7 @@ describe('buildPagePrefetchRequests /shipments', () => {
       JSON.stringify({ key: 'vessel_name', dir: 'asc' }),
     )
     const requests = buildPagePrefetchRequests('/shipments')
-    expect(requests[0].cacheKey).toContain('sortKey=created_at')
+    expect(requests[0].cacheKey).toContain('sortKey=contract_date')
     expect(requests[0].cacheKey).toContain('sortDir=desc')
     expect(window.localStorage.getItem(SHIPMENTS_COMPACT_SORT_STORAGE_KEY)).toBeNull()
   })

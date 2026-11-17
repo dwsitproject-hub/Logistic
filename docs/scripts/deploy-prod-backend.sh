@@ -229,7 +229,16 @@ if timeout 10 ls "$UPLOAD_MOUNT" >/dev/null 2>&1; then
   printf '  %s -> /app/uploads\n' "$UPLOAD_MOUNT"
   printf '  shipment files land in documents/shipment/contract|si|bl/<id> on that share\n'
 else
-  printf '  WARNING: %s is not readable. Uploads stay on the Docker volume and will not appear on Synology.\n' "$UPLOAD_MOUNT"
+  # This used to be a warning. A container started without the upload share runs normally, writes every upload to an empty Docker volume and shows
+  # "File not found on server" for every older document (2026-11-12 and 2026-11-17), so it must stop the deploy and leave the running container alone.
+  if [[ "${DEPLOY_WITHOUT_UPLOAD_SHARE:-}" == "1" ]]; then
+    printf '  WARNING: %s is not readable. DEPLOY_WITHOUT_UPLOAD_SHARE=1: deploying with uploads on the Docker volume; every document will show "File not found" until this is fixed.\n' "$UPLOAD_MOUNT"
+  else
+    die "$UPLOAD_MOUNT is not readable on this host (dead share, wrong KLIP_UPLOAD_MOUNT in .env, or a stale mount).
+  Nothing was changed and the running container is untouched.
+  Check: ls $UPLOAD_MOUNT   and   mount | grep synology   and   grep KLIP_UPLOAD_MOUNT .env
+  Only to deliberately run without the share: DEPLOY_WITHOUT_UPLOAD_SHARE=1 bash docs/scripts/deploy-prod-backend.sh"
+  fi
 fi
 
 IMAGE_BEFORE="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null || echo none)"
@@ -278,6 +287,17 @@ if [[ "$UPLOAD_ON_NAS" == "1" && "$UPLOAD_SOURCE" == *"$UPLOAD_MOUNT"* ]]; then
   ok "uploads are on Synology ($UPLOAD_MOUNT)"
 else
   bad "uploads are on Synology (container /app/uploads source is '${UPLOAD_SOURCE:-none}', expected $UPLOAD_MOUNT)"
+fi
+
+# The app refuses uploads when the upload folder is not the share (UPLOADS_REQUIRE_MARKER=true in .env, marker file .klip-uploads-root in the share root).
+if grep -qE '^UPLOADS_REQUIRE_MARKER=true' .env; then
+  if docker exec "$CONTAINER" sh -c 'test -f /app/uploads/.klip-uploads-root' >/dev/null 2>&1; then
+    ok "upload marker found (the app accepts uploads)"
+  else
+    bad "upload marker .klip-uploads-root not found in /app/uploads: the app will REFUSE uploads. Create it once on the share: touch ${UPLOAD_MOUNT}/.klip-uploads-root"
+  fi
+else
+  printf '  [SKIP] upload marker check is off (add UPLOADS_REQUIRE_MARKER=true to .env after creating the marker on the share)\n'
 fi
 
 if logs | grep -qiE 'migration.*(failed|error)'; then bad "no migration errors this boot"; else ok "no migration errors this boot"; fi

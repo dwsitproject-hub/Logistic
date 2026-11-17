@@ -13,7 +13,12 @@ export interface ShipmentsCompactSort {
   sortDir: 'asc' | 'desc'
 }
 
-export const DEFAULT_SHIPMENTS_COMPACT_SORT: ShipmentsCompactSort = { sortKey: 'created_at', sortDir: 'desc' }
+/**
+ * Newest CONTRACT first (it was created_at, when KLIP first saw the row): the page opens on the contracts people are working on, the way Contracts, Contract Performance,
+ * Shipping Performance and Trucking do. The startup warmers (backend/src/services/shipmentSummaryWarmer.service.ts) warm exactly this key, so the first visitor after a restart
+ * is served from the cache; measured on production 2026-11-17, a cold page of this sort cost 6.9 s against 5.2 s for created_at, and a warm one about 0 s.
+ */
+export const DEFAULT_SHIPMENTS_COMPACT_SORT: ShipmentsCompactSort = { sortKey: 'contract_date', sortDir: 'desc' }
 
 /** The sort the table opens on. Safe to call during SSR. */
 export function readShipmentsCompactSort(): ShipmentsCompactSort {

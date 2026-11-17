@@ -31,8 +31,8 @@ describe('Shipments table forgets its sort', () => {
     vi.unstubAllGlobals()
   })
 
-  it('is created_at desc when nothing is stored', () => {
-    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'created_at', sortDir: 'desc' })
+  it('is contract_date desc when nothing is stored', () => {
+    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'contract_date', sortDir: 'desc' })
   })
 
   it('ignores a sort stored by an earlier version, and removes it', () => {
@@ -40,7 +40,7 @@ describe('Shipments table forgets its sort', () => {
       SHIPMENTS_COMPACT_SORT_STORAGE_KEY,
       JSON.stringify({ key: 'vessel_name', dir: 'asc' }),
     )
-    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'created_at', sortDir: 'desc' })
+    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'contract_date', sortDir: 'desc' })
     expect(window.localStorage.getItem(SHIPMENTS_COMPACT_SORT_STORAGE_KEY)).toBeNull()
   })
 
@@ -53,6 +53,6 @@ describe('Shipments table forgets its sort', () => {
   it('is safe where there is no window (server render)', () => {
     vi.unstubAllGlobals()
     expect(() => forgetShipmentsCompactSort()).not.toThrow()
-    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'created_at', sortDir: 'desc' })
+    expect(readShipmentsCompactSort()).toEqual({ sortKey: 'contract_date', sortDir: 'desc' })
   })
 })
