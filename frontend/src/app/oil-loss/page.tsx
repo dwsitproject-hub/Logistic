@@ -2107,33 +2107,27 @@ export default function OilLossPage() {
                   <FieldHelp text={`Formula: ${card.formula}`} />
                 </div>
 
-                <div className="min-w-0">
-                  <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-500 leading-none">
-                    Avg
+                {/* Avg % at the left and Avg MT at the right of ONE row: R1-R3 show Avg MT like Loss (the same mean of the per-voyage loss in MT, ROilLossSummary.avgMt, computed for every R). */}
+                <div className="flex items-end justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-500 leading-none">Avg</div>
+                    <div
+                      className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
+                        cardDisabled || showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgPct, 'primary')
+                      }`}
+                    >
+                      {showBlockingLoad ? '…' : cardDisabled ? '-' : formatOilLossAvgPct(avgPct)}
+                    </div>
                   </div>
-                  <div
-                    className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
-                      cardDisabled || showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgPct, 'primary')
-                    }`}
-                  >
-                    {showBlockingLoad ? '…' : cardDisabled ? '-' : formatOilLossAvgPct(avgPct)}
-                  </div>
-                </div>
-                {/* R1-R3 show Avg MT like Loss: the same mean of the per-voyage loss in MT (ROilLossSummary.avgMt, computed for every R). */}
-                <div className="mt-2 min-w-0">
-                  <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-400 leading-none">
-                    Avg MT
-                  </div>
-                  <div
-                    className={`mt-1 text-sm font-medium leading-tight tabular-nums ${
-                      showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgMt, 'secondary')
-                    }`}
-                  >
-                    {showBlockingLoad
-                      ? '…'
-                      : avgMt == null
-                        ? '-'
-                        : `${formatOilLossAvgMt(avgMt)} MT`}
+                  <div className="min-w-0 text-right">
+                    <div className="text-[0.625rem] font-medium uppercase tracking-wide text-gray-500 leading-none">Avg MT</div>
+                    <div
+                      className={`mt-1 whitespace-nowrap text-lg font-medium leading-tight tabular-nums ${
+                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgMt, 'secondary')
+                      }`}
+                    >
+                      {showBlockingLoad ? '…' : avgMt == null ? '-' : `${formatOilLossAvgMt(avgMt)} MT`}
+                    </div>
                   </div>
                 </div>
               </div>
