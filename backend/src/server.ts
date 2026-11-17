@@ -82,6 +82,7 @@ import { ssoHubHandler } from './controllers/sso.controller';
 import { oidcLoginHandler, oidcCallbackHandler } from './controllers/oidc.controller';
 import { configureTrustProxy, createSessionMiddleware } from './middleware/session';
 import { frontendUrl } from './services/sessionAuth.service';
+import { logUploadsRootStatusAtStart, uploadsMarkerRequired, uploadsRootProblem } from './utils/uploadsGuard';
 
 dotenv.config();
 
@@ -207,11 +208,17 @@ const swaggerSpec = swaggerJsdoc(swaggerOptions);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Health check (also under /api for Nginx proxy: /api/health → backend /api/health)
+// `uploads` is only reported when the marker check is on (production): 'ok', or 'NOT_ON_SHARE' when the container runs without the Synology mount.
+const healthBody = () => ({
+  status: 'OK',
+  message: 'KLIP Backend is running',
+  ...(uploadsMarkerRequired() ? { uploads: uploadsRootProblem() ? 'NOT_ON_SHARE' : 'ok' } : {}),
+});
 app.get('/health', (_req, res) => {
-  res.json({ status: 'OK', message: 'KLIP Backend is running' });
+  res.json(healthBody());
 });
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'OK', message: 'KLIP Backend is running' });
+  res.json(healthBody());
 });
 
 // Downstream Hub SSO — legacy HS256 bridge (opt-in via SSO_LEGACY_BRIDGE=true).
@@ -274,6 +281,7 @@ if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, async () => {
     logger.info(`🚀 Server is running on port ${PORT}`);
     logger.info(`📚 API Documentation available at http://localhost:${PORT}/api-docs`);
+    logUploadsRootStatusAtStart();
 
     try {
       await ensureUserStoContractAssignmentsTable();

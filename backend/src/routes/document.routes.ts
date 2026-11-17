@@ -4,6 +4,7 @@ import { auditLog } from '../middleware/audit';
 import multer from 'multer';
 import { downloadDocument, viewDocument, listDocuments, documentPresence, uploadDocumentHandler, deleteShipmentDocument, ensureUploadDir } from '../controllers/document.controller';
 import { buildUniqueStoredFilename } from '../utils/fileUpload';
+import { requireUploadsShare } from '../utils/uploadsGuard';
 
 const router = express.Router();
 
@@ -58,7 +59,7 @@ router.get('/', listDocuments);
 router.get('/presence', documentPresence);
 
 // Upload document
-router.post('/upload', upload.single('file'), auditLog('CREATE', 'DOCUMENT'), uploadDocumentHandler);
+router.post('/upload', requireUploadsShare, upload.single('file'), auditLog('CREATE', 'DOCUMENT'), uploadDocumentHandler);
 
 // Delete (soft) a shipment's Contract / SI / BL: the same right as editing a shipment. The handler writes its own audit entry.
 router.delete('/:id', authorizePermission('data.shipments', 'can_edit'), deleteShipmentDocument);

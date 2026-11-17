@@ -1,5 +1,6 @@
 import express from 'express';
 import { authenticateToken, authorize, authorizeAnyPermission, authorizePermission } from '../middleware/auth';
+import { requireUploadsShare } from '../utils/uploadsGuard';
 import {
   commercialDocumentUpload,
   deleteCommercialDocument,
@@ -63,7 +64,7 @@ router.get('/po-creators/status', authenticateToken, authorize('ADMIN'), getComm
 router.post('/po-creators/sync', authenticateToken, authorize('ADMIN'), syncCommercialPoCreators);
 router.get('/history/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentHistory);
 router.get('/files/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentFiles);
-router.post('/upload', authenticateToken, canViewDocuments, commercialDocumentUpload.single('file'), uploadCommercialDocument);
+router.post('/upload', authenticateToken, canViewDocuments, requireUploadsShare, commercialDocumentUpload.single('file'), uploadCommercialDocument);
 router.post(
   '/ocr/settlement-invoice',
   authenticateToken,
