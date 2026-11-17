@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 import { StitchNavIcons } from '@/components/shared/stitchIcons'
 import { withoutMovedPages } from '@/lib/commdocsApp'
+import { isHiddenNavHref } from '@/lib/hiddenFeatures'
 
 export type NavGroup = 'performance' | 'operations' | 'master' | 'system'
 
@@ -172,5 +173,8 @@ export const ALL_NAV_ITEMS: NavItem[] = [
   { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Sparkles, roles: ['ALL'], permissionKey: 'page.klip_agent_ai', group: 'system' },
 ]
 
-/** What KLIP shows: without Commercial Documents / Commercial Dashboard once they live in their own app. */
-export const NAV_ITEMS: NavItem[] = withoutMovedPages(ALL_NAV_ITEMS)
+/**
+ * What KLIP shows: without Commercial Documents / Commercial Dashboard once they live in their own app, and without the features that are not in use yet (lib/hiddenFeatures.ts).
+ * The Layout only lets a user open an address that is in this list, so a hidden page cannot be reached by typing its address either.
+ */
+export const NAV_ITEMS: NavItem[] = withoutMovedPages(ALL_NAV_ITEMS).filter((item) => !isHiddenNavHref(item.href))
