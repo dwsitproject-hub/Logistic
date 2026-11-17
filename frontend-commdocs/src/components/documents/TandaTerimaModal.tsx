@@ -1,6 +1,6 @@
 'use client'
 
-import { Download, X } from 'lucide-react'
+import { CheckCircle2, Download, X } from 'lucide-react'
 import { useState } from 'react'
 import { apiBlob, errorMessage } from '@/lib/api'
 import { DOCUMENT_TYPES, typesDone } from '@/lib/documentTypes'
@@ -30,6 +30,10 @@ export function TandaTerimaModal({
   const [sendDate, setSendDate] = useState(ddmmyyyy(isoDate(new Date())))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // The file once it is made. The browser may refuse a download that starts by itself (Chrome blocks further automatic downloads of a page, and shows a
+  // small "downloads blocked" icon in the address bar), while saying nothing to the page. So the receipt is not "done" until the person can see it was
+  // saved: this state keeps the file and offers Save PDF, a real click that the browser always accepts.
+  const [ready, setReady] = useState<{ blob: Blob; fileName: string } | null>(null)
 
   const download = async () => {
     const iso = parseDdMmYyyy(sendDate)
@@ -42,8 +46,10 @@ export function TandaTerimaModal({
         method: 'POST',
         body: { contractExtNos: rows.map((r) => r.contract_ext_no), sendDate: iso },
       })
-      saveBlob(blob, fileName || `Tanda_Terima_${iso}.pdf`)
-      onDone(rows.length)
+      const name = fileName || `Tanda_Terima_${iso}.pdf`
+      saveBlob(blob, name)
+      setReady({ blob, fileName: name })
+      setBusy(false)
     } catch (err) {
       setError(errorMessage(err))
       setBusy(false)
@@ -57,15 +63,28 @@ export function TandaTerimaModal({
       onClose={onClose}
       busy={busy}
       footer={
-        <>
-          <button className="btn" type="button" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button className="btn primary" type="button" onClick={() => void download()} disabled={busy || !rows.length}>
-            <Download aria-hidden />
-            {busy ? 'Generating…' : 'Download PDF'}
-          </button>
-        </>
+        ready ? (
+          <>
+            <button className="btn" type="button" onClick={() => saveBlob(ready.blob, ready.fileName)}>
+              <Download aria-hidden />
+              Save PDF again
+            </button>
+            <button className="btn primary" type="button" onClick={() => onDone(rows.length)}>
+              <CheckCircle2 aria-hidden />
+              Done
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn" type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="btn primary" type="button" onClick={() => void download()} disabled={busy || !rows.length}>
+              <Download aria-hidden />
+              {busy ? 'Generating…' : 'Download PDF'}
+            </button>
+          </>
+        )
       }
     >
       <div className="field">
@@ -109,6 +128,15 @@ export function TandaTerimaModal({
         />
         <span className="hint">Printed on the receipt as the date the documents were sent.</span>
       </div>
+      {ready ? (
+        <div className="alert ok" role="status"><CheckCircle2 aria-hidden /><div>
+          <b>{ready.fileName}</b> is ready ({rows.length} PO{rows.length === 1 ? '' : 's'}). It should now be in your Downloads folder.
+          <br />
+          <span className="hint">
+            Not there? Click <b>Save PDF again</b>. If your browser shows a &quot;downloads blocked&quot; icon in the address bar, choose Always allow downloads for this site.
+          </span>
+        </div></div>
+      ) : null}
       <ErrorNote>{error}</ErrorNote>
     </Modal>
   )
