@@ -98,17 +98,30 @@ function drawWrapped(
   return cursorY;
 }
 
+const TABLE_HEADER_HEIGHT = 22;
+const TABLE_ROW_HEIGHT = 20;
+/** Nothing is drawn below this line: a row that would cross it goes to the next page (a 50-PO receipt used to run off the bottom of the single page). */
+const BOTTOM_MARGIN = 50;
+/** Room the closing block needs (return note, closing line, date, Pengirim/Penerima and the names), with some air. */
+const FOOTER_HEIGHT = 210;
+
+/** How many table rows fit on a page when the table starts at startY. */
+export function tandaTerimaRowsThatFit(startY: number): number {
+  return Math.max(1, Math.floor((startY - TABLE_HEADER_HEIGHT - BOTTOM_MARGIN) / TABLE_ROW_HEIGHT));
+}
+
 function drawTable(
   page: PDFPage,
   font: PDFFont,
   fontBold: PDFFont,
   startY: number,
   rows: TandaTerimaContractLine[],
+  indexOffset = 0,
 ): number {
   const colWidths = [28, 150, CONTENT_WIDTH - 28 - 150 - 36, 36];
   const headers = ['No', 'Deskripsi', 'Nomor Kontrak', 'Qty'];
-  const headerHeight = 22;
-  const rowHeight = 20;
+  const headerHeight = TABLE_HEADER_HEIGHT;
+  const rowHeight = TABLE_ROW_HEIGHT;
   let y = startY;
 
   const drawRowBorder = (topY: number, h: number) => {
@@ -149,7 +162,7 @@ function drawTable(
   rows.forEach((row, idx) => {
     drawRowBorder(y, rowHeight);
     const cells = [
-      String(idx + 1),
+      String(indexOffset + idx + 1),
       'KONTRAK JUAL BELI',
       row.contractExtNo,
       '1',
@@ -177,18 +190,15 @@ function drawTable(
   return y - 16;
 }
 
-function drawTandaTerimaPage(
-  page: PDFPage,
-  font: PDFFont,
-  fontBold: PDFFont,
-  opts: {
-    lines: TandaTerimaContractLine[];
-    supplierLabel: string;
-    sendDateLabel: string;
-    senderEmail: string;
-    senderParen: string;
-  },
-): void {
+interface TandaTerimaPageOpts {
+  supplierLabel: string;
+  sendDateLabel: string;
+  senderEmail: string;
+  senderParen: string;
+}
+
+/** Title, "Kepada" and "UP" of a receipt. Returns the y where the table starts. */
+function drawHeaderBlock(page: PDFPage, font: PDFFont, fontBold: PDFFont, opts: TandaTerimaPageOpts): number {
   let y = PAGE_HEIGHT - 60;
 
   const title = 'TANDA TERIMA';
@@ -209,9 +219,20 @@ function drawTandaTerimaPage(
   page.drawText('UP :', { x: MARGIN_X, y, size: 11, font: fontBold });
   page.drawText('-', { x: MARGIN_X + 62, y, size: 11, font });
   y -= 24;
+  return y;
+}
 
-  y = drawTable(page, font, fontBold, y, opts.lines);
+/** Head of a continuation page: the table goes on, so it says whose receipt it is. Returns the y where the table starts. */
+function drawContinuationHeader(page: PDFPage, font: PDFFont, fontBold: PDFFont, opts: TandaTerimaPageOpts): number {
+  const y = PAGE_HEIGHT - 60;
+  page.drawText('TANDA TERIMA (lanjutan)', { x: MARGIN_X, y, size: 12, font: fontBold, color: rgb(0, 0, 0) });
+  page.drawText(opts.supplierLabel, { x: MARGIN_X, y: y - 16, size: 10, font, color: rgb(0, 0, 0) });
+  return y - 36;
+}
 
+/** Return note, closing line, date and the Pengirim / Penerima signatures. Starts at y and needs FOOTER_HEIGHT. */
+function drawFooterBlock(page: PDFPage, font: PDFFont, fontBold: PDFFont, startY: number, opts: TandaTerimaPageOpts): void {
+  let y = startY;
   const returnNote = `Mohon untuk Tanda Terima di paraf dan dikembalikan atau diemail kembali ke: ${opts.senderEmail || '-'}`;
   y = drawWrapped(page, font, returnNote, MARGIN_X, y, 10, CONTENT_WIDTH, 13);
   y -= 14;
@@ -243,6 +264,39 @@ function drawTandaTerimaPage(
   }
 }
 
+/**
+ * One supplier's receipt. A short list is one page, as always. A long one (50 POs of the same supplier) continues on further pages: rows that would
+ * cross the bottom margin move to the next page, and the closing block (note, date, signatures) always sits on the LAST page, on a page of its own
+ * when the table fills the previous one. Before, everything was drawn on one page, so from about the 28th row down, and the whole signature block,
+ * fell below the page and was cut off.
+ */
+function drawTandaTerimaGroup(
+  pdf: PDFDocument,
+  font: PDFFont,
+  fontBold: PDFFont,
+  lines: TandaTerimaContractLine[],
+  opts: TandaTerimaPageOpts,
+): void {
+  let page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  let y = drawHeaderBlock(page, font, fontBold, opts);
+  let offset = 0;
+  let remaining = lines;
+  for (;;) {
+    const chunk = remaining.slice(0, tandaTerimaRowsThatFit(y));
+    y = drawTable(page, font, fontBold, y, chunk, offset);
+    offset += chunk.length;
+    remaining = remaining.slice(chunk.length);
+    if (remaining.length === 0) break;
+    page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    y = drawContinuationHeader(page, font, fontBold, opts);
+  }
+  if (y - FOOTER_HEIGHT < BOTTOM_MARGIN) {
+    page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    y = PAGE_HEIGHT - 60;
+  }
+  drawFooterBlock(page, font, fontBold, y, opts);
+}
+
 export async function buildTandaTerimaPdf(input: TandaTerimaPdfInput): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -255,9 +309,7 @@ export async function buildTandaTerimaPdf(input: TandaTerimaPdfInput): Promise<U
   const pages = groups.length > 0 ? groups : [{ supplierLabel: '-', lines: [] as TandaTerimaContractLine[] }];
 
   for (const group of pages) {
-    const page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-    drawTandaTerimaPage(page, font, fontBold, {
-      lines: group.lines,
+    drawTandaTerimaGroup(pdf, font, fontBold, group.lines, {
       supplierLabel: group.supplierLabel,
       sendDateLabel,
       senderEmail: input.senderEmail,

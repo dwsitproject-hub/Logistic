@@ -746,7 +746,7 @@ export default function DocumentsPage() {
           onClose={() => setTtRows(null)}
           onDone={(n) => {
             setTtRows(null)
-            toast(`Tanda Terima PDF downloaded for ${plural(n, 'PO')}`)
+            toast(`Tanda Terima PDF created for ${plural(n, 'PO')}`)
           }}
         />
       ) : null}

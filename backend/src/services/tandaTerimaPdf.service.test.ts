@@ -6,6 +6,7 @@ import {
   formatTandaTerimaSendDate,
   groupTandaTerimaLinesBySupplier,
   tandaTerimaDownloadFilename,
+  tandaTerimaRowsThatFit,
 } from '../services/tandaTerimaPdf.service';
 
 describe('tandaTerimaPdf.service', () => {
@@ -73,5 +74,29 @@ describe('tandaTerimaPdf.service', () => {
     });
     const loaded = await PDFDocument.load(bytes);
     expect(loaded.getPageCount()).toBe(2);
+  });
+});
+
+describe('buildTandaTerimaPdf with many POs of one supplier', () => {
+  const lines = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ contractExtNo: `18100008${String(i).padStart(2, '0')}`, supplier: 'BIMA PALMA NUGRAHA PT.' }));
+  const build = async (n: number) => {
+    const bytes = await buildTandaTerimaPdf({ lines: lines(n), sendDateIso: '2026-11-17', senderEmail: 'a@b.c', senderFullName: 'A B' });
+    return (await PDFDocument.load(bytes)).getPageCount();
+  };
+
+  it('a short list is still one page', async () => {
+    expect(await build(1)).toBe(1);
+    expect(await build(10)).toBe(1);
+  });
+  it('50 POs no longer run off the bottom of one page: the table continues on a second page, which also carries the signatures', async () => {
+    expect(await build(50)).toBe(2);
+  });
+  it('when the table fills a page exactly, the closing block gets a page of its own rather than falling off the bottom', async () => {
+    const fit = tandaTerimaRowsThatFit(701.89); // first page, one-line supplier name
+    expect(await build(fit)).toBe(2);
+  });
+  it('a very long list keeps going, page after page', async () => {
+    expect(await build(120)).toBeGreaterThanOrEqual(4);
   });
 });
