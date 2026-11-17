@@ -3537,8 +3537,6 @@ export function EditShipmentModal({
                             label={label}
                             jpsIso={jpsEstimateIso(jettyStatus?.jps_est, key)}
                             klipIso={dischargeEtaFields[key]}
-                            canEdit={canModifyCoreSections}
-                            onChangeKlip={(iso) => updateDischargeEtaField(key, iso)}
                           />
                         ) : (
                           <div key={key}>
@@ -3618,8 +3616,6 @@ export function EditShipmentModal({
                           label={label}
                           jpsIso={jpsEstimateIso(jettyStatus?.jps_est, key)}
                           klipIso={activeEtaBlock.fields[key]}
-                          canEdit={canModifyCoreSections}
-                          onChangeKlip={(iso) => updateActiveEtaField(key, iso)}
                         />
                       ) : (
                         <div key={key}>
