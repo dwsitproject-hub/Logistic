@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeMultiSelectMenuBox, establishesFixedContainingBlock, type PlacementRect } from '@/lib/multiSelectMenuPlacement'
+import { computeMultiSelectMenuBox, establishesFixedContainingBlock, toPlacementRect, type PlacementRect } from '@/lib/multiSelectMenuPlacement'
 
 const rect = (left: number, top: number, width: number, height: number): PlacementRect => ({
   left,
@@ -70,5 +70,32 @@ describe('establishesFixedContainingBlock', () => {
     expect(establishesFixedContainingBlock({ filter: 'blur(2px)' })).toBe(true)
     expect(establishesFixedContainingBlock({ willChange: 'transform' })).toBe(true)
     expect(establishesFixedContainingBlock({ contain: 'paint' })).toBe(true)
+  })
+})
+
+describe('toPlacementRect: a DOMRect cannot be spread', () => {
+  /** Like a real DOMRect: the numbers are getters on the PROTOTYPE, so they are not own properties and a spread does not see them. */
+  function fakeDomRect(r: PlacementRect): PlacementRect {
+    const proto = {}
+    for (const key of ['top', 'left', 'right', 'bottom', 'width', 'height'] as const) {
+      Object.defineProperty(proto, key, { get: () => r[key], enumerable: true })
+    }
+    return Object.create(proto) as PlacementRect
+  }
+  const dialog = fakeDomRect(rect(300, 140, 480, 488))
+
+  it('spreading one loses every number (the bug: NaN placement, no max-height, nothing to scroll in a dialog)', () => {
+    expect({ ...dialog }).toEqual({})
+  })
+
+  it('copies all six numbers', () => {
+    expect(toPlacementRect(dialog)).toEqual(rect(300, 140, 480, 488))
+  })
+
+  it('gives a finite list height inside a dialog, so the list scrolls instead of growing past the dialog', () => {
+    const containingBlock = { ...toPlacementRect(dialog), borderLeft: 1, borderTop: 1 }
+    const box = computeMultiSelectMenuBox({ trigger: rect(320, 520, 440, 40), viewport: { width: 1280, height: 768 }, containingBlock })
+    for (const value of [box.top, box.left, box.width, box.listMaxHeight]) expect(Number.isFinite(value)).toBe(true)
+    expect(box.listMaxHeight).toBeLessThan(488)
   })
 })

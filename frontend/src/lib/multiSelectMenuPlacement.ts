@@ -12,6 +12,15 @@
 
 export type PlacementRect = { top: number; left: number; right: number; bottom: number; width: number; height: number }
 
+/**
+ * The plain numbers of a rect. A DOMRect keeps top / left / right / bottom / width / height as getters on its PROTOTYPE, so `{ ...element.getBoundingClientRect() }` is an
+ * EMPTY object: every field comes out undefined, the placement turns to NaN, and React drops a NaN style - the list then has no max-height, grows to its full length
+ * and the dialog that clips it leaves nothing to scroll (Users, Region/Plant). Always take a rect through this function, never spread one.
+ */
+export function toPlacementRect(rect: PlacementRect): PlacementRect {
+  return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height }
+}
+
 export type MenuBox = { top: number; left: number; width: number; listMaxHeight: number }
 
 const MARGIN = 8

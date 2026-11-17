@@ -7,7 +7,7 @@ import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { stitchControlClass, useStitchFields } from '@/components/shared/stitchField'
 import { isBlankFilterOption, sortFilterOptionsWithSelectedFirst } from '@/lib/globalScopeFilters'
-import { computeMultiSelectMenuBox, establishesFixedContainingBlock } from '@/lib/multiSelectMenuPlacement'
+import { computeMultiSelectMenuBox, establishesFixedContainingBlock, toPlacementRect } from '@/lib/multiSelectMenuPlacement'
 
 // Searchable multi-select dropdown (type to filter, multiple selection with OR).
 // Copied from Dashboard to keep Plant/Site and Incoterm UX consistent.
@@ -97,13 +97,14 @@ export function SearchableMultiSelect({
     }
     const place = () => {
       const triggerEl = containerRef.current
-      const trigger = triggerEl?.getBoundingClientRect()
-      if (!triggerEl || !trigger) return
+      const triggerBox = triggerEl?.getBoundingClientRect()
+      if (!triggerEl || !triggerBox) return
+      const trigger = toPlacementRect(triggerBox)
       const dialog = triggerEl.closest<HTMLElement>('[role="dialog"]')
       setMenuHost(dialog)
       // Only a transformed dialog (Radix centres it with one) re-bases `position: fixed`; a plain one measures from the viewport.
       const rebasing = dialog != null && establishesFixedContainingBlock(window.getComputedStyle(dialog))
-      const dialogRect = rebasing ? dialog.getBoundingClientRect() : null
+      const dialogRect = rebasing ? toPlacementRect(dialog.getBoundingClientRect()) : null
       setMenuBox(
         computeMultiSelectMenuBox({
           trigger,
