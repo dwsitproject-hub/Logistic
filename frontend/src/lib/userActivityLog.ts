@@ -24,6 +24,19 @@ export type DailyActivitySummary = {
   view_count: number;
   active_seconds: number;
   active_duration_label: string;
+  /** users.level; empty for Administrator and Management. */
+  level?: string | null;
+  /** The Region/Site names the user is scoped to. */
+  region_sites?: string[] | null;
+};
+
+/** The cards above the table: the whole filtered period, not only the page that shows. */
+export type UserActivitySummary = {
+  users: number;
+  total_actions: number;
+  clicks: number;
+  changes: number;
+  day_records: number;
 };
 
 export type ActivityDetailEvent = {

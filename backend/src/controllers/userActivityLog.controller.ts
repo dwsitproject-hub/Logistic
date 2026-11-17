@@ -35,7 +35,8 @@ export async function postUserActivityEvents(req: AuthRequest, res: Response): P
 
 export async function getUserActivityDailySummary(req: AuthRequest, res: Response): Promise<void> {
   try {
-    const { userId, page, limit } = req.query;
+    const { userId, role, level, regionSite, search, page, limit } = req.query;
+    const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
     const { dateFrom, dateTo } = parseOptionalStrictDateRange({
       dateFrom: req.query.dateFrom,
       dateTo: req.query.dateTo,
@@ -44,6 +45,10 @@ export async function getUserActivityDailySummary(req: AuthRequest, res: Respons
       dateFrom,
       dateTo,
       userId: typeof userId === 'string' ? userId : undefined,
+      role: text(role),
+      level: text(level),
+      regionSite: text(regionSite),
+      search: text(search),
       page: page ? Number(page) : undefined,
       limit: limit ? Number(limit) : undefined,
     });
