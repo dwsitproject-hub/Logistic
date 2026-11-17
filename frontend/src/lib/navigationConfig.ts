@@ -33,7 +33,7 @@ import { StitchNavIcons } from '@/components/shared/stitchIcons'
 import { withoutMovedPages } from '@/lib/commdocsApp'
 import { isHiddenNavHref } from '@/lib/hiddenFeatures'
 
-export type NavGroup = 'performance' | 'operations' | 'master' | 'system'
+export type NavGroup = 'performance' | 'operations' | 'import' | 'master' | 'system'
 
 export type NavItem = {
   name: string
@@ -47,11 +47,12 @@ export type NavItem = {
 export const NAV_GROUP_LABELS: Record<NavGroup, string> = {
   performance: 'Performance',
   operations: 'Operations',
+  import: 'Import Data',
   master: 'Master Data',
   system: 'System & Admin',
 }
 
-export const NAV_GROUP_ORDER: NavGroup[] = ['performance', 'operations', 'master', 'system']
+export const NAV_GROUP_ORDER: NavGroup[] = ['performance', 'operations', 'import', 'master', 'system']
 
 /** Every menu entry, before the Commercial Documents go-live switch (see lib/commdocsApp.ts). */
 export const ALL_NAV_ITEMS: NavItem[] = [
@@ -126,8 +127,8 @@ export const ALL_NAV_ITEMS: NavItem[] = [
   { name: 'Users', href: '/users', icon: UsersRound, roles: ['ALL'], permissionKey: 'page.users', group: 'system' },
   // The same page the Users page opens from its activity button (who clicked, edited and how long they were active). ADMIN only, as the page itself is.
   { name: 'User Activity Log', href: '/users/activity-log', icon: History, roles: ['ADMIN'], permissionKey: 'page.users', group: 'system' },
-  { name: 'Logistics Data', href: '/sap-imports', icon: DatabaseZap, roles: ['ALL'], permissionKey: 'page.sap', group: 'system' },
-  { name: 'Claim Data', href: '/claim-data', icon: FileSpreadsheet, roles: ['ADMIN'], permissionKey: 'page.claim_data', group: 'system' },
+  { name: 'Logistics Data', href: '/sap-imports', icon: DatabaseZap, roles: ['ALL'], permissionKey: 'page.sap', group: 'import' },
+  { name: 'Claim Data', href: '/claim-data', icon: FileSpreadsheet, roles: ['ADMIN'], permissionKey: 'page.claim_data', group: 'import' },
   // Holds the credentials KLIP uses on other systems - ADMIN only, and no read-only tier (migration 189).
   {
     name: 'Integrations',
