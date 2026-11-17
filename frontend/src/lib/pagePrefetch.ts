@@ -34,7 +34,8 @@ export function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
       const listParams = new URLSearchParams({
         limit: '20',
         page: '1',
-        sortKey: 'created_at',
+        // the sort the Trucking View Table opens on
+        sortKey: 'contract_date',
         sortDir: 'desc',
         dateFrom,
         dateTo,

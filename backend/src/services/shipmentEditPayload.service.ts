@@ -4,7 +4,7 @@
 
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
 import { JPS_CURRENT_ROW_ORDER_SQL, SHIPMENT_LIST_JPS_SELECT_SQL } from '../utils/shipmentListStoJoinSql';
-import { sqlJpsAtaJsonExpr } from '../jps/scheduleAtaSql';
+import { sqlJpsAtaJsonExpr, sqlJpsEstimateJsonExpr } from '../jps/scheduleAtaSql';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { getContractImportStatusForShipment, isContractDeliveryClosed } from '../utils/contractDeliveryStatus';
@@ -589,7 +589,8 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
   const res = await query(
     `SELECT ${SHIPMENT_LIST_JPS_SELECT_SQL},
             jps.external_reference, jps.revision,
-            ${sqlJpsAtaJsonExpr('jps')} AS jps_ata
+            ${sqlJpsAtaJsonExpr('jps')} AS jps_ata,
+            ${sqlJpsEstimateJsonExpr('jps')} AS jps_est
      FROM shipments s
      INNER JOIN contracts c ON c.id = s.contract_id
      LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id

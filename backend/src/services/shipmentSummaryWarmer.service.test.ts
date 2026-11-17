@@ -29,7 +29,7 @@ describe('shipmentWarmerBaseQuery', () => {
     expect(q.page).toBe('1');
     expect(q.limit).toBe('20');
     // Frontend default: frontend/src/lib/shipmentsCompactSort.ts DEFAULT_SORT.
-    expect(q.sortKey).toBe('created_at');
+    expect(q.sortKey).toBe('contract_date');
     expect(q.sortDir).toBe('desc');
     // Default global filter window: 1 January of the current year .. today (Jakarta).
     expect(String(q.dateFrom)).toMatch(/^\d{4}-01-01$/);

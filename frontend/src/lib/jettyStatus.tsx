@@ -1,6 +1,12 @@
 import type { ShipmentAtaApiField } from '@/lib/shipmentAtaFields'
 import type { ReactNode } from 'react'
 
+/** The discharge estimation fields JPS also estimates (eta, etb, etc): the keys of `jps_est`. */
+export type ShipmentEstimateApiField =
+  | 'eta_vessel_arrive_at_discharge_port'
+  | 'eta_vessel_berthed_at_discharge_port'
+  | 'eta_vessel_complete_discharge'
+
 /**
  * Jetty Planning System status, shared by the Shipments table and the Edit/View Shipment modal so
  * the two cannot drift apart.
@@ -48,6 +54,11 @@ export interface JettyStatusFields {
    * (backend/src/jps/scheduleAtaSql.ts). Only the discharge fields JPS reports are present.
    */
   jps_ata?: Partial<Record<ShipmentAtaApiField, string | null>> | null
+  /**
+   * JPS's ESTIMATES for the discharge port (eta, etb, etc), keyed by the KLIP estimation field each corresponds to and dated in WIB
+   * (backend/src/jps/scheduleAtaSql.ts sqlJpsEstimateJsonExpr). The Edit / View Shipment modal draws them as the main value with the JPS badge.
+   */
+  jps_est?: Partial<Record<ShipmentEstimateApiField, string | null>> | null
 }
 
 const BADGE_CLASS: Record<string, string> = {
