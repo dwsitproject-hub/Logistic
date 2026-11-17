@@ -14,6 +14,7 @@ import {
   Files,
   Gauge,
   Handshake,
+  History,
   LayoutGrid,
   MapPinned,
   Orbit,
@@ -122,6 +123,8 @@ export const ALL_NAV_ITEMS: NavItem[] = [
   },
   { name: 'Master Company (External)', href: '/master-company-ext', icon: Building, roles: ['ALL'], permissionKey: 'page.suppliers', group: 'master' },
   { name: 'Users', href: '/users', icon: UsersRound, roles: ['ALL'], permissionKey: 'page.users', group: 'system' },
+  // The same page the Users page opens from its activity button (who clicked, edited and how long they were active). ADMIN only, as the page itself is.
+  { name: 'User Activity Log', href: '/users/activity-log', icon: History, roles: ['ADMIN'], permissionKey: 'page.users', group: 'system' },
   { name: 'Logistics Data', href: '/sap-imports', icon: DatabaseZap, roles: ['ALL'], permissionKey: 'page.sap', group: 'system' },
   { name: 'Claim Data', href: '/claim-data', icon: FileSpreadsheet, roles: ['ADMIN'], permissionKey: 'page.claim_data', group: 'system' },
   // Holds the credentials KLIP uses on other systems - ADMIN only, and no read-only tier (migration 189).
