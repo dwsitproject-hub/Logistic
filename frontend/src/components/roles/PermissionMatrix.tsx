@@ -16,6 +16,7 @@ import {
   type PermissionField,
   type PermissionRow,
 } from '@/lib/rolePermissionsView'
+import { isHiddenPermissionKey } from '@/lib/hiddenFeatures'
 
 interface Props {
   permissions: PermissionRow[]
@@ -55,7 +56,9 @@ function CategoryNote({ category }: { category: string }) {
 }
 
 /** The permissions of one role scope: a tab per category, a search box, and one row per permission with View, Create, Edit and Delete in aligned columns. */
-export function PermissionMatrix({ permissions, loading, roleLabel, onChange, onSetAll }: Props) {
+export function PermissionMatrix({ permissions: allPermissions, loading, roleLabel, onChange, onSetAll }: Props) {
+  // Rows of features that are not in use yet are not shown (lib/hiddenFeatures.ts). They are still in the page's state, so saving sends them back unchanged.
+  const permissions = useMemo(() => allPermissions.filter((permission) => !isHiddenPermissionKey(permission.permission_key)), [allPermissions])
   const grouped = useMemo(() => groupPermissionsByCategory(permissions), [permissions])
   const categories = useMemo(() => orderedCategories(grouped), [grouped])
   const [active, setActive] = useState('')

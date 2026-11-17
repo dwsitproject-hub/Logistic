@@ -94,15 +94,69 @@ export type DailySummaryRow = {
   view_count: number;
   active_seconds: number;
   active_duration_label: string;
+  /** users.level (empty for Administrator and Management, which carry none). */
+  level?: string | null;
+  /** The Region/Site names the user is scoped to (user_region_sites), empty when none. */
+  region_sites?: string[] | null;
 };
 
 export type ListDailySummaryParams = {
   dateFrom?: string;
   dateTo?: string;
   userId?: string;
+  /** users.role code. */
+  role?: string;
+  /** users.level (Dept Head / Section Head / Staff / Admin), compared case-insensitively. */
+  level?: string;
+  /** One Region/Site name from user_region_sites. */
+  regionSite?: string;
+  /** Free text: name, username or e-mail. */
+  search?: string;
   page?: number;
   limit?: number;
 };
+
+/**
+ * The WHERE of the daily summary and of its totals, over user_activity_events as e and users as u. One builder so the rows, the count and the cards can never
+ * disagree about what a filter means. Values are positional ($1...); nextIndex is the first free one.
+ */
+export function buildUserActivityWhere(params: ListDailySummaryParams): { whereSql: string; values: unknown[]; nextIndex: number } {
+  const conditions: string[] = ['1=1'];
+  const values: unknown[] = [];
+  let idx = 1;
+
+  if (params.dateFrom) {
+    conditions.push(`(e.event_at AT TIME ZONE 'UTC')::date >= $${idx++}::date`);
+    values.push(params.dateFrom);
+  }
+  if (params.dateTo) {
+    conditions.push(`(e.event_at AT TIME ZONE 'UTC')::date <= $${idx++}::date`);
+    values.push(params.dateTo);
+  }
+  if (params.userId) {
+    conditions.push(`e.user_id = $${idx++}`);
+    values.push(params.userId);
+  }
+  if (params.role?.trim()) {
+    conditions.push(`u.role = $${idx++}`);
+    values.push(params.role.trim());
+  }
+  if (params.level?.trim()) {
+    conditions.push(`UPPER(TRIM(u.level)) = UPPER($${idx++})`);
+    values.push(params.level.trim());
+  }
+  if (params.regionSite?.trim()) {
+    conditions.push(`EXISTS (SELECT 1 FROM user_region_sites urs WHERE urs.user_id = u.id AND urs.region_site = $${idx++})`);
+    values.push(params.regionSite.trim());
+  }
+  if (params.search?.trim()) {
+    conditions.push(`(u.full_name ILIKE $${idx} OR u.username ILIKE $${idx} OR u.email ILIKE $${idx})`);
+    values.push(`%${params.search.trim()}%`);
+    idx++;
+  }
+
+  return { whereSql: conditions.join(' AND '), values, nextIndex: idx };
+}
 
 async function attachActiveSeconds(
   rows: Array<{
@@ -158,29 +212,14 @@ export async function listUserActivityDailySummary(params: ListDailySummaryParam
   const limit = Math.min(100, Math.max(1, Number(params.limit) || 20));
   const offset = (page - 1) * limit;
 
-  const conditions: string[] = ['1=1'];
-  const values: unknown[] = [];
-  let idx = 1;
-
-  if (params.dateFrom) {
-    conditions.push(`(e.event_at AT TIME ZONE 'UTC')::date >= $${idx++}::date`);
-    values.push(params.dateFrom);
-  }
-  if (params.dateTo) {
-    conditions.push(`(e.event_at AT TIME ZONE 'UTC')::date <= $${idx++}::date`);
-    values.push(params.dateTo);
-  }
-  if (params.userId) {
-    conditions.push(`e.user_id = $${idx++}`);
-    values.push(params.userId);
-  }
-
-  const whereSql = conditions.join(' AND ');
+  const { whereSql, values, nextIndex } = buildUserActivityWhere(params);
+  let idx = nextIndex;
 
   const countResult = await query(
     `SELECT COUNT(*)::int AS total FROM (
        SELECT e.user_id, (e.event_at AT TIME ZONE 'UTC')::date AS activity_date
        FROM user_activity_events e
+       JOIN users u ON u.id = e.user_id
        WHERE ${whereSql}
        GROUP BY e.user_id, (e.event_at AT TIME ZONE 'UTC')::date
      ) sub`,
@@ -188,12 +227,28 @@ export async function listUserActivityDailySummary(params: ListDailySummaryParam
   );
   const total = Number(countResult.rows[0]?.total ?? 0);
 
+  // The cards above the table: the whole filtered period, not the page that is showing.
+  const totalsResult = await query(
+    `SELECT
+       COUNT(DISTINCT e.user_id)::int AS users,
+       COUNT(*)::int AS total_actions,
+       COUNT(*) FILTER (WHERE e.event_type = 'CLICK')::int AS clicks,
+       COUNT(*) FILTER (WHERE e.event_type IN ('CREATE', 'UPDATE', 'EDIT'))::int AS changes
+     FROM user_activity_events e
+     JOIN users u ON u.id = e.user_id
+     WHERE ${whereSql}`,
+    values,
+  );
+  const totals = totalsResult.rows[0] ?? {};
+
   const listResult = await query(
     `SELECT
        e.user_id,
        u.username,
        u.full_name,
        u.role,
+       u.level,
+       (SELECT array_agg(urs.region_site ORDER BY urs.region_site) FROM user_region_sites urs WHERE urs.user_id = e.user_id) AS region_sites,
        (e.event_at AT TIME ZONE 'UTC')::date AS activity_date,
        COUNT(*)::int AS total_count,
        COUNT(*) FILTER (WHERE e.event_type = 'CLICK')::int AS click_count,
@@ -204,7 +259,7 @@ export async function listUserActivityDailySummary(params: ListDailySummaryParam
      FROM user_activity_events e
      JOIN users u ON u.id = e.user_id
      WHERE ${whereSql}
-     GROUP BY e.user_id, u.username, u.full_name, u.role, (e.event_at AT TIME ZONE 'UTC')::date
+     GROUP BY e.user_id, u.username, u.full_name, u.role, u.level, (e.event_at AT TIME ZONE 'UTC')::date
      ORDER BY activity_date DESC, u.full_name ASC
      LIMIT $${idx++} OFFSET $${idx++}`,
     [...values, limit, offset],
@@ -214,6 +269,13 @@ export async function listUserActivityDailySummary(params: ListDailySummaryParam
 
   return {
     items,
+    summary: {
+      users: Number(totals.users ?? 0),
+      total_actions: Number(totals.total_actions ?? 0),
+      clicks: Number(totals.clicks ?? 0),
+      changes: Number(totals.changes ?? 0),
+      day_records: total,
+    },
     pagination: {
       page,
       limit,

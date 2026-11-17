@@ -42,7 +42,8 @@ export const getAllRoles = async (_req: AuthRequest, res: Response): Promise<voi
 export const getRoleById = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { scope, error: scopeError } = parseAdminRoleScopeQuery(req.query);
+    const roleNameRow = await query('SELECT role_name FROM roles WHERE id = $1', [id]);
+    const { scope, error: scopeError } = parseAdminRoleScopeQuery(req.query, roleNameRow.rows[0]?.role_name);
     if (scopeError) {
       res.status(400).json({
         success: false,
@@ -219,7 +220,8 @@ export const updateRolePermissions = async (req: AuthRequest, res: Response): Pr
   try {
     const { id } = req.params;
     const { permissions } = req.body; // Array of {permission_id, can_view, can_create, can_edit, can_delete}
-    const { scope, error: scopeError } = parseAdminRoleScopeQuery(req.query);
+    const roleNameRow = await query('SELECT role_name FROM roles WHERE id = $1', [id]);
+    const { scope, error: scopeError } = parseAdminRoleScopeQuery(req.query, roleNameRow.rows[0]?.role_name);
     if (scopeError) {
       res.status(400).json({
         success: false,

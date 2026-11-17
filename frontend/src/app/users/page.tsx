@@ -37,7 +37,7 @@ import api from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { alignSelectedToRegionSiteOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
-import { formatRoleLabel } from '@/lib/userRoles'
+import { formatRoleDisplayName, formatRoleLabel } from '@/lib/userRoles'
 import { UserKpis } from '@/components/users/UserKpis'
 import { UserFilterBar, type RoleFilterOption } from '@/components/users/UserFilterBar'
 import { UserTable } from '@/components/users/UserTable'
@@ -67,6 +67,8 @@ interface User {
   created_at: string
   updated_at: string
 }
+
+import { roleUsesLevel } from '@/lib/roleLevel'
 
 interface Role {
   id: string
@@ -109,7 +111,9 @@ export default function UsersPage() {
 
   /** A reset link or an invitation is being sent (the request waits for the SMTP server). */
   const [sendingLink, setSendingLink] = useState(false)
-  const showTransportType = formData.role === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(formData.level)
+  /** Administrator and Management are not ranked: no level is asked for or sent. */
+  const showLevel = roleUsesLevel(formData.role)
+  const showTransportType = showLevel && formData.role === 'LOGISTICS' && ['Section Head', 'Staff', 'Admin'].includes(formData.level)
   // Region/Plant follows the role's own flag (roles.uses_region_scope, set on the Roles page). Users no longer carry a product: the product default filter is retired.
   const showRegion =
     roles.find((role) => role.role_name === formData.role)?.uses_region_scope ??
@@ -142,7 +146,7 @@ export default function UsersPage() {
       ])
 
       setUsers(usersRes.data.data)
-      setRoles(rolesRes.data.data)
+      setRoles((rolesRes.data.data as Role[]).map((role) => ({ ...role, display_name: formatRoleDisplayName(role.display_name) })))
       const groupPlants = (groupPlantsRes.data?.data?.groupPlants ?? []) as string[]
       setPlantOptions(filterRegionSiteOptions(Array.isArray(groupPlants) ? groupPlants : []))
     } catch (err) {
@@ -163,7 +167,7 @@ export default function UsersPage() {
         email: formData.email,
         full_name: formData.full_name,
         role: formData.role,
-        level: formData.level,
+        level: showLevel ? formData.level : null,
         plants: showRegion ? formData.plants : [],
       })
       const created = response.data?.data
@@ -193,7 +197,7 @@ export default function UsersPage() {
         email: formData.email,
         full_name: formData.full_name,
         role: formData.role,
-        level: formData.level,
+        level: showLevel ? formData.level : null,
         transport_type: showTransportType ? formData.transport_type : null,
         plants: showRegion ? formData.plants : [],
         phone: formData.phone,
@@ -297,7 +301,7 @@ export default function UsersPage() {
     ...roles.map((role) => ({ value: role.role_name, label: role.display_name, count: roleCounts[role.role_name] ?? 0 })),
     ...Object.keys(roleCounts)
       .filter((code) => !roles.some((role) => role.role_name === code))
-      .map((code) => ({ value: code, label: formatRoleLabel(code), count: roleCounts[code] })),
+      .map((code) => ({ value: code, label: formatRoleDisplayName(formatRoleLabel(code)), count: roleCounts[code] })),
   ]
 
   if (loading) {
@@ -396,7 +400,7 @@ export default function UsersPage() {
               users={filteredUsers}
               currentUserId={currentUser?.id}
               sendingLink={sendingLink}
-              roleLabel={formatRoleLabel}
+              roleLabel={(code) => roles.find((role) => role.role_name === code)?.display_name ?? formatRoleDisplayName(formatRoleLabel(code))}
               onEdit={openEditModal}
               onResendInvitation={(user) => void sendPasswordLink(user, 'invitation')}
               onResetPassword={openResetModal}
@@ -480,6 +484,7 @@ export default function UsersPage() {
                   </Select>
                 </div>
 
+                {showLevel ? (
                 <div className="space-y-2">
                   <Label htmlFor="level">Level *</Label>
                   <Select value={formData.level} onValueChange={(value) => setFormData({ ...formData, level: value })}>
@@ -494,6 +499,7 @@ export default function UsersPage() {
                     </SelectContent>
                   </Select>
                 </div>
+                ) : null}
 
                 <div className={showRegion ? '' : 'opacity-50 pointer-events-none'}>
                   <SearchableMultiSelect
@@ -584,6 +590,7 @@ export default function UsersPage() {
                   </Select>
                 </div>
 
+                {showLevel ? (
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="edit_level">Level</Label>
@@ -633,6 +640,7 @@ export default function UsersPage() {
                     </Select>
                   </div>
                 </div>
+                ) : null}
 
                 <div className={showRegion ? '' : 'opacity-50 pointer-events-none'}>
                   <SearchableMultiSelect

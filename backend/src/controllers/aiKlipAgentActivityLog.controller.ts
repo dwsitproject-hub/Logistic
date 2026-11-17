@@ -8,11 +8,13 @@ import {
 
 export const getAiKlipAgentActivityLogs = async (req: AuthRequest, res: Response) => {
   try {
-    const { dateFrom, dateTo, agentName, page, limit } = req.query;
+    const { dateFrom, dateTo, agentName, status, search, page, limit } = req.query;
     const data = await listAiKlipAgentActivityLogs({
       dateFrom: dateFrom ? String(dateFrom).slice(0, 10) : undefined,
       dateTo: dateTo ? String(dateTo).slice(0, 10) : undefined,
       agentName: agentName ? String(agentName).trim() : undefined,
+      status: status ? String(status).trim() : undefined,
+      search: search ? String(search).trim() : undefined,
       page: page ? Number(page) : 1,
       limit: limit ? Number(limit) : 20,
     });

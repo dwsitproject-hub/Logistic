@@ -5,6 +5,8 @@ import {
   normalizeRoleTransportType,
   parseAdminRoleScopeQuery,
   parseRoleScopeQuery,
+  roleUsesLevel,
+  ROLES_WITHOUT_LEVEL,
   VALID_ROLE_LEVELS,
   VALID_ROLE_TRANSPORT_TYPES,
 } from './rolePermissionScope';
@@ -68,5 +70,32 @@ describe('rolePermissionScope', () => {
     expect(formatRoleScopeLabel({ level: null, transportType: 'SEA' })).toBe(
       'level=all, transport=SEA'
     );
+  });
+});
+
+describe('roles without a level (Administrator and Management)', () => {
+  it('lists exactly ADMIN and MANAGEMENT', () => {
+    expect([...ROLES_WITHOUT_LEVEL].sort()).toEqual(['ADMIN', 'MANAGEMENT']);
+  });
+
+  it('roleUsesLevel is false for them, in any case and with spaces, and true for the others', () => {
+    expect(roleUsesLevel('ADMIN')).toBe(false);
+    expect(roleUsesLevel(' management ')).toBe(false);
+    for (const role of ['LOGISTICS', 'TRADING', 'FINANCE', 'SUPPORT', 'ADMIN_SUPPORT', 'SOME_NEW_ROLE']) {
+      expect(roleUsesLevel(role)).toBe(true);
+    }
+    expect(roleUsesLevel(undefined)).toBe(true);
+  });
+
+  it('the role editor scope for them is level NULL without asking for a level, and ignores one that is sent', () => {
+    expect(parseAdminRoleScopeQuery({}, 'MANAGEMENT')).toEqual({ scope: { level: null, transportType: null } });
+    expect(parseAdminRoleScopeQuery({ level: 'Staff' }, 'ADMIN').scope.level).toBeNull();
+    expect(parseAdminRoleScopeQuery({ level: 'Staff' }, 'ADMIN').error).toBeUndefined();
+  });
+
+  it('any other role still requires a level', () => {
+    expect(parseAdminRoleScopeQuery({}, 'LOGISTICS').error).toMatch(/Level is required/);
+    expect(parseAdminRoleScopeQuery({ level: 'Staff' }, 'LOGISTICS').scope.level).toBe('Staff');
+    expect(parseAdminRoleScopeQuery({}).error).toMatch(/Level is required/);
   });
 });

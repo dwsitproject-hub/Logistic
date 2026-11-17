@@ -39,15 +39,16 @@ export type ListAiKlipAgentActivityParams = {
   dateFrom?: string;
   dateTo?: string;
   agentName?: string;
+  /** 'success' or 'error'; anything else means both. */
+  status?: string;
+  /** Free text: the activity, the API key name or the agent name. */
+  search?: string;
   page?: number;
   limit?: number;
 };
 
-export async function listAiKlipAgentActivityLogs(params: ListAiKlipAgentActivityParams) {
-  const page = Math.max(1, Number(params.page) || 1);
-  const limit = Math.min(100, Math.max(1, Number(params.limit) || 20));
-  const offset = (page - 1) * limit;
-
+/** The WHERE of the AI agent log and of its totals (table l). Values are positional; nextIndex is the first free one. */
+export function buildAiAgentActivityWhere(params: ListAiKlipAgentActivityParams): { whereSql: string; values: unknown[]; nextIndex: number } {
   const conditions: string[] = ['1=1'];
   const values: unknown[] = [];
   let idx = 1;
@@ -64,11 +65,33 @@ export async function listAiKlipAgentActivityLogs(params: ListAiKlipAgentActivit
     conditions.push(`l.agent_name = $${idx++}`);
     values.push(params.agentName);
   }
+  if (params.status === 'success' || params.status === 'error') {
+    conditions.push(`l.status = $${idx++}`);
+    values.push(params.status);
+  }
+  if (params.search?.trim()) {
+    conditions.push(`(l.activity ILIKE $${idx} OR l.api_key_name ILIKE $${idx} OR l.agent_name ILIKE $${idx})`);
+    values.push(`%${params.search.trim()}%`);
+    idx++;
+  }
 
-  const whereSql = conditions.join(' AND ');
+  return { whereSql: conditions.join(' AND '), values, nextIndex: idx };
+}
 
+export async function listAiKlipAgentActivityLogs(params: ListAiKlipAgentActivityParams) {
+  const page = Math.max(1, Number(params.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(params.limit) || 20));
+  const offset = (page - 1) * limit;
+
+  const { whereSql, values, nextIndex } = buildAiAgentActivityWhere(params);
+  let idx = nextIndex;
+
+  // One query for the count and the cards above the table (the whole filtered period, not the page that is showing).
   const countResult = await query(
-    `SELECT COUNT(*)::int AS total
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE l.status = 'success')::int AS success,
+            COUNT(*) FILTER (WHERE l.status = 'error')::int AS errors,
+            COUNT(DISTINCT l.agent_name)::int AS agents
      FROM ai_klip_agent_activity_logs l
      WHERE ${whereSql}`,
     values,
@@ -93,8 +116,15 @@ export async function listAiKlipAgentActivityLogs(params: ListAiKlipAgentActivit
     [...values, limit, offset],
   );
 
+  const totals = countResult.rows[0] ?? {};
   return {
     items: listResult.rows,
+    summary: {
+      total,
+      success: Number(totals.success ?? 0),
+      errors: Number(totals.errors ?? 0),
+      agents: Number(totals.agents ?? 0),
+    },
     pagination: {
       page,
       limit,

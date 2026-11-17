@@ -42,6 +42,9 @@ interface Role {
 
 type Permission = PermissionRow
 
+import { roleUsesLevel } from '@/lib/roleLevel'
+import { formatRoleDisplayName } from '@/lib/userRoles'
+
 const LEVEL_OPTIONS = ['Dept Head', 'Section Head', 'Staff', 'Admin'] as const
 const DEFAULT_LEVEL = LEVEL_OPTIONS[2] // Staff
 const TRANSPORT_OPTIONS = ['SEA', 'LAND', 'ALL', 'MIX'] as const
@@ -68,7 +71,7 @@ function getScopeHint(roleName?: string): string {
     case 'FINANCE':
       return 'Pick one level (e.g. Staff or Admin) per scope. Finance + Staff + All Transport is separate from Finance + Admin + All Transport.'
     case 'MANAGEMENT':
-      return 'Management permissions are configured per level. Each level (Dept Head, Section Head, Staff, Admin) has its own permission set.'
+      return 'Management is not ranked: one permission set for every Management user, with no level or transport to pick.'
     case 'SUPPORT':
     case 'ADMIN_SUPPORT':
       return 'Select Role + Level + Transport. One level per scope is required; transport can stay All Transport unless you need SEA/LAND/ALL/MIX.'
@@ -109,7 +112,9 @@ export default function RolesPage() {
   const selectedRoleFromList = sortedRoles.find((role) => role.id === selectedRoleId) ?? null
   const activeRole = selectedRoleFromList ?? selectedRole
   const changeCount = countPermissionChanges(savedPermissions, permissions)
-  const transportLabel = selectedTransportType === 'all' ? 'All Transport' : selectedTransportType
+  /** Administrator and Management carry no level: one permission set, so no level or transport is sent or shown. */
+  const roleHasLevel = roleUsesLevel(activeRole?.role_name)
+  const transportLabel = !roleHasLevel ? 'one set' : selectedTransportType === 'all' ? 'All Transport' : selectedTransportType
 
   useEffect(() => {
     // Check if user is admin
@@ -161,7 +166,7 @@ export default function RolesPage() {
   const fetchRoles = async (selectId?: string) => {
     try {
       const response = await api.get('/roles')
-      const rolesData = sortRolesForEditor(response.data.data)
+      const rolesData = sortRolesForEditor((response.data.data as Role[]).map((role) => ({ ...role, display_name: formatRoleDisplayName(role.display_name) })))
       setRoles(rolesData)
 
       if (rolesData.length > 0) {
@@ -186,7 +191,7 @@ export default function RolesPage() {
   }
 
   const handleCreateRole = async () => {
-    const displayName = newRoleName.trim()
+    const displayName = formatRoleDisplayName(newRoleName)
     if (!displayName || !isValidRoleCode(newRoleCode)) {
       setError('Enter a role name that contains letters.')
       return
@@ -218,8 +223,11 @@ export default function RolesPage() {
 
   const fetchRolePermissions = async (roleId: string, requestId: number) => {
     try {
-      const params: Record<string, string> = { level: selectedLevel }
-      if (selectedTransportType !== 'all') params.transportType = selectedTransportType
+      const params: Record<string, string> = {}
+      if (roleUsesLevel(selectedRoleFromList?.role_name)) {
+        params.level = selectedLevel
+        if (selectedTransportType !== 'all') params.transportType = selectedTransportType
+      }
       const response = await api.get(`/roles/${roleId}`, { params })
 
       if (requestId !== fetchRequestIdRef.current) return
@@ -267,7 +275,7 @@ export default function RolesPage() {
     if (!selectedRoleId || permissionsLoading) return
 
     const roleLabel = activeRole?.display_name ?? 'selected role'
-    const levelLabel = selectedLevel
+    const levelLabel = roleHasLevel ? selectedLevel : 'no level'
     const confirmed = window.confirm(
       `Save permission changes for:\n\n` +
         `Role: ${roleLabel} (${activeRole?.role_name ?? '?'})\n` +
@@ -293,10 +301,12 @@ export default function RolesPage() {
       await api.put(`/roles/${selectedRoleId}/permissions`, {
         permissions: permissionsToSave,
       }, {
-        params: {
-          level: selectedLevel,
-          ...(selectedTransportType !== 'all' ? { transportType: selectedTransportType } : {}),
-        }
+        params: roleHasLevel
+          ? {
+              level: selectedLevel,
+              ...(selectedTransportType !== 'all' ? { transportType: selectedTransportType } : {}),
+            }
+          : {}
       })
 
       setSuccess(
@@ -381,6 +391,7 @@ export default function RolesPage() {
                 description={activeRole.description}
                 usesRegionScope={Boolean(activeRole.uses_region_scope)}
                 isAdmin={activeRole.role_name === 'ADMIN'}
+                hasLevel={roleHasLevel}
                 level={selectedLevel}
                 onLevel={(value) => guardUnsaved(() => setSelectedLevel(value))}
                 levelOptions={LEVEL_OPTIONS}
@@ -399,7 +410,7 @@ export default function RolesPage() {
               />
               <RoleSaveBar
                 changeCount={changeCount}
-                scopeLabel={`${activeRole.display_name}, ${selectedLevel}, ${transportLabel}`}
+                scopeLabel={roleHasLevel ? `${activeRole.display_name}, ${selectedLevel}, ${transportLabel}` : `${activeRole.display_name}, one permission set`}
                 saving={saving}
                 loading={permissionsLoading}
                 onSave={() => void handleSave()}
@@ -420,7 +431,7 @@ export default function RolesPage() {
             <li><strong>Row:</strong> All ticks all four boxes of that permission; None clears them. It touches that row only.</li>
             <li>
               <strong>Scope:</strong> each permission set belongs to one Role + one Level + a Transport. Level is required (Dept Head, Section Head, Staff or
-              Admin). Transport can be All Transport or a specific type (SEA, LAND, ALL, MIX). Saving only updates the scope shown above.
+              Admin), except for Administrator and Management, which have one permission set and no level. Transport can be All Transport or a specific type (SEA, LAND, ALL, MIX). Saving only updates the scope shown above.
             </li>
             <li>
               <strong>Commercial Documents:</strong> turn on <code className="text-xs">page.commercial_documents</code> (View) under Pages and{' '}
