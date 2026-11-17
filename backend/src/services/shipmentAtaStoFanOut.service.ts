@@ -7,6 +7,84 @@ import {
   type ShipmentAtaOverrideRow,
 } from './shipmentAtaOverride.service';
 
+/**
+ * The discharge actual times, layer by layer, below the override. The page reads JPS, then shipment_ata_overrides, then shipments.ata_discharge_*, then the discharge
+ * port row; the modal saves only the override. A cleared field therefore has to reach the lower layers too, or the date shows through again and "delete" looks like it failed.
+ * Keyed by the override column; every name is fixed here, so none of it comes from a request.
+ */
+export const DISCHARGE_ACTUAL_LAYERS = {
+  ata_discharge_arrival: { ship: 'ata_discharge_arrival', port: 'ata_vessel_arrival', sap: 'sap_ata_vessel_arrival' },
+  ata_discharge_berthed: { ship: 'ata_discharge_berthed', port: 'ata_vessel_berthed', sap: 'sap_ata_vessel_berthed' },
+  ata_discharge_start: { ship: 'ata_discharge_start', port: 'ata_loading_start', sap: 'sap_ata_loading_start' },
+  ata_discharge_complete: { ship: 'ata_discharge_complete', port: 'ata_loading_completed', sap: 'sap_ata_loading_completed' },
+} as const;
+
+export type DischargeActualColumn = keyof typeof DISCHARGE_ACTUAL_LAYERS;
+
+/** The discharge milestones a save EMPTIED: present in the payload with no value. A milestone left out of the payload, or given a date, is not one. */
+export function clearedDischargeActualColumns(payload: ShipmentAtaOverridePayload): DischargeActualColumn[] {
+  const byApiField: Record<string, DischargeActualColumn> = {
+    ata_vessel_arrive_at_discharge_port: 'ata_discharge_arrival',
+    ata_vessel_berthed_at_discharge_port: 'ata_discharge_berthed',
+    ata_vessel_start_discharging: 'ata_discharge_start',
+    ata_vessel_complete_discharge: 'ata_discharge_complete',
+  };
+  const cleared: DischargeActualColumn[] = [];
+  for (const [apiField, column] of Object.entries(byApiField)) {
+    if (!Object.prototype.hasOwnProperty.call(payload, apiField)) continue;
+    const value = (payload as Record<string, unknown>)[apiField];
+    if (value == null || String(value).trim() === '') cleared.push(column);
+  }
+  return cleared;
+}
+
+/**
+ * A person emptied a discharge actual: remove it from the lower layers of EVERY shipment of the voyage (the group the override fans out to).
+ *
+ * - shipments.ata_discharge_*: always (a KLIP-side column).
+ * - the discharge port row's own column: only where SAP's mirror of that column is empty. A date SAP itself reports for the shipment's own STO is SAP's to keep: it stays and the
+ *   page keeps showing it with the SAP badge. A date with no SAP mirror was typed or copied, and the person has just said it is wrong.
+ * The "typed by a person" marker of the port column goes with it. Runs after the override is saved, which is also after the modal's port save (that save rewrites the port row first).
+ */
+export async function clearStoredDischargeActualsForStoGroup(
+  anchorShipmentId: string,
+  columns: readonly DischargeActualColumn[],
+): Promise<{ shipments: number; ports: number }> {
+  if (columns.length === 0) return { shipments: 0, ports: 0 };
+  const memberIds = await resolveStoGroupShipmentIds(anchorShipmentId);
+  const ids = memberIds.length > 0 ? memberIds : [anchorShipmentId];
+  let shipments = 0;
+  let ports = 0;
+
+  for (const column of columns) {
+    const layer = DISCHARGE_ACTUAL_LAYERS[column];
+    const shipResult = await query(
+      `UPDATE shipments SET ${layer.ship} = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ANY($1::uuid[]) AND ${layer.ship} IS NOT NULL`,
+      [ids],
+    );
+    shipments += shipResult.rowCount ?? 0;
+
+    const portResult = await query(
+      `UPDATE vessel_loading_ports
+       SET ${layer.port} = NULL,
+           klip_edited_fields = array_remove(COALESCE(klip_edited_fields, '{}'), '${layer.port}'),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE shipment_id = ANY($1::uuid[])
+         AND (COALESCE(is_discharge_port, false) = true OR port_sequence = 999)
+         AND ${layer.port} IS NOT NULL
+         AND ${layer.sap} IS NULL`,
+      [ids],
+    );
+    ports += portResult.rowCount ?? 0;
+  }
+
+  if (shipments + ports > 0) {
+    logger.info('Cleared stored discharge actuals below the override', { anchorShipmentId, columns, shipments, ports, memberCount: ids.length });
+  }
+  return { shipments, ports };
+}
+
 export type VesselLoadingPortAtaFields = {
   ata_vessel_arrival: string | null;
   ata_vessel_berthed: string | null;

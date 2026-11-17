@@ -6,7 +6,11 @@ import {
   getShipmentAtaOverrideByShipmentId,
   mapOverrideRowToApi,
 } from '../services/shipmentAtaOverride.service';
-import { upsertShipmentAtaOverrideForStoGroup } from '../services/shipmentAtaStoFanOut.service';
+import {
+  clearedDischargeActualColumns,
+  clearStoredDischargeActualsForStoGroup,
+  upsertShipmentAtaOverrideForStoGroup,
+} from '../services/shipmentAtaStoFanOut.service';
 import { invalidateAfterShipmentWrite } from '../services/shipmentWriteInvalidation.service';
 import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 import {
@@ -97,6 +101,8 @@ export const updateShipmentAtaOverride = async (req: AuthRequest, res: Response)
     }
 
     const row = await upsertShipmentAtaOverrideForStoGroup(id, payload, req.user?.id ?? null);
+    // A discharge actual a person emptied must leave the lower layers too (shipments column, discharge port rows), or it shows through again.
+    await clearStoredDischargeActualsForStoGroup(id, clearedDischargeActualColumns(payload));
     // The override fans out across the whole STO group, and the ATC it writes is what Trade Cycle
     // and Log Cycle are measured from - so Contract Performance has to be refreshed for every
     // member, not just the anchor the request named.
