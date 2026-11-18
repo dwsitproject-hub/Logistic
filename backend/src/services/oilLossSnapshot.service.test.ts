@@ -70,6 +70,10 @@ describe('oilLossSnapshotNeedsRebuild', () => {
 
   it('rebuilds a snapshot written before a B2B origin took its ending child\'s discharge port', () => {
     expect(OIL_LOSS_SNAPSHOT_LOGIC_VERSION).toBeGreaterThanOrEqual(10);
+  });
+
+  it("rebuilds a snapshot written before a B2B origin took its children's Delivery and Receive", () => {
+    expect(OIL_LOSS_SNAPSHOT_LOGIC_VERSION).toBeGreaterThanOrEqual(11);
     expect(oilLossSnapshotNeedsRebuild({ ...built, logicVersion: 9 })).toBe(true);
   });
 });
