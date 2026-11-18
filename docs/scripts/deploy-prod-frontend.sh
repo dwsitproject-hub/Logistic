@@ -151,9 +151,12 @@ else
 fi
 
 step "waiting for the container to finish starting"
+# grep -q stops at the FIRST match and the writer (docker compose logs) then dies of SIGPIPE (141). Under pipefail the pipeline reports that failure, so `logs | grep -q X`
+# said "no" although X was there ("[FAIL] SAP auto-import cron registered" with the cron line printed right below it, 2026-11-18) - and in a NEGATIVE check
+# (`if logs | grep -q 'migration.*error'; then bad`) it would say "no error" although one was there. So the log is captured first and the variable is searched.
 for _ in $(seq 1 60); do
-  if "${COMPOSE[@]}" logs --tail=400 "$SERVICE" 2>/dev/null \
-      | grep -qE "ready - started server|Listening on"; then
+  NOW_LOGS="$("${COMPOSE[@]}" logs --tail=400 "$SERVICE" 2>/dev/null || true)"
+  if grep -qE "ready - started server|Listening on" <<<"$NOW_LOGS"; then
     break
   fi
   sleep 3
