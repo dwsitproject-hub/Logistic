@@ -3,13 +3,13 @@ import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import { integrationEnv } from '../integrations/integrationEnv';
 import { isKmapsEnabled } from './config';
+import { getKmapsAvailabilityView } from './embedAvailable';
 import logger from '../utils/logger';
 
 /**
- * "Open KMAPS on this shipment" (docs: KLIP-EMBED.md). KLIP calls no KMAPS API and sends no data: it only builds a URL that
- * KMAPS resolves itself, with the signed-in user's own KMAPS session. The identifiers are the ones KLIP already hands KMAPS in
- * `GET /api/partner/v1/shipments`: `op` is the opaque record id (`id`), `sto` is `stoNumber`, `shipment` is `shipmentNo`, `vessel`
- * is the DHM vessel code. KMAPS tries them in that order, so every one we have is sent.
+ * "Open KMAPS on this shipment" (docs: KLIP-EMBED.md). The frame URL still carries no secret (KMAPS resolves it with the
+ * signed-in user's own session). Separately, KLIP asks KMAPS which shipments can be shown (`GET /api/v1/embed/available`,
+ * Draft 3 §8) so the Shipments Action column shows the map icon only for those rows.
  */
 
 const MAX_PARAM_LENGTH = 64;
@@ -67,11 +67,22 @@ interface RecordRow {
 }
 
 /**
- * GET /api/shipments/kmaps-status - is the KMAPS integration switched on (Integrations > KMAPS > Enabled)? The Shipments table shows the KMAPS icon
- * in its Action column only then; while it is off the column keeps the View Documents button. Read per request, so the switch takes effect at once.
+ * GET /api/shipments/kmaps-status — Enabled switch plus which shipments KMAPS can show right now.
+ *
+ * `availability.mode`:
+ * - `none`  → View Documents on every row (off, no access key, or KMAPS unreachable with no cache)
+ * - `all`   → map icon on every real shipment row (availability endpoint returned 404 / not deployed yet)
+ * - `filter`→ map icon only when the row matches ops / stoKeys / stos / shipments
  */
-export const getKmapsEmbedStatus = (_req: AuthRequest, res: Response) => {
-  res.json({ success: true, data: { enabled: isKmapsEnabled() } });
+export const getKmapsEmbedStatus = async (_req: AuthRequest, res: Response) => {
+  try {
+    const enabled = isKmapsEnabled();
+    const availability = enabled ? await getKmapsAvailabilityView() : { mode: 'none' as const };
+    res.json({ success: true, data: { enabled, availability } });
+  } catch (error) {
+    logger.error('KMAPS embed status failed:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to read KMAPS status' } });
+  }
 };
 
 /**
