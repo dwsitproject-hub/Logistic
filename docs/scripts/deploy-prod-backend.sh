@@ -266,9 +266,12 @@ step "waiting for the container to finish starting"
 # "Database connected successfully" is also printed by the migration step, which runs BEFORE the server starts, so waiting on it let
 # the checks below run before the scheduler had registered its crons (a false "[FAIL] SAP auto-import cron registered", 2026-10-08).
 # The scheduler line comes last in start-up.
+# grep -q stops at the FIRST match and the writer (docker compose logs) then dies of SIGPIPE (141). Under pipefail the pipeline reports that failure, so `logs | grep -q X`
+# said "no" although X was there ("[FAIL] SAP auto-import cron registered" with the cron line printed right below it, 2026-11-18) - and in a NEGATIVE check
+# (`if logs | grep -q 'migration.*error'; then bad`) it would say "no error" although one was there. So the log is captured first and the variable is searched.
 for _ in $(seq 1 60); do
-  if "${COMPOSE[@]}" logs --tail=400 "$SERVICE" 2>/dev/null \
-      | grep -qE "Scheduler service initialized|Failed to initialize scheduler service"; then
+  NOW_LOGS="$("${COMPOSE[@]}" logs --tail=400 "$SERVICE" 2>/dev/null || true)"
+  if grep -qE "Scheduler service initialized|Failed to initialize scheduler service" <<<"$NOW_LOGS"; then
     break
   fi
   sleep 3
@@ -279,6 +282,8 @@ FAILED=0
 ok()   { printf '  [ OK ] %s\n' "$1"; }
 bad()  { printf '  [FAIL] %s\n' "$1"; FAILED=1; }
 logs() { "${COMPOSE[@]}" logs --tail=800 "$SERVICE" 2>/dev/null; }
+# True when the last 800 log lines match the (case-insensitive, extended) pattern. See the note above the wait loop for why this is not `logs | grep -q`.
+logs_match() { local out; out="$(logs || true)"; grep -qiE "$1" <<<"$out"; }
 
 if docker exec "$CONTAINER" true >/dev/null 2>&1; then ok "container is running"; else bad "container is running"; fi
 
@@ -300,11 +305,11 @@ else
   printf '  [SKIP] upload marker check is off (add UPLOADS_REQUIRE_MARKER=true to .env after creating the marker on the share)\n'
 fi
 
-if logs | grep -qiE 'migration.*(failed|error)'; then bad "no migration errors this boot"; else ok "no migration errors this boot"; fi
+if logs_match 'migration.*(failed|error)'; then bad "no migration errors this boot"; else ok "no migration errors this boot"; fi
 if [[ "$WITHOUT_SHARE" == "1" ]]; then
   printf '  [SKIP] SAP auto-import cron and share: deployed without the share overlay (DEPLOY_WITHOUT_SHARE=1)\n'
 else
-  if logs | grep -qi 'SAP folder auto-import cron scheduled'; then ok "SAP auto-import cron registered"; else bad "SAP auto-import cron registered"; fi
+  if logs_match 'SAP folder auto-import cron scheduled'; then ok "SAP auto-import cron registered"; else bad "SAP auto-import cron registered"; fi
   if docker exec "$CONTAINER" sh -c 'ls "/mnt/sap-import/ORIGINAL" >/dev/null 2>&1'; then
     ok "SAP share mounted and readable"
   else
@@ -313,7 +318,7 @@ else
   # Claim Data folder rides on the same overlay (KLIP_CLAIM_IMPORT_MOUNT -> /mnt/claim-import). Only reported, never fatal: the claim auto-import is
   # opt-in (CLAIM_AUTO_IMPORT_ENABLED=true in .env), and the page's status strip names a folder it cannot read.
   if grep -qE '^CLAIM_AUTO_IMPORT_ENABLED=true' .env; then
-    if logs | grep -qi 'Claim Data auto-import cron scheduled'; then ok "Claim auto-import cron registered"; else bad "Claim auto-import cron registered"; fi
+    if logs_match 'Claim Data auto-import cron scheduled'; then ok "Claim auto-import cron registered"; else bad "Claim auto-import cron registered"; fi
     if docker exec "$CONTAINER" sh -c 'ls "/mnt/claim-import/original" >/dev/null 2>&1'; then
       ok "Claim share mounted and readable"
     else

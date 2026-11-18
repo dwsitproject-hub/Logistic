@@ -249,9 +249,12 @@ else
 fi
 
 step "waiting for the container to finish starting"
+# grep -q stops at the FIRST match and the writer (docker compose logs) then dies of SIGPIPE (141). Under pipefail the pipeline reports that failure, so `logs | grep -q X`
+# said "no" although X was there ("[FAIL] SAP auto-import cron registered" with the cron line printed right below it, 2026-11-18) - and in a NEGATIVE check
+# (`if logs | grep -q 'migration.*error'; then bad`) it would say "no error" although one was there. So the log is captured first and the variable is searched.
 for _ in $(seq 1 60); do
-  if "${COMPOSE[@]}" logs --tail=400 "$SERVICE" 2>/dev/null \
-      | grep -qE "Database connected successfully|ready - started server|Listening on"; then
+  NOW_LOGS="$("${COMPOSE[@]}" logs --tail=400 "$SERVICE" 2>/dev/null || true)"
+  if grep -qE "Database connected successfully|ready - started server|Listening on" <<<"$NOW_LOGS"; then
     break
   fi
   sleep 3
@@ -262,11 +265,13 @@ FAILED=0
 ok()   { printf '  [ OK ] %s\n' "$1"; }
 bad()  { printf '  [FAIL] %s\n' "$1"; FAILED=1; }
 logs() { "${COMPOSE[@]}" logs --tail=800 "$SERVICE" 2>/dev/null; }
+# True when the last 800 log lines match the (case-insensitive, extended) pattern. See the note above the wait loop for why this is not `logs | grep -q`.
+logs_match() { local out; out="$(logs || true)"; grep -qiE "$1" <<<"$out"; }
 
 if docker exec "$CONTAINER" true >/dev/null 2>&1; then ok "container is running"; else bad "container is running"; fi
 
 if [[ "$ROLE" == "backend" ]]; then
-  if logs | grep -qiE 'migration.*(failed|error)'; then bad "no migration errors this boot"; else ok "no migration errors this boot"; fi
+  if logs_match 'migration.*(failed|error)'; then bad "no migration errors this boot"; else ok "no migration errors this boot"; fi
   if curl -sf "http://127.0.0.1:5001/health" >/dev/null; then ok "/health answers on 127.0.0.1:5001"; else bad "/health answers on 127.0.0.1:5001"; fi
 
   # docker-compose.backend.yml reads the key from env_file ONLY; a ${...:-} line would substitute an
