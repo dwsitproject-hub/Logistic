@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { FileText, Ship, Ban } from 'lucide-react'
 import { normalizeShipmentStatusKey } from '@/lib/shipmentStatusDisplay'
 import { useDocumentPresence } from '@/lib/documentPresence'
+import { useKmapsEnabled } from '@/lib/kmapsEnabled'
 import {
   cancelKlipShipmentDisabledReason,
   cancelPrePlannedGroupDisabledReason,
@@ -30,12 +31,15 @@ export interface ShipmentViewTableRowActionsProps {
   onCancelShipment?: () => void
   cancelShipmentLoading?: boolean
   primaryActionLoading?: boolean
+  /** Opens the shipment's documents. This is the button while the KMAPS integration is off. */
   onViewDocs: () => void
+  /** Opens the KMAPS map for this shipment (in a frame). Replaces the documents button while the KMAPS integration is on. */
+  onViewKmaps: () => void
 }
 
 /**
  * Unified Actions column for the Shipments page main view table only.
- * Primary (ship) · Cancel · View Docs (file).
+ * Primary (ship) · Cancel · then KMAPS (vessel position) while the KMAPS integration is on, otherwise View Docs (file).
  */
 export function ShipmentViewTableRowActions({
   shipment,
@@ -46,10 +50,18 @@ export function ShipmentViewTableRowActions({
   cancelShipmentLoading = false,
   primaryActionLoading = false,
   onViewDocs,
+  onViewKmaps,
 }: ShipmentViewTableRowActionsProps) {
+  const kmapsEnabled = useKmapsEnabled()
   // A backlog row's documents hang on its contract; every other row's on its shipment. Unknown (not answered yet) keeps the button on.
   const hasDocs = useDocumentPresence(String(shipment.row_kind ?? '').trim() === 'contract_backlog' ? 'contract' : 'shipment', shipment.id)
   const docsDisabled = hasDocs === false
+  // A PO that has no shipment yet (backlog row) or a preplanned group has no vessel for KMAPS to show.
+  const kmapsDisabledReason =
+    String(shipment.row_kind ?? '').trim() === 'contract_backlog' || normalizeShipmentStatusKey(shipment.status) === 'PREPLANNED'
+      ? 'No shipment yet'
+      : null
+  const kmapsDisabled = kmapsDisabledReason !== null
   const primary = resolveShipmentTablePrimaryAction(shipment.status)
   const cancelKind = resolveShipmentViewTableCancelKind(shipment)
   const canCancel = cancelKind != null
@@ -174,24 +186,45 @@ export function ShipmentViewTableRowActions({
           </TooltipContent>
         </Tooltip>
       ) : null}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={onViewDocs}
-              disabled={docsDisabled}
-              title={docsDisabled ? undefined : 'Docs'}
-              className="h-8 w-8 border-transparent bg-transparent text-violet-600 hover:bg-violet-50 disabled:opacity-40 disabled:pointer-events-none"
-              aria-label="View documents"
-            >
-              <FileText className="h-4 w-4" />
-            </Button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="top">{docsDisabled ? 'No documents uploaded yet' : 'View documents'}</TooltipContent>
-      </Tooltip>
+      {kmapsEnabled ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={onViewKmaps}
+                disabled={kmapsDisabled}
+                className="h-8 w-8 border-transparent bg-transparent hover:bg-purple-50 disabled:pointer-events-none disabled:opacity-40"
+                aria-label="Open in KMAPS"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/kmaps-icon.svg" alt="" className="h-5 w-5" />
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top">{kmapsDisabledReason ?? 'Open in KMAPS (vessel position)'}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={onViewDocs}
+                disabled={docsDisabled}
+                title={docsDisabled ? undefined : 'Docs'}
+                className="h-8 w-8 border-transparent bg-transparent text-violet-600 hover:bg-violet-50 disabled:opacity-40 disabled:pointer-events-none"
+                aria-label="View documents"
+              >
+                <FileText className="h-4 w-4" />
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top">{docsDisabled ? 'No documents uploaded yet' : 'View documents'}</TooltipContent>
+        </Tooltip>
+      )}
     </div>
   )
 }

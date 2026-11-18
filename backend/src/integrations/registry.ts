@@ -141,6 +141,12 @@ export const INTEGRATIONS: IntegrationDef[] = [
         prefix: 'whsec_',
         help: 'Issued by KMAPS together with the keys; begins with whsec_. Signs every bell.',
       },
+      {
+        key: 'KMAPS_EMBED_URL',
+        label: 'Map (embed) URL',
+        kind: 'url',
+        help: 'Where the KMAPS icon on the Shipments table opens the map in a frame, e.g. https://test-kmaps.kpndomain.com (only the scheme, host and port are used). It must be on the same site and scheme as KLIP, and KMAPS must allow-list the KLIP origin as a frame parent. Empty = the icon explains that KMAPS is not set up. Nothing is sent to KMAPS: this only builds the link.',
+      },
     ],
   },
 ];

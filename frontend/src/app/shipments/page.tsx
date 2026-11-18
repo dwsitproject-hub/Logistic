@@ -74,6 +74,7 @@ import {
   type ShipmentPoOption,
 } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentViewTableRowActions } from '@/components/shipments/ShipmentViewTableRowActions'
+import { KmapsEmbedDialog } from '@/components/shipments/KmapsEmbedDialog'
 import {
   buildVesselPortsQuantityRows,
   sumVesselPortsQuantityEdits,
@@ -1339,6 +1340,8 @@ function ShipmentsPageContent() {
   const [shipmentDocs, setShipmentDocs] = useState<DocumentItem[]>([])
   const [docsLoading, setDocsLoading] = useState(false)
   const [showDocs, setShowDocs] = useState(false)
+  /** The row whose shipment the KMAPS dialog shows (Actions column > KMAPS icon); null = closed. */
+  const [kmapsShipment, setKmapsShipment] = useState<Shipment | null>(null)
 
   const [showAddShipment, setShowAddShipment] = useState(false)
   const [contractDetailTarget, setContractDetailTarget] = useState<ContractDetailModalContract | null>(null)
@@ -7489,6 +7492,7 @@ function ShipmentsPageContent() {
                                         cancelPrePlannedTarget?.groupId === cancelGroupId
                                       }
                                       onViewDocs={() => void handleViewDocuments(rep)}
+                                      onViewKmaps={() => setKmapsShipment(rep)}
                                     />
                                   </td>
                                 </tr>
@@ -7797,6 +7801,7 @@ function ShipmentsPageContent() {
                                           cancelShipmentSubmitting && cancelShipmentTarget?.id === shipment.id
                                         }
                                         onViewDocs={() => void handleViewDocuments(shipment)}
+                                        onViewKmaps={() => setKmapsShipment(shipment)}
                                       />
                                     )}
                                   </td>
@@ -7980,6 +7985,7 @@ function ShipmentsPageContent() {
                                 cancelPrePlannedTarget?.groupId === cancelGroupId
                               }
                               onViewDocs={() => void handleViewDocuments(rep)}
+                                      onViewKmaps={() => setKmapsShipment(rep)}
                             />
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-xs">
@@ -8092,6 +8098,7 @@ function ShipmentsPageContent() {
                                     cancelShipmentSubmitting && cancelShipmentTarget?.id === shipment.id
                                   }
                                   onViewDocs={() => void handleViewDocuments(shipment)}
+                                        onViewKmaps={() => setKmapsShipment(shipment)}
                                 />
                               )}
                             </div>
@@ -9484,6 +9491,8 @@ function ShipmentsPageContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <KmapsEmbedDialog shipment={kmapsShipment} onClose={() => setKmapsShipment(null)} />
 
       {/* Documents Modal */}
       {showDocs && selectedShipment && (
