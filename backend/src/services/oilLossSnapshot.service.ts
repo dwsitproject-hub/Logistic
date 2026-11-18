@@ -5,8 +5,11 @@ import { canonicalVesselName } from '../utils/sapVesselFields';
 import type { OilLossPayload } from './oilLoss.service';
 
 export const OIL_LOSS_SNAPSHOT_TABLE = 'oil_loss_snapshot';
-/** v10: a B2B origin's unloading_location is its ending child's discharge port (utils/b2bChildDischargePortSql.ts). */
-export const OIL_LOSS_SNAPSHOT_LOGIC_VERSION = 10;
+/**
+ * v10: a B2B origin's unloading_location is its ending child's discharge port (utils/b2bChildDischargePortSql.ts).
+ * v11: a B2B origin's Delivery / Receive include its children's on the STO (oilLossVesselCompletedSql.ts, b2b_children); rows with a B2B child were read from the empty origin.
+ */
+export const OIL_LOSS_SNAPSHOT_LOGIC_VERSION = 11;
 
 const STALE_REFRESH_DEBOUNCE_MS = 60_000;
 

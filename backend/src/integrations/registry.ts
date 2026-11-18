@@ -111,13 +111,13 @@ export const INTEGRATIONS: IntegrationDef[] = [
     id: 'kmaps',
     name: 'KMAPS - KPN Downstream Maps',
     description:
-      'KMAPS reads shipments and vessel pairs from KLIP (partner API at /api/partner/v1). The keys are issued by KMAPS: paste them here once. KLIP keeps only a hash of the private key.',
+      'KMAPS reads shipments and vessel pairs from KLIP (partner API at /api/partner/v1). The keys are issued by KMAPS: paste them here once. KLIP keeps only a hash of the private key. The access key is the reverse direction: KLIP asks KMAPS which shipments can be shown on the map.',
     settings: [
       {
         key: 'KMAPS_ENABLED',
         label: 'Enabled',
         kind: 'boolean',
-        help: 'Takes effect at once. When off, KMAPS gets 403 application_disabled at /auth/token and its tokens stop working.',
+        help: 'Takes effect at once. When off, KMAPS gets 403 application_disabled at /auth/token and its tokens stop working, and the Shipments table keeps View Documents.',
       },
       { key: 'KMAPS_PUBLIC_KEY', label: 'Public key', kind: 'text', prefix: 'kmaps_pk_' },
       {
@@ -140,6 +140,19 @@ export const INTEGRATIONS: IntegrationDef[] = [
         kind: 'secret',
         prefix: 'whsec_',
         help: 'Issued by KMAPS together with the keys; begins with whsec_. Signs every bell.',
+      },
+      {
+        key: 'KMAPS_EMBED_URL',
+        label: 'Map (embed) URL',
+        kind: 'url',
+        help: 'Where the KMAPS map opens in a frame, e.g. http://test-kmaps.kpndomain.com (only the scheme, host and port are used). The same origin is used to call GET /api/v1/embed/available. It must be on the same site and scheme as KLIP, and KMAPS must allow-list the KLIP origin as a frame parent.',
+      },
+      {
+        key: 'KMAPS_ACCESS_KEY',
+        label: 'Access key (embed available)',
+        kind: 'secret',
+        prefix: 'kmaps_ak_',
+        help: 'Issued once in KMAPS Setting > Integrasi on the KLIP card (Terbitkan kunci akses). Begins with kmaps_ak_. KLIP sends it as Authorization: Bearer when asking which shipments can be shown on the map. Independent of the public/private key pair. Empty = the Shipments table keeps View Documents until this is saved.',
       },
     ],
   },

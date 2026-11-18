@@ -2,9 +2,10 @@
 
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { FileText, Ship, Ban } from 'lucide-react'
+import { FileText, Ship, Ban, MapPinned } from 'lucide-react'
 import { normalizeShipmentStatusKey } from '@/lib/shipmentStatusDisplay'
 import { useDocumentPresence } from '@/lib/documentPresence'
+import { shipmentMatchesKmapsAvailability, useKmapsActionState } from '@/lib/kmapsEnabled'
 import {
   cancelKlipShipmentDisabledReason,
   cancelPrePlannedGroupDisabledReason,
@@ -19,6 +20,7 @@ export interface ShipmentViewTableRowActionsShipment {
   sto_number?: string | null
   sto_key?: string | null
   operation_id?: string | null
+  shipment_id?: string | null
   pre_planned_group_id?: string | null
 }
 
@@ -30,12 +32,16 @@ export interface ShipmentViewTableRowActionsProps {
   onCancelShipment?: () => void
   cancelShipmentLoading?: boolean
   primaryActionLoading?: boolean
+  /** Opens the shipment's documents. Shown when KMAPS is off or this row is not available in KMAPS. */
   onViewDocs: () => void
+  /** Opens the KMAPS map for this shipment (in a frame). Shown only for rows KMAPS can display. */
+  onViewKmaps: () => void
 }
 
 /**
  * Unified Actions column for the Shipments page main view table only.
- * Primary (ship) · Cancel · View Docs (file).
+ * Primary (ship) · Cancel · then map (KMAPS) when this row is available in KMAPS, otherwise View Docs (file).
+ * Map icon is a Lucide pin in violet — same size/style as the other action icons, not the KMAPS app logo.
  */
 export function ShipmentViewTableRowActions({
   shipment,
@@ -46,10 +52,27 @@ export function ShipmentViewTableRowActions({
   cancelShipmentLoading = false,
   primaryActionLoading = false,
   onViewDocs,
+  onViewKmaps,
 }: ShipmentViewTableRowActionsProps) {
+  const kmaps = useKmapsActionState()
   // A backlog row's documents hang on its contract; every other row's on its shipment. Unknown (not answered yet) keeps the button on.
   const hasDocs = useDocumentPresence(String(shipment.row_kind ?? '').trim() === 'contract_backlog' ? 'contract' : 'shipment', shipment.id)
   const docsDisabled = hasDocs === false
+  // A PO that has no shipment yet (backlog row) or a preplanned group has no vessel for KMAPS to show.
+  const noShipmentYet =
+    String(shipment.row_kind ?? '').trim() === 'contract_backlog' || normalizeShipmentStatusKey(shipment.status) === 'PREPLANNED'
+  const kmapsEligible =
+    kmaps.enabled &&
+    !noShipmentYet &&
+    shipmentMatchesKmapsAvailability(
+      {
+        sto_key: shipment.sto_key,
+        sto_number: shipment.sto_number,
+        shipment_id: shipment.shipment_id,
+      },
+      kmaps.availability,
+    )
+  const showKmaps = kmapsEligible
   const primary = resolveShipmentTablePrimaryAction(shipment.status)
   const cancelKind = resolveShipmentViewTableCancelKind(shipment)
   const canCancel = cancelKind != null
@@ -174,24 +197,43 @@ export function ShipmentViewTableRowActions({
           </TooltipContent>
         </Tooltip>
       ) : null}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={onViewDocs}
-              disabled={docsDisabled}
-              title={docsDisabled ? undefined : 'Docs'}
-              className="h-8 w-8 border-transparent bg-transparent text-violet-600 hover:bg-violet-50 disabled:opacity-40 disabled:pointer-events-none"
-              aria-label="View documents"
-            >
-              <FileText className="h-4 w-4" />
-            </Button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="top">{docsDisabled ? 'No documents uploaded yet' : 'View documents'}</TooltipContent>
-      </Tooltip>
+      {showKmaps ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={onViewKmaps}
+                className="h-8 w-8 border-transparent bg-transparent text-violet-600 hover:bg-violet-50"
+                aria-label="Open vessel map"
+              >
+                <MapPinned className="h-4 w-4" />
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top">Open vessel map</TooltipContent>
+        </Tooltip>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={onViewDocs}
+                disabled={docsDisabled}
+                title={docsDisabled ? undefined : 'Docs'}
+                className="h-8 w-8 border-transparent bg-transparent text-violet-600 hover:bg-violet-50 disabled:opacity-40 disabled:pointer-events-none"
+                aria-label="View documents"
+              >
+                <FileText className="h-4 w-4" />
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top">{docsDisabled ? 'No documents uploaded yet' : 'View documents'}</TooltipContent>
+        </Tooltip>
+      )}
     </div>
   )
 }

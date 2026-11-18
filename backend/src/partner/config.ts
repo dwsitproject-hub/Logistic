@@ -35,6 +35,27 @@ export function kmapsWebhookSecret(): string {
   return String(integrationEnv('KMAPS_WEBHOOK_SECRET') || '').trim();
 }
 
+/**
+ * Access key for KLIP → KMAPS (`kmaps_ak_…`). Used only as `Authorization: Bearer` on
+ * `GET /api/v1/embed/available` (KLIP-EMBED.md Draft 3 §8). Independent of the public/private key pair.
+ * Stored sealed (not hashed), because KLIP must send the plaintext key.
+ */
+export function kmapsAccessKey(): string {
+  return String(integrationEnv('KMAPS_ACCESS_KEY') || '').trim();
+}
+
+/** Origin of the Map (embed) URL — same host used for the availability list. */
+export function kmapsEmbedOrigin(): string {
+  const raw = String(integrationEnv('KMAPS_EMBED_URL') || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : '';
+  } catch {
+    return '';
+  }
+}
+
 /** Bells go out only while the integration is on and both the URL and the secret are saved. */
 export function isKmapsWebhookConfigured(): boolean {
   return isKmapsEnabled() && kmapsWebhookUrl() !== '' && kmapsWebhookSecret() !== '';

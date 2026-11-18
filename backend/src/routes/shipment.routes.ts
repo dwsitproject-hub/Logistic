@@ -36,6 +36,7 @@ import {
   getShipmentActivityLog,
   cancelKlipShipment,
 } from '../controllers/shipment.controller';
+import { getKmapsEmbedLink, getKmapsEmbedStatus } from '../partner/embedLink';
 import { revertPurchaseOrderHandler } from '../controllers/shipmentPoRevert.controller';
 import {
   getShipmentAtaOverride,
@@ -68,6 +69,10 @@ const shipmentPlanningUpload = multer({
     cb(null, ok);
   },
 });
+
+// Link that opens KMAPS on one shipment (frame). Before the parameterized routes.
+router.get('/kmaps-status', authorizePermission('data.shipments', 'can_view'), getKmapsEmbedStatus);
+router.get('/kmaps-link', authorizePermission('data.shipments', 'can_view'), getKmapsEmbedLink);
 
 // New shipment creation routes - MUST BE BEFORE parameterized routes
 router.get('/contracts/suggestions', getContractSuggestions);

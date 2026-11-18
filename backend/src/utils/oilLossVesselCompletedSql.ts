@@ -11,6 +11,10 @@
  * The POs of the row are the contracts linked to the STO (contractsOnStoSubquery - contract_stos, SAP rows, shipments), the
  * ones the Shipments View Table lists, plus the contracts of the members. Qty Delivery and Qty Receive are the same
  * STO-scoped SAP kilograms View Shipment shows as Delivered Qty (SAP) and Receive Qty (SAP), summed across those POs.
+ * A B2B origin carries what its CHILDREN moved on the STO (b2b_children below): SAP books the STO's Delivery / Receive on the child, while the PO list names the origin
+ * (contractsOnStoSubquery replaces a child by its origin, exactly as the View Table does). The origin's own figure plus its children's is what View Shipment shows, and what
+ * the row sums. Without it a PO that is a B2B child dropped out of Delivery and Receive while SFAL / SFBD (the whole vessel) kept it: STO 1006019499 (MT. ARCADIA, FOB)
+ * read R1 330% and R3 -77% (2026-11-18) where the vessel itself is -0.34% / -0.30%; 48 SEA rows of production have a B2B child.
  * SFAL and SFBD are the opened shipment's fields (the primary row of the STO group), including when that row is null.
  * A sibling PO that has a value must not fill the blank. The modal stores kilograms.
  *
@@ -123,11 +127,36 @@ export function buildOilLossVesselCompletedCtes(): string {
     stoKeyExpr: 'vsc.sto_key',
     poNumberExpr: 'c2.po_number',
   };
-  const sapDeliveredKg = `NULLIF(${sqlStoScopedDeliveredKgSql({
-    ...stoQtyOpts,
-    incotermExpr: 'c2.incoterm',
-  })}, 0)`;
-  const sapReceivedKg = `NULLIF(${sqlStoScopedReceiveKgSql(stoQtyOpts)}, 0)`;
+  const ownDeliveredKg = sqlStoScopedDeliveredKgSql({ ...stoQtyOpts, incotermExpr: 'c2.incoterm' });
+  const ownReceivedKg = sqlStoScopedReceiveKgSql(stoQtyOpts);
+  // The children of this PO that moved something on this STO. The child's OWN contract number, quantity, incoterm and PO pick its SAP rows and the incoterm arm
+  // (FOB / CIF / CFR read the vessel arm, FRC / LCO the trucking arm): the origin's incoterm must not choose for a row that belongs to the child.
+  const childOpts = {
+    contractNumberExpr: 'bc.child_contract',
+    contractQtyExpr: 'COALESCE(bc.child_qty, 0)',
+    stoKeyExpr: 'vsc.sto_key',
+    poNumberExpr: 'bc.child_po',
+  };
+  const childSum = (valueSql: string) => `(
+              SELECT SUM(${valueSql})
+              FROM b2b_children bc
+              WHERE bc.origin_po = TRIM(c2.po_number::text) AND bc.child_contract <> c2.contract_id
+            )`;
+  const childDeliveredKg = childSum(sqlStoScopedDeliveredKgSql({ ...childOpts, incotermExpr: 'bc.child_incoterm' }));
+  const childReceivedKg = childSum(sqlStoScopedReceiveKgSql(childOpts));
+  // Same overlay as View Shipment (contractDetailsForStoSql): when a child has a figure, the line is its own figure (0 when it has none) plus the children's.
+  // The four figures are computed ONCE per row in a LATERAL (fig): an inline overlay would repeat each SAP lookup four times and the rebuild already takes about 5 minutes.
+  const figuresLateral = `LEFT JOIN LATERAL (
+            SELECT
+              ${ownDeliveredKg} AS own_delivered_kg,
+              ${ownReceivedKg} AS own_received_kg,
+              ${childDeliveredKg} AS child_delivered_kg,
+              ${childReceivedKg} AS child_received_kg
+          ) fig ON TRUE`;
+  const overlay = (own: string, child: string) =>
+    `NULLIF(CASE WHEN ${child} IS NOT NULL THEN COALESCE(${own}::numeric, 0) + ${child} ELSE ${own} END, 0)`;
+  const sapDeliveredKg = overlay('fig.own_delivered_kg', 'fig.child_delivered_kg');
+  const sapReceivedKg = overlay('fig.own_received_kg', 'fig.child_received_kg');
 
   return `
       latest_spd_contract AS (
@@ -194,6 +223,20 @@ export function buildOilLossVesselCompletedCtes(): string {
         WHERE member.contract_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM vessel_status vs WHERE vs.sto_key = member.sto_key)
       ),
+      b2b_children AS (
+        -- every live B2B child (SAP flag B2B + a Contract Reff PO), keyed by the PO of its origin. Built once: a join per row would scan contract_latest_spd_snapshot each time.
+        SELECT
+          ch.contract_id AS child_contract,
+          NULLIF(TRIM(ch.po_number::text), '') AS child_po,
+          ch.incoterm AS child_incoterm,
+          ch.quantity_ordered AS child_qty,
+          TRIM(chb.contract_reference_po_raw) AS origin_po
+        FROM contract_latest_spd_snapshot chb
+        JOIN contracts ch ON ch.contract_id = chb.contract_number
+        WHERE UPPER(COALESCE(chb.b2b_flag_raw, '')) = 'B2B'
+          AND NULLIF(TRIM(chb.contract_reference_po_raw), '') IS NOT NULL
+          AND UPPER(TRIM(COALESCE(ch.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
+      ),
       vessel_contract_qty AS (
         SELECT DISTINCT ON (sto_key, contract_id)
           sto_key,
@@ -216,6 +259,7 @@ export function buildOilLossVesselCompletedCtes(): string {
           FROM vessel_sto_contract vsc
           JOIN contracts c2 ON c2.contract_id = vsc.contract_id
           LEFT JOIN latest_spd_contract l2 ON l2.contract_number = c2.contract_id
+          ${figuresLateral}
           -- a Cancelled contract is not a PO of the voyage: its quantity must not count (the SAP link still lists it)
           WHERE UPPER(TRIM(COALESCE(c2.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
         ) linked
