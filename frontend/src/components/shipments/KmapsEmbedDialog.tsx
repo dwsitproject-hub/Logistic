@@ -77,36 +77,47 @@ export function KmapsEmbedDialog({ shipment, onClose }: KmapsEmbedDialogProps) {
 
   const title = shipment?.vessel_name || shipment?.shipment_id || shipment?.sto_number || 'Shipment'
 
+  // DialogContent wraps children in a scroll body that is NOT a flex column, so flex-1 on the
+  // iframe wrapper never got a height and the map collapsed to a thin strip. Fill the dialog shell
+  // (85vh minus the close-button bar) with our own column, and pin the iframe with absolute inset.
   return (
     <Dialog open={shipment !== null} onOpenChange={(open) => (!open ? onClose() : undefined)}>
-      <DialogContent className="flex h-[85vh] w-[90vw] max-w-[90vw] flex-col gap-3 p-4">
-        <DialogHeader>
-          <DialogTitle>KMAPS — {title}</DialogTitle>
-          <DialogDescription>
-            Posisi kapal untuk shipment ini, dari KMAPS. Jika diminta, masuk dengan akun KMAPS Anda di jendela ini.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-gray-200 bg-gray-50">
-          {error ? (
-            <p className="p-6 text-sm text-red-700">{error}</p>
-          ) : link === null ? (
-            <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-500">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Memuat KMAPS…
-            </div>
-          ) : !link.enabled ? (
-            <p className="p-6 text-sm text-gray-600">
-              KMAPS belum diatur di KLIP. Minta ADMIN mengisi <b>Map (embed) URL</b> di Integrations &gt; KMAPS.
-            </p>
-          ) : !link.url ? (
-            <p className="p-6 text-sm text-gray-600">Baris ini belum punya identitas shipment yang bisa dicari di KMAPS.</p>
-          ) : (
-            <iframe src={link.url} title="Posisi kapal (KMAPS)" loading="lazy" className="h-full w-full border-0" />
-          )}
+      <DialogContent className="h-[85vh] w-[90vw] max-w-[90vw] overflow-hidden">
+        <div className="-m-6 flex h-[calc(85vh-2.75rem)] flex-col">
+          <DialogHeader className="shrink-0 space-y-1.5 px-4 py-3">
+            <DialogTitle>KMAPS — {title}</DialogTitle>
+            <DialogDescription>
+              Posisi kapal untuk shipment ini, dari KMAPS. Jika diminta, masuk dengan akun KMAPS Anda di jendela ini.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="relative min-h-0 flex-1 overflow-hidden border-y border-gray-200 bg-gray-50">
+            {error ? (
+              <p className="p-6 text-sm text-red-700">{error}</p>
+            ) : link === null ? (
+              <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Memuat KMAPS…
+              </div>
+            ) : !link.enabled ? (
+              <p className="p-6 text-sm text-gray-600">
+                KMAPS belum diatur di KLIP. Minta ADMIN mengisi <b>Map (embed) URL</b> di Integrations &gt; KMAPS.
+              </p>
+            ) : !link.url ? (
+              <p className="p-6 text-sm text-gray-600">Baris ini belum punya identitas shipment yang bisa dicari di KMAPS.</p>
+            ) : (
+              <iframe
+                src={link.url}
+                title="Posisi kapal (KMAPS)"
+                loading="lazy"
+                className="absolute inset-0 h-full w-full border-0"
+              />
+            )}
+          </div>
+          <p className="shrink-0 px-4 py-2 text-xs text-gray-500">
+            Bingkai kosong? Biasanya CSP frame-src KLIP belum mengizinkan origin KMAPS, atau alamat KLIP belum
+            didaftarkan di KMAPS (frame-ancestors).
+          </p>
         </div>
-        <p className="text-xs text-gray-500">
-          Bingkai kosong? Biasanya alamat KLIP belum didaftarkan di KMAPS (frame-ancestors) atau KMAPS tidak satu situs dengan KLIP.
-        </p>
       </DialogContent>
     </Dialog>
   )
