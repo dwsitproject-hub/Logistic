@@ -46,6 +46,45 @@ export const PRE_PLANNED_RELEASABLE_HOLDER_SQL = `(
 )`;
 
 /**
+ * The holders that a MANUAL grouping may release: everything PRE_PLANNED_RELEASABLE_HOLDER_SQL releases, plus a member of an ACCEPTED group that is linked to a LIVE shipment
+ * when ITS contract has no live shipment of its own.
+ *
+ * Why. A group has ONE shipment link but can hold several POs, and linkAcceptedPrePlannedGroupsForContracts links the WHOLE group when a shipment is made for ANY member. A
+ * sibling PO that went on no shipment then drops to Unplanned on the page (the Unplanned card reads an unlinked group as Preplanned and a linked one as not), is offered for
+ * grouping, passes the eligibility check ("a contract visible as Unplanned is never wrongly rejected here", prePlannedManualEligibilitySql.ts) and then hits
+ * ux_ppgm_active_contract: PO 1001030838 in PPM-BONTAN-023, linked to MNL-50527716-1004029445 (OP-1004030473-49138234), 2026-11-18, with three more POs in PPM-BONTAN-022.
+ * The person pressing Create is saying where the PO goes next, so the old membership of a PO that has no shipment on that group's voyage is let go.
+ *
+ * Only the manual grouping uses it. The nightly rebuild keeps PRE_PLANNED_RELEASABLE_HOLDER_SQL: it must not move a PO out of a freshly linked group just because that
+ * PO's own shipment is the next one to be planned.
+ */
+export const PRE_PLANNED_MANUAL_RELEASABLE_HOLDER_SQL = `(
+  ${PRE_PLANNED_RELEASABLE_HOLDER_SQL}
+  OR (
+    pg.status = 'ACCEPTED'
+    AND pg.shipment_id IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM shipments ls
+      WHERE ls.contract_id = pgm.contract_id AND UPPER(TRIM(COALESCE(ls.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'UNPLANNED')
+    )
+  )
+)`;
+
+export type PrePlannedHolderRow = { po_number?: unknown; contract_id?: unknown; group_code?: unknown; status?: unknown };
+
+/**
+ * What the user reads when a PO is still held. ONLY the holders that really block are named: a SUGGESTED group in the same list is released by the very save that failed,
+ * so naming it made every selected PO look locked (2026-11-18: five POs, one blocker, four SUGGESTED holders in the message).
+ */
+export function describePrePlannedBlockers(blockers: readonly PrePlannedHolderRow[]): string | null {
+  if (blockers.length === 0) return null;
+  const named = blockers
+    .map((r) => `PO ${String(r.po_number ?? r.contract_id)} is still in Preplanned group ${String(r.group_code)} (${String(r.status)})`)
+    .join('; ');
+  return `${named}. Return that group to Unplanned (or complete or cancel its shipment) before grouping the PO again.`;
+}
+
+/**
  * Release the members that a cancelled shipment's group still holds. Called when a shipment is cancelled, so the PO is free the moment it is Unplanned again;
  * the manual grouping and the nightly rebuild apply the same rule themselves, which also covers every other way a shipment becomes cancelled.
  * Returns how many member rows were released.
@@ -521,7 +560,7 @@ export async function createManualPrePlannedGroup(
       SET released_at = now()
       FROM pre_planned_groups pg
       WHERE pgm.group_id = pg.id
-        AND ${PRE_PLANNED_RELEASABLE_HOLDER_SQL}
+        AND ${PRE_PLANNED_MANUAL_RELEASABLE_HOLDER_SQL}
         AND pgm.contract_id = ANY($1::uuid[])
         AND pgm.released_at IS NULL
       `,
@@ -593,16 +632,13 @@ export async function createManualPrePlannedGroup(
         INNER JOIN pre_planned_groups pg ON pg.id = pgm.group_id
         INNER JOIN contracts c ON c.id = pgm.contract_id
         WHERE pgm.released_at IS NULL AND pgm.contract_id = ANY($1::uuid[])
+          AND NOT ${PRE_PLANNED_MANUAL_RELEASABLE_HOLDER_SQL}
         ORDER BY c.contract_id, pg.group_code
         `,
         [dedupedIds],
       ).catch(() => ({ rows: [] as Array<Record<string, unknown>> }));
-      if (holders.rows.length > 0) {
-        const named = holders.rows
-          .map((r) => `PO ${String(r.po_number ?? r.contract_id)} is already in Preplanned group ${String(r.group_code)} (${String(r.status)})`)
-          .join('; ');
-        throw new Error(`${named}. Return that group to Unplanned (or complete or cancel its shipment) before grouping the PO again.`);
-      }
+      const message = describePrePlannedBlockers(holders.rows);
+      if (message) throw new Error(message);
     }
     throw err;
   } finally {

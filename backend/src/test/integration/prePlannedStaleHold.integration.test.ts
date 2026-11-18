@@ -186,22 +186,28 @@ describe('grouping the PO again', () => {
     await query(`DELETE FROM pre_planned_groups WHERE id = $1`, [created.id]);
   });
 
-  it('a PO a LIVE group really holds is refused with the group named, not the raw index name', async () => {
+  it('a PO held by a group linked to a LIVE shipment of ANOTHER member, with no shipment of its own, is released and grouped (the 2026-11-18 production case)', async () => {
+    // PO 1001030838 in PPM-BONTAN-023: the group is linked to MNL-50527716-1004029445, a shipment made for a sibling PO; this PO went on no shipment, so the page lists it as Unplanned.
     const c = await contract('M-LIVE');
     const elsewhere = await contract('M-LIVE-OTHER');
     const liveShipment = await shipment(elsewhere, 'M-LIVE-OTHER', 'PLANNED');
-    await group('M-LIVE-HOLDER', 'ACCEPTED', liveShipment, c);
-
-    let message = '';
-    try {
-      await createManualPrePlannedGroup([c], actorId);
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
-    expect(message).not.toContain('ux_ppgm_active_contract');
-    expect(message).not.toContain('duplicate key');
-    expect(message).toContain(`${P}-M-LIVE-HOLDER`);
-    expect(message).toContain(`${P}-PO-M-LIVE`);
+    const holderId = await group('M-LIVE-HOLDER', 'ACCEPTED', liveShipment, c);
     expect(await activeHolders(c)).toHaveLength(1);
+
+    const created = await createManualPrePlannedGroup([c], actorId);
+    expect(created.status).toBe('ACCEPTED');
+
+    const holders = await activeHolders(c);
+    expect(holders).toHaveLength(1);
+    expect(holders[0].group_code).toBe(created.groupCode);
+    const old = await one<{ released_at: string | null }>(
+      `SELECT released_at FROM pre_planned_group_members WHERE group_id = $1 AND contract_id = $2`,
+      [holderId, c],
+    );
+    expect(old.released_at).not.toBeNull();
+    // the old group is still linked to its shipment: only this PO's membership was let go
+    expect((await one<{ shipment_id: string }>(`SELECT shipment_id FROM pre_planned_groups WHERE id = $1`, [holderId])).shipment_id).toBe(liveShipment);
+    await query(`DELETE FROM pre_planned_group_members WHERE group_id = $1`, [created.id]);
+    await query(`DELETE FROM pre_planned_groups WHERE id = $1`, [created.id]);
   });
 });
