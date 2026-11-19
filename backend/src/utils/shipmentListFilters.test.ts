@@ -223,3 +223,32 @@ describe('Group and Source find a STO by ANY of its contracts and give the OS th
     ).toBe('');
   });
 });
+
+describe('Jetty Status column filter', () => {
+  const filtered = appendShipmentColumnFilters({ jetty_status: { type: 'multi', values: ['Approved', 'Not Sent'] } } as never, 3);
+
+  it('binds the chosen statuses as one array parameter on the shown status', () => {
+    expect(filtered.params).toEqual([['Approved', 'Not Sent']]);
+    expect(filtered.nextIndex).toBe(4);
+    expect(filtered.sql).toContain('= ANY($3::text[])');
+  });
+
+  it('reads the status the way the list does: the current tracker row of the row\'s STO key, JPS status first, then Send Failed / On Hold, else Not Sent', () => {
+    const sql = filtered.sql.replace(/\s+/g, ' ');
+    expect(sql).toContain('FROM jps_shipping_instructions jf WHERE jf.sto_key = sb.sto_key::text');
+    expect(sql).toContain("jf.state IN ('SUBMITTED', 'FAILED', 'SKIPPED_NO_CARGO')");
+    expect(sql).toContain("WHEN jf.state = 'FAILED' THEN 'Send Failed'");
+    expect(sql).toContain("WHEN jf.state = 'SKIPPED_NO_CARGO' THEN 'On Hold'");
+    expect(sql).toContain("'Not Sent'");
+    // the derived stage and the live-row order are the list's own, over the jf alias
+    expect(sql).toContain("'Completed (Hose Off)'");
+    expect(sql).toContain("(jf.state = 'SUBMITTED' AND COALESCE(jf.jps_status, '') NOT IN ('Rejected', 'Deleted')) DESC, jf.revision DESC");
+    expect(sql).not.toMatch(/\bj\./);
+  });
+
+  it('an empty selection adds nothing', () => {
+    const none = appendShipmentColumnFilters({ jetty_status: { type: 'multi', values: [] } } as never, 3);
+    expect(none.sql).toBe('');
+    expect(none.params).toEqual([]);
+  });
+});

@@ -85,6 +85,29 @@ const BADGE_CLASS: Record<string, string> = {
 
 const NOT_SENT_CLASS = 'bg-gray-100 text-gray-600'
 
+/**
+ * The values the Jetty Status filter of the Shipments page offers: what KLIP can show in the column (jettyStatusLabel), in the order a shipment moves through them,
+ * KLIP's own states first. The backend filters on the same wording (shipmentListFilters.ts SHIPMENT_JETTY_STATUS_FILTER_SQL), so a value here must read as the badge reads.
+ */
+export const JETTY_STATUS_FILTER_OPTIONS: string[] = [
+  'Not Sent',
+  'On Hold',
+  'Send Failed',
+  'Pending',
+  'Approved',
+  'Allocated',
+  'Berthed',
+  'Hose On',
+  'Start Cargo',
+  'Cargo Done',
+  'Hose Off',
+  'Completed (Hose Off)',
+  'Sailed Off',
+  'Sailed',
+  'Rejected',
+  'Deleted',
+]
+
 /** KLIP tried and JPS refused: not the same as Rejected, which is a decision JPS made on an instruction it accepted. */
 export const JETTY_SEND_FAILED = 'Send Failed'
 /** KLIP is holding it back (missing cargo code, odd quantity) and will send once the data is fixed. */

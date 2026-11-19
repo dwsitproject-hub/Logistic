@@ -1,7 +1,9 @@
 'use client'
 
 import type { ReactNode } from 'react'
-import { Anchor, CircleDot, Database, Factory, Package, Ship, Timer } from 'lucide-react'
+import { Anchor, CircleDot, Database, Factory, Package, Ship, Timer, Waves } from 'lucide-react'
+import { JETTY_COLUMNS_ENABLED } from '@/lib/jettyFeature'
+import { JETTY_STATUS_FILTER_OPTIONS } from '@/lib/jettyStatus'
 import { ListFilterBar, ListFilterField } from '@/components/shared/ListFilterBar'
 import { MultiValueField, SingleValueField } from '@/components/shared/ListFilterFields'
 import { filterIncotermOptions } from '@/lib/globalScopeFilters'
@@ -28,6 +30,9 @@ export interface ShipmentsGlobalFiltersSectionProps {
   availableIncoterms: string[]
   selectedIncoterms: string[]
   onIncotermsChange: (values: string[]) => void
+  /** Jetty Status filter (only where the Jetty columns exist, NEXT_PUBLIC_JPS_ENABLED). */
+  selectedJettyStatuses: string[]
+  onJettyStatusesChange: (values: string[]) => void
   availableProducts: string[]
   selectedProducts: string[]
   onProductsChange: (values: string[]) => void
@@ -74,6 +79,8 @@ export function ShipmentsGlobalFiltersSection({
   availableIncoterms,
   selectedIncoterms,
   onIncotermsChange,
+  selectedJettyStatuses,
+  onJettyStatusesChange,
   availableProducts,
   selectedProducts,
   onProductsChange,
@@ -112,6 +119,7 @@ export function ShipmentsGlobalFiltersSection({
     (charterTypeFilter !== 'ALL' ? 1 : 0) +
     (sourceTypeFilter !== 'ALL' ? 1 : 0) +
     (selectedIncoterms.length > 0 ? 1 : 0) +
+    (JETTY_COLUMNS_ENABLED && selectedJettyStatuses.length > 0 ? 1 : 0) +
     (selectedProducts.length > 0 ? 1 : 0) +
     (selectedSuppliers.length > 0 ? 1 : 0)
 
@@ -164,6 +172,19 @@ export function ShipmentsGlobalFiltersSection({
               icon={<Anchor className="h-4 w-4" />}
             />
           </ListFilterField>
+          {JETTY_COLUMNS_ENABLED && (
+            <ListFilterField label="Jetty Status">
+              <MultiValueField
+                label="Jetty Status"
+                options={JETTY_STATUS_FILTER_OPTIONS}
+                selected={selectedJettyStatuses}
+                onChange={onJettyStatusesChange}
+                placeholder="All jetty statuses"
+                emptyMessage="No jetty status"
+                icon={<Waves className="h-4 w-4" />}
+              />
+            </ListFilterField>
+          )}
           <ListFilterField label="Product">
             <MultiValueField
               label="Product"
