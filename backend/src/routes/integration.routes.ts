@@ -6,6 +6,10 @@ import {
   getIntegrations,
   getKmapsDeliveries,
   getJpsPortOptions,
+  getJpsNotifyRules,
+  removeJpsNotifyRule,
+  saveJpsNotifyRule,
+  sendJpsNotifyTest,
   listApiCalls,
   resendKmapsDeliveries,
   retryDhmPushNow,
@@ -28,6 +32,11 @@ router.get('/dhm/push-state', getDhmPushState);
 router.post('/dhm/push-retry', retryDhmPushNow);
 // What the JPS Ports editor picks from (Master Ports and whether each has a DHM code). Before /:id.
 router.get('/jps/port-options', getJpsPortOptions);
+// The mail sent after Submit to Jetty: one rule per discharge port plus a default, and a test send to the administrator. Before /:id.
+router.get('/jps/notify-rules', getJpsNotifyRules);
+router.put('/jps/notify-rules', saveJpsNotifyRule);
+router.post('/jps/notify-rules/test', sendJpsNotifyTest);
+router.delete('/jps/notify-rules/:id', removeJpsNotifyRule);
 // Bells KLIP rings for KMAPS, and a way to send the failed ones again. Declared before /:id so 'kmaps' is not an id.
 router.get('/kmaps/webhook-deliveries', getKmapsDeliveries);
 router.post('/kmaps/webhook-deliveries/resend', resendKmapsDeliveries);

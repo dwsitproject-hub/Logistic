@@ -296,3 +296,87 @@ export const resendKmapsDeliveries = async (req: AuthRequest, res: Response): Pr
     res.status(500).json({ success: false, error: { message: 'Failed to queue the resend.' } });
   }
 };
+
+/**
+ * Integrations > JPS > Email notifications: the rules of the mail sent after Submit to Jetty (one per discharge port plus a default). ADMIN only like the rest of
+ * the menu. The recipients are personal data, so they are listed only here, never in a migration or a log line (a log carries counts).
+ */
+export const getJpsNotifyRules = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { listNotifyRules } = await import('../jps/notifyRules');
+    const { isNotifyEnabled, isProductionEnvironment, JPS_NOTIFY_NON_PRODUCTION_RECIPIENT } = await import('../jps/notifyEmail');
+    res.json({
+      success: true,
+      data: {
+        rules: await listNotifyRules(),
+        masterSwitchOn: isNotifyEnabled(),
+        production: isProductionEnvironment(),
+        // Outside production every mail goes here whatever a rule says; shown so a tester is not surprised.
+        testRecipient: isProductionEnvironment() ? null : JPS_NOTIFY_NON_PRODUCTION_RECIPIENT,
+      },
+    });
+  } catch (error) {
+    logger.error('Load JPS email rules error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to load the email rules.' } });
+  }
+};
+
+export const saveJpsNotifyRule = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { cleanNotifyRuleInput, validateNotifyRule, saveNotifyRule } = await import('../jps/notifyRules');
+    const input = cleanNotifyRuleInput((req.body ?? {}) as Record<string, unknown>);
+    const problems = validateNotifyRule(input);
+    if (problems.length > 0) {
+      res.status(400).json({ success: false, error: { message: problems.join(' ') } });
+      return;
+    }
+    const rule = await saveNotifyRule(input, req.user?.id ?? null);
+    logger.info('JPS email rule saved', { port: rule.port, enabled: rule.enabled, userId: req.user?.id });
+    res.json({ success: true, data: { rule } });
+  } catch (error) {
+    logger.error('Save JPS email rule error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to save the email rule.' } });
+  }
+};
+
+export const removeJpsNotifyRule = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { deleteNotifyRule } = await import('../jps/notifyRules');
+    const removed = await deleteNotifyRule(String(req.params.id ?? ''));
+    if (!removed) {
+      res.status(404).json({ success: false, error: { message: 'No such port rule (the default rule cannot be deleted).' } });
+      return;
+    }
+    logger.info('JPS email rule deleted', { id: req.params.id, userId: req.user?.id });
+    res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    logger.error('Delete JPS email rule error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to delete the email rule.' } });
+  }
+};
+
+/** "Send test to me": the rule being edited, built with example values, sent ONLY to the administrator who asked (never to the rule's recipients). */
+export const sendJpsNotifyTest = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const to = String(req.user?.email ?? '').trim();
+    if (!to) {
+      res.status(400).json({ success: false, error: { message: 'Your account has no email address to send the test to.' } });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const text = (v: unknown) => String(v ?? '').replace(/\r\n/g, '\n').trim();
+    const { normalizeRulePort } = await import('../jps/notifyRules');
+    const { buildRuleTestEmail } = await import('../jps/notifyEmail');
+    const { sendEmail } = await import('../services/email.service');
+    const mail = buildRuleTestEmail({ port: normalizeRulePort(body.port), subject: text(body.subject), body: text(body.body) });
+    const ok = await sendEmail({ to: [to], subject: mail.subject, html: mail.html });
+    if (!ok) {
+      res.status(502).json({ success: false, error: { message: 'The test mail could not be sent. Check SMTP_HOST, SMTP_USER and EMAIL_FROM in the backend .env, and the backend log.' } });
+      return;
+    }
+    res.json({ success: true, data: { sentTo: to } });
+  } catch (error) {
+    logger.error('Send JPS email test error:', error);
+    res.status(500).json({ success: false, error: { message: 'Failed to send the test mail.' } });
+  }
+};

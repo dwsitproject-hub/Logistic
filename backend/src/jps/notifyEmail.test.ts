@@ -1,6 +1,11 @@
+import fs from 'fs';
+import path from 'path';
 import { describe, expect, it } from 'vitest';
+import { chooseNotifyRule, cleanNotifyRuleInput, validateNotifyRule, type NotifyRule, type NotifyRuleInput } from './notifyRules';
 import {
   buildNotifyEmail,
+  buildRuleTestEmail,
+  DEFAULT_NOTIFY_BODY,
   buildPoTableHtml,
   DEFAULT_NOTIFY_SUBJECT,
   fillPlaceholders,
@@ -12,7 +17,7 @@ import {
   resolveNotifyRecipients,
   type NotifyData,
 } from './notifyEmail';
-import { findIntegration, findSetting, parseEmailList, validateSettingValue } from '../integrations/registry';
+import { findIntegration, findSetting, parseEmailList } from '../integrations/registry';
 
 const data: NotifyData = {
   vessel: 'TB. TELUK BAJAU DELTA / BG. SMS 3002',
@@ -20,6 +25,7 @@ const data: NotifyData = {
   shipper: 'PT. BERAU KARETINDO LESTARI',
   loadingPort: 'LABANAN',
   dischargePort: 'BONTANG',
+  masterPort: 'PORT BONTANG',
   qtyKg: 2645542,
   eta: '22 Nov 2026',
   incoterm: 'FOB',
@@ -91,12 +97,13 @@ describe('Submit to Jetty email: PO table and figures', () => {
   });
 });
 
-describe('Submit to Jetty email: settings', () => {
+describe('Submit to Jetty email: settings and rules', () => {
   const jps = findIntegration('jps')!;
 
-  it('are registered under JPS: switch, to, cc, subject, body', () => {
-    for (const key of ['JPS_NOTIFY_ENABLED', 'JPS_NOTIFY_TO', 'JPS_NOTIFY_CC', 'JPS_NOTIFY_SUBJECT', 'JPS_NOTIFY_BODY']) {
-      expect(findSetting(jps, key), key).toBeTruthy();
+  it('keeps only the master switch among the integration settings; recipients and wording live in the rules', () => {
+    expect(findSetting(jps, 'JPS_NOTIFY_ENABLED')).toBeTruthy();
+    for (const key of ['JPS_NOTIFY_TO', 'JPS_NOTIFY_CC', 'JPS_NOTIFY_SUBJECT', 'JPS_NOTIFY_BODY']) {
+      expect(findSetting(jps, key), key).toBeUndefined();
     }
   });
 
@@ -106,17 +113,68 @@ describe('Submit to Jetty email: settings', () => {
     expect(parsed.invalid).toEqual([]);
   });
 
-  it('refuses an address that is not one, naming it', () => {
-    const def = findSetting(jps, 'JPS_NOTIFY_TO')!;
-    expect(validateSettingValue(def, 'a@x.com, nope')).toContain('nope');
-    expect(validateSettingValue(def, 'a@x.com, b@y.org')).toBeNull();
+  const rule = (over: Partial<NotifyRuleInput> = {}): NotifyRuleInput => ({
+    port: 'PORT BONTANG',
+    enabled: true,
+    emailTo: 'a@x.com',
+    emailCc: '',
+    subject: 'UPCOMING {vessel}',
+    body: 'Dengan Hormat,\n\n{po_table}',
+    ...over,
   });
 
-  it('accepts a subject and a body with spaces, line breaks and Indonesian text', () => {
-    const body = findSetting(jps, 'JPS_NOTIFY_BODY')!;
-    expect(validateSettingValue(body, 'Dengan Hormat,\n\nBerikut detail pengapalan {discharge_port}')).toBeNull();
-    expect(validateSettingValue(body, 'bad \u0001 text')).toContain('control character');
-    expect(validateSettingValue(body, 'x'.repeat(8001))).toContain('8000');
+  it('accepts a rule with spaces, line breaks and Indonesian text', () => {
+    expect(validateNotifyRule(rule())).toEqual([]);
+  });
+
+  it('refuses an address that is not one, naming it, and a rule that is on with nobody to send to', () => {
+    expect(validateNotifyRule(rule({ emailTo: 'a@x.com, nope' })).join(' ')).toContain('nope');
+    expect(validateNotifyRule(rule({ emailTo: '' })).join(' ')).toContain('at least one address');
+    expect(validateNotifyRule(rule({ emailTo: '', enabled: false }))).toEqual([]);
+  });
+
+  it('refuses a control character, a two-line subject and a body that is too long', () => {
+    expect(validateNotifyRule(rule({ body: 'bad \u0001 text' })).join(' ')).toContain('control character');
+    expect(validateNotifyRule(rule({ subject: 'a\nb' })).join(' ')).toContain('one line');
+    expect(validateNotifyRule(rule({ body: 'x'.repeat(8001) })).join(' ')).toContain('8000');
+  });
+
+  it('cleans what a text box leaves: line breaks settled, ends trimmed, port in upper case, a blank port is the default', () => {
+    const cleaned = cleanNotifyRuleInput({ port: ' port  bontang ', enabled: 'true', emailTo: ' a@x.com \r\n', emailCc: '', subject: ' S ', body: 'x\r\ny\n' });
+    expect(cleaned).toEqual({ port: 'PORT BONTANG', enabled: true, emailTo: 'a@x.com', emailCc: '', subject: 'S', body: 'x\ny' });
+    expect(cleanNotifyRuleInput({ port: '  ' }).port).toBeNull();
+  });
+
+  const rules = (ports: Array<[string | null, boolean]>): NotifyRule[] =>
+    ports.map(([port, enabled], i) => ({ id: String(i), port, enabled, emailTo: 'a@x.com', emailCc: '', subject: '', body: '', updatedAt: null }));
+
+  it('picks the rule of the shipment\'s own port, else the default, else none', () => {
+    const all = rules([[null, true], ['PORT BONTANG', true], ['PORT LUBUK GAUNG', true]]);
+    expect(chooseNotifyRule(all, 'PORT BONTANG')?.port).toBe('PORT BONTANG');
+    expect(chooseNotifyRule(all, ' port lubuk  gaung ')?.port).toBe('PORT LUBUK GAUNG');
+    expect(chooseNotifyRule(all, 'PORT DUMAI')?.port).toBeNull();
+    expect(chooseNotifyRule(all, '')?.port).toBeNull();
+    expect(chooseNotifyRule(rules([['PORT BONTANG', true]]), 'PORT DUMAI')).toBeNull();
+  });
+
+  it('a switched-off rule of a port still wins over the default, so that port sends nothing', () => {
+    const all = rules([[null, true], ['PORT BONTANG', false]]);
+    const chosen = chooseNotifyRule(all, 'PORT BONTANG');
+    expect(chosen?.port).toBe('PORT BONTANG');
+    expect(chosen?.enabled).toBe(false);
+  });
+
+  it('seeds the default rule with the built-in subject and body (migration 271)', () => {
+    const sql = fs.readFileSync(path.join(__dirname, '..', 'database', 'migrations', '271_jps_notify_rules.sql'), 'utf8').replace(/\r\n/g, '\n');
+    expect(sql).toContain(DEFAULT_NOTIFY_SUBJECT);
+    expect(sql).toContain(DEFAULT_NOTIFY_BODY);
+  });
+
+  it('builds a test mail from a rule draft with example values, marked as a test', () => {
+    const mail = buildRuleTestEmail({ port: 'PORT LUBUK GAUNG', subject: '', body: '' });
+    expect(mail.subject.startsWith('[TEST] UPCOMING Vessel EUP LUBUK GAUNG')).toBe(true);
+    expect(mail.html).toContain('data contoh');
+    expect(mail.html).toContain('<table');
   });
 });
 

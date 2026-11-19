@@ -1,9 +1,9 @@
 /**
  * The email that goes out when a user presses Submit to Jetty and JPS accepts the instruction (Pending).
  *
- * Who receives it, the subject and the body are SETTINGS (Integrations > JPS: Email to / cc / subject / body), so a change of recipients or wording needs no deploy and no
- * code change. Nothing is built into the code except the wording used while the subject or body setting is empty, which follows the "UPCOMING Vessel" mail the shipping team
- * writes by hand today.
+ * Who receives it, the subject and the body are RULES, one per discharge port plus a default (Integrations > JPS > Email notifications, table jps_notify_rules), so a
+ * change of recipients or wording needs no deploy and no code change, and Bontang can differ from Lubuk Gaung. The master switch JPS_NOTIFY_ENABLED turns all of it off.
+ * The wording used while a rule's subject or body is empty follows the "UPCOMING Vessel" mail the shipping team writes by hand today (the default rule is seeded with it).
  *
  * It is a notification, never a step of the submit: it runs after JPS answered, it never throws, and a failure is logged and nothing else. It is sent only for a NEW
  * instruction ('submitted'); a duplicate JPS already held ('recovered') and a refusal send nothing. Only the button sends it: the automatic sweep does not.
@@ -12,6 +12,7 @@ import { query } from '../database/connection';
 import { sendEmail } from '../services/email.service';
 import { integrationEnv } from '../integrations/integrationEnv';
 import { parseEmailList } from '../integrations/registry';
+import { chooseNotifyRule, listNotifyRules } from './notifyRules';
 import logger from '../utils/logger';
 import type { EligibleSto } from './eligibility';
 
@@ -48,6 +49,8 @@ export interface NotifyData {
   shipper: string;
   loadingPort: string;
   dischargePort: string;
+  /** The discharge Master Port as its rule is keyed (upper case, "PORT BONTANG"); empty when the shipment has none. */
+  masterPort: string;
   qtyKg: number | null;
   eta: string;
   incoterm: string;
@@ -155,6 +158,7 @@ export async function loadNotifyData(sto: EligibleSto, revision: number): Promis
 
   let loadingPorts: string[] = [];
   let dischargePort = '';
+  let masterPort = '';
   if (sto.shipment_ids.length > 0) {
     const ports = await query(
       `SELECT v.port_name, COALESCE(v.is_discharge_port, FALSE) AS is_discharge, v.port_sequence,
@@ -169,6 +173,7 @@ export async function loadNotifyData(sto: EligibleSto, revision: number): Promis
     loadingPorts = distinct(rows.filter((r) => !r.is_discharge).map((r) => r.port_name));
     const discharge = rows.find((r) => r.is_discharge);
     // The Master Port reads "PORT BONTANG"; the mail writes "BONTANG". A plant name (EUP EDIBLE OIL BONTANG) is only the fallback.
+    masterPort = String(discharge?.master_port || '').trim().replace(/\s+/g, ' ').toUpperCase();
     dischargePort = String(discharge?.master_port || discharge?.port_name || '')
       .trim()
       .replace(/^PORT\s+/i, '')
@@ -189,6 +194,7 @@ export async function loadNotifyData(sto: EligibleSto, revision: number): Promis
     shipper: distinct(rows.map((r) => r.shipper)).join(', '),
     loadingPort: loadingPorts.join(', '),
     dischargePort,
+    masterPort,
     qtyKg,
     eta: formatNotifyDate(sto.eta_discharge_arrival),
     incoterm: String(sto.incoterm ?? '').trim(),
@@ -252,28 +258,70 @@ export function markAsTestMail(email: { subject: string; html: string }, configu
 }
 
 /**
+ * Example values for a test mail and for the modal's preview: a Bontang FOB shipment of the kind the hand-written mail describes.
+ * Nothing here is a real shipment, shipper or contract.
+ */
+export function buildSampleNotifyData(masterPort = 'PORT BONTANG'): NotifyData {
+  const dischargePort = masterPort.replace(/^PORT\s+/i, '') || 'BONTANG';
+  return {
+    vessel: 'TB. CONTOH PERKASA / BG. CONTOH 3001',
+    commodity: 'CRUDE PALM OIL (CPO)',
+    shipper: 'PT. CONTOH SUMBER LESTARI',
+    loadingPort: 'LABANAN',
+    dischargePort,
+    masterPort,
+    qtyKg: 2645542,
+    eta: formatNotifyDate(new Date(Date.now() + 3 * 86_400_000)),
+    incoterm: 'FOB',
+    stoNumber: '1006000000',
+    revision: 1,
+    rows: [{ shipper: 'PT. CONTOH SUMBER LESTARI', contract: '000/CONTOH/CPO_EUP/I/2026', po: '1001000000', qtyKg: 2645542 }],
+  };
+}
+
+/** A rule as it is being edited: what the test mail and the preview are built from. */
+export interface NotifyRuleDraft {
+  port: string | null;
+  subject: string;
+  body: string;
+}
+
+/** Subject and HTML for a rule draft with example values, marked as a test. For the modal's "Send test to me" and the preview; sends nothing by itself. */
+export function buildRuleTestEmail(draft: NotifyRuleDraft): { subject: string; html: string } {
+  const built = buildNotifyEmail(buildSampleNotifyData(draft.port ?? 'PORT BONTANG'), { subject: draft.subject, body: draft.body });
+  return {
+    subject: `[TEST] ${built.subject}`,
+    html: `<div style="background:#fff4e5;border:1px solid #f0b363;padding:8px 12px;margin-bottom:12px;font-family:Calibri,Arial,sans-serif;font-size:13px;">Email uji dengan data contoh dari menu Integrations. Bukan pengiriman sebenarnya.</div>${built.html}`,
+  };
+}
+
+/**
  * Sends the notification for a submission JPS just accepted. Resolves to what happened (for the log and the tests); never throws.
- * Nothing is sent while the switch is off. In production nothing is sent without a valid recipient either; elsewhere the test address always receives it.
+ * Nothing is sent while the master switch is off, when no rule applies, or when the applying rule is switched off. In production nothing is sent without a valid
+ * recipient either; elsewhere the test address always receives it.
  */
 export async function notifySubmittedToJetty(sto: EligibleSto, revision: number): Promise<'sent' | 'off' | 'no_recipient' | 'failed'> {
   try {
     if (!isNotifyEnabled()) return 'off';
-    const recipients = resolveNotifyRecipients(integrationEnv('JPS_NOTIFY_TO'), integrationEnv('JPS_NOTIFY_CC'), isProductionEnvironment());
+    const data = await loadNotifyData(sto, revision);
+    const rule = chooseNotifyRule(await listNotifyRules(), data.masterPort);
+    if (!rule || !rule.enabled) {
+      logger.info('JPS: Submit to Jetty email not sent, no active rule for this port', { stoKey: sto.sto_key, port: data.masterPort || null, rule: rule ? 'switched off' : 'none' });
+      return 'off';
+    }
+    const recipients = resolveNotifyRecipients(rule.emailTo, rule.emailCc, isProductionEnvironment());
     if (recipients.to.length === 0) {
-      logger.warn('JPS: Submit to Jetty email is on but Email to is empty, nothing sent', { stoKey: sto.sto_key });
+      logger.warn('JPS: Submit to Jetty email rule has no recipient, nothing sent', { stoKey: sto.sto_key, port: rule.port });
       return 'no_recipient';
     }
-    const data = await loadNotifyData(sto, revision);
-    const built = buildNotifyEmail(data, {
-      subject: integrationEnv('JPS_NOTIFY_SUBJECT'),
-      body: integrationEnv('JPS_NOTIFY_BODY'),
-    });
+    const built = buildNotifyEmail(data, { subject: rule.subject, body: rule.body });
     const { subject, html } = recipients.redirected ? markAsTestMail(built, recipients.configuredCount) : built;
     const ok = await sendEmail({ to: recipients.to, cc: recipients.cc, subject, html });
     logger.info('JPS: Submit to Jetty email', {
       stoKey: sto.sto_key,
       revision,
       sent: ok,
+      rulePort: rule.port,
       toCount: recipients.to.length,
       ccCount: recipients.cc.length,
       redirectedToTestAddress: recipients.redirected,

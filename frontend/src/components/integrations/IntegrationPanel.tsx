@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { ApiCallHistory } from '@/components/integrations/ApiCallHistory'
 import { DhmFailedPushButton } from '@/components/integrations/DhmPushPanel'
 import { KmapsWebhookButton } from '@/components/integrations/KmapsWebhookPanel'
+import { JpsNotifyButton } from '@/components/integrations/JpsNotifyPanel'
 import { SettingRow } from '@/components/integrations/SettingRow'
 import api from '@/lib/api'
 import {
@@ -127,6 +128,7 @@ export function IntegrationPanel({ integration, secretsKeyConfigured, onSaved, o
         <div className="flex flex-wrap items-center gap-2">
           {integration.id === 'dhm' ? <DhmFailedPushButton /> : null}
           {integration.id === 'kmaps' ? <KmapsWebhookButton /> : null}
+          {integration.id === 'jps' ? <JpsNotifyButton /> : null}
           <Button variant="outline" size="sm" onClick={() => void runTest()} disabled={testing || editing}>
             {testing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <PlugZap className="mr-2 h-4 w-4" aria-hidden />}
             Test connection
