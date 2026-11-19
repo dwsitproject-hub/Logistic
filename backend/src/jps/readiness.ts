@@ -14,6 +14,7 @@ import { companiesForPort, fetchJpsPortCompanies } from './companies';
 import { fetchJpsKnownPorts } from './portCatalog';
 import { EFFECTIVE_ATA_SQL, STO_KEY_SQL, findEligibleStos } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
+import { deliveryQtyCheck, loadPoDeliveryQty } from './deliveryQty';
 import { isJpsClosedStatus } from './types';
 import { JPS_CURRENT_ROW_ORDER_SQL } from '../utils/shipmentListStoJoinSql';
 
@@ -316,6 +317,9 @@ export async function checkJpsReadiness(shipmentId: string): Promise<JpsReadines
     return base;
   }
   checks.push(...(await loadEligibilityChecks(stoKey, enabledPorts, jpsPorts().map((p) => p.port))));
+  // The Delivery Qty (Klip) of every PO must be filled: it is the quantity the email after a successful submission reports. The button's rule only, not the sweep's.
+  const deliveryCheck = deliveryQtyCheck(await loadPoDeliveryQty(stoKey));
+  if (deliveryCheck) checks.push(deliveryCheck);
 
   // Master data the payload needs, asked of the payload builder itself so this list can never differ from what a real submission would hold back.
   const conditionsOk = checks.every((c) => c.ok);

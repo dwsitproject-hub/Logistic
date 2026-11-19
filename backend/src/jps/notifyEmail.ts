@@ -17,6 +17,7 @@ import { parseEmailList } from '../integrations/registry';
 import { chooseNotifyRule, listNotifyRules } from './notifyRules';
 import logger from '../utils/logger';
 import type { EligibleSto } from './eligibility';
+import { loadPoDeliveryQty, hasDeliveryQty } from './deliveryQty';
 
 export const DEFAULT_NOTIFY_SUBJECT = 'UPCOMING Vessel EUP {discharge_port} - {vessel} - {loading_port} to {discharge_port}{revision_note}';
 
@@ -188,12 +189,17 @@ export async function loadNotifyData(sto: EligibleSto, revision: number): Promis
       .toUpperCase();
   }
 
-  const rows: NotifyPoRow[] = sto.cargo.map((c) => ({
-    shipper: supplierByContract.get(String(c.contract_no ?? '')) ?? '',
-    contract: String(c.contract_no ?? ''),
-    po: String(c.po_no ?? ''),
-    qtyKg: c.sto_quantity_kg == null ? null : Number(c.sto_quantity_kg),
-  }));
+  // The quantity written is the KLIP Delivery Qty of each PO (Edit Shipment), which Submit to Jetty requires to be filled; NOT the contract or the STO quantity.
+  const deliveryByContract = new Map((await loadPoDeliveryQty(sto.sto_key)).map((r) => [r.contract, r] as const));
+  const rows: NotifyPoRow[] = sto.cargo.map((c) => {
+    const delivery = deliveryByContract.get(String(c.contract_no ?? ''));
+    return {
+      shipper: supplierByContract.get(String(c.contract_no ?? '')) ?? '',
+      contract: String(c.contract_no ?? ''),
+      po: String(c.po_no ?? ''),
+      qtyKg: delivery && hasDeliveryQty(delivery) ? (delivery.qtyKg as number) : null,
+    };
+  });
   const qtyKg = rows.some((r) => r.qtyKg != null) ? rows.reduce((sum, r) => sum + (r.qtyKg ?? 0), 0) : null;
 
   return {
