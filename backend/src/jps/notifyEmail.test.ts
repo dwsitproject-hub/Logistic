@@ -6,6 +6,7 @@ import {
   buildNotifyEmail,
   buildRuleTestEmail,
   chooseNotifyAttachments,
+  notifyRowsFromCargo,
   skippedAttachmentsNote,
   stripPortPrefix,
   type NotifyDocumentRow,
@@ -271,5 +272,42 @@ describe('Submit to Jetty email: attachments and the loading port', () => {
     expect(stripPortPrefix('  port  Lubuk Gaung ')).toBe('Lubuk Gaung');
     expect(stripPortPrefix('LABANAN')).toBe('LABANAN');
     expect(stripPortPrefix(null)).toBe('');
+  });
+});
+
+describe('Submit to Jetty email: a B2B chain is written as its parent', () => {
+  const cargo = [{ contract_no: '1004033142', po_no: '1001033142' }];
+  const suppliers = new Map([['1004033142', 'TRITUNGGAL SENTRA BUANA PT.']]);
+
+  it('names the parent (PO, contract, supplier) and carries the quantity of the child shipment, once', () => {
+    const rows = notifyRowsFromCargo(
+      cargo,
+      [{ contract: '1004033142', po: '1001033142', qtyKg: 4_495_000, originContract: '9144101942', originPo: '9141001942', originSupplier: 'BUMI INDAWA' }],
+      suppliers,
+    );
+    expect(rows).toEqual([{ shipper: 'BUMI INDAWA', contract: '9144101942', po: '9141001942', qtyKg: 4_495_000 }]);
+  });
+
+  it('lists a parent only once when two cargo lines belong to it', () => {
+    const rows = notifyRowsFromCargo(
+      [...cargo, { contract_no: '1004033999', po_no: '1001033999' }],
+      [
+        { contract: '1004033142', po: '1001033142', qtyKg: 2_000_000, originContract: '9144101942', originPo: '9141001942', originSupplier: 'BUMI INDAWA' },
+        { contract: '1004033999', po: '1001033999', qtyKg: 2_000_000, originContract: '9144101942', originPo: '9141001942', originSupplier: 'BUMI INDAWA' },
+      ],
+      suppliers,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].contract).toBe('9144101942');
+  });
+
+  it('writes an ordinary PO as it is, with its own supplier and the quantity of its shipment', () => {
+    const rows = notifyRowsFromCargo(cargo, [{ contract: '1004033142', po: '1001033142', qtyKg: 2_000_000 }], suppliers);
+    expect(rows).toEqual([{ shipper: 'TRITUNGGAL SENTRA BUANA PT.', contract: '1004033142', po: '1001033142', qtyKg: 2_000_000 }]);
+  });
+
+  it('a PO with no Delivery Qty has no quantity (the dash), and still appears', () => {
+    const rows = notifyRowsFromCargo(cargo, [{ contract: '1004033142', po: '1001033142', qtyKg: null }], suppliers);
+    expect(rows[0].qtyKg).toBeNull();
   });
 });

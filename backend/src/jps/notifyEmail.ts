@@ -17,7 +17,7 @@ import { parseEmailList } from '../integrations/registry';
 import { chooseNotifyRule, listNotifyRules } from './notifyRules';
 import logger from '../utils/logger';
 import type { EligibleSto } from './eligibility';
-import { loadPoDeliveryQty, hasDeliveryQty } from './deliveryQty';
+import { loadPoDeliveryQty, hasDeliveryQty, type PoDeliveryRow } from './deliveryQty';
 
 export const DEFAULT_NOTIFY_SUBJECT = 'UPCOMING Vessel EUP {discharge_port} - {vessel} - {loading_port} to {discharge_port}{revision_note}';
 
@@ -153,6 +153,33 @@ export function buildNotifyEmail(data: NotifyData, templates: { subject?: string
   return { subject, html: `<div style="font-family:Calibri,Arial,sans-serif;font-size:14px;">${html}</div>` };
 }
 
+/**
+ * The PO rows of the mail: one per cargo line, with the quantity of its shipment. A B2B CHILD is written as its PARENT (parent's PO, contract and supplier): KLIP knows the chain by
+ * its parent, and SAP books the STO on the child, so the child's shipment quantity is the chain's quantity. Two lines of one chain would repeat the cargo, so a parent is listed once.
+ */
+export function notifyRowsFromCargo(
+  cargo: Array<{ contract_no: string | null; po_no: string | null }>,
+  delivery: PoDeliveryRow[],
+  supplierByContract: Map<string, string>,
+): NotifyPoRow[] {
+  const deliveryByContract = new Map(delivery.map((r) => [r.contract, r] as const));
+  const rows: NotifyPoRow[] = [];
+  const parents = new Set<string>();
+  for (const c of cargo) {
+    const own = String(c.contract_no ?? '');
+    const d = deliveryByContract.get(own);
+    const qtyKg = d && hasDeliveryQty(d) ? (d.qtyKg as number) : null;
+    if (d && d.originContract) {
+      if (parents.has(d.originContract)) continue;
+      parents.add(d.originContract);
+      rows.push({ shipper: d.originSupplier || supplierByContract.get(own) || '', contract: d.originContract, po: d.originPo || String(c.po_no ?? ''), qtyKg });
+      continue;
+    }
+    rows.push({ shipper: supplierByContract.get(own) ?? '', contract: own, po: String(c.po_no ?? ''), qtyKg });
+  }
+  return rows;
+}
+
 /** What the email says, read from the STO that was just submitted and the contracts and ports behind it. */
 export async function loadNotifyData(sto: EligibleSto, revision: number): Promise<NotifyData> {
   const contractIds = distinct(sto.cargo.map((c) => c.contract_no));
@@ -190,16 +217,7 @@ export async function loadNotifyData(sto: EligibleSto, revision: number): Promis
   }
 
   // The quantity written is the KLIP Delivery Qty of each PO (Edit Shipment), which Submit to Jetty requires to be filled; NOT the contract or the STO quantity.
-  const deliveryByContract = new Map((await loadPoDeliveryQty(sto.sto_key)).map((r) => [r.contract, r] as const));
-  const rows: NotifyPoRow[] = sto.cargo.map((c) => {
-    const delivery = deliveryByContract.get(String(c.contract_no ?? ''));
-    return {
-      shipper: supplierByContract.get(String(c.contract_no ?? '')) ?? '',
-      contract: String(c.contract_no ?? ''),
-      po: String(c.po_no ?? ''),
-      qtyKg: delivery && hasDeliveryQty(delivery) ? (delivery.qtyKg as number) : null,
-    };
-  });
+  const rows = notifyRowsFromCargo(sto.cargo, await loadPoDeliveryQty(sto.sto_key), supplierByContract);
   const qtyKg = rows.some((r) => r.qtyKg != null) ? rows.reduce((sum, r) => sum + (r.qtyKg ?? 0), 0) : null;
 
   return {
