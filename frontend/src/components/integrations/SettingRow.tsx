@@ -71,11 +71,25 @@ export function SettingRow({ setting: s, editing, secretsKeyConfigured, draft, o
           {s.hint ?? '-'}
         </span>
       )
+    else if (s.kind === 'message' || s.kind === 'emails')
+      value = <span className="block whitespace-pre-wrap break-words font-mono text-xs text-gray-700">{s.value ?? '-'}</span>
     else value = <span className="break-all font-mono text-xs text-gray-700">{s.value ?? '-'}</span>
   } else if (reverting) {
     value = <p className="text-xs italic text-gray-500">Akan dikembalikan ke nilai .env saat disimpan.</p>
   } else if (s.kind === 'ports') {
     value = <JpsPortsEditor value={draft} onChange={onDraft} />
+  } else if (s.kind === 'emails' || (s.kind === 'message' && (s.rows ?? 1) > 1)) {
+    value = (
+      <textarea
+        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-300"
+        rows={s.kind === 'emails' ? 3 : s.rows}
+        aria-label={s.label}
+        autoComplete="off"
+        spellCheck={false}
+        value={draft}
+        onChange={(e) => onDraft(e.target.value)}
+      />
+    )
   } else if (s.kind === 'boolean') {
     value = (
       <span className="flex items-center gap-2 text-sm text-gray-700">

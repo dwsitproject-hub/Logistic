@@ -91,6 +91,8 @@ export interface SettingView {
   help?: string;
   requiresRestart: boolean;
   min?: number;
+  /** For a 'message': lines the editor shows. */
+  rows?: number;
   prefix?: string;
   source: SettingSource;
   /** Plain value. Always null for secrets. */
@@ -122,6 +124,7 @@ function viewOf(def: SettingDef, integration: IntegrationDef): SettingView {
     help: def.help,
     requiresRestart: Boolean(def.requiresRestart),
     min: def.min,
+    rows: def.rows,
     prefix: def.prefix,
     source,
     value: isSecret ? null : integrationEnv(def.key) ?? null,
@@ -180,7 +183,12 @@ export async function saveIntegrationSettings(
   const integration = findIntegration(integrationId);
   if (!integration) throw new IntegrationSettingsError([`Unknown integration "${integrationId}".`]);
 
-  const values = request.values ?? {};
+  // A message or a recipient list is typed in a text box: a trailing line break or space is not part of it, and would only fail the "no leading or trailing spaces" check.
+  const values: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(request.values ?? {})) {
+    const def = findSetting(integration, key);
+    values[key] = def && (def.kind === 'message' || def.kind === 'emails') && typeof raw === 'string' ? raw.replace(/\r\n/g, '\n').trim() : raw;
+  }
   const revert = request.revert ?? [];
   const problems: string[] = [];
 

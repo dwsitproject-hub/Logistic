@@ -1,0 +1,286 @@
+/**
+ * The email that goes out when a user presses Submit to Jetty and JPS accepts the instruction (Pending).
+ *
+ * Who receives it, the subject and the body are SETTINGS (Integrations > JPS: Email to / cc / subject / body), so a change of recipients or wording needs no deploy and no
+ * code change. Nothing is built into the code except the wording used while the subject or body setting is empty, which follows the "UPCOMING Vessel" mail the shipping team
+ * writes by hand today.
+ *
+ * It is a notification, never a step of the submit: it runs after JPS answered, it never throws, and a failure is logged and nothing else. It is sent only for a NEW
+ * instruction ('submitted'); a duplicate JPS already held ('recovered') and a refusal send nothing. Only the button sends it: the automatic sweep does not.
+ */
+import { query } from '../database/connection';
+import { sendEmail } from '../services/email.service';
+import { integrationEnv } from '../integrations/integrationEnv';
+import { parseEmailList } from '../integrations/registry';
+import logger from '../utils/logger';
+import type { EligibleSto } from './eligibility';
+
+export const DEFAULT_NOTIFY_SUBJECT = 'UPCOMING Vessel EUP {discharge_port} - {vessel} - {loading_port} to {discharge_port}{revision_note}';
+
+export const DEFAULT_NOTIFY_BODY = [
+  'Dengan Hormat,',
+  '',
+  'Berikut saya informasikan detail pengapalan {discharge_port}, dengan detail sebagai berikut :',
+  '',
+  'VESSEL : {vessel}',
+  'COMMODITY : {commodity}',
+  'SHIPPER : {shipper}',
+  'LOADING PORT : {loading_port}',
+  'QTY : {qty_kg} Kg',
+  'ETA {discharge_port} : {eta}',
+  'TERM : {incoterm}',
+  '',
+  '{po_table}',
+  '',
+  'Demikian saya sampaikan, terima kasih.',
+].join('\n');
+
+export interface NotifyPoRow {
+  shipper: string;
+  contract: string;
+  po: string;
+  qtyKg: number | null;
+}
+
+export interface NotifyData {
+  vessel: string;
+  commodity: string;
+  shipper: string;
+  loadingPort: string;
+  dischargePort: string;
+  qtyKg: number | null;
+  eta: string;
+  incoterm: string;
+  stoNumber: string;
+  revision: number;
+  rows: NotifyPoRow[];
+}
+
+const DASH = '-';
+
+/** 2645542 -> "2.645.542", the way the shipping team writes a quantity in kilograms. */
+export function formatNotifyQty(kg: number | null | undefined): string {
+  if (kg == null || !Number.isFinite(Number(kg))) return DASH;
+  return new Intl.NumberFormat('id-ID', { maximumFractionDigits: 3 }).format(Number(kg));
+}
+
+/** "22 Nov 2026" in Jakarta time; "-" when there is no usable date. */
+export function formatNotifyDate(value: unknown): string {
+  if (value == null || value === '') return DASH;
+  const d = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(d.getTime())) return DASH;
+  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Jakarta' }).format(d);
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function distinct(values: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  for (const raw of values) {
+    const v = String(raw ?? '').trim();
+    if (v && !out.some((o) => o.toLowerCase() === v.toLowerCase())) out.push(v);
+  }
+  return out;
+}
+
+/** The values a subject or body can name, as plain text. */
+export function notifyPlaceholders(data: NotifyData): Record<string, string> {
+  return {
+    vessel: data.vessel || DASH,
+    commodity: data.commodity || DASH,
+    shipper: data.shipper || DASH,
+    loading_port: data.loadingPort || DASH,
+    discharge_port: data.dischargePort || DASH,
+    qty_kg: formatNotifyQty(data.qtyKg),
+    eta: data.eta || DASH,
+    incoterm: data.incoterm || DASH,
+    sto_number: data.stoNumber || DASH,
+    revision: String(data.revision),
+    revision_note: data.revision > 1 ? ` (Revisi R${data.revision})` : '',
+  };
+}
+
+/** Replaces {name} with its value; a name nobody defined is left as typed, so a typo in the setting shows in the email instead of vanishing. */
+export function fillPlaceholders(template: string, values: Record<string, string>, escape = false): string {
+  return template.replace(/\{([a-z_]+)\}/g, (whole, name: string) => {
+    if (!Object.prototype.hasOwnProperty.call(values, name)) return whole;
+    return escape ? escapeHtml(values[name] as string) : (values[name] as string);
+  });
+}
+
+/** The Shipper / Kontrak / PO / Qty table with its total, in the layout of the hand-written mail. */
+export function buildPoTableHtml(rows: NotifyPoRow[]): string {
+  const cell = 'border:1px solid #999;padding:4px 10px;';
+  const head = ['Shipper', 'Kontrak', 'PO', 'Qty (kg)']
+    .map((h) => `<th style="${cell}background:#f2f2f2;text-align:left;">${h}</th>`)
+    .join('');
+  const body = rows
+    .map(
+      (r) =>
+        `<tr><td style="${cell}">${escapeHtml(r.shipper || DASH)}</td><td style="${cell}">${escapeHtml(r.contract || DASH)}</td><td style="${cell}">${escapeHtml(r.po || DASH)}</td><td style="${cell}text-align:right;">${escapeHtml(formatNotifyQty(r.qtyKg))}</td></tr>`,
+    )
+    .join('');
+  const total = rows.reduce((sum, r) => sum + (r.qtyKg ?? 0), 0);
+  const foot = `<tr><td colspan="3" style="${cell}font-weight:bold;">TOTAL</td><td style="${cell}font-weight:bold;text-align:right;">${escapeHtml(formatNotifyQty(total))}</td></tr>`;
+  return `<table style="border-collapse:collapse;font-size:13px;"><thead><tr>${head}</tr></thead><tbody>${body}${foot}</tbody></table>`;
+}
+
+/** Subject (plain) and body (HTML) from the two templates; an empty template falls back to the built-in wording. */
+export function buildNotifyEmail(data: NotifyData, templates: { subject?: string | null; body?: string | null }): { subject: string; html: string } {
+  const values = notifyPlaceholders(data);
+  const subjectTemplate = String(templates.subject ?? '').trim() || DEFAULT_NOTIFY_SUBJECT;
+  const bodyTemplate = String(templates.body ?? '').replace(/\r\n/g, '\n').trim() || DEFAULT_NOTIFY_BODY;
+
+  const subject = fillPlaceholders(subjectTemplate, values).replace(/\s+/g, ' ').trim();
+  const poTable = buildPoTableHtml(data.rows);
+  const html = bodyTemplate
+    .split(/(\{po_table\})/)
+    .map((part) => (part === '{po_table}' ? poTable : escapeHtml(fillPlaceholders(part, values)).replace(/\n/g, '<br>')))
+    .join('');
+  return { subject, html: `<div style="font-family:Calibri,Arial,sans-serif;font-size:14px;">${html}</div>` };
+}
+
+/** What the email says, read from the STO that was just submitted and the contracts and ports behind it. */
+export async function loadNotifyData(sto: EligibleSto, revision: number): Promise<NotifyData> {
+  const contractIds = distinct(sto.cargo.map((c) => c.contract_no));
+  const supplierByContract = new Map<string, string>();
+  if (contractIds.length > 0) {
+    const res = await query(`SELECT contract_id, supplier FROM contracts WHERE contract_id = ANY($1::text[])`, [contractIds]);
+    for (const r of res.rows as Array<{ contract_id: string; supplier: string | null }>) {
+      supplierByContract.set(String(r.contract_id), String(r.supplier ?? '').trim());
+    }
+  }
+
+  let loadingPorts: string[] = [];
+  let dischargePort = '';
+  if (sto.shipment_ids.length > 0) {
+    const ports = await query(
+      `SELECT v.port_name, COALESCE(v.is_discharge_port, FALSE) AS is_discharge, v.port_sequence,
+              mp.port AS master_port
+         FROM vessel_loading_ports v
+         LEFT JOIN master_loading_ports mp ON mp.id = v.master_port_id
+        WHERE v.shipment_id::text = ANY($1::text[]) AND COALESCE(v.is_cancelled, FALSE) IS NOT TRUE
+        ORDER BY v.port_sequence NULLS LAST`,
+      [sto.shipment_ids],
+    );
+    const rows = ports.rows as Array<{ port_name: string | null; is_discharge: boolean; master_port: string | null }>;
+    loadingPorts = distinct(rows.filter((r) => !r.is_discharge).map((r) => r.port_name));
+    const discharge = rows.find((r) => r.is_discharge);
+    // The Master Port reads "PORT BONTANG"; the mail writes "BONTANG". A plant name (EUP EDIBLE OIL BONTANG) is only the fallback.
+    dischargePort = String(discharge?.master_port || discharge?.port_name || '')
+      .trim()
+      .replace(/^PORT\s+/i, '')
+      .toUpperCase();
+  }
+
+  const rows: NotifyPoRow[] = sto.cargo.map((c) => ({
+    shipper: supplierByContract.get(String(c.contract_no ?? '')) ?? '',
+    contract: String(c.contract_no ?? ''),
+    po: String(c.po_no ?? ''),
+    qtyKg: c.sto_quantity_kg == null ? null : Number(c.sto_quantity_kg),
+  }));
+  const qtyKg = rows.some((r) => r.qtyKg != null) ? rows.reduce((sum, r) => sum + (r.qtyKg ?? 0), 0) : null;
+
+  return {
+    vessel: String(sto.vessel_name ?? '').trim(),
+    commodity: distinct(sto.cargo.map((c) => c.product)).join(', '),
+    shipper: distinct(rows.map((r) => r.shipper)).join(', '),
+    loadingPort: loadingPorts.join(', '),
+    dischargePort,
+    qtyKg,
+    eta: formatNotifyDate(sto.eta_discharge_arrival),
+    incoterm: String(sto.incoterm ?? '').trim(),
+    stoNumber: sto.sto_key,
+    revision,
+    rows,
+  };
+}
+
+export function isNotifyEnabled(): boolean {
+  return String(integrationEnv('JPS_NOTIFY_ENABLED') || '').toLowerCase() === 'true';
+}
+
+/**
+ * Where a test mail goes outside production. Written in the code on purpose (the owner's own address, asked for 2026-11-19): a SIT or local backend must never reach the
+ * real recipient list, whatever the Integrations settings say, because SIT carries copies of real STOs and a button press there is a test.
+ */
+export const JPS_NOTIFY_NON_PRODUCTION_RECIPIENT = 'ryan.pohan@energi-up.com';
+
+/**
+ * True only on production: KLIP_ENV is `prod` or `production` (the same switch the commercial-documents NAS layout reads). It FAILS SAFE: an unset or any other KLIP_ENV
+ * counts as not production, so a production host that lost the variable sends to the test address and is noticed, rather than mailing the whole list from a test.
+ */
+export function isProductionEnvironment(): boolean {
+  const env = String(process.env.KLIP_ENV || '').trim().toLowerCase();
+  return env === 'prod' || env === 'production';
+}
+
+export interface NotifyRecipients {
+  to: string[];
+  cc: string[];
+  /** True when the configured list was replaced by the test address (not production). */
+  redirected: boolean;
+  /** How many people the configured list names; shown in the test mail so a tester sees what production would do. */
+  configuredCount: number;
+}
+
+/**
+ * Who gets the mail. Production: the settings' To and cc (an address in both gets one copy). Anywhere else: only the test address, no cc, whatever is configured,
+ * and the settings do not even have to be filled in.
+ */
+export function resolveNotifyRecipients(configuredTo: string | undefined, configuredCc: string | undefined, production: boolean): NotifyRecipients {
+  const to = parseEmailList(configuredTo).valid;
+  const toKeys = new Set(to.map((a) => a.toLowerCase()));
+  const cc = parseEmailList(configuredCc).valid.filter((a) => !toKeys.has(a.toLowerCase()));
+  const configuredCount = to.length + cc.length;
+  if (production) return { to, cc, redirected: false, configuredCount };
+  return { to: [JPS_NOTIFY_NON_PRODUCTION_RECIPIENT], cc: [], redirected: true, configuredCount };
+}
+
+/** The mark a test mail carries, so nobody takes it for the real one. */
+export function markAsTestMail(email: { subject: string; html: string }, configuredCount: number): { subject: string; html: string } {
+  const note =
+    configuredCount > 0
+      ? `Email uji dari lingkungan non-produksi. Di produksi email ini dikirim ke ${configuredCount} penerima sesuai pengaturan.`
+      : 'Email uji dari lingkungan non-produksi. Daftar penerima produksi belum diisi di pengaturan.';
+  return {
+    subject: `[TEST] ${email.subject}`,
+    html: `<div style="background:#fff4e5;border:1px solid #f0b363;padding:8px 12px;margin-bottom:12px;font-family:Calibri,Arial,sans-serif;font-size:13px;">${note}</div>${email.html}`,
+  };
+}
+
+/**
+ * Sends the notification for a submission JPS just accepted. Resolves to what happened (for the log and the tests); never throws.
+ * Nothing is sent while the switch is off. In production nothing is sent without a valid recipient either; elsewhere the test address always receives it.
+ */
+export async function notifySubmittedToJetty(sto: EligibleSto, revision: number): Promise<'sent' | 'off' | 'no_recipient' | 'failed'> {
+  try {
+    if (!isNotifyEnabled()) return 'off';
+    const recipients = resolveNotifyRecipients(integrationEnv('JPS_NOTIFY_TO'), integrationEnv('JPS_NOTIFY_CC'), isProductionEnvironment());
+    if (recipients.to.length === 0) {
+      logger.warn('JPS: Submit to Jetty email is on but Email to is empty, nothing sent', { stoKey: sto.sto_key });
+      return 'no_recipient';
+    }
+    const data = await loadNotifyData(sto, revision);
+    const built = buildNotifyEmail(data, {
+      subject: integrationEnv('JPS_NOTIFY_SUBJECT'),
+      body: integrationEnv('JPS_NOTIFY_BODY'),
+    });
+    const { subject, html } = recipients.redirected ? markAsTestMail(built, recipients.configuredCount) : built;
+    const ok = await sendEmail({ to: recipients.to, cc: recipients.cc, subject, html });
+    logger.info('JPS: Submit to Jetty email', {
+      stoKey: sto.sto_key,
+      revision,
+      sent: ok,
+      toCount: recipients.to.length,
+      ccCount: recipients.cc.length,
+      redirectedToTestAddress: recipients.redirected,
+    });
+    return ok ? 'sent' : 'failed';
+  } catch (error) {
+    logger.error('JPS: Submit to Jetty email failed', { stoKey: sto.sto_key, error: error instanceof Error ? error.message : String(error) });
+    return 'failed';
+  }
+}

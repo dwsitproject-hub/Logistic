@@ -14,7 +14,7 @@ import { validateJpsPortsValue } from '../jps/ports';
  */
 export type IntegrationId = 'dhm' | 'jps' | 'kmaps';
 
-export type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text' | 'ports';
+export type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text' | 'ports' | 'emails' | 'message';
 
 export interface SettingDef {
   key: string;
@@ -24,6 +24,8 @@ export interface SettingDef {
   requiresRestart?: boolean;
   /** Minimum for integers - rejected below it rather than silently clamped, so the UI never lies. */
   min?: number;
+  /** For a 'message': how many lines the editor shows (1 = a single-line input). */
+  rows?: number;
   /** Public prefix a secret must carry, and that the hint may reveal (e.g. "dhm_sk_"). */
   prefix?: string;
   /**
@@ -99,6 +101,33 @@ export const INTEGRATIONS: IntegrationDef[] = [
       },
       { key: 'JPS_MAX_SUBMITS_PER_SWEEP', label: 'Max submits per sweep', kind: 'integer', min: 1 },
       {
+        key: 'JPS_NOTIFY_ENABLED',
+        label: 'Email after Submit to Jetty',
+        kind: 'boolean',
+        help: 'When on, an email goes to the addresses below each time a user presses Submit to Jetty and JPS accepts it (Pending). Off unless set to true. Only the button sends it, not the automatic sweep.',
+      },
+      {
+        key: 'JPS_NOTIFY_TO',
+        label: 'Email to',
+        kind: 'emails',
+        help: 'Recipients, separated by commas or line breaks. Nothing is sent while this is empty. The mail server is the one KLIP already uses (SMTP_* in .env).',
+      },
+      { key: 'JPS_NOTIFY_CC', label: 'Email cc', kind: 'emails', help: 'Copied recipients, same format. Leave empty (revert to .env) for none.' },
+      {
+        key: 'JPS_NOTIFY_SUBJECT',
+        label: 'Email subject',
+        kind: 'message',
+        rows: 1,
+        help: 'Placeholders: {vessel} {commodity} {shipper} {loading_port} {discharge_port} {qty_kg} {eta} {incoterm} {sto_number} {revision} {revision_note}. {revision_note} is empty on the first submission and reads " (Revisi R2)" on a resubmission. Empty = the built-in subject.',
+      },
+      {
+        key: 'JPS_NOTIFY_BODY',
+        label: 'Email body',
+        kind: 'message',
+        rows: 14,
+        help: 'Plain text with the same placeholders as the subject, plus {po_table} (the Shipper / Kontrak / PO / Qty table with its total). Line breaks are kept. Empty = the built-in body.',
+      },
+      {
         key: 'JPS_RETRY_FAILED',
         label: 'Retry failed submissions',
         kind: 'boolean',
@@ -158,6 +187,20 @@ export const INTEGRATIONS: IntegrationDef[] = [
   },
 ];
 
+/** Splits a recipient list typed as commas, semicolons or line breaks, and sorts the entries into valid addresses and the rest. */
+export function parseEmailList(raw: string | null | undefined): { valid: string[]; invalid: string[] } {
+  const valid: string[] = [];
+  const invalid: string[] = [];
+  for (const part of String(raw ?? '').split(/[,;\r\n]+/)) {
+    const addr = part.trim();
+    if (!addr) continue;
+    if (/^[^\s@<>(),;:"\[\]]+@[^\s@<>(),;:"\[\]]+\.[^\s@<>(),;:"\[\]]+$/.test(addr)) {
+      if (!valid.some((v) => v.toLowerCase() === addr.toLowerCase())) valid.push(addr);
+    } else invalid.push(addr);
+  }
+  return { valid, invalid };
+}
+
 export function findIntegration(id: string): IntegrationDef | undefined {
   return INTEGRATIONS.find((i) => i.id === id);
 }
@@ -186,6 +229,18 @@ export function validateSettingValue(def: SettingDef, raw: string): string | nul
       return cron.validate(value) ? null : `${def.label} is not a valid cron expression.`;
     case 'ports':
       return validateJpsPortsValue(value);
+    case 'emails': {
+      const parsed = parseEmailList(value);
+      if (parsed.invalid.length > 0) return `${def.label} has an address that is not valid: ${parsed.invalid.slice(0, 3).join(', ')}.`;
+      if (parsed.valid.length === 0) return `${def.label} has no address.`;
+      if (parsed.valid.length > 200) return `${def.label} has more than 200 addresses.`;
+      return null;
+    }
+    case 'message':
+      // Any text, Indonesian included, with line breaks; only control characters (other than tab and line breaks) and absurd lengths are refused.
+      if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(value)) return `${def.label} contains a control character.`;
+      if (value.length > 8000) return `${def.label} is longer than 8000 characters.`;
+      return null;
     case 'secret':
     case 'text':
       if (/\s/.test(value)) return `${def.label} must not contain spaces or line breaks.`;

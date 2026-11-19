@@ -3,6 +3,8 @@ import logger from '../utils/logger';
 
 export interface SendEmailInput {
   to: string[];
+  /** Copied recipients; optional. */
+  cc?: string[];
   subject: string;
   html: string;
 }
@@ -64,10 +66,11 @@ export async function sendEmail(input: SendEmailInput): Promise<boolean> {
     await transporter.sendMail({
       from,
       to: recipients.join(', '),
+      ...(input.cc && input.cc.length > 0 ? { cc: input.cc.map((addr) => addr.trim()).filter(Boolean).join(', ') } : {}),
       subject: input.subject,
       html: input.html,
     });
-    logger.info('Email sent', { subject: input.subject, recipientCount: recipients.length });
+    logger.info('Email sent', { subject: input.subject, recipientCount: recipients.length, ccCount: input.cc?.length ?? 0 });
     return true;
   } catch (error) {
     logger.error('Failed to send email', { subject: input.subject, error });
