@@ -26,7 +26,8 @@ describe('Jetty Status shown', () => {
   });
 
   it('is never stored: the stored status keeps what JPS reported', () => {
-    expect(SHIPMENT_LIST_JPS_SELECT_SQL).not.toMatch(/UPDATE/i);
+    // an UPDATE statement, not the word inside a column name such as send_updated_at
+    expect(SHIPMENT_LIST_JPS_SELECT_SQL).not.toMatch(/\bUPDATE\b/i);
   });
 });
 

@@ -1,4 +1,5 @@
 import { sqlJettyStatusShown } from './jettyStatusSql';
+import { shipmentListStoKeyExpr } from './shipmentStoTypeSql';
 
 /**
  * The shipments-list STO join block, shared by the list service and the controller.
@@ -39,6 +40,25 @@ export const SHIPMENT_LIST_STO_JOIN_SQL = `
       LEFT JOIN contract_ext_agg cex ON cex.sto_key::text = sp.sto_key::text
       LEFT JOIN po_numbers_agg pna ON pna.sto_key::text = sp.sto_key::text`;
 
+/**
+ * The key JPS filed this row's STO under, read from the row's PRIMARY shipment (`<alias>.id`).
+ *
+ * The list groups its rows by shipmentListSeaStoKeyExpr, which for a FOB shipment with a vessel and an Operation ID made by KLIP (a voyage of its own) is that OP- id. JPS
+ * (eligibility.ts STO_KEY_SQL), the tracker rows and the Edit Shipment modal use shipmentListStoKeyExpr, the STO number. Looking the tracker up by the list key alone found nothing
+ * for such a row, so the table said "Not Sent" while the modal said Approved (production STO 1006021140, 2026-11-19: shipment_id 1006021140, operation OP-1004033205-40057190, one
+ * tracker row under 1006021140). The join and the Jetty Status filter therefore try the list key AND this one.
+ */
+export function sqlJpsKeyOfListRow(rowAlias: string): string {
+  return `(
+        SELECT ${shipmentListStoKeyExpr('jk_c', 'jk_l', 'jk_s')}
+          FROM shipments jk_s
+          INNER JOIN contracts jk_c ON jk_c.id = jk_s.contract_id
+          LEFT JOIN contract_latest_spd_snapshot jk_l ON jk_l.contract_number = jk_c.contract_id
+         WHERE jk_s.id = ${rowAlias}.id::uuid
+         LIMIT 1
+      )`;
+}
+
 /** Which of an STO's tracker rows stands for it (alias j). The rule is explained on SHIPMENT_LIST_JPS_JOIN_SQL. */
 export const JPS_CURRENT_ROW_ORDER_SQL = `(j.state = 'SUBMITTED' AND COALESCE(j.jps_status, '') NOT IN ('Rejected', 'Deleted')) DESC, j.revision DESC`;
 
@@ -67,7 +87,7 @@ export const SHIPMENT_LIST_JPS_JOIN_SQL = `
                j.submitted_at, j.last_polled_at, j.schedule_cargo_ops_end_at,
                j.state AS send_state, j.last_error AS send_error, j.updated_at AS send_updated_at
         FROM jps_shipping_instructions j
-        WHERE j.sto_key = sp.sto_key::text
+        WHERE j.sto_key = ANY(ARRAY[sp.sto_key::text, ${sqlJpsKeyOfListRow('sp')}])
           AND j.state IN ('SUBMITTED', 'FAILED', 'SKIPPED_NO_CARGO')
         ORDER BY ${JPS_CURRENT_ROW_ORDER_SQL}
         LIMIT 1

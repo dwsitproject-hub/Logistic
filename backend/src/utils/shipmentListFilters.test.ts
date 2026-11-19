@@ -235,7 +235,9 @@ describe('Jetty Status column filter', () => {
 
   it('reads the status the way the list does: the current tracker row of the row\'s STO key, JPS status first, then Send Failed / On Hold, else Not Sent', () => {
     const sql = filtered.sql.replace(/\s+/g, ' ');
-    expect(sql).toContain('FROM jps_shipping_instructions jf WHERE jf.sto_key = sb.sto_key::text');
+    expect(sql).toContain('FROM jps_shipping_instructions jf WHERE jf.sto_key = ANY(ARRAY[sb.sto_key::text,');
+    // the key JPS filed the row's primary shipment under is tried too (the list key can be an Operation ID of a KLIP voyage)
+    expect(sql).toContain('WHERE jk_s.id = sb.id::uuid');
     expect(sql).toContain("jf.state IN ('SUBMITTED', 'FAILED', 'SKIPPED_NO_CARGO')");
     expect(sql).toContain("WHEN jf.state = 'FAILED' THEN 'Send Failed'");
     expect(sql).toContain("WHEN jf.state = 'SKIPPED_NO_CARGO' THEN 'On Hold'");

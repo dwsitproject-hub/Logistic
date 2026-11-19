@@ -6,7 +6,7 @@ import { sqlContractOutstandingFromFields, sqlIncotermQuantityDeliveryCase } fro
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
 import { sqlJettyStatusShown } from './jettyStatusSql'
-import { JPS_CURRENT_ROW_ORDER_SQL } from './shipmentListStoJoinSql'
+import { JPS_CURRENT_ROW_ORDER_SQL, sqlJpsKeyOfListRow } from './shipmentListStoJoinSql'
 import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments'
 import {
   LEGACY_SHIPMENT_STATUS_ALIASES,
@@ -97,7 +97,7 @@ export const SHIPMENT_JETTY_STATUS_FILTER_SQL = `COALESCE((
              WHEN jf.state = 'SKIPPED_NO_CARGO' THEN 'On Hold'
            END
     FROM jps_shipping_instructions jf
-    WHERE jf.sto_key = sb.sto_key::text
+    WHERE jf.sto_key = ANY(ARRAY[sb.sto_key::text, ${sqlJpsKeyOfListRow('sb')}])
       AND jf.state IN ('SUBMITTED', 'FAILED', 'SKIPPED_NO_CARGO')
     ORDER BY ${JPS_CURRENT_ROW_ORDER_SQL.replace(/\bj\./g, 'jf.')}
     LIMIT 1
