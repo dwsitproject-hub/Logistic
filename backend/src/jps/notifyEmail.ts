@@ -8,7 +8,9 @@
  * It is a notification, never a step of the submit: it runs after JPS answered, it never throws, and a failure is logged and nothing else. It is sent only for a NEW
  * instruction ('submitted'); a duplicate JPS already held ('recovered') and a refusal send nothing. Only the button sends it: the automatic sweep does not.
  */
+import fs from 'fs';
 import { query } from '../database/connection';
+import { resolveUploadAbsolutePath } from '../utils/fileUpload';
 import { sendEmail } from '../services/email.service';
 import { integrationEnv } from '../integrations/integrationEnv';
 import { parseEmailList } from '../integrations/registry';
@@ -86,6 +88,11 @@ function distinct(values: Array<string | null | undefined>): string[] {
     if (v && !out.some((o) => o.toLowerCase() === v.toLowerCase())) out.push(v);
   }
   return out;
+}
+
+/** "PORT LABANAN" -> "LABANAN". */
+export function stripPortPrefix(name: string | null | undefined): string {
+  return String(name ?? '').trim().replace(/^PORT\s+/i, '');
 }
 
 /** The values a subject or body can name, as plain text. */
@@ -170,7 +177,8 @@ export async function loadNotifyData(sto: EligibleSto, revision: number): Promis
       [sto.shipment_ids],
     );
     const rows = ports.rows as Array<{ port_name: string | null; is_discharge: boolean; master_port: string | null }>;
-    loadingPorts = distinct(rows.filter((r) => !r.is_discharge).map((r) => r.port_name));
+    // A Master Port reads "PORT LABANAN"; the mail writes "LABANAN", as it does for the discharge port.
+    loadingPorts = distinct(rows.filter((r) => !r.is_discharge).map((r) => stripPortPrefix(r.port_name)));
     const discharge = rows.find((r) => r.is_discharge);
     // The Master Port reads "PORT BONTANG"; the mail writes "BONTANG". A plant name (EUP EDIBLE OIL BONTANG) is only the fallback.
     masterPort = String(discharge?.master_port || '').trim().replace(/\s+/g, ' ').toUpperCase();
@@ -202,6 +210,90 @@ export async function loadNotifyData(sto: EligibleSto, revision: number): Promis
     revision,
     rows,
   };
+}
+
+/** What goes out with the mail: the documents that JPS also gets (the newest Contract, SI and BL of the STO), attached as files. */
+export interface NotifyDocumentRow {
+  document_type: string;
+  file_name: string;
+  file_path: string;
+}
+
+export interface NotifyAttachments {
+  attachments: Array<{ filename: string; path: string }>;
+  /** Documents that exist but were left out, with the reason, so the mail can say so instead of silently going without. */
+  skipped: Array<{ kind: string; reason: string }>;
+}
+
+/** Together the attachments must stay below this: base64 makes a mail about a third bigger and mail servers refuse large messages. */
+export const NOTIFY_ATTACHMENT_LIMIT_BYTES = 15 * 1024 * 1024;
+
+const DOCUMENT_ORDER = ['CONTRACT', 'SI', 'BL'];
+const DOCUMENT_LABEL: Record<string, string> = { CONTRACT: 'Contract', SI: 'Shipping Instruction', BL: 'Bill of Lading' };
+
+/**
+ * Chooses which of the documents are attached, in the order Contract, SI, BL. A file that is not on disk is skipped, and so is one that would push the total over
+ * the limit (a file is never cut). Pure apart from the two functions it is given, so the rules are tested without files.
+ */
+export function chooseNotifyAttachments(
+  rows: NotifyDocumentRow[],
+  fileSize: (absolutePath: string) => number | null,
+  resolvePath: (storedPath: string) => string,
+  limitBytes: number = NOTIFY_ATTACHMENT_LIMIT_BYTES,
+): NotifyAttachments {
+  const result: NotifyAttachments = { attachments: [], skipped: [] };
+  const ordered = [...rows].sort(
+    (a, b) => DOCUMENT_ORDER.indexOf(String(a.document_type).toUpperCase()) - DOCUMENT_ORDER.indexOf(String(b.document_type).toUpperCase()),
+  );
+  let total = 0;
+  for (const row of ordered) {
+    const kind = DOCUMENT_LABEL[String(row.document_type).toUpperCase()] ?? String(row.document_type);
+    const absolute = resolvePath(row.file_path);
+    const size = fileSize(absolute);
+    if (size == null) {
+      result.skipped.push({ kind, reason: 'file tidak ditemukan di server' });
+      continue;
+    }
+    if (total + size > limitBytes) {
+      result.skipped.push({ kind, reason: 'ukuran melebihi batas lampiran' });
+      continue;
+    }
+    total += size;
+    result.attachments.push({ filename: row.file_name, path: absolute });
+  }
+  return result;
+}
+
+/** A line under the mail naming what could not be attached; empty when everything was. */
+export function skippedAttachmentsNote(skipped: NotifyAttachments['skipped']): string {
+  if (skipped.length === 0) return '';
+  const items = skipped.map((s) => `${escapeHtml(s.kind)} (${escapeHtml(s.reason)})`).join(', ');
+  return `<p style="font-family:Calibri,Arial,sans-serif;font-size:13px;color:#8a4b00;">Catatan: lampiran berikut tidak disertakan: ${items}.</p>`;
+}
+
+/** The newest Contract, SI and BL of the STO's shipments (the same pick JPS gets links for), as files on disk. */
+export async function loadNotifyAttachments(sto: EligibleSto): Promise<NotifyAttachments> {
+  if (sto.shipment_ids.length === 0) return { attachments: [], skipped: [] };
+  const res = await query(
+    `SELECT DISTINCT ON (UPPER(d.document_type)) UPPER(d.document_type) AS document_type, d.file_name, d.file_path
+       FROM documents d
+      WHERE d.shipment_id::text = ANY($1::text[])
+        AND d.deleted_at IS NULL
+        AND UPPER(d.document_type) IN ('CONTRACT', 'SI', 'BL')
+      ORDER BY UPPER(d.document_type), d.upload_date DESC NULLS LAST`,
+    [sto.shipment_ids],
+  );
+  return chooseNotifyAttachments(
+    res.rows as NotifyDocumentRow[],
+    (absolute) => {
+      try {
+        return fs.statSync(absolute).isFile() ? fs.statSync(absolute).size : null;
+      } catch {
+        return null;
+      }
+    },
+    resolveUploadAbsolutePath,
+  );
 }
 
 export function isNotifyEnabled(): boolean {
@@ -315,8 +407,17 @@ export async function notifySubmittedToJetty(sto: EligibleSto, revision: number)
       return 'no_recipient';
     }
     const built = buildNotifyEmail(data, { subject: rule.subject, body: rule.body });
-    const { subject, html } = recipients.redirected ? markAsTestMail(built, recipients.configuredCount) : built;
-    const ok = await sendEmail({ to: recipients.to, cc: recipients.cc, subject, html });
+    const marked = recipients.redirected ? markAsTestMail(built, recipients.configuredCount) : built;
+    // The documents are attached after the rest is settled: a problem with a file must never stop the mail itself.
+    let files: NotifyAttachments = { attachments: [], skipped: [] };
+    try {
+      files = await loadNotifyAttachments(sto);
+    } catch (error) {
+      logger.warn('JPS: Submit to Jetty email goes without attachments', { stoKey: sto.sto_key, error: error instanceof Error ? error.message : String(error) });
+    }
+    const subject = marked.subject;
+    const html = marked.html + skippedAttachmentsNote(files.skipped);
+    const ok = await sendEmail({ to: recipients.to, cc: recipients.cc, subject, html, attachments: files.attachments });
     logger.info('JPS: Submit to Jetty email', {
       stoKey: sto.sto_key,
       revision,
@@ -325,6 +426,8 @@ export async function notifySubmittedToJetty(sto: EligibleSto, revision: number)
       toCount: recipients.to.length,
       ccCount: recipients.cc.length,
       redirectedToTestAddress: recipients.redirected,
+      attached: files.attachments.length,
+      notAttached: files.skipped.length,
     });
     return ok ? 'sent' : 'failed';
   } catch (error) {

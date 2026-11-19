@@ -5,6 +5,10 @@ import { chooseNotifyRule, cleanNotifyRuleInput, validateNotifyRule, type Notify
 import {
   buildNotifyEmail,
   buildRuleTestEmail,
+  chooseNotifyAttachments,
+  skippedAttachmentsNote,
+  stripPortPrefix,
+  type NotifyDocumentRow,
   DEFAULT_NOTIFY_BODY,
   buildPoTableHtml,
   DEFAULT_NOTIFY_SUBJECT,
@@ -219,5 +223,53 @@ describe('Submit to Jetty email: who receives it outside production', () => {
     expect(marked.subject).toBe('[TEST] UPCOMING Vessel X');
     expect(marked.html).toContain('61 penerima');
     expect(marked.html).toContain('<p>isi</p>');
+  });
+});
+
+describe('Submit to Jetty email: attachments and the loading port', () => {
+  const rows: NotifyDocumentRow[] = [
+    { document_type: 'BL', file_name: 'bl.pdf', file_path: 'p/bl.pdf' },
+    { document_type: 'CONTRACT', file_name: 'contract.pdf', file_path: 'p/contract.pdf' },
+    { document_type: 'SI', file_name: 'si.pdf', file_path: 'p/si.pdf' },
+  ];
+  const resolve = (p: string) => `/uploads/${p}`;
+  const MB = 1024 * 1024;
+
+  it('attaches Contract, SI and BL, in that order, under their own file names', () => {
+    const out = chooseNotifyAttachments(rows, () => MB, resolve);
+    expect(out.attachments.map((a) => a.filename)).toEqual(['contract.pdf', 'si.pdf', 'bl.pdf']);
+    expect(out.attachments[0].path).toBe('/uploads/p/contract.pdf');
+    expect(out.skipped).toEqual([]);
+  });
+
+  it('skips a file that is not on disk and says so, and keeps the others', () => {
+    const out = chooseNotifyAttachments(rows, (p) => (p.endsWith('si.pdf') ? null : MB), resolve);
+    expect(out.attachments.map((a) => a.filename)).toEqual(['contract.pdf', 'bl.pdf']);
+    expect(out.skipped).toEqual([{ kind: 'Shipping Instruction', reason: 'file tidak ditemukan di server' }]);
+  });
+
+  it('never cuts a file: one that would pass the limit is skipped, a smaller one after it still fits', () => {
+    const size = (p: string) => (p.endsWith('contract.pdf') ? 10 * MB : p.endsWith('si.pdf') ? 8 * MB : 2 * MB);
+    const out = chooseNotifyAttachments(rows, size, resolve, 15 * MB);
+    expect(out.attachments.map((a) => a.filename)).toEqual(['contract.pdf', 'bl.pdf']);
+    expect(out.skipped).toEqual([{ kind: 'Shipping Instruction', reason: 'ukuran melebihi batas lampiran' }]);
+  });
+
+  it('with no document there is nothing to attach and nothing to say', () => {
+    expect(chooseNotifyAttachments([], () => MB, resolve)).toEqual({ attachments: [], skipped: [] });
+    expect(skippedAttachmentsNote([])).toBe('');
+  });
+
+  it('names what was left out in a line under the mail', () => {
+    const note = skippedAttachmentsNote([{ kind: 'Bill of Lading', reason: 'file tidak ditemukan di server' }]);
+    expect(note).toContain('Bill of Lading');
+    expect(note).toContain('tidak disertakan');
+  });
+
+  it('writes a loading port without the PORT prefix, as the discharge port is', () => {
+    expect(stripPortPrefix('PORT LABANAN')).toBe('LABANAN');
+    expect(stripPortPrefix('  port  Lubuk Gaung ')).toBe('Lubuk Gaung');
+    expect(stripPortPrefix('LABANAN')).toBe('LABANAN');
+    expect(stripPortPrefix(null)).toBe('');
   });
 });

@@ -5,6 +5,8 @@ export interface SendEmailInput {
   to: string[];
   /** Copied recipients; optional. */
   cc?: string[];
+  /** Files to attach, read from disk by the mailer when it sends. */
+  attachments?: Array<{ filename: string; path: string }>;
   subject: string;
   html: string;
 }
@@ -69,6 +71,7 @@ export async function sendEmail(input: SendEmailInput): Promise<boolean> {
       ...(input.cc && input.cc.length > 0 ? { cc: input.cc.map((addr) => addr.trim()).filter(Boolean).join(', ') } : {}),
       subject: input.subject,
       html: input.html,
+      ...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
     });
     // What the mail server ANSWERED, not only that the call returned: an accepted message can still be filtered or bounced later, and a partly refused one
     // (rejected addresses) is otherwise indistinguishable from a delivered one. The addresses are counted, not listed.
@@ -76,6 +79,7 @@ export async function sendEmail(input: SendEmailInput): Promise<boolean> {
       subject: input.subject,
       recipientCount: recipients.length,
       ccCount: input.cc?.length ?? 0,
+      attachmentCount: input.attachments?.length ?? 0,
       acceptedCount: Array.isArray(info?.accepted) ? info.accepted.length : undefined,
       rejectedCount: Array.isArray(info?.rejected) ? info.rejected.length : undefined,
       serverResponse: typeof info?.response === 'string' ? info.response.slice(0, 200) : undefined,
