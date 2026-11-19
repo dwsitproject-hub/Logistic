@@ -50,8 +50,22 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Hashed build files. The app sends Cache-Control: immutable. Do not cache them in Nginx, and do not
+    # replace a missing .js with an HTML error page. The browser reports ChunkLoadError, then React #423.
+    # See docs/COD-BUGFIX-HISTORY.md.
+    location /_next/static/ {
+        proxy_pass http://127.0.0.1:3002;
+        proxy_intercept_errors off;
+        proxy_cache off;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:3002;      # klip-commdocs (docker-compose.commdocs.yml)
+        proxy_cache off;                       # HTML / RSC must not outlive a deploy (the app also sends no-store)
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;

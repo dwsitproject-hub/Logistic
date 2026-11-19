@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CHUNK_RELOAD_WINDOW_MS, isChunkLoadError, mayReloadForChunkError } from './chunkReload'
+import { CHUNK_RELOAD_WINDOW_MS, isChunkLoadError, isStaleAssetError, isWebpackVersionSkewError, mayReloadForChunkError } from './chunkReload'
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const data = { ...initial }
@@ -30,6 +30,81 @@ describe('isChunkLoadError', () => {
     expect(isChunkLoadError(new Error('Request failed with status code 502'))).toBe(false)
     expect(isChunkLoadError(new TypeError('Failed to fetch'))).toBe(false)
     expect(isChunkLoadError(new Error('Minified React error #423'))).toBe(false)
+  })
+})
+
+describe('isWebpackVersionSkewError: the old runtime meets a module it does not have', () => {
+  const withStack = (message: string, stack: string) => Object.assign(new TypeError(message), { stack })
+
+  it("Chrome: 'reading call' with the failing frame in the webpack runtime", () => {
+    const err = withStack(
+      "Cannot read properties of undefined (reading 'call')",
+      "TypeError: Cannot read properties of undefined (reading 'call')\n    at t (https://commercial-docs.example/_next/static/chunks/webpack-f46d9bddd56fc7e3.js:1:143)\n    at https://commercial-docs.example/_next/static/chunks/app/login/page-d098570194a3dd10.js:1:900",
+    )
+    expect(isWebpackVersionSkewError(err)).toBe(true)
+    const named = withStack(
+      "Cannot read properties of undefined (reading 'call')",
+      'TypeError: x\n    at __webpack_require__ (https://commercial-docs.example/x.js:1:1)',
+    )
+    expect(isWebpackVersionSkewError(named)).toBe(true)
+  })
+
+  it('Firefox and Safari wording, also from the webpack runtime', () => {
+    expect(
+      isWebpackVersionSkewError(
+        withStack(
+          'can\'t access property "call", modules[moduleId] is undefined',
+          'o@https://commercial-docs.example/_next/static/chunks/webpack-f46d9b.js:1:143\nrun@https://commercial-docs.example/y.js:1:2',
+        ),
+      ),
+    ).toBe(true)
+    expect(
+      isWebpackVersionSkewError(
+        withStack(
+          "undefined is not an object (evaluating 'e[t].call')",
+          'o@https://commercial-docs.example/_next/static/chunks/webpack-f46d9b.js:1:143',
+        ),
+      ),
+    ).toBe(true)
+  })
+
+  it('the same words thrown by application code are left alone (the app lives under /_next/static/ too, so only the webpack runtime counts)', () => {
+    const app = withStack(
+      "Cannot read properties of undefined (reading 'call')",
+      "TypeError: Cannot read properties of undefined (reading 'call')\n    at onClick (https://commercial-docs.example/_next/static/chunks/app/login/page-d098570194a3dd10.js:1:900)\n    at https://commercial-docs.example/_next/static/chunks/main-app-1.js:1:5",
+    )
+    expect(isWebpackVersionSkewError(app)).toBe(false)
+  })
+
+  it('other errors, no stack, and non-errors are left alone', () => {
+    expect(isWebpackVersionSkewError(new Error('Request failed with status code 502'))).toBe(false)
+    expect(
+      isWebpackVersionSkewError(
+        withStack("Cannot read properties of undefined (reading 'map')", 'at t (https://commercial-docs.example/_next/static/chunks/webpack-f46d9b.js:1:1)'),
+      ),
+    ).toBe(false)
+    expect(isWebpackVersionSkewError({ message: "Cannot read properties of undefined (reading 'call')" })).toBe(false)
+    expect(isWebpackVersionSkewError("Cannot read properties of undefined (reading 'call')")).toBe(false)
+    expect(isWebpackVersionSkewError(null)).toBe(false)
+    expect(isWebpackVersionSkewError(undefined)).toBe(false)
+  })
+})
+
+describe('isStaleAssetError', () => {
+  it('accepts a chunk error, a webpack skew error, and either one as error.cause', () => {
+    const chunk = new Error('Loading chunk 626 failed.\n(error: http://commercial-docs.example/_next/static/chunks/app/login/page-d098570194a3dd10.js)')
+    chunk.name = 'ChunkLoadError'
+    expect(isStaleAssetError(chunk)).toBe(true)
+    const skew = Object.assign(new TypeError("Cannot read properties of undefined (reading 'call')"), {
+      stack: 'TypeError: x\n    at __webpack_require__ (https://commercial-docs.example/_next/static/chunks/webpack-f46d9b.js:1:1)',
+    })
+    expect(isStaleAssetError(skew)).toBe(true)
+    expect(isStaleAssetError(Object.assign(new Error('Minified React error #423'), { cause: chunk }))).toBe(true)
+  })
+
+  it('does not treat React #423 alone as a stale asset (it is also a real hydration mismatch)', () => {
+    expect(isStaleAssetError(new Error('Minified React error #423'))).toBe(false)
+    expect(isStaleAssetError(new Error('Request failed with status code 502'))).toBe(false)
   })
 })
 

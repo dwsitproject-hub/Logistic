@@ -64,6 +64,12 @@ module.exports = {
   async headers() {
     return [
       {
+        // Content-hashed build output. Safe to cache forever. A missing file must stay a 404, never an HTML page
+        // (see docs/COD-BUGFIX-HISTORY.md). Next already sends this; repeating it keeps a proxy from dropping it.
+        source: '/_next/static/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
+      {
         source: '/:path*',
         headers: [
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
