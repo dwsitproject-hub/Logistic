@@ -20,6 +20,11 @@ describe('isChunkLoadError', () => {
     expect(isChunkLoadError(new Error('Loading chunk 6195 failed.\n(error: http://klip/_next/static/chunks/6195-b875790f8ca51e81.js)'))).toBe(true)
     expect(isChunkLoadError('Uncaught ChunkLoadError: Loading chunk 6195 failed.')).toBe(true)
     expect(isChunkLoadError(new Error('Loading CSS chunk 12 failed.'))).toBe(true)
+    expect(
+      isChunkLoadError(
+        new Error('Loading chunk 148 failed.\n(timeout: http://commercial-docs.kpndomain.com/_next/static/chunks/148-a399183382e2b28e.js)'),
+      ),
+    ).toBe(true)
     expect(isChunkLoadError({ name: 'ChunkLoadError' })).toBe(true)
   })
 

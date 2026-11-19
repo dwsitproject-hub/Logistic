@@ -24,6 +24,55 @@ Salin blok ini ke atas daftar (di bawah judul bagian "Entri"). Isi hanya yang te
 
 ## Entri
 
+## 2026-11-18 — `ChunkLoadError` chunk 626, report sumber (08.14)
+
+- **Severity:** Low. Satu kejadian, satu pengguna. Bukan defect baru.
+- **Halaman:** `http://commercial-docs.kpndomain.com/login`
+- **Rilis:** `83c5065e`
+- **Pengguna / jumlah:** febrianto.rahmawan@energi-up.com. Report Sentinel `07ad0940-f554-4b4f-9cd1-58df492a216a`, dilaporkan 18 Nov 2026, 08.14.22. Waktu yang sama dengan #423 `036717b9-a15f-498d-82b5-aa7d84e0d465`.
+- **Gejala:** `Uncaught ChunkLoadError: Loading chunk 626 failed.` dengan `(error: .../app/login/page-d098570194a3dd10.js)`. Stack `webpack-f46d9bddd56fc7e3.js` `d.f.j` → `d.e`, lalu router `117-48a2f1a945f634b1.js`. Breadcrumb 01:14:20 UTC, #423 di sesi yang sama pada 01:14:22.722. Satu page view.
+- **Penyebab:** Ini `ChunkLoadError` asli sesi itu. Akhiran `(error:)` berarti script gagal di-fetch (404 atau jaringan), bukan timeout seperti chunk 148. #423 dua milidetik kemudian adalah gejalanya. Report `6a0c9825` (19 Nov, 08.11) menyalin analisis ini.
+- **Perbaikan:** sudah di `b4e1abdf`. Tidak ada perubahan kode.
+- **Cara cek:** satukan `07ad0940` dengan `036717b9`, `6a0c9825`, dan `c8bbe323`. Pisahkan dari chunk 148.
+
+## 2026-11-18 — `/documents` chunk 148 timeout (penyebab #423 yustinus)
+
+- **Severity:** Low. Satu pengguna, satu kejadian. Bersama chunk 626 di `/login` sekitar 1,5 jam sebelumnya: 2 pengguna, 2 kegagalan chunk dalam 14 hari.
+- **Halaman:** `http://commercial-docs.kpndomain.com/documents`
+- **Rilis:** `83c5065e`
+- **Pengguna / jumlah:** yustinus.refiano@energi-up.com. Report Sentinel `b3fcf3bd-530c-49be-9250-cbf689eb9201`, dilaporkan 18 Nov 2026, 09.37.59. Pasangannya #423 `a1426191-8c8f-4d80-beb8-b8b49e2af87c` pada waktu, halaman, dan pengguna yang sama.
+- **Gejala:** `Uncaught ChunkLoadError: Loading chunk 148 failed.` dengan `(timeout: .../148-a399183382e2b28e.js)`, bukan `(error:)`. Stack sama: `webpack-f46d9bddd56fc7e3.js` `d.f.j` → `d.e`, dipanggil dari router `117-48a2f1a945f634b1.js`. Halaman dibuka 02:35:25 UTC, error 02:37:59 UTC (sekitar 2,5 menit, sesuai timeout script webpack 120 detik). #423 menyusul pada milidetik yang sama.
+- **Penyebab:** Request script tidak selesai, bukan 404. 404 pada kejadian `/login` tertulis `(error:)`. Timeout lebih cocok dengan koneksi, VPN, proxy, atau asset `/_next/static` yang menggantung. Kemungkinan hash basi lebih kecil. `148-*.js` adalah chunk webpack bernomor (chunk bersama), bukan `app/documents/page-*.js`. Id 148 hanya ada di build `83c5065e`; repo tidak menyimpan peta chunk itu, jadi modul di dalamnya tidak bisa disebut dari source. `xlsx` di halaman Documents hanya di-import saat Export, jadi bukan kandidat untuk request yang mulai saat halaman dibuka.
+- **Perbaikan:** `isChunkLoadError` sudah mengenali pesan `Loading chunk 148 failed` termasuk akhiran `(timeout:)`. Reload sekali dari `b4e1abdf` menutup sesi ini. Test ditambah dengan kalimat production itu. Tidak ada perubahan perilaku.
+- **Di luar perbaikan ini:** log Nginx/proxy 02:35–02:38 UTC 18 Nov 2026 untuk URL chunk itu (lambat, timeout, atau koneksi putus). Analisis Sentinel pada report #423 `a1426191` yang menyalin chunk 626 `/login` tidak menggambarkan sesi ini.
+- **Cara cek:** triage: satukan `b3fcf3bd` dengan `a1426191`. Jangan digabung dengan trio `/login` (chunk 626).
+
+## 2026-11-19 — `ChunkLoadError` chunk 626 (penyebab #423, sesi yang sama)
+
+- **Severity:** Low (Sentinel). Satu kejadian, satu pengguna, tidak ada `ChunkLoadError` lain dalam 14 hari. 81 page view pada 11–17 Nov.
+- **Halaman:** `http://commercial-docs.kpndomain.com/login`
+- **Rilis:** `83c5065e`
+- **Pengguna / jumlah:** febrianto.rahmawan@energi-up.com. Report Sentinel `6a0c9825-8223-4214-aadf-51875194d927`, dilaporkan 19 Nov 2026, 08.11. Catatan Sentinel: analisis dibuat untuk kejadian sebelumnya. Sumbernya report `07ad0940-f554-4b4f-9cd1-58df492a216a` (18 Nov, 08.14.22). Lihat entri teratas.
+- **Gejala:** `Uncaught ChunkLoadError: Loading chunk 626 failed.` File-nya `/_next/static/chunks/app/login/page-d098570194a3dd10.js`. Stack di webpack runtime `webpack-f46d9bddd56fc7e3.js` (`d.f.j` → `Array.reduce` → `d.e`), lalu router Next di `117-48a2f1a945f634b1.js`. Breadcrumb: buka `/login` pukul 01:14:20 UTC, lalu console `Loading chunk 626 failed`. Report #423 di sesi yang sama pada 01:14:22.722.
+- **Penyebab:** Ini error primernya. Fetch script gagal. #423 dua milidetik kemudian adalah gejala lanjutannya. Bukan exception logic aplikasi. Sentinel tidak bisa membedakan jaringan putus dan hash chunk yang sudah tidak ada, karena status HTTP tidak tertangkap. Hanya rilis `83c5065e` yang muncul di report.
+- **Perbaikan:** sudah tertangani di `b4e1abdf`. `isChunkLoadError` mengenali `name === 'ChunkLoadError'` dan pesan `Loading chunk 626 failed`, lalu me-reload sekali. Tidak ada perubahan kode untuk report ini.
+- **Cara cek:** di triage Sentinel, gabungkan `07ad0940`, `6a0c9825`, #423 `036717b9`, dan `c8bbe323`. Jangan buka tiket terpisah.
+
+## 2026-11-18 — `/login` React #423, report sumber (breadcrumb asli)
+
+- **Severity:** Medium
+- **Halaman:** `http://commercial-docs.kpndomain.com/login`
+- **Rilis:** `83c5065e`
+- **Pengguna / jumlah:** febrianto.rahmawan@energi-up.com, satu sesi, satu page view (`/login`). Report Sentinel `036717b9-a15f-498d-82b5-aa7d84e0d465`, dilaporkan 18 Nov 2026, 08.14.22 (sama dengan 01:14:22 UTC di breadcrumb).
+- **Gejala:** 01:14:20 UTC `Loading chunk 626 failed` untuk `/_next/static/chunks/app/login/page-d098570194a3dd10.js`. `ChunkLoadError` lewat `webpack-f46d9bddd56fc7e3.js` (`d.f.j` → `d.e`). Sekitar 2 ms kemudian (01:14:22.722) `Minified React error #423` di scheduler (`MessagePort.M` di `117-48a2f1a945f634b1.js`). Halaman login kosong untuk sesi itu.
+- **Penyebab:** Ini kejadian yang analisisnya kemudian disalin Sentinel ke report lain. Chunk route `/login` gagal di-fetch (HTML/tab basi setelah deploy, atau request terputus). React 18.3.1 melempar #423 karena kegagalan itu di luar Suspense saat hydration. Bukan bug form login, backend tidak terlibat. Status HTTP chunk tidak tertangkap.
+- **Perbaikan:** sudah ada di commit `b4e1abdf` (`origin/SIT`). Tidak ada perubahan kode untuk report ini.
+- **Report yang menunjuk ke analisis ini:**
+  - `07ad0940-f554-4b4f-9cd1-58df492a216a` — `ChunkLoadError` chunk 626, dilaporkan 18 Nov 2026, 08.14.22, sesi yang sama. Ini error primernya.
+  - `6a0c9825-8223-4214-aadf-51875194d927` — `ChunkLoadError` yang sama, dilaporkan 19 Nov 2026, 08.11. Analisis disalin dari `07ad0940`.
+  - `c8bbe323-27fc-44a3-9396-82b897440939` — #423, dilaporkan 19 Nov 2026, 08.11, halaman `/login`, pengguna yang sama. Catatan Sentinel: analisis dibuat untuk kejadian sebelumnya.
+- **Cara cek:** setelah deploy `b4e1abdf`, hard refresh `/login`. Kelompokkan report `/login` ini sebagai satu defect. Sesi `/documents` (chunk 148) adalah defect terpisah.
+
 ## 2026-11-19 — `/documents` React #423 (report 18 Nov, analisis Sentinel disalin)
 
 - **Severity:** Medium
@@ -31,17 +80,16 @@ Salin blok ini ke atas daftar (di bawah judul bagian "Entri"). Isi hanya yang te
 - **Rilis:** `83c5065e`
 - **Pengguna / jumlah:** yustinus.refiano@energi-up.com. Report Sentinel `a1426191-8c8f-4d80-beb8-b8b49e2af87c`, dilaporkan 18 Nov 2026, 09.37.
 - **Gejala:** Stack yang dikirim sama persis dengan kejadian `/login`: `Minified React error #423` di `fd9d1056-b9b281d6c2728617.js` dan scheduler `117-48a2f1a945f634b1.js` (`MessagePort.M`). Tidak ada frame dari kode halaman Documents.
-- **Penyebab:** Sentinel menulis "same error as an earlier report; this analysis was made for that occurrence". Isi analisis (chunk 626, `page-d098570194a3dd10.js`, jam 01:14 UTC, pengguna febrianto, halaman `/login`) disalin dari report login, bukan dari sesi `/documents` ini. Halaman Documents dicek di kode: preferensi kolom dan page size dibaca dari `localStorage` setelah mount, sesi mulai sebagai `loading` di server dan client, dan tidak ada cabang `typeof window` di render pertama. Tidak ada bug hydration terpisah di halaman itu. Kegagalan yang cocok dengan stack ini tetap chunk route yang gagal dimuat, lalu React #423. Recovery di root layout menutup `/documents` sama seperti `/login`.
-- **Perbaikan:** tidak ada perubahan kode tambahan. Tertutup oleh entri 19 Nov di bawah.
-- **Di luar perbaikan ini:** breadcrumb sesi yustinus (apakah ada `Loading chunk … failed`, dan hash file-nya) tidak ada di report ini. Kalau Sentinel nanti mengirim breadcrumb yang bukan chunk, entri baru perlu dibuka.
-- **Cara cek:** setelah deploy, buka `/documents` dari tab yang sudah login. Hard refresh bila halaman kosong.
+- **Penyebab:** Teks analisis report ini menyalin kejadian `/login` (chunk 626). Bukti sesi yustinus ada di report `b3fcf3bd`: chunk 148 timeout, lalu #423 pada waktu yang sama. Lihat entri teratas. Bukan bug hydration halaman Documents.
+- **Perbaikan:** tidak ada perubahan kode tambahan. Reload sekali di `b4e1abdf` menutup `ChunkLoadError` ini.
+- **Cara cek:** satukan dengan `b3fcf3bd`. Jangan digabung dengan chunk 626.
 
 ## 2026-11-19 — `/login` blank: ChunkLoadError lalu React #423
 
 - **Severity:** Medium (1 pengguna, 1 kejadian dalam 30 hari)
 - **Halaman:** `http://commercial-docs.kpndomain.com/login`
 - **Rilis:** `83c5065e`
-- **Pengguna / jumlah:** febrianto.rahmawan@energi-up.com, satu sesi. Report Sentinel `c8bbe323-27fc-44a3-9396-82b897440939` (analisis 18 Nov 2026, 08.14). Kejadian yang sama dengan report sebelumnya di rilis itu.
+- **Pengguna / jumlah:** febrianto.rahmawan@energi-up.com, satu sesi. Report `c8bbe323-27fc-44a3-9396-82b897440939` (19 Nov 2026, 08.11) memakai analisis report sumber `036717b9-a15f-498d-82b5-aa7d84e0d465` (18 Nov 2026, 08.14). Lihat entri di atas.
 - **Gejala:** Halaman login kosong. Console: `Loading chunk 626 failed` untuk `/_next/static/chunks/app/login/page-d098570194a3dd10.js`, lalu `ChunkLoadError` dari webpack runtime (`webpack-f46d9bddd56fc7e3.js`), sekitar 2 ms kemudian `Minified React error #423`.
 - **Penyebab:** Browser meminta chunk route yang tidak ter-fetch (tab/HTML basi setelah deploy, gangguan jaringan, atau file hash sudah tidak ada di container baru). React 18.3.1 melempar #423 karena kegagalan itu terjadi di luar Suspense saat hydration, lalu seluruh root di-render ulang di client. #423 adalah gejala lanjutan, bukan bug form login. Backend KLIP tidak terlibat. Status HTTP request chunk tidak tertangkap Sentinel, jadi 404 vs reset jaringan tidak bisa dipisahkan dari satu kejadian ini.
 - **Perbaikan:**
