@@ -357,3 +357,12 @@ describe('buildUnplannedContractToolbarScope source filter', () => {
     expect(scope.params).toEqual(['2026-01-01']);
   });
 });
+
+describe('Jetty Status filter on contract-backlog rows', () => {
+  it('a backlog row reads Not Sent, so it stays only when Not Sent is chosen', async () => {
+    const { appendUnplannedContractBacklogColumnFilters } = await import('./shipmentUnplannedHybridSql');
+    const r = appendUnplannedContractBacklogColumnFilters({ jetty_status: { type: 'multi', values: ['Approved'] } } as never, 2);
+    expect(r.sql).toContain(`'Not Sent'::text = ANY($2::text[])`);
+    expect(r.params).toEqual([['Approved']]);
+  });
+});

@@ -37,7 +37,10 @@ const CONTENT_SECURITY_POLICY = [
   "form-action 'self'",
   "frame-ancestors 'self'",
   // Commercial Documents PDF preview uses blob: URLs in an iframe.
-  "frame-src 'self' blob:",
+  // KMAPS vessel map (Shipments Action column) is framed from test-kmaps; without this origin the
+  // browser refuses the iframe (frame-src) even when KMAPS allows KLIP via frame-ancestors.
+  // Baked at `next build` — redeploy the frontend image after changing this list.
+  "frame-src 'self' blob: http://test-kmaps.kpndomain.com",
   "object-src 'none'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",

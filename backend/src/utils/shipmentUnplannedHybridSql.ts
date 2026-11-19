@@ -51,6 +51,9 @@ import {
 export { buildShipmentPageUnplannedOpenContractsCte };
 
 const CB_COL: Record<string, string> = {
+  // A contract-backlog row has no STO, so nothing was ever sent to JPS for it: it reads "Not Sent" in the list. Without this entry a Jetty Status filter
+  // dropped every shipment row it did not match and still listed every backlog row.
+  jetty_status: `'Not Sent'`,
   contract_numbers: 'c.contract_id',
   contract_number: 'c.contract_id',
   po_numbers: 'c.po_number',

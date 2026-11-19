@@ -1162,6 +1162,7 @@ function ShipmentsPageContent() {
     | { type: 'text'; value: string; exact?: boolean; emptyOnly?: boolean; notBlankOnly?: boolean }
     | { type: 'number'; min?: string; max?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
     | { type: 'date'; from?: string; to?: string; emptyOnly?: boolean; notBlankOnly?: boolean }
+    | { type: 'multi'; values: string[]; emptyOnly?: boolean; notBlankOnly?: boolean }
 
   const [columnFilters, setColumnFilters] = useState<Record<string, ColumnFilter>>({})
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
@@ -1599,6 +1600,24 @@ function ShipmentsPageContent() {
     (values: string[]) => {
       resetPageForGlobalFilter()
       setSelectedIncoterms(values)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  /** The Jetty Status filter lives in columnFilters (key jetty_status), which every list request already sends and keys its cache on. */
+  const selectedJettyStatuses = useMemo(() => {
+    const f = columnFilters.jetty_status
+    return f && f.type === 'multi' ? f.values : []
+  }, [columnFilters])
+  const onJettyStatusesChange = useCallback(
+    (values: string[]) => {
+      resetPageForGlobalFilter()
+      setColumnFilters((prev) => {
+        const next = { ...prev }
+        if (values.length === 0) delete next.jetty_status
+        else next.jetty_status = { type: 'multi', values }
+        return next
+      })
     },
     [resetPageForGlobalFilter],
   )
@@ -3584,6 +3603,7 @@ function ShipmentsPageContent() {
     for (const f of Object.values(filters)) {
       if (f.emptyOnly || f.notBlankOnly) return true
       if (f.type === 'text' && (f.value || '').trim().length > 0) return true
+      if (f.type === 'multi' && f.values.length > 0) return true
       if (f.type === 'number') {
         if ((f.min !== undefined && String(f.min).trim() !== '') || (f.max !== undefined && String(f.max).trim() !== '')) {
           return true
@@ -6410,6 +6430,8 @@ function ShipmentsPageContent() {
           availableIncoterms={availableIncoterms}
           selectedIncoterms={selectedIncoterms}
           onIncotermsChange={onIncotermsChange}
+          selectedJettyStatuses={selectedJettyStatuses}
+          onJettyStatusesChange={onJettyStatusesChange}
           availableProducts={availableProducts}
           selectedProducts={selectedProducts}
           onProductsChange={onProductsChangeWithPageReset}

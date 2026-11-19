@@ -3,7 +3,7 @@
  * Pure functions, so the "blank secret = keep the current one" rule and the change count are tested without the page.
  */
 
-export type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text' | 'ports'
+export type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text' | 'ports' | 'emails' | 'message'
 export type SettingSource = 'database' | 'env' | 'unset'
 
 export interface SettingView {
@@ -13,6 +13,8 @@ export interface SettingView {
   help?: string
   requiresRestart: boolean
   min?: number
+  /** For a 'message': lines the editor shows (1 = a single-line input). */
+  rows?: number
   prefix?: string
   source: SettingSource
   value: string | null
@@ -43,6 +45,8 @@ const GROUP_OF_KIND: Record<SettingKind, SettingGroup['id']> = {
   cron: 'options',
   text: 'options',
   ports: 'options',
+  emails: 'options',
+  message: 'options',
 }
 
 const GROUP_TITLE: Record<SettingGroup['id'], string> = {

@@ -137,7 +137,8 @@ describe('batchSaveShipmentPoKlipQty', () => {
       can_add_po: true,
       add_po_blocked_reason: null,
     });
-    queryMock.mockResolvedValueOnce({ rows: [] });
+    // no shipment of its own, and no B2B child with one either
+    queryMock.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] });
 
     const result = await batchSaveShipmentPoKlipQty({
       anchorShipmentUuid: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
@@ -256,5 +257,64 @@ describe('batchSaveShipmentPoKlipQty UPDATE statement', () => {
     const { sql, values } = await run({ quantityShipmentPlanKg: 0 });
     expect(sql).toContain('quantity_shipment_plan = $1::numeric');
     expect(values).toEqual([0, SIBLING]);
+  });
+
+  const originContext = {
+    lookup_key: '1006021152',
+    contract_numbers: '1004033142',
+    po_numbers: '',
+    has_sap_sto: true,
+    can_add_po: false,
+    add_po_blocked_reason: null,
+  };
+
+  it('a quantity typed on a B2B origin with no shipment of its own is written on the shipment of its CHILD (STO 1006021152, 2026-11-19)', async () => {
+    // this block's beforeEach queues two answers of its own; these tests need a clean sequence
+    queryMock.mockReset();
+    resolveContextMock.mockReset();
+    resolveContextMock.mockResolvedValue(originContext);
+    queryMock
+      .mockResolvedValueOnce({ rows: [] }) // the origin 9144101942 has no shipment of its own
+      .mockResolvedValueOnce({ rows: [{ origin: '9144101942', shipment_id: 'dddddddd-dddd-dddd-dddd-dddddddddddd' }] }) // its child's does
+      .mockResolvedValue({ rows: [] });
+
+    const result = await batchSaveShipmentPoKlipQty({
+      anchorShipmentUuid: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      rows: [{ contractNumber: '9144101942', quantityDeliveredKlipKg: 4_000_000, quantityReceiveKlipKg: null }],
+    });
+
+    expect(result.ok).toBe(true);
+    const update = queryMock.mock.calls.find((c) => String(c[0]).includes('UPDATE shipments'));
+    expect(update, 'an UPDATE of the child shipment').toBeTruthy();
+    expect(update![1]).toContain('dddddddd-dddd-dddd-dddd-dddddddddddd');
+    expect(update![1]).toContain(4_000_000);
+  });
+
+  it('with several child shipments the origin row is refused and the message says to use the child row', async () => {
+    // this block's beforeEach queues two answers of its own; these tests need a clean sequence
+    queryMock.mockReset();
+    resolveContextMock.mockReset();
+    resolveContextMock.mockResolvedValue(originContext);
+    queryMock
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          { origin: '9144101942', shipment_id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee' },
+          { origin: '9144101942', shipment_id: 'ffffffff-ffff-ffff-ffff-ffffffffffff' },
+        ],
+      });
+
+    const result = await batchSaveShipmentPoKlipQty({
+      anchorShipmentUuid: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+      rows: [{ contractNumber: '9144101942', quantityDeliveredKlipKg: 1_000_000, quantityReceiveKlipKg: null }],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.message).toContain('B2B origin');
+      expect(result.message).toContain('child');
+    }
+    expect(queryMock.mock.calls.some((c) => String(c[0]).includes('UPDATE shipments'))).toBe(false);
   });
 });

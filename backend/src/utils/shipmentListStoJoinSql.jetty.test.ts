@@ -11,7 +11,7 @@ import { SHIPMENT_LIST_JPS_JOIN_SQL, SHIPMENT_LIST_JPS_SELECT_SQL } from './ship
 async function jettyRowFor(client: { query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> }, stoKey: string) {
   const r = await client.query(
     `SELECT ${SHIPMENT_LIST_JPS_SELECT_SQL}
-       FROM (SELECT $1::text AS sto_key) sp
+       FROM (SELECT $1::text AS sto_key, NULL::uuid AS id) sp
        ${SHIPMENT_LIST_JPS_JOIN_SQL}`,
     [stoKey],
   );

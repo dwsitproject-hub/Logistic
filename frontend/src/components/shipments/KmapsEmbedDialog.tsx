@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, X } from 'lucide-react'
 import api from '@/lib/api'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 
 /** What the dialog needs from a Shipments table row. */
 export interface KmapsEmbedShipment {
@@ -32,12 +32,11 @@ const errorText = (e: unknown): string => {
 }
 
 /**
- * Shipments table > KMAPS icon: the KMAPS map in a frame, limited to the vessel(s) of this shipment (KMAPS team's KLIP-EMBED.md).
+ * Shipments table > map icon: KMAPS in a frame for this shipment's vessel(s) (KLIP-EMBED.md).
  *
- * KLIP calls no KMAPS API and sends no data: the server only builds the URL (`/api/shipments/kmaps-link`, from Integrations > KMAPS and
- * the record id KLIP issues to KMAPS) and KMAPS resolves it with the user's own KMAPS session. The iframe exists only while the dialog
- * is open, so each open loads a fresh frame. No `sandbox`: KMAPS needs scripts, same-origin (its session cookie), popups and forms for
- * its sign-in popup.
+ * Custom overlay (same pattern as the Documents modal) so the iframe gets a real flex height —
+ * DialogContent's scroll body is not a flex column and collapsed the map. Map-first: thin chrome,
+ * ~92vw × 90vh panel. No sandbox: KMAPS needs scripts, cookies, popups and forms for sign-in.
  */
 export function KmapsEmbedDialog({ shipment, onClose }: KmapsEmbedDialogProps) {
   const [link, setLink] = useState<KmapsLink | null>(null)
@@ -75,18 +74,42 @@ export function KmapsEmbedDialog({ shipment, onClose }: KmapsEmbedDialogProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shipmentKey])
 
-  const title = shipment?.vessel_name || shipment?.shipment_id || shipment?.sto_number || 'Shipment'
+  useEffect(() => {
+    if (!shipment) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [shipment, onClose])
+
+  if (!shipment) return null
+
+  const title = shipment.vessel_name || shipment.shipment_id || shipment.sto_number || 'Shipment'
+  const showHint =
+    error != null ||
+    (link !== null && (!link.enabled || !link.url))
 
   return (
-    <Dialog open={shipment !== null} onOpenChange={(open) => (!open ? onClose() : undefined)}>
-      <DialogContent className="flex h-[85vh] w-[90vw] max-w-[90vw] flex-col gap-3 p-4">
-        <DialogHeader>
-          <DialogTitle>KMAPS — {title}</DialogTitle>
-          <DialogDescription>
-            Posisi kapal untuk shipment ini, dari KMAPS. Jika diminta, masuk dengan akun KMAPS Anda di jendela ini.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-gray-200 bg-gray-50">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`KMAPS — ${title}`}
+      onClick={onClose}
+    >
+      <div
+        className="flex h-[90vh] w-[92vw] max-w-[1600px] flex-col overflow-hidden rounded-lg bg-white shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
+          <h3 className="truncate text-lg font-semibold text-gray-900">KMAPS — {title}</h3>
+          <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={onClose}>
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+
+        <div className="relative min-h-0 flex-1 bg-gray-50">
           {error ? (
             <p className="p-6 text-sm text-red-700">{error}</p>
           ) : link === null ? (
@@ -101,13 +124,22 @@ export function KmapsEmbedDialog({ shipment, onClose }: KmapsEmbedDialogProps) {
           ) : !link.url ? (
             <p className="p-6 text-sm text-gray-600">Baris ini belum punya identitas shipment yang bisa dicari di KMAPS.</p>
           ) : (
-            <iframe src={link.url} title="Posisi kapal (KMAPS)" loading="lazy" className="h-full w-full border-0" />
+            <iframe
+              src={link.url}
+              title="Posisi kapal (KMAPS)"
+              loading="lazy"
+              className="absolute inset-0 h-full w-full border-0"
+            />
           )}
         </div>
-        <p className="text-xs text-gray-500">
-          Bingkai kosong? Biasanya alamat KLIP belum didaftarkan di KMAPS (frame-ancestors) atau KMAPS tidak satu situs dengan KLIP.
-        </p>
-      </DialogContent>
-    </Dialog>
+
+        {showHint ? (
+          <p className="shrink-0 border-t px-4 py-2 text-xs text-gray-500">
+            Bingkai kosong? Biasanya CSP frame-src KLIP belum mengizinkan origin KMAPS, atau alamat KLIP belum
+            didaftarkan di KMAPS (frame-ancestors).
+          </p>
+        ) : null}
+      </div>
+    </div>
   )
 }

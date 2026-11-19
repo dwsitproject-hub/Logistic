@@ -15,6 +15,7 @@ import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.ser
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import { contractsWithActiveSiblingShipment } from './shipmentPoAssignment.service';
+import { withB2bParentRows } from './shipmentB2bChain.service';
 import { sqlSapQtySharedAcrossShipments } from '../utils/shipmentSapQtyShared';
 import { ttlMemo } from '../utils/ttlMemo';
 import {
@@ -613,9 +614,11 @@ async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<st
   }
 
   const lookupKey = String(editContext.lookup_key ?? '').trim();
-  const contractDetails = lookupKey
+  let contractDetails = lookupKey
     ? await loadContractDetailsForEdit(lookupKey, editContext.contract_numbers ?? '')
     : [];
+  // A B2B chain is shown as its PARENT (SAP books the STO on the child, whose row the query hides): see shipmentB2bChain.service.ts.
+  if (lookupKey) contractDetails = await withB2bParentRows(lookupKey, shipmentUuid, contractDetails);
   /*
    * Which PO rows can take a Delivered / Received / Plan quantity at all. The list also holds a PO whose shipment on this STO / operation was
    * cancelled (found through the STO or an Add PO link): PUT /po-klip-qty answers 400 "No sibling shipment found" for it, and because the shipment

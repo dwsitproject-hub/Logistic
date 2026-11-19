@@ -14,6 +14,7 @@ import { jpsEnabledPortNames } from './config';
 import { findEligibleStos } from './eligibility';
 import { checkJpsReadiness, type JpsReadiness } from './readiness';
 import { submitOneSto, type SubmitOutcome } from './submit';
+import { notifySubmittedToJetty } from './notifyEmail';
 
 export interface ManualSubmitResult {
   /** True only when a request was made to JPS. False means KLIP held it back: see readiness. */
@@ -34,6 +35,10 @@ export async function submitShipmentToJps(shipmentId: string, requestedBy: strin
   const portCatalog = await fetchJpsPortCompanies();
   const outcome = await submitOneSto(sto, portCatalog, await fetchJpsKnownPorts(), requestedBy);
   logger.info('JPS: Submit to Jetty', { stoKey: readiness.stoKey, shipmentId, outcome: outcome.kind });
+
+  // JPS accepted a NEW instruction (Pending): tell the people the Integrations > JPS settings name. Not awaited, so the button answers at once; it never throws.
+  // A duplicate JPS already held ('recovered') and a refusal send nothing.
+  if (outcome.kind === 'submitted') void notifySubmittedToJetty(sto, outcome.revision);
 
   // The Shipments list keeps its pages for an hour; what was just sent (or refused) must show now, not later.
   if (outcome.kind !== 'retryable') {

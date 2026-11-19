@@ -5,6 +5,8 @@ import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance'
 import { sqlContractOutstandingFromFields, sqlIncotermQuantityDeliveryCase } from './sapIncotermMetrics'
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import { sqlJettyStatusShown } from './jettyStatusSql'
+import { JPS_CURRENT_ROW_ORDER_SQL, sqlJpsKeyOfListRow } from './shipmentListStoJoinSql'
 import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments'
 import {
   LEGACY_SHIPMENT_STATUS_ALIASES,
@@ -81,7 +83,28 @@ export function shipmentIsLateSql(
   )`;
 }
 
+/**
+ * The Jetty Status a Shipments row SHOWS, as one scalar over the row's STO key (alias `sb`), so the Jetty Status filter and the badge cannot disagree.
+ *
+ * It is the same pick the list makes (SHIPMENT_LIST_JPS_JOIN_SQL: the current tracker row of the STO, JPS_CURRENT_ROW_ORDER_SQL) and the same wording as the
+ * frontend's jettyStatusLabel: JPS's own status (with the derived Completed (Hose Off) stage) wins; with none, a refused submission reads "Send Failed", a held one
+ * "On Hold", and an STO KLIP never tried reads "Not Sent". The tracker table is small and indexed on sto_key, so the subquery is a handful of index lookups.
+ */
+export const SHIPMENT_JETTY_STATUS_FILTER_SQL = `COALESCE((
+    SELECT CASE
+             WHEN NULLIF(TRIM(${sqlJettyStatusShown('jf')}), '') IS NOT NULL THEN TRIM(${sqlJettyStatusShown('jf')})
+             WHEN jf.state = 'FAILED' THEN 'Send Failed'
+             WHEN jf.state = 'SKIPPED_NO_CARGO' THEN 'On Hold'
+           END
+    FROM jps_shipping_instructions jf
+    WHERE jf.sto_key = ANY(ARRAY[sb.sto_key::text, ${sqlJpsKeyOfListRow('sb')}])
+      AND jf.state IN ('SUBMITTED', 'FAILED', 'SKIPPED_NO_CARGO')
+    ORDER BY ${JPS_CURRENT_ROW_ORDER_SQL.replace(/\bj\./g, 'jf.')}
+    LIMIT 1
+  ), 'Not Sent')`
+
 const SB_COL: Record<string, string> = {
+  jetty_status: SHIPMENT_JETTY_STATUS_FILTER_SQL,
   late_indicator: lateIndicatorExpr('sb'),
   operation_id: 'sb.operation_id',
   shipment_id: 'sb.shipment_id',
