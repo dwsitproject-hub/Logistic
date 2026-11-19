@@ -582,6 +582,52 @@ export type BatchSavePoKlipResult =
   | { ok: true; shipmentIds: string[] }
   | { ok: false; status: number; message: string };
 
+/**
+ * For each B2B ORIGIN among `origins` that has NO shipment of its own in the group: the live shipments of its B2B CHILDREN in that group.
+ *
+ * The Shipments list and the Edit Shipment modal show a B2B origin in place of its child (the child is hidden), but only the CHILD has a shipment, so a quantity typed on the
+ * origin's row belongs on the child's shipment. Found through SAP (the child's B2B flag and its Contract Reff PO pointing at the origin's PO), the same link the PO table uses.
+ * An origin whose children have no live shipment here is not in the result.
+ */
+export async function b2bChildShipmentsForOrigins(
+  lookupKey: string,
+  anchorShipmentUuid: string,
+  origins: string[],
+): Promise<Map<string, string[]>> {
+  const wanted = [...new Set(origins.map((c) => String(c ?? '').trim()).filter(Boolean))];
+  const found = new Map<string, string[]>();
+  if (wanted.length === 0 || !lookupKey) return found;
+  const groupMatch = sqlSiblingShipmentGroupMatchSql({
+    lookupKeySql: '$2::text',
+    contractNumberSql: 'c.contract_id',
+    anchorShipmentIdSql: '$3::uuid',
+  });
+  const result = await query(
+    `
+    SELECT TRIM(wanted.cn) AS origin, s.id::text AS shipment_id
+    FROM unnest($1::text[]) AS wanted(cn)
+    INNER JOIN contracts oc ON TRIM(oc.contract_id) = TRIM(wanted.cn)
+    INNER JOIN contract_latest_spd_snapshot chb
+            ON UPPER(COALESCE(chb.b2b_flag_raw, '')) = 'B2B'
+           AND NULLIF(TRIM(chb.contract_reference_po_raw), '') IS NOT NULL
+           AND TRIM(chb.contract_reference_po_raw) = TRIM(oc.po_number::text)
+    INNER JOIN contracts c ON c.contract_id = chb.contract_number AND c.contract_id <> oc.contract_id
+    INNER JOIN shipments s ON s.contract_id = c.id
+    WHERE COALESCE(s.status, '') <> 'CANCELLED'
+      AND (
+        ${groupMatch}
+      )
+    ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
+    `,
+    [wanted, lookupKey, anchorShipmentUuid],
+  );
+  for (const r of result.rows as Array<{ origin: string; shipment_id: string }>) {
+    const key = String(r.origin).trim();
+    found.set(key, [...(found.get(key) ?? []), String(r.shipment_id).trim()]);
+  }
+  return found;
+}
+
 async function findSiblingShipmentIdForContract(
   lookupKey: string,
   contractNumber: string,
@@ -645,7 +691,16 @@ export async function contractsWithActiveSiblingShipment(
     `,
     [wanted, lookupKey, anchorShipmentUuid],
   );
-  return new Set((result.rows as Array<{ contract_number: string }>).map((r) => String(r.contract_number).trim()));
+  const live = new Set((result.rows as Array<{ contract_number: string }>).map((r) => String(r.contract_number).trim()));
+  // A B2B origin has no shipment of its own; with exactly ONE live child shipment in the group its quantity is saved there (batchSaveShipmentPoKlipQty).
+  const withoutOwn = wanted.filter((c) => !live.has(c));
+  if (withoutOwn.length > 0) {
+    const viaChild = await b2bChildShipmentsForOrigins(lookupKey, anchorShipmentUuid, withoutOwn);
+    for (const [origin, shipmentIds] of viaChild) {
+      if (new Set(shipmentIds).size === 1) live.add(origin);
+    }
+  }
+  return live;
 }
 
 /** Persist Delivered/Received Qty (KLIP) onto each sibling shipment (one contract/PO row). */
@@ -699,11 +754,25 @@ export async function batchSaveShipmentPoKlipQty(args: {
     }
     if (delivered == null && receive == null && plan == null) continue;
 
-    const siblingId = await findSiblingShipmentIdForContract(
+    let siblingId = await findSiblingShipmentIdForContract(
       context.lookup_key,
       contractNumber,
       args.anchorShipmentUuid,
     );
+    if (!siblingId) {
+      // A B2B origin shown in place of its child: the quantity goes on the child's shipment (one child only; with several the PO row to use is not known).
+      const viaChild = (await b2bChildShipmentsForOrigins(context.lookup_key, args.anchorShipmentUuid, [contractNumber])).get(contractNumber) ?? [];
+      const distinctChildShipments = [...new Set(viaChild)];
+      if (distinctChildShipments.length === 1) {
+        siblingId = distinctChildShipments[0];
+      } else if (distinctChildShipments.length > 1) {
+        return {
+          ok: false,
+          status: 400,
+          message: `Contract ${contractNumber} is a B2B origin with ${distinctChildShipments.length} child shipments under this STO / operation: enter the quantity on the child PO row, not on the origin`,
+        };
+      }
+    }
     if (!siblingId) {
       return {
         ok: false,
