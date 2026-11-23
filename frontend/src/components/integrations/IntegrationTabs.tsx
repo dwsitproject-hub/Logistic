@@ -1,13 +1,14 @@
 'use client'
 
 import type { ComponentType } from 'react'
-import { Anchor, Database, Webhook } from 'lucide-react'
+import { Anchor, Database, Mail, Webhook } from 'lucide-react'
 import { summarizeIntegration, type IntegrationView } from '@/lib/integrationSettings'
 
 const LOOK: Record<IntegrationView['id'], { Icon: ComponentType<{ className?: string }>; chip: string; tagline: string }> = {
   dhm: { Icon: Database, chip: 'bg-blue-50 text-blue-600', tagline: 'DataHub: master data' },
   jps: { Icon: Anchor, chip: 'bg-amber-50 text-amber-700', tagline: 'Jetty Planning System' },
   kmaps: { Icon: Webhook, chip: 'bg-emerald-50 text-emerald-700', tagline: 'Partner API and webhook' },
+  email: { Icon: Mail, chip: 'bg-violet-50 text-violet-700', tagline: 'On / off for every email KLIP sends' },
 }
 
 interface Props {
@@ -19,7 +20,7 @@ interface Props {
 /** One card per integration: which one the panel below shows, and at a glance how many of its settings are filled in. */
 export function IntegrationTabs({ integrations, selectedId, onSelect }: Props) {
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-3" role="tablist" aria-label="Integrations">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4" role="tablist" aria-label="Integrations">
       {integrations.map((integration) => {
         const look = LOOK[integration.id]
         const summary = summarizeIntegration(integration.settings)

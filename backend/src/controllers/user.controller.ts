@@ -640,7 +640,7 @@ async function sendPasswordLinkToUser(
     data: { email: person.email, email_sent: sent },
     message: sent
       ? `A link was sent to ${person.email}.`
-      : 'The e-mail could not be sent (SMTP is not configured or failed). Nothing was changed for the user.',
+      : 'The e-mail could not be sent (it is switched off in Integrations > Email, or SMTP is not configured or failed). Nothing was changed for the user.',
   });
 }
 

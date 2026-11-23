@@ -2,6 +2,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { frontendUrl } from './sessionAuth.service';
 import { sendEmail } from './email.service';
+import { emailBlockedReason } from './emailFeatures';
 import {
   buildContractEtaReminderEmailHtml,
   buildContractEtaReminderEmailSubject,
@@ -133,6 +134,13 @@ export async function runContractEtaReminderJob(
     skipReason,
   });
 
+  // Switched off in Integrations > Email: the daily job still runs, and says so, without reading the contracts.
+  const blocked = emailBlockedReason('eta_reminder');
+  if (blocked) {
+    logger.info('Contract ETA reminder: skipped, this email is switched off (Integrations > Email)', { reason: blocked });
+    return emptyResult(blocked === 'master_off' ? 'email_master_off' : 'email_feature_off');
+  }
+
   try {
     const rows = await findContractsMissingEtaNearCargoReadiness();
     if (rows.length === 0) {
@@ -167,6 +175,7 @@ export async function runContractEtaReminderJob(
     const html = buildContractEtaReminderEmailHtml(rows, frontendUrl());
     const subject = buildContractEtaReminderEmailSubject(rows);
     const sent = await sendEmail({
+      feature: 'eta_reminder',
       to: recipientEmails,
       subject,
       html,

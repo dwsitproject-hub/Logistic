@@ -29,6 +29,8 @@ interface Rule {
 interface RulesData {
   rules: Rule[]
   masterSwitchOn: boolean
+  /** Why the mail would not be sent (Integrations > Email), or null when it would be. */
+  blockedReason?: 'master_off' | 'feature_off' | null
   production: boolean
   testRecipient: string | null
 }
@@ -220,7 +222,9 @@ export function JpsNotifyButton() {
           {data && !data.masterSwitchOn ? (
             <p className="flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
               <AlertTriangle className="h-4 w-4 shrink-0" />
-              Saklar utama &quot;Email after Submit to Jetty&quot; di pengaturan JPS sedang mati, jadi tidak ada email yang terkirim walau aturan di bawah aktif.
+              {data.blockedReason === 'master_off'
+                ? 'Semua email KLIP sedang dimatikan (Integrations > Email > Send email from KLIP), jadi tidak ada email yang terkirim walau aturan di bawah aktif.'
+                : 'Saklar "Email after Submit to Jetty" di Integrations > Email sedang mati, jadi tidak ada email yang terkirim walau aturan di bawah aktif.'}
             </p>
           ) : null}
           {data && !data.production ? (

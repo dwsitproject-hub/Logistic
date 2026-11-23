@@ -12,7 +12,7 @@ import { validateJpsPortsValue } from '../jps/ports';
  * which jobs SchedulerService registers at startup; changing them afterwards has no effect until the
  * backend restarts. The UI says so next to the field rather than letting a save look like it worked.
  */
-export type IntegrationId = 'dhm' | 'jps' | 'kmaps';
+export type IntegrationId = 'dhm' | 'jps' | 'kmaps' | 'email';
 
 export type SettingKind = 'secret' | 'url' | 'boolean' | 'integer' | 'cron' | 'text' | 'ports' | 'emails' | 'message';
 
@@ -26,6 +26,8 @@ export interface SettingDef {
   min?: number;
   /** For a 'message': how many lines the editor shows (1 = a single-line input). */
   rows?: number;
+  /** For a switch: what it reads while nobody has saved it ('true' / 'false'), shown next to the empty value. */
+  defaultValue?: string;
   /** Public prefix a secret must carry, and that the hint may reveal (e.g. "dhm_sk_"). */
   prefix?: string;
   /**
@@ -101,12 +103,6 @@ export const INTEGRATIONS: IntegrationDef[] = [
       },
       { key: 'JPS_MAX_SUBMITS_PER_SWEEP', label: 'Max submits per sweep', kind: 'integer', min: 1 },
       {
-        key: 'JPS_NOTIFY_ENABLED',
-        label: 'Email after Submit to Jetty',
-        kind: 'boolean',
-        help: 'Master switch. When on, an email is sent each time a user presses Submit to Jetty and JPS accepts it (Pending), to the people the rule for that port names. Who receives it and what it says is set per port under Email notifications. Off unless set to true. Only the button sends it, not the automatic sweep. Takes effect at once.',
-      },
-      {
         key: 'JPS_RETRY_FAILED',
         label: 'Retry failed submissions',
         kind: 'boolean',
@@ -161,6 +157,55 @@ export const INTEGRATIONS: IntegrationDef[] = [
         kind: 'secret',
         prefix: 'kmaps_ak_',
         help: 'Issued once in KMAPS Setting > Integrasi on the KLIP card (Terbitkan kunci akses). Begins with kmaps_ak_. KLIP sends it as Authorization: Bearer when asking which shipments can be shown on the map. Independent of the public/private key pair. Empty = the Shipments table keeps View Documents until this is saved.',
+      },
+    ],
+  },
+  {
+    id: 'email',
+    name: 'Email - messages KLIP sends',
+    description: 'Switches for every kind of email KLIP sends. They take effect at once, without a restart. The mail server itself (SMTP_HOST, user, password) is set in the backend .env.',
+    settings: [
+      {
+        key: 'EMAIL_ENABLED',
+        label: 'Send email from KLIP (master switch)',
+        kind: 'boolean',
+        defaultValue: 'true',
+        help: "Off stops every email in the list below, whatever each switch says. A test mail asked for from Integrations (Test connection, Send test to me) is not held back.",
+      },
+      {
+        key: 'EMAIL_ETA_REMINDER_ENABLED',
+        label: 'Contract ETA reminder',
+        kind: 'boolean',
+        defaultValue: 'true',
+        help: "The daily 07:00 mail to the logistics people about open contracts with no ETA near their cargo readiness date. Off: the job still runs and sends nothing.",
+      },
+      {
+        key: 'EMAIL_SAP_IMPORT_REPORT_ENABLED',
+        label: 'SAP auto-import report',
+        kind: 'boolean',
+        defaultValue: 'true',
+        help: "The mail to the administrators after the SAP folder auto-import ran (files processed, failed, folder missing, import still running).",
+      },
+      {
+        key: 'EMAIL_INVITATION_ENABLED',
+        label: 'User invitation',
+        kind: 'boolean',
+        defaultValue: 'true',
+        help: "The set-password link mailed when an administrator creates a user or resends an invitation (KLIP and Commercial Documents). Off: the administrator is told the mail could not be sent and no link reaches the user.",
+      },
+      {
+        key: 'EMAIL_PASSWORD_RESET_ENABLED',
+        label: 'Password reset',
+        kind: 'boolean',
+        defaultValue: 'true',
+        help: "The reset link mailed after Forgot password, and when an administrator sends a reset (KLIP and Commercial Documents). Off: nobody can reset a password by email.",
+      },
+      {
+        key: 'JPS_NOTIFY_ENABLED',
+        label: 'Email after Submit to Jetty',
+        kind: 'boolean',
+        defaultValue: 'false',
+        help: "When on, an email is sent each time a user presses Submit to Jetty and JPS accepts it (Pending), to the people the rule of that port names (Integrations > JPS > Email notifications). Off unless switched on here. Only the button sends it, not the automatic sweep.",
       },
     ],
   },

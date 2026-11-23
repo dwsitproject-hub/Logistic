@@ -15,6 +15,8 @@ export interface SettingView {
   min?: number
   /** For a 'message': lines the editor shows (1 = a single-line input). */
   rows?: number
+  /** For a switch nobody has saved: what it reads ('true' / 'false'). A setting that has one is never "not filled in". */
+  defaultValue?: string
   prefix?: string
   source: SettingSource
   value: string | null
@@ -25,7 +27,7 @@ export interface SettingView {
 }
 
 export interface IntegrationView {
-  id: 'dhm' | 'jps' | 'kmaps'
+  id: 'dhm' | 'jps' | 'kmaps' | 'email'
   name: string
   description: string
   settings: SettingView[]
@@ -74,7 +76,8 @@ export interface IntegrationSummary {
 export function summarizeIntegration(settings: SettingView[]): IntegrationSummary {
   return {
     total: settings.length,
-    unset: settings.filter((s) => s.source === 'unset').length,
+    // A switch with a default is working without being filled in, so it is not counted as missing.
+    unset: settings.filter((s) => s.source === 'unset' && s.defaultValue === undefined).length,
     fromKlip: settings.filter((s) => s.source === 'database').length,
   }
 }

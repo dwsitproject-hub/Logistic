@@ -11,6 +11,9 @@ const SOURCE: Record<SettingSource, { label: string; className: string; title: s
   unset: { label: 'Belum diisi', className: 'bg-amber-50 text-amber-700', title: 'Tidak ada di menu ini maupun .env' },
 }
 
+/** A setting with a default that nobody has changed: it works, so it is not "Belum diisi". */
+const SOURCE_DEFAULT = { label: 'Bawaan', className: 'bg-gray-100 text-gray-600', title: 'Belum diubah: memakai nilai bawaan KLIP' }
+
 function formatWhen(value: string | null): string {
   if (!value) return ''
   const d = new Date(value)
@@ -50,7 +53,10 @@ interface Props {
 
 /** One setting: its name and explanation on the left, its value (or its input, while editing) on the right. */
 export function SettingRow({ setting: s, editing, secretsKeyConfigured, draft, onDraft, changed, reverting, onToggleRevert }: Props) {
-  const source = SOURCE[s.source]
+  const source = s.source === 'unset' && s.defaultValue !== undefined ? SOURCE_DEFAULT : SOURCE[s.source]
+  // What a switch reads while nobody saved it, so the toggle shows the truth instead of "off".
+  const effectiveOn = (v: string | null) => (v == null || v === '' ? s.defaultValue === 'true' : String(v).toLowerCase() === 'true')
+  const defaultNote = s.defaultValue === undefined ? 'Belum diatur' : s.defaultValue === 'true' ? 'Aktif (bawaan)' : 'Mati (bawaan)'
   const secretBlocked = s.kind === 'secret' && !secretsKeyConfigured
   const isOn = (v: string | null) => String(v ?? '').toLowerCase() === 'true'
 
@@ -60,8 +66,8 @@ export function SettingRow({ setting: s, editing, secretsKeyConfigured, draft, o
     else if (s.kind === 'boolean')
       value = (
         <span className="flex items-center gap-2 text-sm text-gray-700">
-          <Switch on={isOn(s.value)} disabled label={s.label} />
-          {s.value == null ? '-' : isOn(s.value) ? 'Aktif' : 'Mati'}
+          <Switch on={effectiveOn(s.value)} disabled label={s.label} />
+          {s.value == null ? (s.defaultValue === undefined ? '-' : defaultNote) : isOn(s.value) ? 'Aktif' : 'Mati'}
         </span>
       )
     else if (s.kind === 'secret')
@@ -93,8 +99,8 @@ export function SettingRow({ setting: s, editing, secretsKeyConfigured, draft, o
   } else if (s.kind === 'boolean') {
     value = (
       <span className="flex items-center gap-2 text-sm text-gray-700">
-        <Switch on={isOn(draft)} onChange={(next) => onDraft(next ? 'true' : 'false')} label={s.label} />
-        {draft === '' ? 'Belum diatur' : isOn(draft) ? 'Aktif' : 'Mati'}
+        <Switch on={effectiveOn(draft)} onChange={(next) => onDraft(next ? 'true' : 'false')} label={s.label} />
+        {draft === '' ? defaultNote : isOn(draft) ? 'Aktif' : 'Mati'}
       </span>
     )
   } else {

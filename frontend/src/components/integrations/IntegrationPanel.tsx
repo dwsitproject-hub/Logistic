@@ -146,7 +146,8 @@ export function IntegrationPanel({ integration, secretsKeyConfigured, onSaved, o
         {(
           [
             ['settings', 'Settings'],
-            ['history', 'History'],
+            // Email sends mail, not API calls: there is no call history to show.
+            ...(integration.id === 'email' ? [] : ([['history', 'History']] as const)),
           ] as const
         ).map(([id, label]) => (
           <button
@@ -181,7 +182,7 @@ export function IntegrationPanel({ integration, secretsKeyConfigured, onSaved, o
         </div>
       ) : null}
 
-      {tab === 'history' ? (
+      {tab === 'history' && integration.id !== 'email' ? (
         <div className="p-5">
           <ApiCallHistory integration={integration.id} />
         </div>

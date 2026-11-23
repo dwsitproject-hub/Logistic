@@ -12,7 +12,7 @@ import fs from 'fs';
 import { query } from '../database/connection';
 import { resolveUploadAbsolutePath } from '../utils/fileUpload';
 import { sendEmail } from '../services/email.service';
-import { integrationEnv } from '../integrations/integrationEnv';
+import { isEmailFeatureEnabled } from '../services/emailFeatures';
 import { parseEmailList } from '../integrations/registry';
 import { chooseNotifyRule, listNotifyRules } from './notifyRules';
 import logger from '../utils/logger';
@@ -320,8 +320,9 @@ export async function loadNotifyAttachments(sto: EligibleSto): Promise<NotifyAtt
   );
 }
 
+/** The Submit to Jetty email's switches (Integrations > Email): the master switch and its own, which is off until someone switches it on. */
 export function isNotifyEnabled(): boolean {
-  return String(integrationEnv('JPS_NOTIFY_ENABLED') || '').toLowerCase() === 'true';
+  return isEmailFeatureEnabled('jps_submit');
 }
 
 /**
@@ -441,7 +442,7 @@ export async function notifySubmittedToJetty(sto: EligibleSto, revision: number)
     }
     const subject = marked.subject;
     const html = marked.html + skippedAttachmentsNote(files.skipped);
-    const ok = await sendEmail({ to: recipients.to, cc: recipients.cc, subject, html, attachments: files.attachments });
+    const ok = await sendEmail({ feature: 'jps_submit', to: recipients.to, cc: recipients.cc, subject, html, attachments: files.attachments });
     logger.info('JPS: Submit to Jetty email', {
       stoKey: sto.sto_key,
       revision,
