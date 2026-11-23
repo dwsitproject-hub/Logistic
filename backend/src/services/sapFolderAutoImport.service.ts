@@ -4,6 +4,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { SQL_SAP_IMPORT_IN_FLIGHT_EXISTS } from '../utils/sapImportInFlightSql';
 import { sendEmail } from './email.service';
+import { emailBlockedReason } from './emailFeatures';
 import { failStaleSapImports } from './sapImportRecovery.service';
 import { frontendUrl } from './sessionAuth.service';
 import { SapMasterV2ImportService } from './sapMasterV2Import.service';
@@ -391,10 +392,13 @@ async function sendRunEmail(
   filesSkippedChecksum = 0,
   sourcePath?: string,
 ): Promise<boolean> {
+  // Switched off in Integrations > Email: nothing to look up or build.
+  if (emailBlockedReason('sap_import_report')) return false;
   const recipients = await findSapAutoImportAdminRecipients();
   const appUrl = frontendUrl();
   const input = { kind, frontendUrl: appUrl, files, filesSkippedChecksum, sourcePath };
   return sendEmail({
+    feature: 'sap_import_report',
     to: recipients,
     subject: buildSapAutoImportEmailSubject(input),
     html: buildSapAutoImportEmailHtml(input),

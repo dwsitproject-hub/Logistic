@@ -87,3 +87,21 @@ describe('what Save sends', () => {
     expect(countSettingChanges(settings, draft, new Set())).toBe(3)
   })
 })
+
+describe('summarizeIntegration: a switch with a default is not "not filled in"', () => {
+  it('counts an unset setting as missing only when it has no default to work with', () => {
+    const summary = summarizeIntegration([
+      setting({ key: 'A', kind: 'boolean', source: 'unset', value: null, defaultValue: 'true' }),
+      setting({ key: 'B', kind: 'boolean', source: 'unset', value: null, defaultValue: 'false' }),
+      setting({ key: 'C', kind: 'text', source: 'unset', value: null }),
+      setting({ key: 'D', kind: 'boolean', source: 'database', value: 'false', defaultValue: 'true' }),
+    ])
+    expect(summary.unset).toBe(1)
+    expect(summary.fromKlip).toBe(1)
+  })
+
+  it('files the switches of the Email integration under Sakelar', () => {
+    const groups = groupSettings([setting({ key: 'EMAIL_ENABLED', kind: 'boolean', defaultValue: 'true', source: 'unset', value: null })])
+    expect(groups.map((g) => g.id)).toEqual(['switches'])
+  })
+})

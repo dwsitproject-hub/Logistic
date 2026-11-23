@@ -106,7 +106,8 @@ describe('Submit to Jetty email: settings and rules', () => {
   const jps = findIntegration('jps')!;
 
   it('keeps only the master switch among the integration settings; recipients and wording live in the rules', () => {
-    expect(findSetting(jps, 'JPS_NOTIFY_ENABLED')).toBeTruthy();
+    // the master switch is now filed under Integrations > Email (the key is the same)
+    expect(findSetting(findIntegration('email')!, 'JPS_NOTIFY_ENABLED')).toBeTruthy();
     for (const key of ['JPS_NOTIFY_TO', 'JPS_NOTIFY_CC', 'JPS_NOTIFY_SUBJECT', 'JPS_NOTIFY_BODY']) {
       expect(findSetting(jps, key), key).toBeUndefined();
     }

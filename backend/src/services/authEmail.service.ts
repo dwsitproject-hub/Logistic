@@ -97,7 +97,7 @@ export async function sendInvitationEmail(
   app: AuthEmailApp = 'klip',
 ): Promise<boolean> {
   const mail = buildInvitationEmail({ fullName: user.fullName, link: buildSetPasswordUrl(token, appBaseUrl(app)), app });
-  return sendEmail({ to: [user.email], subject: mail.subject, html: mail.html });
+  return sendEmail({ feature: 'invitation', to: [user.email], subject: mail.subject, html: mail.html });
 }
 
 export async function sendPasswordResetEmail(
@@ -106,5 +106,5 @@ export async function sendPasswordResetEmail(
   app: AuthEmailApp = 'klip',
 ): Promise<boolean> {
   const mail = buildPasswordResetEmail({ fullName: user.fullName, link: buildSetPasswordUrl(token, appBaseUrl(app)), app });
-  return sendEmail({ to: [user.email], subject: mail.subject, html: mail.html });
+  return sendEmail({ feature: 'password_reset', to: [user.email], subject: mail.subject, html: mail.html });
 }

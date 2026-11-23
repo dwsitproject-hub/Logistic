@@ -93,6 +93,8 @@ export interface SettingView {
   min?: number;
   /** For a 'message': lines the editor shows. */
   rows?: number;
+  /** For a switch nobody saved: what it reads ('true' / 'false'). */
+  defaultValue?: string;
   prefix?: string;
   source: SettingSource;
   /** Plain value. Always null for secrets. */
@@ -125,6 +127,7 @@ function viewOf(def: SettingDef, integration: IntegrationDef): SettingView {
     requiresRestart: Boolean(def.requiresRestart),
     min: def.min,
     rows: def.rows,
+    defaultValue: def.defaultValue,
     prefix: def.prefix,
     source,
     value: isSecret ? null : integrationEnv(def.key) ?? null,

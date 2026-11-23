@@ -77,6 +77,10 @@ export const testIntegration = async (req: AuthRequest, res: Response): Promise<
   let result: { ok: boolean; message: string };
   if (integration.id === 'dhm') {
     result = await verifyDhmCredentials();
+  } else if (integration.id === 'email') {
+    // Sends nothing: connect, TLS and login against the mail server.
+    const { verifySmtpConnection } = await import('../services/email.service');
+    result = await verifySmtpConnection();
   } else if (integration.id === 'kmaps') {
     // KMAPS calls KLIP, so there is nothing to call out to: the test reports whether KLIP could authenticate KMAPS right now.
     result = partnerReadiness();
@@ -304,12 +308,15 @@ export const resendKmapsDeliveries = async (req: AuthRequest, res: Response): Pr
 export const getJpsNotifyRules = async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { listNotifyRules } = await import('../jps/notifyRules');
-    const { isNotifyEnabled, isProductionEnvironment, JPS_NOTIFY_NON_PRODUCTION_RECIPIENT } = await import('../jps/notifyEmail');
+    const { isProductionEnvironment, JPS_NOTIFY_NON_PRODUCTION_RECIPIENT } = await import('../jps/notifyEmail');
+    const { emailBlockedReason } = await import('../services/emailFeatures');
     res.json({
       success: true,
       data: {
         rules: await listNotifyRules(),
-        masterSwitchOn: isNotifyEnabled(),
+        // null = the mail would be sent; otherwise why not (Integrations > Email): master_off or feature_off
+        blockedReason: emailBlockedReason('jps_submit'),
+        masterSwitchOn: emailBlockedReason('jps_submit') === null,
         production: isProductionEnvironment(),
         // Outside production every mail goes here whatever a rule says; shown so a tester is not surprised.
         testRecipient: isProductionEnvironment() ? null : JPS_NOTIFY_NON_PRODUCTION_RECIPIENT,
