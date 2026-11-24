@@ -249,3 +249,16 @@ describe('commercialDocuments Created by filter', () => {
     expect(buildCommercialDocumentsListQuery({ createdBy: [], page: 1, limit: 50 }).sql).not.toContain('pcf');
   });
 });
+
+describe('commercialDocuments cancelled POs', () => {
+  it('a PO cancelled in SAP is neither listed nor counted, in every view (they share one scope)', () => {
+    const params = { dateFrom: '2026-01-01', dateTo: '2026-12-31' };
+    const list = buildCommercialDocumentsListQuery({ ...params, page: 1, limit: 20 });
+    for (const sql of [list.sql, list.countSql, buildCommercialDocumentsSummaryQuery(params).sql, buildCommercialDocumentsCompletenessByPlantQuery(params).sql]) {
+      expect(sql).toContain("UPPER(TRIM(COALESCE(e.status, ''))) NOT LIKE 'CANCEL%'");
+    }
+  });
+  it('the rule does not depend on whether documents were uploaded', () => {
+    expect(buildCommercialDocumentsListQuery({}).sql).not.toMatch(/CANCEL%'[^]*uploaded_count = 0/);
+  });
+});
