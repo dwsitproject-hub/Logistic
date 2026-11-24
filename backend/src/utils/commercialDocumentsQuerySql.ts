@@ -12,6 +12,14 @@ export const COMMERCIAL_DOCS_OPEN_STATUS_SQL = `(
   )
 )`;
 
+/**
+ * A PO SAP has cancelled is not part of COD: it is neither listed nor counted. KLIP stores contracts.status = 'Cancelled' when every line of the PO is
+ * deleted in SAP (Delete PO / Delete STO Status). The list, the summary cards, the Dashboard Completeness (by plant, user, document) and the Excel export
+ * all read the same scope, so they agree. A PO whose cancellation is only one deleted STO of several is not cancelled in KLIP and stays.
+ * (Ryan, 2026-11-24: PO 1011003239, cancelled in SAP, was still listed; documents already uploaded for a cancelled PO are not shown either.)
+ */
+export const COMMERCIAL_DOCS_NOT_CANCELLED_SQL = `UPPER(TRIM(COALESCE(e.status, ''))) NOT LIKE 'CANCEL%'`;
+
 export type CommercialDocumentsListParams = {
   dateFrom?: string | null;
   dateTo?: string | null;
@@ -292,7 +300,7 @@ function uploadedTypesExpr(): string {
 function buildScopeWhere(params: CommercialDocumentsScopeParams): { where: string[]; values: unknown[]; nextIndex: number } {
   const values: unknown[] = [];
   let idx = 1;
-  const where: string[] = ['1=1'];
+  const where: string[] = ['1=1', COMMERCIAL_DOCS_NOT_CANCELLED_SQL];
 
   if (params.dateFrom) {
     where.push(`e.contract_date >= $${idx++}::date`);
