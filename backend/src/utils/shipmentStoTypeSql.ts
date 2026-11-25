@@ -273,6 +273,19 @@ export function shipmentListSeaDisplayStoNumberExpr(
           AND NULLIF(TRIM(sto_shell.shipment_id::text), '') = COALESCE((${seaStoPick}), ${contractSto})
           AND NULLIF(TRIM(sto_shell.operation_id::text), '') IS NOT DISTINCT FROM ${operationId}
       )
+      -- A B2B child's shipment is listed under its ORIGIN (c = origin, s.contract_id = the child). The shell above is looked up on c, the origin, which carries no STO, so it never
+      -- finds the row's own: a KLIP plan that SAP gave its STO (merged / reused by findB2bOriginPlannedShipmentForSto) kept its OP- id and showed "-" (MT. ARCADIA, 2026-11-25).
+      -- Its own shipment_id is then a STO registered on its own contract: that is the STO's voyage.
+      AND NOT (
+        ${shipmentAlias}.contract_id IS DISTINCT FROM ${contractAlias}.id
+        AND NULLIF(TRIM(${shipmentAlias}.shipment_id::text), '') ~ '^[0-9]+$'
+        AND EXISTS (
+          SELECT 1
+          FROM contract_stos cs_own
+          WHERE cs_own.contract_id = ${shipmentAlias}.contract_id
+            AND TRIM(cs_own.sto_number::text) = TRIM(${shipmentAlias}.shipment_id::text)
+        )
+      )
     THEN NULL
     ELSE NULLIF(TRIM((COALESCE(
       CASE
