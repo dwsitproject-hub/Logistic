@@ -5,6 +5,7 @@ import multer from 'multer';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { uploadsRootProblem } from '../utils/uploadsGuard';
+import { createStepTimer } from '../utils/stepTimer';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import {
   buildCommercialDocumentStoredName,
@@ -739,6 +740,9 @@ async function replacePreviousContractFiles(poNumber: string): Promise<number> {
 }
 
 export const uploadCommercialDocument = async (req: AuthRequest, res: Response) => {
+  // Where an upload spends its time (Server-Timing header + one log line): recv = the file arriving and being written by multer, checks = the role check
+  // and the virus scan, lookup = the database lookups and the removal of a replaced contract, disk = naming, rename and read-back on the share, db = the inserts.
+  const timer = createStepTimer(typeof res.locals?.requestStartNs === 'bigint' ? res.locals.requestStartNs : undefined);
   try {
     const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
     const contractExtNo = String(req.body?.contract_ext_no || '').trim();
@@ -812,6 +816,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       return res.status(503).json({ success: false, error: { message: 'Virus scanner unavailable' } });
     }
 
+    timer.mark('checks');
     let existingFileCount = 0;
     let replacedContractCount = 0;
     if (documentType === 'contract') {
@@ -822,6 +827,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
 
     // The version suffix follows the number of files on the record, so deleting an earlier version frees a number that a later version still
     // holds on disk (3 versions, delete the first: the next upload would be "(3)" again). Walk up to the first name no file has.
+    timer.mark('lookup');
     const uploadDir = path.dirname(file.path);
     let storedName = '';
     let finalAbsPath = '';
@@ -860,6 +866,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       return res.status(500).json({ success: false, error: { message: 'The file could not be saved on the server. Nothing was recorded; please try again.' } });
     }
 
+    timer.mark('disk');
     const relativePath = toRelativeUploadPath(finalAbsPath);
     const userId = req.user?.id ?? null;
     const userName = req.user?.username || req.user?.email || 'Unknown';
@@ -886,6 +893,9 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     auditCommercial(req, 'UPLOAD', savedFile.id, {
       po_number: poNumber, contract_ext_no: contractExtNo, document_type: documentType, file_name: storedName, action_type: actionType,
     });
+    timer.mark('db');
+    res.setHeader('Server-Timing', timer.header());
+    logger.info('commdocs upload timing (ms)', { ...timer.summary(), bytes: file.size, type: documentType });
     return res.json({
       success: true,
       message: actionType === 'ADD' ? 'Document uploaded' : 'New document version uploaded',
