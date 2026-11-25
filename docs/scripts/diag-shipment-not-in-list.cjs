@@ -33,7 +33,7 @@ const t = (v) => (v == null || v === '' ? '-' : v instanceof Date ? v.toISOStrin
 
   const rows = await q(
     `SELECT s.id, s.status, s.shipment_id, s.operation_id, s.operation_id_source, s.vessel_name, s.vessel_code, s.port_of_loading, s.port_of_discharge,
-            s.created_at, s.eta_discharge_arrival,
+            s.created_at, s.updated_at, s.eta_discharge_arrival,
             c.contract_id, c.po_number, c.status AS contract_status, c.contract_date, c.incoterm AS contract_incoterm,
             ${contractEffectiveIncotermExpr('c')} AS effective_incoterm,
             c.product, c.supplier, c.quantity_ordered,
@@ -63,6 +63,7 @@ const t = (v) => (v == null || v === '' ? '-' : v instanceof Date ? v.toISOStrin
   const inScope = (inc) => ['CIF', 'FOB', 'CFR'].includes(String(inc || '').toUpperCase().trim())
   for (const r of rows) {
     console.log(`\n  shipment ${r.id}`)
+    console.log(`    written    : created ${t(r.created_at)}  last updated ${r.updated_at ? new Date(r.updated_at).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : '-'}`)
     console.log(`    ids        : shipment_id ${t(r.shipment_id)}  operation_id ${t(r.operation_id)} (source ${t(r.operation_id_source)})`)
     console.log(`    contract   : ${t(r.contract_id)}  PO ${t(r.po_number)}  status ${t(r.contract_status)}  date ${t(r.contract_date)}  product ${t(r.product)}  qty ${t(r.quantity_ordered)}`)
     console.log(`    vessel     : shipment "${t(r.vessel_name)}"  code ${t(r.vessel_code)}  master vessel "${t(r.master_vessel_name)}"`)
@@ -85,6 +86,34 @@ const t = (v) => (v == null || v === '' ? '-' : v instanceof Date ? v.toISOStrin
     const fails = [!okInc && 'incoterm', !okStatus && 'cancelled', okYtd === false && 'YTD'].filter(Boolean)
     console.log(`    => ${fails.length ? 'left out by: ' + fails.join(', ') : 'no scope rule excludes it: check the region/plant and discharge-port filters of the top bar, and the stage filter'}`)
   }
+  // What happened to these rows and when: their audit trail, and the SAP imports, so a change can be told apart as a person's edit, an import, or nothing.
+  const ids = rows.map((r) => String(r.id))
+  console.log('\n== 2. audit log of these shipments (oldest first)')
+  try {
+    const audit = await q(
+      `SELECT a.timestamp AS at, a.action, a.entity_id::text AS shipment, COALESCE(u.username, a.user_id::text) AS who,
+              left(COALESCE(a.after_data->>'status', ''), 20) AS new_status
+         FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id
+        WHERE a.entity_id::text = ANY($1::text[]) ORDER BY a.timestamp DESC LIMIT 25`,
+      [ids],
+    )
+    if (!audit.length) console.log('  no audit entry: nothing a user did, or an import did it')
+    for (const a of audit.reverse()) {
+      console.log(`  ${new Date(a.at).toISOString().replace('T', ' ').slice(0, 19)}  ${String(a.action).padEnd(18)} ${a.shipment.slice(0, 8)}  by ${t(a.who)}  ${a.new_status ? 'status ' + a.new_status : ''}`)
+    }
+  } catch (e) {
+    console.log('  (audit section failed: ' + String(e && e.message ? e.message : e).slice(0, 160) + ')')
+  }
+  console.log('\n== 3. the latest SAP imports (when SAP data could have changed these rows)')
+  try {
+    const imports = await q(`SELECT status, source, file_name, import_timestamp FROM sap_data_imports ORDER BY import_timestamp DESC NULLS LAST LIMIT 6`)
+    for (const i of imports) {
+      console.log(`  ${i.import_timestamp ? new Date(i.import_timestamp).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : '-'}  ${t(i.status).padEnd(12)} ${t(i.source).padEnd(10)} ${t(i.file_name)}`)
+    }
+  } catch (e) {
+    console.log('  (import section failed: ' + String(e && e.message ? e.message : e).slice(0, 160) + ')')
+  }
+  console.log('\nHow to read it: a row cancelled or updated at the time of an import was changed by SAP; at another time, by a person (section 2 names who). A row with no change still exists, and only the page filters hid it (the Discharge Port chip of the top bar).')
   await pool.end()
 })().catch((e) => {
   console.error(e && e.message ? e.message : e)
