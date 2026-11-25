@@ -2,6 +2,7 @@ import express from 'express';
 import { authenticateToken, authorize, authorizeAnyPermission, authorizePermission } from '../middleware/auth';
 import { requireUploadsShare } from '../utils/uploadsGuard';
 import { stampRequestStart } from '../utils/stepTimer';
+import { slowRequestLog } from '../utils/slowRequestLog';
 import {
   commercialDocumentUpload,
   deleteCommercialDocument,
@@ -33,6 +34,9 @@ import {
 } from '../controllers/settlementInvoice.controller';
 
 const router = express.Router();
+
+// Every request of this router slower than COMMDOCS_SLOW_REQUEST_MS (default 1000) is logged with its duration: see utils/slowRequestLog.ts.
+router.use(slowRequestLog('commdocs', Number(process.env.COMMDOCS_SLOW_REQUEST_MS) || 1000));
 
 /*
  * Every route checks the page permission on the server. The page keys used to be checked in the browser only, so any signed-in

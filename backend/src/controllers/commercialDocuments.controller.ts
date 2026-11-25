@@ -895,7 +895,15 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     });
     timer.mark('db');
     res.setHeader('Server-Timing', timer.header());
-    logger.info('commdocs upload timing (ms)', { ...timer.summary(), bytes: file.size, type: documentType });
+    const timing = timer.summary();
+    logger.info('commdocs upload timing (ms)', {
+      ...timing,
+      bytes: file.size,
+      // How fast the file arrived: low = the network from the user's office (or the share multer writes to), high = look at checks / lookup / disk / db.
+      recvKBps: timing.recv > 0 ? Math.round(file.size / 1024 / (timing.recv / 1000)) : null,
+      type: documentType,
+      user: req.user?.username || req.user?.email || null,
+    });
     return res.json({
       success: true,
       message: actionType === 'ADD' ? 'Document uploaded' : 'New document version uploaded',
