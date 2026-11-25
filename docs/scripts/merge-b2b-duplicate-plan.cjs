@@ -107,15 +107,40 @@ const show = (v) => (v == null ? '-' : v instanceof Date ? v.toISOString().slice
       ORDER BY 1`,
   )).rows;
   const moves = [];
+  const vlpFills = [];
   console.log('\n2. tables that point at a shipment (rows on KEEP / on DROP):');
   for (const f of fks) {
     if (!/^[a-z0-9_."]+$/i.test(f.tbl) || !/^[a-z0-9_]+$/i.test(f.col)) continue;
     const k = Number((await pool.query(`SELECT count(*)::int AS n FROM ${f.tbl} WHERE "${f.col}" = $1::uuid`, [keep.id])).rows[0].n);
     const d = Number((await pool.query(`SELECT count(*)::int AS n FROM ${f.tbl} WHERE "${f.col}" = $1::uuid`, [drop.id])).rows[0].n);
     if (k === 0 && d === 0) continue;
-    const action = d === 0 ? 'nothing to move' : k === 0 ? 'MOVE to KEEP' : 'both have rows: KEEP\'s stay, the SAP row\'s are left in place';
+    const action = d === 0 ? 'nothing to move' : k === 0 ? 'MOVE to KEEP' : 'both have rows: KEEP\'s stay, the SAP row\'s are left in place (port rows: see the pairing below)';
     console.log(`   ${f.tbl.padEnd(34)} ${String(k).padStart(4)} / ${String(d).padStart(4)}   ${action}`);
     if (d > 0 && k === 0) moves.push(f);
+    // Both rows have port rows. The plan's are usually empty skeletons, the SAP row's carry the port-level dates. Pair them by kind (loading / discharge, in creation order) and
+    // fill the dates and quantities the plan's port row has empty. The port NAME is not filled: the plan's typed port stays what the list shows as KLIP's.
+    if (d > 0 && k > 0 && /vessel_loading_ports/.test(f.tbl)) {
+      const load = async (id) =>
+        (await pool.query(`SELECT to_jsonb(v) AS j FROM ${f.tbl} v WHERE v."${f.col}" = $1::uuid ORDER BY COALESCE(v.is_discharge_port, false), v.created_at, v.id`, [id])).rows.map((r) => r.j);
+      const kRows = await load(keep.id);
+      const dRows = await load(drop.id);
+      const byKind = (rows, kind) => rows.filter((j) => Boolean(j.is_discharge_port) === kind);
+      for (const kind of [false, true]) {
+        const ks = byKind(kRows, kind);
+        const ds = byKind(dRows, kind);
+        ds.forEach((dj, i) => {
+          const kj = ks[i];
+          const label = `${kind ? 'discharge' : 'loading '} #${i + 1}`;
+          if (!kj) {
+            console.log(`      ${label}: SAP port row "${show(dj.port_name)}" has no partner on the plan - left in place`);
+            return;
+          }
+          const cols = Object.keys(dj).filter((c) => /^[a-z0-9_]+$/.test(c) && /^(eta_|ata_|quantity)/.test(c) && blank(kj[c]) && !blank(dj[c]));
+          console.log(`      ${label}: plan port "${show(kj.port_name)}", SAP port "${show(dj.port_name)}" -> ${cols.length ? 'fills ' + cols.map((c) => `${c}=${show(dj[c])}`).join(', ') : 'nothing to fill'}`);
+          if (cols.length) vlpFills.push({ tbl: f.tbl, keepRow: kj.id, dropRow: dj.id, cols });
+        });
+      }
+    }
   }
 
   // 3. assignments
@@ -147,6 +172,12 @@ const show = (v) => (v == null ? '-' : v instanceof Date ? v.toISOString().slice
     );
     for (const f of moves) {
       await client.query(`UPDATE ${f.tbl} SET "${f.col}" = $1::uuid WHERE "${f.col}" = $2::uuid`, [keep.id, drop.id]);
+    }
+    for (const v of vlpFills) {
+      await client.query(
+        `UPDATE ${v.tbl} k SET ${v.cols.map((c) => `"${c}" = d."${c}"`).join(', ')}, updated_at = CURRENT_TIMESTAMP FROM ${v.tbl} d WHERE k.id = $1::uuid AND d.id = $2::uuid`,
+        [v.keepRow, v.dropRow],
+      );
     }
     const setFill = fill.map((n) => `"${n}" = d."${n}"`);
     await client.query(
