@@ -41,6 +41,7 @@ import {
 import {
   finalizeSapShipmentAfterUpsert,
   findKlipPlannedStoSupersedeCandidate,
+  findB2bOriginPlannedShipmentForSto,
   findSapShipmentSupersedeCandidate,
   findShipmentByPoAndSto,
   hasKlipShipmentActivity,
@@ -1287,6 +1288,27 @@ export class SapDataDistributionService {
       );
       if (poMatch && poMatch.contractUuid === contractUuid) {
         targetShipmentId = poMatch.id;
+      }
+    }
+
+    // B2B: SAP books the STO on the CHILD contract while the KLIP plan of the cargo sits on the ORIGIN. Without this the plan is never found
+    // and a second row is inserted (MT. ARCADIA, 2026-11-18). The plan is reused, moved to the child and renamed to the STO; its KLIP fields stay protected.
+    if (!targetShipmentId && contractUuid && isSapSourcedShipmentId(shipmentIdFromSap)) {
+      const originPlanId = await findB2bOriginPlannedShipmentForSto(
+        client,
+        contractUuid,
+        String(shipmentIdFromSap).trim(),
+        vesselName,
+        (a, b) => this.stringSimilarity(a, b),
+      );
+      if (originPlanId) {
+        targetShipmentId = originPlanId;
+        logger.info('upsertShipment: reusing the KLIP plan of the B2B origin for the STO SAP booked on the child', {
+          contractId,
+          originPlanShipmentUuid: originPlanId,
+          sapShipmentId: shipmentIdFromSap,
+          poNumber: contractPoNumber,
+        });
       }
     }
 

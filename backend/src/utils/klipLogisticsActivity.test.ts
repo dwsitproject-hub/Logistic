@@ -7,6 +7,8 @@ import {
   canSupersedeShipmentForStoChange,
   fetchLatestSapStoKeysForPo,
   findKlipPlannedStoSupersedeCandidate,
+  findB2bOriginPlannedShipmentForSto,
+  pickB2bOriginPlan,
   finalizeSapShipmentAfterUpsert,
   isKlipManualShipmentId,
   isPlaceholderShipmentEligibleForSapConsolidate,
@@ -229,6 +231,47 @@ describe('findKlipPlannedStoSupersedeCandidate', () => {
     await expect(
       findKlipPlannedStoSupersedeCandidate(db, contractUuid, '1016010636', '1011002977'),
     ).resolves.toBeNull();
+  });
+});
+
+describe('B2B origin plan for the STO SAP booked on the child (MT. ARCADIA)', () => {
+  const same = (a: string, b: string) => (a.trim().toUpperCase() === b.trim().toUpperCase() ? 1 : 0);
+  const plan = (id: string, vessel: string | null) => ({ id, shipment_id: `MNL-${id}`, vessel_name: vessel });
+
+  it('picks the only plan of the same vessel', () => {
+    expect(pickB2bOriginPlan([plan('a', 'MT. ARCADIA')], 'MT. ARCADIA', same)).toBe('a');
+  });
+
+  it('does not take a plan of another vessel (a different voyage)', () => {
+    expect(pickB2bOriginPlan([plan('a', 'MT. OTHER')], 'MT. ARCADIA', same)).toBeNull();
+  });
+
+  it('among several plans takes the one of the vessel, and none when two match', () => {
+    expect(pickB2bOriginPlan([plan('a', 'MT. OTHER'), plan('b', 'MT. ARCADIA')], 'MT. ARCADIA', same)).toBe('b');
+    expect(pickB2bOriginPlan([plan('a', 'MT. ARCADIA'), plan('b', 'MT. ARCADIA')], 'MT. ARCADIA', same)).toBeNull();
+  });
+
+  it('takes a plan without a vessel only when it is the only plan', () => {
+    expect(pickB2bOriginPlan([plan('a', null)], 'MT. ARCADIA', same)).toBe('a');
+    expect(pickB2bOriginPlan([plan('a', null), plan('b', null)], 'MT. ARCADIA', same)).toBeNull();
+  });
+
+  it('with no vessel from SAP takes the only plan, not one of several', () => {
+    expect(pickB2bOriginPlan([plan('a', 'MT. ARCADIA')], '', same)).toBe('a');
+    expect(pickB2bOriginPlan([plan('a', 'X'), plan('b', 'Y')], null, same)).toBeNull();
+  });
+
+  it('finds the plan through the B2B link of the child, and ignores a non-STO id', async () => {
+    const seen: string[] = [];
+    const db = mockDb(vi.fn(async (text: string, params?: unknown[]) => {
+      seen.push(`${text.includes('contract_reference_po_raw')}:${params?.[0]}`);
+      return { rows: [plan('271a1e58', 'MT. ARCADIA')] };
+    }));
+    const child = '11111111-2222-3333-4444-555555555555';
+    await expect(findB2bOriginPlannedShipmentForSto(db, child, '1006021152', 'MT. ARCADIA', same)).resolves.toBe('271a1e58');
+    expect(seen).toEqual([`true:${child}`]);
+    await expect(findB2bOriginPlannedShipmentForSto(db, child, 'MNL-123', 'MT. ARCADIA', same)).resolves.toBeNull();
+    expect(seen).toHaveLength(1);
   });
 });
 

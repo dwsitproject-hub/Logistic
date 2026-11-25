@@ -437,6 +437,71 @@ export async function findKlipPlannedStoSupersedeCandidate(
   return null;
 }
 
+export interface B2bOriginPlanCandidate {
+  id: string;
+  shipment_id: string | null;
+  vessel_name: string | null;
+}
+
+/**
+ * Which KLIP plan on the ORIGIN of a B2B chain does the STO of the child belong to?
+ * Strict on purpose: a wrong pick would swap two voyages, a missed pick only leaves the row doubled where it can be seen.
+ *  - SAP names a vessel: the plans whose vessel is at least `minScore` similar; exactly one wins. A plan without a vessel counts only when it is the only plan.
+ *  - SAP names no vessel: the only plan wins.
+ *  - Anything else (two similar plans, a plan of another vessel): none.
+ */
+export function pickB2bOriginPlan(
+  candidates: B2bOriginPlanCandidate[],
+  sapVesselName: unknown,
+  similarity: (a: string, b: string) => number,
+  minScore = 0.8,
+): string | null {
+  const sapVessel = String(sapVesselName ?? '').trim();
+  const named = candidates.filter((c) => String(c.vessel_name ?? '').trim() !== '');
+  if (sapVessel) {
+    const strong = named.filter((c) => similarity(sapVessel, String(c.vessel_name)) >= minScore);
+    if (strong.length === 1) return strong[0].id;
+    if (strong.length > 1) return null;
+    return candidates.length === 1 && named.length === 0 ? candidates[0].id : null;
+  }
+  return candidates.length === 1 ? candidates[0].id : null;
+}
+
+/**
+ * SAP books a B2B STO on the CHILD contract, but the KLIP plan of the cargo lives on the ORIGIN (the contract KLIP shows). Looking only among the child's own shipments never finds
+ * that plan, so SAP inserted a second row (MT. ARCADIA, PO 9141001942, 2026-11-18). Returns the origin's KLIP plan this STO belongs to, so the row is reused: the UPDATE of
+ * upsertShipment moves it to the child's contract, finalizeSapShipmentAfterUpsert renames it to the STO, and the KLIP-entered fields stay protected (the row is a KLIP plan).
+ * Unlike findKlipPlannedStoSupersedeCandidate it does not refuse a plan that already has documents or daily deliverables: nothing the user typed is overwritten.
+ */
+export async function findB2bOriginPlannedShipmentForSto(
+  db: Queryable,
+  childContractUuid: string,
+  newSapShipmentId: string,
+  sapVesselName: unknown,
+  similarity: (a: string, b: string) => number,
+): Promise<string | null> {
+  const sto = String(newSapShipmentId ?? '').trim();
+  if (!sto || !childContractUuid || !isSapSourcedShipmentId(sto)) return null;
+
+  const res = await runQuery<B2bOriginPlanCandidate>(
+    db,
+    `SELECT s.id::text AS id, s.shipment_id, s.vessel_name
+       FROM contracts c
+       JOIN contract_latest_spd_snapshot chb
+         ON chb.contract_number = c.contract_id
+        AND UPPER(COALESCE(chb.b2b_flag_raw, '')) = 'B2B'
+        AND NULLIF(TRIM(chb.contract_reference_po_raw), '') IS NOT NULL
+       JOIN contracts oc ON TRIM(oc.po_number::text) = TRIM(chb.contract_reference_po_raw) AND oc.id <> c.id
+       JOIN shipments s ON s.contract_id = oc.id
+      WHERE c.id = $1::uuid
+        AND UPPER(COALESCE(s.status, '')) NOT IN ('CANCELLED', 'CANCELED', 'COMPLETED')
+        AND (s.shipment_id LIKE 'MNL-%' OR s.shipment_id LIKE 'MSEA-%')
+      ORDER BY s.created_at DESC`,
+    [childContractUuid],
+  );
+  return pickB2bOriginPlan(res.rows, sapVesselName, similarity);
+}
+
 /** Cancel numeric SAP ghost rows on the same contract after keeper is renamed to the new STO. */
 export async function reconcileSupersededNumericStoSiblings(
   db: Queryable,
