@@ -18,11 +18,17 @@ const DOT_CLASS: Record<SapImportTone, string> = {
   neutral: 'bg-gray-400',
 }
 
-/** A status as a small chip with a coloured dot (the dot pulses while the import is running). */
-export function SapImportStatusChip({ status }: { status: string }) {
-  const meta = sapImportStatusMeta(status)
+/**
+ * A status as a small chip with a coloured dot (the dot pulses while the import is running).
+ * `meta` lets another page (WB Data) draw its own labels and tones in the same chip; without it the SAP import statuses are used.
+ */
+export function SapImportStatusChip({ status, meta: given }: { status: string; meta?: { label: string; tone: SapImportTone; hint?: string } }) {
+  const meta = given ?? sapImportStatusMeta(status)
   return (
-    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${TONE_CLASS[meta.tone]}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${TONE_CLASS[meta.tone]}`}
+      title={given?.hint}
+    >
       <span className={`h-1.5 w-1.5 rounded-full ${DOT_CLASS[meta.tone]}`} aria-hidden />
       {meta.label}
     </span>

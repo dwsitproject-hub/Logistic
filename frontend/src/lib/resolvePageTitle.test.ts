@@ -5,6 +5,7 @@ describe('resolvePageTitle', () => {
   it('uses exact nav names', () => {
     expect(resolvePageTitle('/contracts')).toBe('Contracts')
     expect(resolvePageTitle('/sap-imports')).toBe('Logistics Data')
+    expect(resolvePageTitle('/wb-data')).toBe('WB Data')
     expect(resolvePageTitle('/contract-performance')).toBe('Contract Performance')
   })
 
