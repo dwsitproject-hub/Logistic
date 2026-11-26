@@ -59,6 +59,9 @@ export function DocumentDrawer({
   const [deleting, setDeleting] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const previewUrl = useRef<string | null>(null)
+  // The files this person has uploaded in this drawer, by the id the server gave them. The preview of a version that was just uploaded is shown from the file the
+  // browser already holds, instead of fetching it back from the server (a read of the share that took 1 - 2 s, and now and then 10 - 20 s).
+  const justUploaded = useRef<Map<string, File>>(new Map())
 
   const qs = toQuery({ contract_ext_no: row.contract_ext_no })
 
@@ -123,7 +126,8 @@ export function DocumentDrawer({
     if (!current) return
     let alive = true
     setPreviewLoading(true)
-    apiBlob(`/commercial-documents/file/${current.id}/view`)
+    const held = justUploaded.current.get(current.id)
+    ;(held ? Promise.resolve({ blob: held as Blob }) : apiBlob(`/commercial-documents/file/${current.id}/view`))
       .then(async ({ blob }) => {
         const isImage = blob.type.startsWith('image/')
         let shown = blob
@@ -151,7 +155,13 @@ export function DocumentDrawer({
     }
   }, [current?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => () => dropPreview(), [])
+  useEffect(
+    () => () => {
+      dropPreview()
+      justUploaded.current.clear()
+    },
+    [],
+  )
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -182,10 +192,16 @@ export function DocumentDrawer({
       form.append('buyer_name', row.buyer || row.supplier || '')
       form.append('contract_date', row.contract_date || '')
       form.append('file', file)
-      const res = await apiJson<{ file_name: string }>('/commercial-documents/upload', { method: 'POST', body: form })
+      const res = await apiJson<{ file_name: string; file_id?: string }>('/commercial-documents/upload', { method: 'POST', body: form })
       toast(`${DOCUMENT_LABELS[target]} uploaded · ${res.data?.file_name || file.name}`)
-      await load()
+      if (res.data?.file_id) {
+        justUploaded.current.set(res.data.file_id, file)
+        // A drawer open for a long session must not keep every file: only the latest few.
+        while (justUploaded.current.size > 5) justUploaded.current.delete(justUploaded.current.keys().next().value as string)
+      }
+      // The upload is done: the spinner stops here. The file list and the table behind the drawer refresh without holding the person up.
       onChanged()
+      void load()
     } catch (err) {
       setActionError(errorMessage(err, 'Upload failed. Please try again.'))
     } finally {
