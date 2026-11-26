@@ -744,6 +744,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
   // and the virus scan, lookup = the database lookups and the removal of a replaced contract, disk = naming, rename and read-back on the share, db = the inserts.
   const timer = createStepTimer(typeof res.locals?.requestStartNs === 'bigint' ? res.locals.requestStartNs : undefined);
   try {
+    timer.mark('recv'); // the file has arrived and multer has written it
     const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
     const contractExtNo = String(req.body?.contract_ext_no || '').trim();
     const documentType = String(req.body?.document_type || '').trim();
