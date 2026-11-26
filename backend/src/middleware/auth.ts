@@ -111,6 +111,32 @@ export const authorizeSapImportsView = async (
   });
 };
 
+/**
+ * A read-only page guarded by one permission: ADMIN, or whoever the roles screen grants `permissionKey` view to (scoped by the user's level / transport type).
+ * The same rule as authorizeSapImportsView without its MANAGEMENT shortcut - a page that is new is granted, not assumed.
+ */
+export const authorizePermissionView =
+  (permissionKey: string) =>
+  async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.user) {
+      res.status(401).json({ success: false, error: { message: 'Unauthorized' } });
+      return;
+    }
+    if (req.user.role === 'ADMIN') {
+      next();
+      return;
+    }
+    try {
+      if (await userHasPermissionFlag(req.user.id, req.user.role, permissionKey, 'can_view')) {
+        next();
+        return;
+      }
+    } catch (error) {
+      logger.error(`authorizePermissionView(${permissionKey}) permission lookup failed:`, error);
+    }
+    res.status(403).json({ success: false, error: { message: 'Insufficient permissions' } });
+  };
+
 export async function userHasPermissionFlag(
   userId: string,
   roleName: string,

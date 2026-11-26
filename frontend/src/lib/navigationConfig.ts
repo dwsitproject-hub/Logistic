@@ -22,6 +22,7 @@ import {
   PackageMinus,
   PieChart,
   PlugZap,
+  Scale,
   ScrollText,
   Ship,
   Sparkles,
@@ -128,6 +129,8 @@ export const ALL_NAV_ITEMS: NavItem[] = [
   // The same page the Users page opens from its activity button (who clicked, edited and how long they were active). ADMIN only, as the page itself is.
   { name: 'User Activity Log', href: '/users/activity-log', icon: History, roles: ['ADMIN'], permissionKey: 'page.users', group: 'system' },
   { name: 'Logistics Data', href: '/sap-imports', icon: DatabaseZap, roles: ['ALL'], permissionKey: 'page.sap', group: 'import' },
+  // The history of the weighbridge uploads made on Trucking (who, when, what it wrote). Read-only; granted through page.wb_data (migration 273).
+  { name: 'WB Data', href: '/wb-data', icon: Scale, roles: ['ALL'], permissionKey: 'page.wb_data', group: 'import' },
   { name: 'Claim Data', href: '/claim-data', icon: FileSpreadsheet, roles: ['ADMIN'], permissionKey: 'page.claim_data', group: 'import' },
   // Holds the credentials KLIP uses on other systems - ADMIN only, and no read-only tier (migration 189).
   {

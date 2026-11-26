@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import jwt from 'jsonwebtoken';
-import { authenticateToken, authorize, authorizeAnyPermission, authorizeSapImportsUpload, authorizeSapImportsView, AuthRequest } from './auth';
+import { authenticateToken, authorize, authorizeAnyPermission, authorizePermissionView, authorizeSapImportsUpload, authorizeSapImportsView, AuthRequest } from './auth';
 import type { Response, NextFunction } from 'express';
 
 vi.mock('../database/connection', () => ({
@@ -225,6 +225,52 @@ describe('authorizeSapImportsView', () => {
     const res = mockRes();
     const next = vi.fn() as NextFunction;
     await authorizeSapImportsView(req, res, next);
+    expect(res.statusCode).toBe(403);
+    expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe('authorizePermissionView (WB Data)', () => {
+  const guard = authorizePermissionView('page.wb_data');
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('401 when user missing (negative)', async () => {
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    await guard({} as AuthRequest, res, next);
+    expect(res.statusCode).toBe(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('next for ADMIN without a DB lookup, but NOT for MANAGEMENT (a new page is granted, not assumed)', async () => {
+    const admin = vi.fn() as NextFunction;
+    await guard({ user: { id: 'u1', role: 'ADMIN' } } as AuthRequest, mockRes(), admin);
+    expect(admin).toHaveBeenCalled();
+    expect(vi.mocked(query)).not.toHaveBeenCalled();
+
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ allowed: false }] } as never);
+    const res = mockRes();
+    const management = vi.fn() as NextFunction;
+    await guard({ user: { id: 'u2', role: 'MANAGEMENT' } } as AuthRequest, res, management);
+    expect(res.statusCode).toBe(403);
+    expect(management).not.toHaveBeenCalled();
+  });
+
+  it('next when page.wb_data can_view is granted at the user level, asking for exactly that permission (positive)', async () => {
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ allowed: true }] } as never);
+    const next = vi.fn() as NextFunction;
+    await guard({ user: { id: 'u3', role: 'LOGISTICS' } } as AuthRequest, mockRes(), next);
+    expect(next).toHaveBeenCalled();
+    expect(vi.mocked(query).mock.calls[0][1]).toEqual(['u3', 'LOGISTICS', 'page.wb_data']);
+  });
+
+  it('403, not 500, when the permission lookup itself fails (negative)', async () => {
+    vi.mocked(query).mockRejectedValueOnce(new Error('connection reset') as never);
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    await guard({ user: { id: 'u4', role: 'LOGISTICS' } } as AuthRequest, res, next);
     expect(res.statusCode).toBe(403);
     expect(next).not.toHaveBeenCalled();
   });
