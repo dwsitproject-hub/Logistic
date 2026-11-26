@@ -77,6 +77,28 @@ function localThenCopy() {
   return out;
 }
 
+/** Creating a NEW folder on the share and copying the first file into it: what the first document of a PO does (every other document finds the folder there). */
+function newFolderOn(base) {
+  const out = { 'folder exists?': [], 'mkdir new': [], 'copy into it': [], 'readback': [], 'unlink+rmdir': [] };
+  const tmp = path.join(localDir, 'nf.tmp');
+  fs.writeFileSync(tmp, PAYLOAD);
+  for (let i = 0; i < N; i += 1) {
+    const dir = path.join(base, `po-${Date.now()}-${i}`);
+    const file = path.join(dir, 'first.pdf');
+    out['folder exists?'].push(timed(() => fs.existsSync(dir)));
+    out['mkdir new'].push(timed(() => fs.mkdirSync(dir, { recursive: true })));
+    out['copy into it'].push(timed(() => fs.copyFileSync(tmp, file, fs.constants.COPYFILE_EXCL)));
+    out.readback.push(timed(() => fs.statSync(file)));
+    out['unlink+rmdir'].push(
+      timed(() => {
+        fs.unlinkSync(file);
+        fs.rmdirSync(dir);
+      }),
+    );
+  }
+  return out;
+}
+
 function cleanup() {
   try {
     fs.rmSync(shareDir, { recursive: true, force: true });
@@ -110,6 +132,12 @@ try {
   for (const k of Object.keys(alt)) console.log(row(k, alt[k]));
   const sumAlt = alt['local-write'].map((_, i) => Math.round((alt['local-write'][i] + alt['copy-to-share'][i] + alt.readback[i]) * 10) / 10);
   console.log(row('local+copy+read', sumAlt));
+
+  console.log('\n=== the FIRST document of a PO: a new folder, then the file in it (the folders are created inside the scratch folder)');
+  const nf = newFolderOn(shareDir);
+  for (const k of Object.keys(nf)) console.log(row(k, nf[k]));
+  const sumNf = nf['mkdir new'].map((_, i) => Math.round((nf['folder exists?'][i] + nf['mkdir new'][i] + nf['copy into it'][i] + nf.readback[i]) * 10) / 10);
+  console.log(row('exists+mkdir+copy+read', sumNf));
 
   console.log('\nHow to read it: the step with median or p90 near 1000 ms is the stall. If "write+name+rename+read" is much slower than "local+copy+read", writing locally first and copying once to the share is worth building. If copy-to-share stalls as well, the share itself is the limit and fewer operations is all that can be saved.');
 } finally {

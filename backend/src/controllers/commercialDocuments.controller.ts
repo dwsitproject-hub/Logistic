@@ -829,6 +829,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     timer.mark('lookup');
     // The folder of the PO on the share (the incoming file is on the local disk). Each name is tried with one exclusive copy: free = created.
     const uploadDir = ensureUploadDir(commercialDocumentUploadRelativeDir(poNumber));
+    timer.mark('folder'); // existence check, and creation when the PO has no folder yet
     const saved = copyToFirstFreeName(
       file.path,
       uploadDir,
@@ -850,6 +851,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     if (!saved) {
       return res.status(409).json({ success: false, error: { message: 'File name collision; please retry' } });
     }
+    timer.mark('copy'); // the one copy to the share (and the removal of the local file)
     const storedName = saved.name;
     const finalAbsPath = saved.absPath;
     // Do not record a document whose bytes are not on the disk: the row would say "uploaded" while View says "File not found". The size is read back from
@@ -865,7 +867,7 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       return res.status(500).json({ success: false, error: { message: 'The file could not be saved on the server. Nothing was recorded; please try again.' } });
     }
 
-    timer.mark('disk');
+    timer.mark('verify'); // the size read back from the share
     const relativePath = toRelativeUploadPath(finalAbsPath);
     const userId = req.user?.id ?? null;
     const userName = req.user?.username || req.user?.email || 'Unknown';
