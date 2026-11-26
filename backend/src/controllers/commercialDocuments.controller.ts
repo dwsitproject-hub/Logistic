@@ -6,6 +6,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { uploadsRootProblem } from '../utils/uploadsGuard';
 import { createStepTimer } from '../utils/stepTimer';
+import { copyToFirstFreeName, incomingUploadDir } from '../utils/incomingUpload';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import {
   buildCommercialDocumentStoredName,
@@ -664,13 +665,10 @@ export const getCommercialDocumentFiles = async (req: AuthRequest, res: Response
 };
 
 const storage = multer.diskStorage({
-  destination: (req, _file, cb) => {
-    const poNumber = resolveCommercialDocumentPoKey(
-      (req as AuthRequest).body?.po_number,
-      (req as AuthRequest).body?.contract_id,
-    );
-    const dir = ensureUploadDir(commercialDocumentUploadRelativeDir(poNumber));
-    cb(null, dir);
+  // The file is received on the container's own disk and copied to its folder on the share once (utils/incomingUpload.ts): writing it to the share
+  // while it arrives cost several share operations per upload, and the share stalls for about a second on an operation now and then.
+  destination: (_req, _file, cb) => {
+    cb(null, incomingUploadDir());
   },
   filename: (_req, file, cb) => {
     // Final name is set after versioning lookup in uploadCommercialDocument; use temp unique name here.
@@ -829,31 +827,31 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     // The version suffix follows the number of files on the record, so deleting an earlier version frees a number that a later version still
     // holds on disk (3 versions, delete the first: the next upload would be "(3)" again). Walk up to the first name no file has.
     timer.mark('lookup');
-    const uploadDir = path.dirname(file.path);
-    let storedName = '';
-    let finalAbsPath = '';
-    for (let bump = 0; bump < 50; bump += 1) {
-      storedName = buildCommercialDocumentStoredName({
-        buyerName,
-        documentType,
-        referenceNumber: poNumber || 'UNKNOWN',
-        originalName: file.originalname,
-        existingFileCount: existingFileCount + bump,
-      });
-      finalAbsPath = path.join(uploadDir, storedName);
-      if (finalAbsPath === file.path || !fs.existsSync(finalAbsPath)) break;
-      if (bump === 49) {
-        try {
-          fs.unlinkSync(file.path);
-        } catch {
-          /* ignore */
-        }
-        return res.status(409).json({ success: false, error: { message: 'File name collision; please retry' } });
-      }
+    // The folder of the PO on the share (the incoming file is on the local disk). Each name is tried with one exclusive copy: free = created.
+    const uploadDir = ensureUploadDir(commercialDocumentUploadRelativeDir(poNumber));
+    const saved = copyToFirstFreeName(
+      file.path,
+      uploadDir,
+      (bump) =>
+        buildCommercialDocumentStoredName({
+          buyerName,
+          documentType,
+          referenceNumber: poNumber || 'UNKNOWN',
+          originalName: file.originalname,
+          existingFileCount: existingFileCount + bump,
+        }),
+      50,
+    );
+    try {
+      fs.unlinkSync(file.path);
+    } catch {
+      /* the local copy is already gone */
     }
-    if (finalAbsPath !== file.path) {
-      fs.renameSync(file.path, finalAbsPath);
+    if (!saved) {
+      return res.status(409).json({ success: false, error: { message: 'File name collision; please retry' } });
     }
+    const storedName = saved.name;
+    const finalAbsPath = saved.absPath;
     // Do not record a document whose bytes are not on the disk: the row would say "uploaded" while View says "File not found". The size is read back from
     // the final path (on the share, a rename can succeed and the file still not be there when the share is unhealthy).
     let landedSize = -1;
@@ -912,6 +910,12 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     });
   } catch (err) {
     logger.error('uploadCommercialDocument error:', err);
+    try {
+      const left = (req as AuthRequest & { file?: Express.Multer.File }).file?.path;
+      if (left) fs.rmSync(left, { force: true });
+    } catch {
+      /* nothing to remove */
+    }
     return res.status(500).json({ success: false, error: { message: 'Failed to upload document' } });
   }
 };
