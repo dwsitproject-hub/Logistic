@@ -79,6 +79,17 @@ describe('moveToTruckingFolder: a Trucking upload is filed under documents/truck
     expect(fs.existsSync(file)).toBe(true);
   });
 
+  it('a Delivery Order (DO) is named like a COD one, BUY_Do_<PO number>.pdf, and a second one becomes (2); any other type keeps its name', async () => {
+    const dir = path.join(root, 'documents', 'trucking', '1001032563');
+    for (const n of [1, 2]) {
+      queryMock.mockResolvedValueOnce({ rows: [{ subject: '1001032563', buyer: 'EOP Trading', supplier: null }] });
+      await moveToTruckingFolder(uploaded(`x${n}_do.pdf`), { truckingOperationId: 'uuid-op' }, 'DO');
+    }
+    queryMock.mockResolvedValueOnce({ rows: [{ subject: '1001032563', buyer: 'EOP Trading' }] });
+    await moveToTruckingFolder(uploaded('kept.pdf'), { truckingOperationId: 'uuid-op' }, 'OTHER');
+    expect(fs.readdirSync(dir).sort()).toEqual(['EOP_Do_1001032563(2).pdf', 'EOP_Do_1001032563.pdf', 'kept.pdf']);
+  });
+
   it('a file already in the right folder is left alone', async () => {
     queryMock.mockResolvedValueOnce({ rows: [{ subject: 'OP-1' }] });
     const dir = path.join(root, 'documents', 'trucking', 'OP-1');
