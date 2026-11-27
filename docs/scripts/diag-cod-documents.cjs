@@ -89,9 +89,29 @@ const head = (s) => {
     if (stos.length > 0 && ids.every((u) => u == null)) line('  (contract_document_url is empty everywhere: APP_PUBLIC_ORIGIN / FRONTEND_URL is not set on this host, so the links cannot be built)');
 
     head('3. Jetty mail attachments (built, not sent)');
+    const fs = require('fs');
+    const { resolveUploadAbsolutePath } = dist('utils/fileUpload');
     for (const sto of stos.slice(0, 6)) {
       const out = await loadNotifyAttachments(sto);
       line(`  STO ${sto.sto_key}: ${out.attachments.map((a) => a.filename).join(', ') || '(no attachment)'}${out.skipped.length ? `   NOT ATTACHED: ${out.skipped.map((s) => `${s.kind} - ${s.reason}`).join('; ')}` : ''}`);
+      // Where the JPS Contract link of this STO points, and whether the mail can see that same document: the mail reads the shipments listed in shipment_ids, the JPS link reads every shipment of the STO.
+      const cid = idOf(sto.contract_document_url);
+      line(`      shipments the mail reads: ${sto.shipment_ids.length}   JPS Contract link: ${cid ? cid : '(none)'}`);
+      if (cid) {
+        const d = (await q(`SELECT id::text AS id, document_type, shipment_id::text AS shipment_id, file_name, file_path, deleted_at FROM documents WHERE id::text = $1`, [cid])).rows[0];
+        if (d) {
+          const inMail = sto.shipment_ids.includes(d.shipment_id);
+          let exists = false;
+          try {
+            exists = fs.existsSync(resolveUploadAbsolutePath(d.file_path));
+          } catch {
+            exists = false;
+          }
+          line(`      -> KLIP document ${d.document_type} "${d.file_name}" on shipment ${d.shipment_id}: ${inMail ? 'IN' : 'NOT IN'} the shipments the mail reads; deleted: ${d.deleted_at ? 'yes' : 'no'}; file on disk: ${exists ? 'yes' : 'NO'}`);
+          const sib = (await q(`SELECT s.id::text AS id, s.shipment_id, s.status, s.contract_id::text AS contract_id FROM shipments s WHERE s.id::text = $1`, [d.shipment_id])).rows[0];
+          if (sib) line(`         that shipment: ${sib.shipment_id} status ${sib.status} contract ${sib.contract_id}`);
+        }
+      }
     }
     if (stos.length === 0) line('  (no eligible STO on this database)');
 
