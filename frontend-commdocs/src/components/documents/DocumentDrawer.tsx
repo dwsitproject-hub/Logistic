@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, Download, ExternalLink, FileText, Minus, ReceiptText, Trash2, Upload, X } from 'lucide-react'
+import { Check, Download, ExternalLink, FileText, Info, Minus, ReceiptText, Trash2, Upload, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { apiBlob, apiData, apiJson, errorMessage, toQuery } from '@/lib/api'
 import type { Access } from '@/lib/access'
@@ -22,7 +22,7 @@ import { dateTime, longDate, num } from '@/lib/format'
 import { saveBlob } from '@/lib/files'
 import type { B2bParty, DocumentFile, DocumentRow, HistoryEntry } from '@/lib/types'
 import { ErrorNote, Modal, Spinner, useToast } from '../ui'
-import { ShipmentDocsPicker, useShipmentDocs } from './ShipmentDocsCard'
+import { SHIPMENT_DOCS_NOTE, ShipmentDocsPicker, useShipmentDocs } from './ShipmentDocsCard'
 
 type Preview = { fileId: string; url: string; isImage: boolean } | { fileId: string; error: string }
 
@@ -480,7 +480,12 @@ export function DocumentDrawer({
                   <div className="file">
                     <FileText width={18} height={18} aria-hidden />
                     <div style={{ minWidth: 0 }}>
-                      <b style={{ display: 'block' }}>Shipment Docs</b>
+                      <b style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        Shipment Docs
+                        <span className="sd-info" tabIndex={0} role="note" aria-label={SHIPMENT_DOCS_NOTE} title={SHIPMENT_DOCS_NOTE}>
+                          <Info aria-hidden />
+                        </span>
+                      </b>
                       <span className="hint ellipsis" style={{ display: 'block' }}>
                         {shipmentCurrent ? shipmentCurrent.fileName : 'Nothing uploaded in KLIP yet'}
                       </span>
@@ -501,9 +506,6 @@ export function DocumentDrawer({
                     </div>
                   ) : null}
                 </div>
-                <p className="hint" style={{ margin: 0 }}>
-                  These files are uploaded in KLIP (Shipments &gt; Edit Shipment). Here they are view only. The slot counts a BL or SI; Loading, Discharge and Others are for information.
-                </p>
                 <ErrorNote>{shipment.error}</ErrorNote>
                 {shipment.groups ? <ShipmentDocsPicker groups={shipment.groups} selectedId={shipmentCurrent?.id ?? null} onSelect={setShipmentFileId} /> : null}
                 {viewerBox}
