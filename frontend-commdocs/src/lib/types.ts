@@ -194,5 +194,5 @@ export type ShipmentDocGroup = {
   voyageNo: string | null
   date: string | null
   sharedWithPos: string[]
-  documents: Array<{ id: string; type: 'SI' | 'BL'; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null; uploadedBy: string | null }>
+  documents: Array<{ id: string; type: 'BL' | 'SI' | 'SLD' | 'SDD' | 'OTHER'; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null; uploadedBy: string | null }>
 }

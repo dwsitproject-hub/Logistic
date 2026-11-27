@@ -122,7 +122,7 @@ export function DocumentDrawer({
   // Show the newest version whenever the type or its versions change.
   useEffect(() => setVersionId(null), [type, files])
 
-  const shipmentCurrent = shipment.files.find((f) => f.id === shipmentFileId) ?? shipment.files[0] ?? null
+  const shipmentCurrent = shipment.files.find((f) => f.id === shipmentFileId) ?? shipment.slotFiles[0] ?? shipment.files[0] ?? null
   // The file the viewer shows: a COD version, or (Shipment Docs) a file KLIP holds, which the open endpoint of the KLIP documents serves.
   const viewed = shipmentView
     ? shipmentCurrent
@@ -272,7 +272,7 @@ export function DocumentDrawer({
   const uploaderOf = (file: DocumentFile) =>
     history.find((h) => h.file_name === file.file_name && h.action_type !== 'DELETE')?.user_name || null
   // The twelfth slot (Shipment Docs) counts for a shipment PO only; it is read from what KLIP holds once that has loaded, before that from the list row.
-  const shipmentDone = shipment.groups ? shipment.files.length > 0 : Boolean(row.doc_shipment_docs)
+  const shipmentDone = shipment.groups ? shipment.slotFiles.length > 0 : Boolean(row.doc_shipment_docs)
   const done = loading ? typesDone(row) : typesDone({ ...row, ...flagsFrom(files), doc_shipment_docs: shipmentDone })
   const slots = slotsFor(row)
   const po = row.po_number || row.contract_ext_no
@@ -402,7 +402,7 @@ export function DocumentDrawer({
                 })}
                 {(() => {
                   // Shipment Docs: the same row as a document type (status, latest upload, who), opening the BL / SI that KLIP holds in the viewer.
-                  const n = shipment.files.length
+                  const n = shipment.slotFiles.length // BL / SI only: Loading, Discharge and Others are shown in the picker but do not make the slot
                   const latestShip = shipment.latest
                   return (
                     <button
@@ -482,7 +482,7 @@ export function DocumentDrawer({
                     <div style={{ minWidth: 0 }}>
                       <b style={{ display: 'block' }}>Shipment Docs</b>
                       <span className="hint ellipsis" style={{ display: 'block' }}>
-                        {shipmentCurrent ? shipmentCurrent.fileName : 'No BL or SI uploaded in KLIP yet'}
+                        {shipmentCurrent ? shipmentCurrent.fileName : 'Nothing uploaded in KLIP yet'}
                       </span>
                     </div>
                   </div>
@@ -502,7 +502,7 @@ export function DocumentDrawer({
                   ) : null}
                 </div>
                 <p className="hint" style={{ margin: 0 }}>
-                  BL and SI are uploaded in KLIP (Shipments &gt; Edit Shipment). Here they are view only.
+                  These files are uploaded in KLIP (Shipments &gt; Edit Shipment). Here they are view only. The slot counts a BL or SI; Loading, Discharge and Others are for information.
                 </p>
                 <ErrorNote>{shipment.error}</ErrorNote>
                 {shipment.groups ? <ShipmentDocsPicker groups={shipment.groups} selectedId={shipmentCurrent?.id ?? null} onSelect={setShipmentFileId} /> : null}

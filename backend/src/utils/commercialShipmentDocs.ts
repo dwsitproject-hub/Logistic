@@ -13,7 +13,16 @@
  * neither uploads nor deletes these; that stays in KLIP.
  */
 
-export const COMMERCIAL_SHIPMENT_DOC_TYPES = ['SI', 'BL'] as const;
+/**
+ * What the card lists, in the order a voyage shows them. SI / BL are the slot (the twelfth type of a shipment PO: "has a BL or SI"); Loading (SLD), Discharge (SDD)
+ * and Others (OTHER) are the internal documents KLIP added to Edit Shipment on 2026-11-27: shown beside them as information only, never counted towards the slot.
+ * OTHER is also a type of contract, payment and trucking documents, which have no shipment_id: the join through documents.shipment_id leaves them out.
+ */
+export const COMMERCIAL_SHIPMENT_DOC_TYPES = ['BL', 'SI', 'SLD', 'SDD', 'OTHER'] as const;
+export type ShipmentDocType = (typeof COMMERCIAL_SHIPMENT_DOC_TYPES)[number];
+/** The two types that make the Shipment Docs slot of a PO (see COMMERCIAL_SHIPMENT_PO / shipment_doc_pos in commercialDocumentsQuerySql.ts). */
+export const COMMERCIAL_SHIPMENT_SLOT_DOC_TYPES: readonly ShipmentDocType[] = ['BL', 'SI'];
+const SHIPMENT_DOC_LABEL: Record<ShipmentDocType, string> = { BL: 'BL', SI: 'SI', SLD: 'Loading', SDD: 'Discharge', OTHER: 'Others' };
 
 /** $1 = the PO number as the COD list shows it (or the contract id when SAP sent no PO). */
 export const COMMERCIAL_SHIPMENT_DOCS_SQL = `
@@ -92,7 +101,7 @@ export const COMMERCIAL_SHIPMENT_DOCS_SQL = `
        AND NULLIF(TRIM(c2.po_number), '') IS NOT NULL
   ) sh ON TRUE
   WHERE d.deleted_at IS NULL
-    AND d.document_type IN ('SI', 'BL')
+    AND d.document_type IN ('SI', 'BL', 'SLD', 'SDD', 'OTHER')
     AND COALESCE(s.status, '') <> 'CANCELLED'
   ORDER BY COALESCE(s.ata_arrival, s.eta_arrival) DESC NULLS LAST, s.created_at DESC, s.id, d.document_type, d.upload_date DESC
 `;
@@ -124,7 +133,7 @@ export type ShipmentDocGroup = {
   date: string | null;
   /** The other POs of this voyage (their own PO numbers): the files are the voyage's, so they show under each of them. */
   sharedWithPos: string[];
-  documents: Array<{ id: string; type: 'SI' | 'BL'; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null; uploadedBy: string | null }>;
+  documents: Array<{ id: string; type: ShipmentDocType; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null; uploadedBy: string | null }>;
 };
 
 const iso = (v: Date | string | null | undefined): string | null => {
@@ -133,12 +142,12 @@ const iso = (v: Date | string | null | undefined): string | null => {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 };
 
-/** One group per shipment row, in the query's order (newest voyage first); inside a group BL before SI, newest file first. */
+/** One group per shipment row, in the query's order (newest voyage first); inside a group BL, SI, Loading, Discharge, Others, newest file first. */
 export function groupShipmentDocs(rows: ShipmentDocRow[]): ShipmentDocGroup[] {
   const groups = new Map<string, ShipmentDocGroup>();
   for (const r of rows) {
-    const type = String(r.document_type || '').toUpperCase();
-    if (type !== 'SI' && type !== 'BL') continue;
+    const type = String(r.document_type || '').toUpperCase() as ShipmentDocType;
+    if (!COMMERCIAL_SHIPMENT_DOC_TYPES.includes(type)) continue;
     let g = groups.get(r.shipment_uuid);
     if (!g) {
       const date = iso(r.shipment_date);
@@ -165,7 +174,11 @@ export function groupShipmentDocs(rows: ShipmentDocRow[]): ShipmentDocGroup[] {
     });
   }
   for (const g of groups.values()) {
-    g.documents.sort((a, b) => (a.type === b.type ? String(b.uploadedAt).localeCompare(String(a.uploadedAt)) : a.type === 'BL' ? -1 : 1));
+    g.documents.sort((a, b) =>
+      a.type === b.type
+        ? String(b.uploadedAt).localeCompare(String(a.uploadedAt))
+        : COMMERCIAL_SHIPMENT_DOC_TYPES.indexOf(a.type) - COMMERCIAL_SHIPMENT_DOC_TYPES.indexOf(b.type),
+    );
   }
   return [...groups.values()];
 }
@@ -182,7 +195,7 @@ export type ShipmentDocHistoryEntry = {
   source: 'KLIP';
 };
 
-/** KLIP uploads as History entries (BL / SI), so the tab shows them next to the COD uploads; newest first. */
+/** KLIP uploads as History entries (BL / SI / Loading / Discharge / Others), so the tab shows them next to the COD uploads; newest first. */
 export function shipmentDocsAsHistory(groups: ShipmentDocGroup[]): ShipmentDocHistoryEntry[] {
   const out: ShipmentDocHistoryEntry[] = [];
   for (const g of groups) {
@@ -191,7 +204,7 @@ export function shipmentDocsAsHistory(groups: ShipmentDocGroup[]): ShipmentDocHi
       out.push({
         id: `klip-${d.id}`,
         document_type: 'shipment_docs',
-        document_type_label: `Shipment Docs · ${d.type}`,
+        document_type_label: `Shipment Docs · ${SHIPMENT_DOC_LABEL[d.type]}`,
         action_type: 'ADD',
         file_name: d.fileName,
         user_name: d.uploadedBy,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COMMERCIAL_SHIPMENT_DOCS_SQL, groupShipmentDocs, shipmentDocsAsHistory, type ShipmentDocRow } from './commercialShipmentDocs';
+import { COMMERCIAL_SHIPMENT_DOCS_SQL, COMMERCIAL_SHIPMENT_SLOT_DOC_TYPES, groupShipmentDocs, shipmentDocsAsHistory, type ShipmentDocRow } from './commercialShipmentDocs';
 
 const row = (o: Partial<ShipmentDocRow>): ShipmentDocRow => ({
   id: 'd1',
@@ -19,8 +19,9 @@ const row = (o: Partial<ShipmentDocRow>): ShipmentDocRow => ({
 });
 
 describe('COMMERCIAL_SHIPMENT_DOCS_SQL', () => {
-  it('takes only BL and SI, never a deleted file or a cancelled shipment, and leaves Contract to COD\'s own card', () => {
-    expect(COMMERCIAL_SHIPMENT_DOCS_SQL).toContain("d.document_type IN ('SI', 'BL')");
+  it('takes BL, SI, Loading, Discharge and Others of a shipment row, never a deleted file or a cancelled shipment, and leaves Contract to COD\'s own card', () => {
+    expect(COMMERCIAL_SHIPMENT_DOCS_SQL).toContain("d.document_type IN ('SI', 'BL', 'SLD', 'SDD', 'OTHER')");
+    expect(COMMERCIAL_SHIPMENT_DOCS_SQL).toContain('JOIN documents d ON d.shipment_id = s.id'); // OTHER of a contract / payment has no shipment_id
     expect(COMMERCIAL_SHIPMENT_DOCS_SQL).toContain('d.deleted_at IS NULL');
     expect(COMMERCIAL_SHIPMENT_DOCS_SQL).toContain("<> 'CANCELLED'");
     expect(COMMERCIAL_SHIPMENT_DOCS_SQL).not.toContain("'CONTRACT'");
@@ -52,6 +53,17 @@ describe('groupShipmentDocs', () => {
     const [alone] = groupShipmentDocs([row({ other_pos: null })]);
     expect(alone.sharedWithPos).toEqual([]);
   });
+  it('orders BL, SI, Loading, Discharge, Others and keeps the slot to BL / SI only', () => {
+    const [g] = groupShipmentDocs([
+      row({ id: 'o', document_type: 'OTHER' }),
+      row({ id: 'd', document_type: 'SDD' }),
+      row({ id: 'l', document_type: 'SLD' }),
+      row({ id: 's', document_type: 'SI' }),
+      row({ id: 'b', document_type: 'BL' }),
+    ]);
+    expect(g.documents.map((d) => d.id)).toEqual(['b', 's', 'l', 'd', 'o']);
+    expect(COMMERCIAL_SHIPMENT_SLOT_DOC_TYPES).toEqual(['BL', 'SI']);
+  });
   it('turns a size that arrives as text into a number, and a missing one into null', () => {
     const [g] = groupShipmentDocs([row({ id: 'a', file_size: '2048' }), row({ id: 'b', file_size: null })]);
     expect(g.documents.find((d) => d.id === 'a')?.sizeBytes).toBe(2048);
@@ -81,5 +93,15 @@ describe('uploader and History of KLIP uploads', () => {
     expect(history.map((h) => h.id)).toEqual(['klip-si1', 'klip-bl1']);
     expect(history[1]).toMatchObject({ action_type: 'ADD', source: 'KLIP', user_name: 'ryan.pohan', document_type_label: 'Shipment Docs · BL' });
     expect(history[0].user_name).toBeNull();
+  });
+  it('labels Loading, Discharge and Others in History', () => {
+    const history = shipmentDocsAsHistory(
+      groupShipmentDocs([
+        row({ id: 'l', document_type: 'SLD', upload_date: '2026-11-14T00:00:00.000Z' }),
+        row({ id: 'd', document_type: 'SDD', upload_date: '2026-11-15T00:00:00.000Z' }),
+        row({ id: 'o', document_type: 'OTHER', upload_date: '2026-11-16T00:00:00.000Z' }),
+      ]),
+    );
+    expect(history.map((h) => h.document_type_label)).toEqual(['Shipment Docs · Others', 'Shipment Docs · Discharge', 'Shipment Docs · Loading']);
   });
 });
