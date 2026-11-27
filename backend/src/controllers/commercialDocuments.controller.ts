@@ -146,6 +146,8 @@ function mapRow(row: Record<string, unknown>) {
     doc_invoice_fp_dp: row.doc_invoice_fp_dp,
     doc_invoice_fp_payoff: row.doc_invoice_fp_payoff,
     doc_invoice_fp_full: row.doc_invoice_fp_full,
+    // The twelfth slot of a shipment PO (BL / SI uploaded in KLIP); false for any other PO.
+    doc_shipment_docs: row.doc_shipment_docs === true,
   };
 }
 
