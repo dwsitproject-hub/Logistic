@@ -2,7 +2,7 @@
 
 import { ChevronRight } from 'lucide-react'
 import { useState } from 'react'
-import { DOCUMENT_LABELS, DOCUMENT_TYPES } from '@/lib/documentTypes'
+import { DOCUMENT_LABELS, DOCUMENT_TYPES, SHIPMENT_DOCS_LABEL } from '@/lib/documentTypes'
 import { pct, poUploaded } from '@/lib/format'
 
 export type CompletenessRow = {
@@ -18,12 +18,14 @@ export type CompletenessRow = {
   totalSlots: number
   /** POs with each document type uploaded: the detail of the row. Without it the row does not open. */
   byType?: Record<string, number>
+  /** POs classified as a shipment (sea): the total of Shipment Docs, the twelfth slot of those POs. */
+  shipmentPoCount?: number
 }
 
 /**
  * The rows of Dashboard > Completeness (By plant and By user): the name, a bar of the POs by how many documents they have, the % of POs uploaded (a PO
- * is uploaded when it has at least one document), uploaded / total POs, and how many POs have all 11 or nothing yet. A row opens (click or Enter) to show, for that plant or person, how many POs have each
- * of the 11 document types. One row is open at a time.
+ * is uploaded when it has at least one document), uploaded / total POs, and how many POs have every slot filled (12 for a shipment PO, 11 for trucking) or nothing yet. A row opens (click or Enter) to show, for that plant or person, how many POs have each
+ * of the 11 document types, and Shipment Docs out of the shipment POs. One row is open at a time.
  */
 export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; rows: CompletenessRow[] }) {
   const [open, setOpen] = useState<string | null>(null)
@@ -32,7 +34,7 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
       <div className="cr-row cr-head" role="row">
         <span />
         <span role="columnheader">{firstLabel}</span>
-        <span role="columnheader" title="Each PO by how many of its 11 documents are uploaded">POs by documents uploaded</span>
+        <span role="columnheader" title="Each PO by how many of its documents are uploaded (11, or 12 for a shipment PO)">POs by documents uploaded</span>
         <span className="r" role="columnheader">
           %
         </span>
@@ -40,7 +42,7 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
           Uploaded / Total POs
         </span>
         <span className="r cr-hide" role="columnheader">
-          All 11
+          All documents
         </span>
         <span className="r cr-hide" role="columnheader">
           Nothing yet
@@ -70,7 +72,7 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
                 {r.sub ? <span className="hint"> · {r.sub}</span> : null}
               </span>
               <span role="cell">
-                <span className="track" title={`${r.name}: ${r.completeCount} with all 11, ${some} with some, ${r.emptyCount} with none`}>
+                <span className="track" title={`${r.name}: ${r.completeCount} with all documents, ${some} with some, ${r.emptyCount} with none`}>
                   <i className="a" style={{ width: w(r.completeCount) }} />
                   <i className="b" style={{ width: w(some) }} />
                 </span>
@@ -91,15 +93,17 @@ export function CompletenessRows({ firstLabel, rows }: { firstLabel: string; row
             {isOpen && r.byType ? (
               <div className="cr-detail">
                 <p className="hint" style={{ margin: '0 0 8px' }}>
-                  POs of <b>{r.name}</b> that have each document ({up.withDocs.toLocaleString('en-US')} of {r.contractCount.toLocaleString('en-US')} POs have at least one, {r.completeCount.toLocaleString('en-US')} have all 11)
+                  POs of <b>{r.name}</b> that have each document ({up.withDocs.toLocaleString('en-US')} of {r.contractCount.toLocaleString('en-US')} POs have at least one, {r.completeCount.toLocaleString('en-US')} have all documents)
                 </p>
                 <div className="cr-doc-grid">
-                  {DOCUMENT_TYPES.map((t) => {
+                  {[...DOCUMENT_TYPES, 'shipment_docs' as const].map((t) => {
                     const n = r.byType?.[t] || 0
-                    const p = pct(n, r.contractCount)
+                    const base = t === 'shipment_docs' ? r.shipmentPoCount ?? 0 : r.contractCount
+                    const label = (t === 'shipment_docs' ? SHIPMENT_DOCS_LABEL : DOCUMENT_LABELS[t]).toUpperCase()
+                    const p = pct(n, base)
                     return (
-                      <div className="cr-doc" key={t} title={`${DOCUMENT_LABELS[t].toUpperCase()}: ${n.toLocaleString('en-US')} of ${r.contractCount.toLocaleString('en-US')} POs`}>
-                        <span className="cr-doc-name">{DOCUMENT_LABELS[t].toUpperCase()}</span>
+                      <div className="cr-doc" key={t} title={`${label}: ${n.toLocaleString('en-US')} of ${base.toLocaleString('en-US')} ${t === 'shipment_docs' ? 'shipment POs' : 'POs'}`}>
+                        <span className="cr-doc-name">{label}</span>
                         <span className="track">
                           <i className="a" style={{ width: `${p}%` }} />
                         </span>

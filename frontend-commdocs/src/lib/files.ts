@@ -26,3 +26,10 @@ export function saveCsv(fileName: string, header: string[], rows: unknown[][]): 
   // BOM so Excel reads UTF-8 names correctly.
   saveBlob(new Blob(['﻿', toCsv(header, rows)], { type: 'text/csv;charset=utf-8' }), fileName)
 }
+
+/** 1.2 MB / 340 KB, for a file size in bytes. */
+export function fileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return ''
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}

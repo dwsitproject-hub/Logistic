@@ -58,6 +58,8 @@ export type DocumentRow = {
   doc_invoice_fp_dp: boolean
   doc_invoice_fp_payoff: boolean
   doc_invoice_fp_full: boolean
+  /** A BL / SI uploaded in KLIP reaches this PO (only ever true for a shipment PO). */
+  doc_shipment_docs?: boolean
 }
 
 export type Pagination = { total: number; page: number; limit: number; totalPages: number }
@@ -84,6 +86,8 @@ export type HistoryEntry = {
   file_name: string | null
   user_name: string | null
   created_at: string
+  /** 'KLIP' for a BL / SI uploaded in KLIP (Edit Shipment); the History tab badges it. */
+  source?: 'KLIP' | 'COD'
 }
 
 export type B2bParty = {
@@ -110,6 +114,8 @@ export type PlantCompleteness = {
   emptyCount: number
   /** POs with each document type uploaded (not on the totals row). */
   byType?: Record<string, number>
+  /** POs classified as a shipment (SEA / MIX): the total of Shipment Docs, which trucking POs do not have. */
+  shipmentPoCount?: number
 }
 
 /** One row of the Dashboard's "Documents by SAP creator" (an empty createdBy = POs the ME2N report does not know). */
@@ -125,6 +131,7 @@ export type CreatorCompleteness = {
   emptyCount: number
   /** POs with each document type uploaded, by type key. */
   byType: Record<string, number>
+  shipmentPoCount?: number
 }
 
 export type ManagedUser = {
@@ -177,4 +184,15 @@ export type AuditEntry = {
   before_data: Record<string, unknown> | null
   after_data: Record<string, unknown> | null
   timestamp: string
+}
+
+/** The BL / SI files uploaded in KLIP for a PO, one group per voyage (GET /commercial-documents/shipment-docs/:po). */
+export type ShipmentDocGroup = {
+  shipmentId: string
+  reference: string | null
+  vesselName: string | null
+  voyageNo: string | null
+  date: string | null
+  sharedWithPos: string[]
+  documents: Array<{ id: string; type: 'SI' | 'BL'; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null; uploadedBy: string | null }>
 }

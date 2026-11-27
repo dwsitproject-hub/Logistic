@@ -11,6 +11,8 @@ import {
   documentKey,
   isB2bOrigin,
   typeLabel,
+  isShipmentPo,
+  slotsFor,
   typesDone,
   uploadProblem,
   versionsOf,
@@ -20,6 +22,7 @@ import { dateTime, longDate, num } from '@/lib/format'
 import { saveBlob } from '@/lib/files'
 import type { B2bParty, DocumentFile, DocumentRow, HistoryEntry } from '@/lib/types'
 import { ErrorNote, Modal, Spinner, useToast } from '../ui'
+import { ShipmentDocsPicker, useShipmentDocs } from './ShipmentDocsCard'
 
 type Preview = { fileId: string; url: string; isImage: boolean } | { fileId: string; error: string }
 
@@ -49,6 +52,11 @@ export function DocumentDrawer({
   const [loadError, setLoadError] = useState('')
   const [tab, setTab] = useState<'checklist' | 'history'>('checklist')
   const [type, setType] = useState<DocumentType | null>(null)
+  // "Shipment Docs" is listed in the checklist like a document type but is not one of the eleven COD types: its files are the BL / SI uploaded in KLIP, picked in
+  // the right-hand panel and shown in the same viewer.
+  const [shipmentView, setShipmentView] = useState(false)
+  const [shipmentFileId, setShipmentFileId] = useState<string | null>(null)
+  const shipment = useShipmentDocs(key)
   const [versionId, setVersionId] = useState<string | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -114,6 +122,16 @@ export function DocumentDrawer({
   // Show the newest version whenever the type or its versions change.
   useEffect(() => setVersionId(null), [type, files])
 
+  const shipmentCurrent = shipment.files.find((f) => f.id === shipmentFileId) ?? shipment.files[0] ?? null
+  // The file the viewer shows: a COD version, or (Shipment Docs) a file KLIP holds, which the open endpoint of the KLIP documents serves.
+  const viewed = shipmentView
+    ? shipmentCurrent
+      ? { id: shipmentCurrent.id, name: shipmentCurrent.fileName, viewPath: `/documents/${encodeURIComponent(shipmentCurrent.id)}/view` }
+      : null
+    : current
+      ? { id: current.id, name: current.file_name, viewPath: `/commercial-documents/file/${current.id}/view` }
+      : null
+
   const dropPreview = () => {
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current)
     previewUrl.current = null
@@ -123,11 +141,11 @@ export function DocumentDrawer({
   // Load the preview of the current version.
   useEffect(() => {
     dropPreview()
-    if (!current) return
+    if (!viewed) return
     let alive = true
     setPreviewLoading(true)
-    const held = justUploaded.current.get(current.id)
-    ;(held ? Promise.resolve({ blob: held as Blob }) : apiBlob(`/commercial-documents/file/${current.id}/view`))
+    const held = justUploaded.current.get(viewed.id)
+    ;(held ? Promise.resolve({ blob: held as Blob }) : apiBlob(viewed.viewPath))
       .then(async ({ blob }) => {
         const isImage = blob.type.startsWith('image/')
         let shown = blob
@@ -138,7 +156,7 @@ export function DocumentDrawer({
           // that the file really is a PDF: otherwise an error text would be shown as a blank viewer.
           const head = new TextDecoder().decode(await blob.slice(0, 5).arrayBuffer())
           if (!head.startsWith('%PDF')) {
-            if (alive) setPreview({ fileId: current.id, error: 'This file is not a valid PDF and cannot be previewed. You can still download it.' })
+            if (alive) setPreview({ fileId: viewed.id, error: 'This file is not a valid PDF and cannot be previewed. You can still download it.' })
             return
           }
           shown = new Blob([blob], { type: 'application/pdf' })
@@ -146,14 +164,14 @@ export function DocumentDrawer({
         if (!alive) return
         const url = URL.createObjectURL(shown)
         previewUrl.current = url
-        setPreview({ fileId: current.id, url, isImage })
+        setPreview({ fileId: viewed.id, url, isImage })
       })
-      .catch((err) => alive && setPreview({ fileId: current.id, error: errorMessage(err, 'The file could not be opened.') }))
+      .catch((err) => alive && setPreview({ fileId: viewed.id, error: errorMessage(err, 'The file could not be opened.') }))
       .finally(() => alive && setPreviewLoading(false))
     return () => {
       alive = false
     }
-  }, [current?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [viewed?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(
     () => () => {
@@ -182,6 +200,7 @@ export function DocumentDrawer({
     }
     setUploading(true)
     setActionError('')
+    setShipmentView(false)
     setType(target)
     try {
       // Field order matters: the backend picks the folder and the file-type rule from the fields that arrive BEFORE the file.
@@ -252,8 +271,36 @@ export function DocumentDrawer({
 
   const uploaderOf = (file: DocumentFile) =>
     history.find((h) => h.file_name === file.file_name && h.action_type !== 'DELETE')?.user_name || null
-  const done = loading ? typesDone(row) : typesDone({ ...row, ...flagsFrom(files) })
+  // The twelfth slot (Shipment Docs) counts for a shipment PO only; it is read from what KLIP holds once that has loaded, before that from the list row.
+  const shipmentDone = shipment.groups ? shipment.files.length > 0 : Boolean(row.doc_shipment_docs)
+  const done = loading ? typesDone(row) : typesDone({ ...row, ...flagsFrom(files), doc_shipment_docs: shipmentDone })
+  const slots = slotsFor(row)
   const po = row.po_number || row.contract_ext_no
+
+  // The viewer, shared by the document types and Shipment Docs.
+  const viewerBox = (
+    <div className="viewer">
+      {!viewed ? (
+        <div className="placeholder">
+          <FileText width={40} height={40} aria-hidden />
+          <span>{shipmentView ? 'The document shows here once a BL or SI is uploaded in KLIP.' : 'The document shows here once it’s uploaded.'}</span>
+        </div>
+      ) : previewLoading || !preview ? (
+        <div className="placeholder">
+          <Spinner label="Loading preview" />
+        </div>
+      ) : 'error' in preview ? (
+        <div className="placeholder">
+          <ErrorNote>{preview.error}</ErrorNote>
+        </div>
+      ) : preview.isImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={preview.url} alt={viewed.name} />
+      ) : (
+        <iframe src={preview.url} title={`Preview of ${viewed.name}`} />
+      )}
+    </div>
+  )
 
   return (
     <>
@@ -265,7 +312,7 @@ export function DocumentDrawer({
               <span className="mono" style={{ fontSize: 16 }}>
                 PO {po}
               </span>
-              <span className={`pill ${done === DOCUMENT_TYPES.length ? 'ok' : done ? 'warn' : 'bad'}`}>{done} of {DOCUMENT_TYPES.length} documents</span>
+              <span className={`pill ${done === slots ? 'ok' : done ? 'warn' : 'bad'}`}>{done} of {slots} documents</span>
             </h2>
             <div className="meta">
               <span>
@@ -330,8 +377,9 @@ export function DocumentDrawer({
                       type="button"
                       key={t}
                       className={`doc${dragType === t ? ' over' : ''}`}
-                      aria-pressed={type === t}
+                      aria-pressed={type === t && !shipmentView}
                       onClick={() => {
+                        setShipmentView(false)
                         setType(t)
                         setActionError('')
                       }}
@@ -352,6 +400,37 @@ export function DocumentDrawer({
                     </button>
                   )
                 })}
+                {(() => {
+                  // Shipment Docs: the same row as a document type (status, latest upload, who), opening the BL / SI that KLIP holds in the viewer.
+                  const n = shipment.files.length
+                  const latestShip = shipment.latest
+                  return (
+                    <button
+                      type="button"
+                      className="doc"
+                      aria-pressed={shipmentView}
+                      onClick={() => {
+                        setShipmentView(true)
+                        setActionError('')
+                      }}
+                    >
+                      <span className={`st ${n ? 'ok' : 'miss'}`}>{n ? <Check aria-hidden /> : <Minus aria-hidden />}</span>
+                      <div style={{ minWidth: 0 }}>
+                        <b>Shipment Docs</b>
+                        <small>
+                          {shipment.error
+                            ? 'Could not load'
+                            : shipment.groups === null
+                              ? 'Loading…'
+                              : latestShip
+                                ? `${n} ${n === 1 ? 'file' : 'files'} · ${dateTime(latestShip.uploadedAt)}${latestShip.uploadedBy ? ` · ${latestShip.uploadedBy}` : ''} · via KLIP`
+                                : 'Not uploaded yet'}
+                        </small>
+                      </div>
+                      {n ? <span className="pill ok">Uploaded</span> : <span className="pill neutral">Missing</span>}
+                    </button>
+                  )
+                })()}
               </div>
             ) : (
               <div className="timeline">
@@ -366,6 +445,7 @@ export function DocumentDrawer({
                         <small style={{ display: 'block', wordBreak: 'break-all' }}>{h.file_name || ''}</small>
                         <small>
                           {h.user_name || 'Unknown user'} · {dateTime(h.created_at)}
+                          {h.source === 'KLIP' ? <span className="badge" title="Uploaded in KLIP (Shipments > Edit Shipment)">via KLIP</span> : null}
                         </small>
                       </div>
                     </div>
@@ -394,7 +474,41 @@ export function DocumentDrawer({
           </div>
 
           <div className="d-right">
-            {type ? (
+            {shipmentView ? (
+              <>
+                <div className="viewer-bar">
+                  <div className="file">
+                    <FileText width={18} height={18} aria-hidden />
+                    <div style={{ minWidth: 0 }}>
+                      <b style={{ display: 'block' }}>Shipment Docs</b>
+                      <span className="hint ellipsis" style={{ display: 'block' }}>
+                        {shipmentCurrent ? shipmentCurrent.fileName : 'No BL or SI uploaded in KLIP yet'}
+                      </span>
+                    </div>
+                  </div>
+                  {shipmentCurrent ? (
+                    <div className="actions">
+                      {preview && 'url' in preview ? (
+                        <a className="btn sm" href={preview.url} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink aria-hidden />
+                          Open
+                        </a>
+                      ) : null}
+                      <a className="btn sm" href={`/api/documents/${encodeURIComponent(shipmentCurrent.id)}/download`} download>
+                        <Download aria-hidden />
+                        Download
+                      </a>
+                    </div>
+                  ) : null}
+                </div>
+                <p className="hint" style={{ margin: 0 }}>
+                  BL and SI are uploaded in KLIP (Shipments &gt; Edit Shipment). Here they are view only.
+                </p>
+                <ErrorNote>{shipment.error}</ErrorNote>
+                {shipment.groups ? <ShipmentDocsPicker groups={shipment.groups} selectedId={shipmentCurrent?.id ?? null} onSelect={setShipmentFileId} /> : null}
+                {viewerBox}
+              </>
+            ) : type ? (
               <>
                 <div className="viewer-bar">
                   <div className="file">
@@ -479,27 +593,7 @@ export function DocumentDrawer({
                 )}
                 <ErrorNote>{actionError}</ErrorNote>
 
-                <div className="viewer">
-                  {!current ? (
-                    <div className="placeholder">
-                      <FileText width={40} height={40} aria-hidden />
-                      <span>The document shows here once it&apos;s uploaded.</span>
-                    </div>
-                  ) : previewLoading || !preview ? (
-                    <div className="placeholder">
-                      <Spinner label="Loading preview" />
-                    </div>
-                  ) : 'error' in preview ? (
-                    <div className="placeholder">
-                      <ErrorNote>{preview.error}</ErrorNote>
-                    </div>
-                  ) : preview.isImage ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={preview.url} alt={current.file_name} />
-                  ) : (
-                    <iframe src={preview.url} title={`Preview of ${current.file_name}`} />
-                  )}
-                </div>
+                {viewerBox}
               </>
             ) : (
               <Spinner />

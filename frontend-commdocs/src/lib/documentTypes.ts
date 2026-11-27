@@ -57,8 +57,22 @@ export function hasType(row: DocumentRow, type: DocumentType): boolean {
   return Boolean(row[`doc_${type}` as keyof DocumentRow])
 }
 
+/** Shipment Docs: the BL / SI uploaded in KLIP. Not one of the eleven COD types: it is the twelfth slot of a PO classified as a shipment (sea), never of a trucking PO. */
+export const SHIPMENT_DOCS_LABEL = 'Shipment Docs'
+
+export function isShipmentPo(row: Pick<DocumentRow, 'transport_mode'>): boolean {
+  const mode = String(row.transport_mode || '').trim().toUpperCase()
+  return mode === 'SEA' || mode === 'MIX'
+}
+
+/** The slots of a PO's checklist: 12 for a shipment PO, 11 for any other (a trucking PO has no BL / SI and can still be complete). */
+export function slotsFor(row: Pick<DocumentRow, 'transport_mode'>): number {
+  return DOCUMENT_TYPES.length + (isShipmentPo(row) ? 1 : 0)
+}
+
+/** Slots with a file: the eleven types and, for a shipment PO, Shipment Docs. */
 export function typesDone(row: DocumentRow): number {
-  return DOCUMENT_TYPES.filter((t) => hasType(row, t)).length
+  return DOCUMENT_TYPES.filter((t) => hasType(row, t)).length + (isShipmentPo(row) && row.doc_shipment_docs ? 1 : 0)
 }
 
 /** Versions of one checklist type, oldest first (the API returns files ordered by created_at). */

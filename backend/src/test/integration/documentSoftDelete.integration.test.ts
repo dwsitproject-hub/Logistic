@@ -140,11 +140,14 @@ describe('delete a shipment document (soft)', () => {
     expect(row.file_path).toBe('documents/shipment/bl-1.pdf'); // the stored path is unchanged: the file is still where it was
   });
 
-  it('works for Contract and SI as well, and refuses SLD, SDD and a document that is not on a shipment', async () => {
+  it('works for every card of Edit Shipment (Contract, SI, Loading, Discharge, Others), and refuses another kind and a document that is not on a shipment', async () => {
     expect((await del(await doc('CONTRACT', 'c.pdf'), { reason: 'x' })).status).toBe(200);
     expect((await del(await doc('SI', 's.pdf'), { reason: 'x' })).status).toBe(200);
-    const sld = await del(await doc('SLD', 'sld.pdf'), { reason: 'x' });
-    expect(sld.status).toBe(403);
+    expect((await del(await doc('SLD', 'sld.pdf'), { reason: 'x' })).status).toBe(200);
+    expect((await del(await doc('SDD', 'sdd.pdf'), { reason: 'x' })).status).toBe(200);
+    expect((await del(await doc('OTHER', 'other.pdf'), { reason: 'x' })).status).toBe(200);
+    const invoice = await del(await doc('INVOICE', 'inv.pdf'), { reason: 'x' });
+    expect(invoice.status).toBe(403);
     const loose = await del(await doc('BL', 'loose.pdf', null), { reason: 'x' });
     expect(loose.status).toBe(403);
   });
@@ -176,6 +179,9 @@ describe('delete a shipment document (soft)', () => {
     expect((await listed(ids.otherShipment)).map((d) => d.id)).not.toContain(id);
     const audit = await one<{ after_data: { sentToJps: boolean } }>(`SELECT after_data FROM audit_logs WHERE action = 'DELETE' AND entity_id = $1::uuid`, [id]);
     expect(audit.after_data.sentToJps).toBe(true);
+    // Loading, Discharge and Others are not linked from the JPS instruction, so deleting one of them never asks about JPS, even on this operation.
+    const loading = await doc('SLD', 'loading-after-jps.pdf', ids.otherShipment);
+    expect((await del(loading, { reason: 'wrong file' })).status).toBe(200);
   });
 
   it('a deleted document no longer counts as KLIP activity on the shipment (the SAP import protection)', async () => {

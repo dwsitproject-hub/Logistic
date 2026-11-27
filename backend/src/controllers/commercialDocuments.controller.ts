@@ -6,6 +6,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { uploadsRootProblem } from '../utils/uploadsGuard';
 import { createStepTimer } from '../utils/stepTimer';
+import { COMMERCIAL_SHIPMENT_DOCS_SQL, groupShipmentDocs, shipmentDocsAsHistory, type ShipmentDocRow } from '../utils/commercialShipmentDocs';
 import { copyToFirstFreeName, incomingUploadDir } from '../utils/incomingUpload';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import {
@@ -145,6 +146,8 @@ function mapRow(row: Record<string, unknown>) {
     doc_invoice_fp_dp: row.doc_invoice_fp_dp,
     doc_invoice_fp_payoff: row.doc_invoice_fp_payoff,
     doc_invoice_fp_full: row.doc_invoice_fp_full,
+    // The twelfth slot of a shipment PO (BL / SI uploaded in KLIP); false for any other PO.
+    doc_shipment_docs: row.doc_shipment_docs === true,
   };
 }
 
@@ -242,6 +245,8 @@ export const getCommercialDocumentsCompletenessByCreator = async (req: AuthReque
       const totalSlots = Number(row.total_slots) || 0;
       const byType: Record<string, number> = {};
       for (const type of COMMERCIAL_DOCUMENT_TYPES) byType[type] = Number(row[`uploaded_${type}`]) || 0;
+      // The twelfth slot of a shipment PO (the BL / SI uploaded in KLIP); its own total is the number of shipment POs.
+      byType.shipment_docs = Number(row.uploaded_shipment_docs) || 0;
       return {
         createdBy: String(row.created_by || ''),
         displayName: row.display_name ? String(row.display_name) : null,
@@ -252,6 +257,7 @@ export const getCommercialDocumentsCompletenessByCreator = async (req: AuthReque
         completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
         completeCount: Number(row.complete_count) || 0,
         emptyCount: Number(row.empty_count) || 0,
+        shipmentPoCount: Number(row.shipment_po_count) || 0,
         byType,
       };
     });
@@ -524,8 +530,10 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
           invoice_fp_dp: card('uploaded_invoice_fp_dp', 'total_invoice_fp_dp'),
           invoice_fp_payoff: card('uploaded_invoice_fp_payoff', 'total_invoice_fp_payoff'),
           invoice_fp_full: card('uploaded_invoice_fp_full'),
+          // The BL / SI uploaded in KLIP: the twelfth slot of a shipment PO (SEA / MIX), not trucking; its card counts among those POs.
+          shipment_docs: card('uploaded_shipment_docs', 'total_shipment_docs'),
         },
-        // All eleven / none / anything short of eleven - the list's completeness filter returns the same rows.
+        // Every slot filled (11, or 12 for a shipment PO) / none / anything short - the list's completeness filter returns the same rows.
         contracts: {
           totalCount,
           completeCount: Number(row.complete_contract_count ?? 0),
@@ -559,6 +567,8 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
       const totalSlots = Number(row.total_slots) || 0;
       const byType: Record<string, number> = {};
       for (const type of COMMERCIAL_DOCUMENT_TYPES) byType[type] = Number(row[`uploaded_${type}`]) || 0;
+      // The twelfth slot of a shipment PO (the BL / SI uploaded in KLIP); its own total is the number of shipment POs.
+      byType.shipment_docs = Number(row.uploaded_shipment_docs) || 0;
       return {
         plant: String(row.plant_site || 'Unassigned'),
         contractCount,
@@ -568,6 +578,7 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
         completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
         completeCount: Number(row.complete_count) || 0,
         emptyCount: Number(row.empty_count) || 0,
+        shipmentPoCount: Number(row.shipment_po_count) || 0,
         byType,
       };
     });
@@ -619,13 +630,21 @@ export const getCommercialDocumentHistory = async (req: AuthRequest, res: Respon
        LIMIT 200`,
       [poNumber, contractExtNo],
     );
-    return res.json({
-      success: true,
-      data: result.rows.map((row) => ({
-        ...row,
-        document_type_label: commercialDocumentTypeLabel(String(row.document_type || '')),
-      })),
-    });
+    const own = result.rows.map((row) => ({
+      ...row,
+      document_type_label: commercialDocumentTypeLabel(String(row.document_type || '')),
+      source: 'COD' as const,
+    }));
+    // The BL / SI uploaded in KLIP join the timeline (badged "via KLIP"). A failure here must not take the COD history down with it.
+    let fromKlip: ReturnType<typeof shipmentDocsAsHistory> = [];
+    try {
+      const klip = await query(COMMERCIAL_SHIPMENT_DOCS_SQL, [poNumber]);
+      fromKlip = shipmentDocsAsHistory(groupShipmentDocs(klip.rows as ShipmentDocRow[]));
+    } catch (klipErr) {
+      logger.error('getCommercialDocumentHistory: KLIP uploads skipped', klipErr);
+    }
+    const merged = [...own, ...fromKlip].sort((a, b) => new Date(String(b.created_at)).getTime() - new Date(String(a.created_at)).getTime());
+    return res.json({ success: true, data: merged.slice(0, 200) });
   } catch (err) {
     logger.error('getCommercialDocumentHistory error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch history' } });
@@ -661,6 +680,22 @@ export const getCommercialDocumentFiles = async (req: AuthRequest, res: Response
   } catch (err) {
     logger.error('getCommercialDocumentFiles error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch files' } });
+  }
+};
+
+/**
+ * The BL and SI files uploaded in KLIP (Shipments > Edit Shipment) for a PO, grouped by voyage (GET /api/commercial-documents/shipment-docs/:poNumber).
+ * Read-only; the rule that links a PO to its voyages is in utils/commercialShipmentDocs.ts. The files themselves are opened through /api/documents/:id/view.
+ */
+export const getCommercialShipmentDocs = async (req: AuthRequest, res: Response) => {
+  try {
+    const key = String(req.params.poNumber || '').trim();
+    if (!key) return res.status(400).json({ success: false, error: { message: 'PO number is required' } });
+    const result = await query(COMMERCIAL_SHIPMENT_DOCS_SQL, [key]);
+    return res.json({ success: true, data: { groups: groupShipmentDocs(result.rows as ShipmentDocRow[]) } });
+  } catch (err) {
+    logger.error('getCommercialShipmentDocs error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch the shipment documents' } });
   }
 };
 

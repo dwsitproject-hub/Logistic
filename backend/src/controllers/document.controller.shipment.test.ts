@@ -100,10 +100,74 @@ describe('uploadDocumentHandler: a shipment Contract / SI / BL is filed under do
     expect(fs.readdirSync(path.join(root, 'documents', 'shipment', 'bl', 'abc-123'))).toHaveLength(1);
   });
 
-  it('a type that has no structured folder (OTHER) stays where multer wrote it', async () => {
+  it('the INSERT records who uploaded (documents.uploaded_by), and NULL when no user is on the request', async () => {
+    const insertParams: unknown[][] = [];
+    queryMock.mockImplementation(async (_sql: string, params: unknown[]) => {
+      if (String(_sql).includes('INSERT INTO documents')) {
+        insertParams.push(params);
+        return { rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] };
+      }
+      return { rows: [] };
+    });
+    for (const [name, user] of [
+      ['with.pdf', { id: 'user-uuid-1', username: 'a@b.c' }],
+      ['without.pdf', undefined],
+    ] as const) {
+      const written = path.join(root, `b1c2_${name}`);
+      fs.writeFileSync(written, 'x');
+      await uploadDocumentHandler(
+        { file: { path: written, originalname: name, size: 1, mimetype: 'application/pdf' }, body: { document_type: 'OTHER', contract_id: 'c-1' }, user } as never,
+        res() as never,
+      );
+    }
+    expect(insertParams).toHaveLength(2);
+    expect(insertParams[0][10]).toBe('user-uuid-1');
+    expect(insertParams[1][10]).toBeNull();
+  });
+
+  it.each([
+    ['SLD', 'sld'],
+    ['SDD', 'sdd'],
+    ['OTHER', 'other'],
+  ])('Loading / Discharge / Others (%s) is filed under documents/shipment/%s/<STO number> and keeps its own name', async (type, kind) => {
+    const written = path.join(root, 'b1c2_scan.pdf');
+    fs.writeFileSync(written, 'x');
+    queryMock
+      .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1', folder_subject: '1006020421' }] }) // the shipment folder lookup
+      .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] })); // INSERT
+    const out = res();
+    await uploadDocumentHandler(
+      { file: { path: written, originalname: 'DOC LOADING BG Luminor 9.pdf', size: 1, mimetype: 'application/pdf' }, body: { document_type: type, shipment_id: 'abc-123' } } as never,
+      out as never,
+    );
+    expect(out.statusCode).toBe(200);
+    const dir = path.join(root, 'documents', 'shipment', kind, '1006020421');
+    expect(fs.readdirSync(dir)).toEqual(['DOC-LOADING-BG-Luminor-9.pdf']); // sanitised, not renamed to an operation id
+    expect(fs.existsSync(written)).toBe(false);
+    expect(out.body.data.file_path).toContain(`documents/shipment/${kind}/1006020421/`);
+  });
+
+  it('a second file of the same name in the same folder becomes -2, and the first is kept', async () => {
+    for (const _ of [1, 2]) {
+      const written = path.join(root, `b1c2_${_}.pdf`);
+      fs.writeFileSync(written, 'x');
+      queryMock
+        .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1', folder_subject: '1006020421' }] })
+        .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] }));
+      await uploadDocumentHandler(
+        { file: { path: written, originalname: 'survey.pdf', size: 1, mimetype: 'application/pdf' }, body: { document_type: 'OTHER', shipment_id: 'abc-123' } } as never,
+        res() as never,
+      );
+    }
+    expect(fs.readdirSync(path.join(root, 'documents', 'shipment', 'other', '1006020421')).sort()).toEqual(['survey-2.pdf', 'survey.pdf']);
+  });
+
+  it('an OTHER upload for a shipment that cannot be found is not refused (the Shipments Docs dialog has always uploaded these): the file stays where it was written', async () => {
     const written = path.join(root, 'b1c2_other.pdf');
     fs.writeFileSync(written, 'x');
-    queryMock.mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] }));
+    queryMock
+      .mockResolvedValueOnce({ rows: [] }) // no such shipment
+      .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] }));
     const out = res();
     await uploadDocumentHandler(
       { file: { path: written, originalname: 'other.pdf', size: 1, mimetype: 'application/pdf' }, body: { document_type: 'OTHER', shipment_id: 'abc-123' } } as never,
@@ -111,5 +175,19 @@ describe('uploadDocumentHandler: a shipment Contract / SI / BL is filed under do
     );
     expect(out.statusCode).toBe(200);
     expect(fs.existsSync(written)).toBe(true);
+  });
+
+  it('an OTHER upload with no shipment (a contract or payment document) is not filed under a shipment', async () => {
+    const written = path.join(root, 'b1c2_contract.pdf');
+    fs.writeFileSync(written, 'x');
+    queryMock.mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] }));
+    const out = res();
+    await uploadDocumentHandler(
+      { file: { path: written, originalname: 'contract.pdf', size: 1, mimetype: 'application/pdf' }, body: { document_type: 'OTHER', contract_id: 'c-1' } } as never,
+      out as never,
+    );
+    expect(out.statusCode).toBe(200);
+    expect(fs.existsSync(written)).toBe(true);
+    expect(fs.existsSync(path.join(root, 'documents', 'shipment'))).toBe(false);
   });
 });

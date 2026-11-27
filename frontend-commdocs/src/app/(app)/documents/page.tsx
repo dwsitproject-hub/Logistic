@@ -14,8 +14,9 @@ import { isoDate, pct, plantLabel, plural, presetRange, type DatePreset } from '
 import { useSession } from '@/lib/session'
 import type { ContractCounts, DocumentRow, Pagination, SummaryCard } from '@/lib/types'
 
-/** null = all POs; 'incomplete' = short of all eleven; a type = POs that have that type uploaded (a summary card). */
-type DocFilter = null | 'incomplete' | DocumentType
+/** null = all POs; 'incomplete' = short of a slot (11, or 12 for a shipment PO); a type = POs that have that type uploaded (a summary card). */
+/** 'shipment_docs' is the card of the BL / SI uploaded in KLIP: not one of the eleven COD types but the twelfth slot of a shipment PO, so it counts in the 12 of a shipment PO and not in a trucking PO's 11. */
+type DocFilter = null | 'incomplete' | 'shipment_docs' | DocumentType
 
 type Filters = {
   preset: DatePreset
@@ -521,7 +522,7 @@ export default function DocumentsPage() {
       <section className="sumcards-wrap" aria-label="Documents uploaded per type">
         <p className="hint">
           Contracts with the document uploaded, out of all contracts in the selected date range. For Invoice + FP Down Payment and Payoff, out of the POs that
-          have a DP Date or a Payoff Date in SAP. Click a card to list them in the table below.
+          have a DP Date or a Payoff Date in SAP; for Shipment Docs, out of the POs that are shipments (sea), not trucking. Click a card to list them in the table below.
         </p>
         <div className="sumcards">
           {DOCUMENT_TYPES.map((t) => {
@@ -548,6 +549,28 @@ export default function DocumentsPage() {
               </button>
             )
           })}
+          {(() => {
+            // Shipment Docs: the BL and SI uploaded in KLIP (Shipments > Edit Shipment), seen from the PO. View only here; the files are listed per voyage in the PO's drawer.
+            const c = summary?.shipment_docs
+            const p = c ? pct(c.uploadedCount, c.totalCount) : 0
+            return (
+              <button
+                type="button"
+                className={`sumcard${c && c.uploadedCount === 0 ? ' empty' : ''}`}
+                aria-pressed={docFilter === 'shipment_docs'}
+                title="Show the shipment POs (sea, not trucking) that have a BL or SI uploaded in KLIP (Shipments > Edit Shipment). View only: the files are in the PO's drawer."
+                onClick={() => setDocFilter(docFilter === 'shipment_docs' ? null : 'shipment_docs')}
+              >
+                <span className="sc-l">Shipment Docs</span>
+                <span className="sc-k">PO in Shipments (not trucking)</span>
+                <span className="sc-n num">{c ? `${c.uploadedCount.toLocaleString('en-US')}/${c.totalCount.toLocaleString('en-US')}` : '…'}</span>
+                <span className={`sc-p num ${p >= 75 ? 'good' : p >= 40 ? 'mid' : 'low'}`}>{c ? `${p.toFixed(1)}%` : ''}</span>
+                <span className="sc-bar" aria-hidden>
+                  <i style={{ width: `${p}%` }} />
+                </span>
+              </button>
+            )
+          })()}
         </div>
       </section>
 
@@ -558,7 +581,9 @@ export default function DocumentsPage() {
               ? `Showing POs with ${DOCUMENT_LABELS[docFilter]} uploaded${SUMMARY_BASIS[docFilter] ? ` (only the ${SUMMARY_BASIS[docFilter]}s)` : ''} · `
               : docFilter === 'incomplete'
                 ? 'Showing POs that miss at least one document · '
-                : ''}
+                : docFilter === 'shipment_docs'
+                  ? 'Showing shipment POs that have a BL or SI uploaded in KLIP (open a PO to see them per voyage) · '
+                  : ''}
             Tick the boxes on the right to download one Tanda Terima for several POs
           </span>
           <div className="actions">

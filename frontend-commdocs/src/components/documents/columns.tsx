@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { DOCUMENT_TYPES, hasType, typesDone } from '@/lib/documentTypes'
+import { DOCUMENT_TYPES, hasType, isShipmentPo, slotsFor, typesDone } from '@/lib/documentTypes'
 import { ddmmyy, num, plantLabel, priceCell } from '@/lib/format'
 import type { DocumentRow } from '@/lib/types'
 
@@ -20,7 +20,7 @@ export type Column = {
 
 export function statusOf(row: DocumentRow): { label: string; tone: 'ok' | 'warn' | 'bad' } {
   const done = typesDone(row)
-  if (done === DOCUMENT_TYPES.length) return { label: 'Complete', tone: 'ok' }
+  if (done === slotsFor(row)) return { label: 'Complete', tone: 'ok' }
   if (done === 0) return { label: 'Nothing yet', tone: 'bad' }
   return { label: 'In progress', tone: 'warn' }
 }
@@ -135,13 +135,14 @@ export const COLUMNS: Column[] = [
           {DOCUMENT_TYPES.map((t) => (
             <span key={t} className={`dot${hasType(r, t) ? ' on' : ''}`} />
           ))}
+          {isShipmentPo(r) ? <span className={`dot${r.doc_shipment_docs ? ' on' : ''}`} /> : null}
         </div>
         <span className="num" style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>
-          {typesDone(r)}/{DOCUMENT_TYPES.length}
+          {typesDone(r)}/{slotsFor(r)}
         </span>
       </div>
     ),
-    csv: (r) => `${typesDone(r)}/${DOCUMENT_TYPES.length}`,
+    csv: (r) => `${typesDone(r)}/${slotsFor(r)}`,
   },
   {
     id: 'status',

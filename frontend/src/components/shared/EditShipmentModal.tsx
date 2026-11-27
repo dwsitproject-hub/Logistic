@@ -202,14 +202,21 @@ import {
  * 2026-09-25, and removed the gate with them - uploading is now something you may do, not something
  * you must do first.
  *
- * JPS receives the download URL of each file (contract_document_url, shipping_instruction_document_url,
+ * JPS receives the download URL of each of the first three (contract_document_url, shipping_instruction_document_url,
  * bl_document_url). The PDF stays on the Synology share at
  * documents\shipment\contract|si|bl\<shipment id>.
+ *
+ * Loading, Discharge and Others (added 2026-11-27) sit in a second row. They reuse the types the database already allowed: Loading = SLD and Discharge = SDD (the old
+ * quantity-authorisation documents, so the 18 files on production show up again here), Others = OTHER (what the Shipments page Docs dialog uploads). They are for the team's
+ * own use: nothing sends them to JPS or the Jetty email.
  */
 const SHIPMENT_DOC_TYPES = [
   { type: 'CONTRACT', label: 'Contract Document' },
   { type: 'SI', label: 'SI Document' },
   { type: 'BL', label: 'BL Document' },
+  { type: 'SLD', label: 'Loading Document' },
+  { type: 'SDD', label: 'Discharge Document' },
+  { type: 'OTHER', label: 'Other Documents' },
 ] as const
 
 interface ShipmentDocumentItem {

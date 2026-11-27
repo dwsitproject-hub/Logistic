@@ -8,6 +8,7 @@ import {
   resolveUploadAbsolutePath,
   shipmentNasFileToken,
   shipmentStructuredDocKindFromType,
+  shipmentUploadFolderKind,
   toRelativeUploadPath,
 } from './fileUpload';
 
@@ -38,6 +39,16 @@ describe('fileUpload utils', () => {
     expect(shipmentStructuredDocKindFromType('SLD')).toBe('sld');
     expect(shipmentStructuredDocKindFromType('sdd')).toBe('sdd');
     expect(shipmentStructuredDocKindFromType('QUANTITY_ADJUSTMENT')).toBeNull();
+    expect(shipmentStructuredDocKindFromType('OTHER')).toBeNull(); // the folder migration classifies rows with this one: an OTHER row must stay out of it
+  });
+
+  it('shipmentUploadFolderKind adds the Others folder on top of the structured kinds', () => {
+    expect(shipmentUploadFolderKind('OTHER')).toBe('other');
+    expect(shipmentUploadFolderKind(' other ')).toBe('other');
+    expect(shipmentUploadFolderKind('SLD')).toBe('sld');
+    expect(shipmentUploadFolderKind('BL')).toBe('bl');
+    expect(shipmentUploadFolderKind('INVOICE')).toBeNull();
+    expect(buildShipmentDocumentUploadSubdir('abc-123', 'other')).toBe('documents/shipment/other/abc-123');
   });
 
   it('buildShipmentNasFileStem uses operation id, document token, Jakarta date, and uploader', () => {
