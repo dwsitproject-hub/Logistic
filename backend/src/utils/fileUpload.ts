@@ -99,20 +99,6 @@ export function shipmentNasFileToken(
   return SHIPMENT_NAS_FILE_TOKEN[kind] ?? null;
 }
 
-/** Upload calendar date in Asia/Jakarta as ddmmyy. */
-export function formatUploadDateDdmmyy(uploadedAt: Date = new Date()): string {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Jakarta',
-    day: '2-digit',
-    month: '2-digit',
-    year: '2-digit',
-  }).formatToParts(uploadedAt);
-  const day = parts.find((part) => part.type === 'day')?.value ?? '00';
-  const month = parts.find((part) => part.type === 'month')?.value ?? '00';
-  const year = parts.find((part) => part.type === 'year')?.value ?? '00';
-  return `${day}${month}${year}`;
-}
-
 /** Keep a path segment readable: letters, digits, dot, underscore, hyphen. */
 export function sanitizeNasNamePart(value: string, fallback: string): string {
   const cleaned = String(value ?? '')
@@ -126,29 +112,21 @@ export function sanitizeNasNamePart(value: string, fallback: string): string {
 }
 
 /**
- * `operation_id-ctr|si|bl-ddmmyy-username`, without the extension.
- * The username is the KLIP login, not the original PDF name.
+ * First free name in `dir`. A second file of the same name becomes `-2` (the name the user gave to a Loading / Discharge / Others file), or `(2)` with
+ * `numbering: 'version'`, the version suffix Commercial Documents puts on its own files.
  */
-export function buildShipmentNasFileStem(input: {
-  operationId: string;
-  token: 'ctr' | 'si' | 'bl';
-  uploadedBy: string;
-  uploadedAt?: Date;
-}): string {
-  const operationId = sanitizeNasNamePart(input.operationId, 'operation');
-  const uploadedBy = sanitizeNasNamePart(input.uploadedBy, 'user');
-  const date = formatUploadDateDdmmyy(input.uploadedAt ?? new Date());
-  return `${operationId}-${input.token}-${date}-${uploadedBy}`;
-}
-
-/** First free name in `dir`. A second upload the same day becomes `...-2.pdf`. */
-export function allocateShipmentNasFilename(dir: string, stem: string, extension: string): string {
+export function allocateShipmentNasFilename(
+  dir: string,
+  stem: string,
+  extension: string,
+  numbering: 'dash' | 'version' = 'dash',
+): string {
   const ext = extension.startsWith('.') ? extension.toLowerCase() : `.${extension.toLowerCase()}`;
   const safeExt = ext === '.' ? '.pdf' : ext;
   let candidate = `${stem}${safeExt}`;
   let sequence = 2;
   while (fs.existsSync(path.join(dir, candidate)) && sequence < 100) {
-    candidate = `${stem}-${sequence}${safeExt}`;
+    candidate = numbering === 'version' ? `${stem}(${sequence})${safeExt}` : `${stem}-${sequence}${safeExt}`;
     sequence += 1;
   }
   return candidate;

@@ -49,10 +49,11 @@ describe('uploadDocumentHandler: a shipment Contract / SI / BL is filed under do
     ['SI', 'si', 'si'],
     ['CONTRACT', 'contract', 'ctr'],
   ])('%s', async (type, kind, token) => {
+    const code = { ctr: 'Ctr', si: 'Si', bl: 'Bl' }[token as 'ctr' | 'si' | 'bl'];
     const written = path.join(root, 'b1c2_scan.pdf'); // where multer put it: the root
     fs.writeFileSync(written, '%PDF-1.4');
     queryMock
-      .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1004031421-62102574', folder_subject: '1006020421' }] }) // the shipment: operation id and STO key
+      .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1004031421-62102574', shipment_id: '1006020421', buyer: 'EOP Trading', folder_subject: '1006020421' }] }) // the shipment: buyer, STO key
       .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] })); // INSERT
     const out = res();
     await uploadDocumentHandler(
@@ -67,23 +68,53 @@ describe('uploadDocumentHandler: a shipment Contract / SI / BL is filed under do
     const dir = path.join(root, 'documents', 'shipment', kind, '1006020421'); // the STO number, not the shipment id
     const files = fs.readdirSync(dir);
     expect(files).toHaveLength(1);
-    expect(files[0]).toMatch(new RegExp(`^OP-1004031421-62102574-${token}-\\d{6}-yohan\\.andrian\\.pdf$`));
+    expect(files[0]).toBe(`EOP_${code}_1006020421.pdf`); // the Commercial Documents format: BUY_Code_<STO number>, no uploader or date in the name
     expect(fs.existsSync(written)).toBe(false);
     expect(out.body.data.file_path).toContain(`documents/shipment/${kind}/1006020421/`);
   });
 
-  it('a shipment with no STO is filed under its operation id (the STO key falls through to it)', async () => {
+  it('a shipment with no STO is filed under its operation id (the STO key falls through to it) and its file is named after its shipment id', async () => {
     const written = path.join(root, 'b1c2_si.pdf');
     fs.writeFileSync(written, '%PDF-1.4');
     queryMock
-      .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1604000039-54225751', folder_subject: 'OP-1604000039-54225751' }] })
+      .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1604000039-54225751', shipment_id: 'MNL-20261127-0001', buyer: null, supplier: 'Mega Sawit', folder_subject: 'OP-1604000039-54225751' }] })
       .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] }));
     const out = res();
     await uploadDocumentHandler(
       { file: { path: written, originalname: 'si.pdf', size: 8, mimetype: 'application/pdf' }, body: { document_type: 'SI', shipment_id: 'abc-123' }, user: { username: 'a@b.c' } } as never,
       out as never,
     );
-    expect(fs.readdirSync(path.join(root, 'documents', 'shipment', 'si', 'OP-1604000039-54225751'))).toHaveLength(1);
+    // folder = operation id (the STO key), file name = shipment id; the buyer falls back to the supplier like COD's
+    expect(fs.readdirSync(path.join(root, 'documents', 'shipment', 'si', 'OP-1604000039-54225751'))).toEqual(['MEG_Si_MNL-20261127-0001.pdf']);
+  });
+
+  it('a second Contract on the same STO becomes (2), like a COD version, and the first is kept', async () => {
+    for (const n of [1, 2]) {
+      const written = path.join(root, `b1c2_ctr${n}.pdf`);
+      fs.writeFileSync(written, '%PDF-1.4');
+      queryMock
+        .mockResolvedValueOnce({ rows: [{ operation_id: 'OP-1', shipment_id: '1006020421', buyer: 'EOP Trading', folder_subject: '1006020421' }] })
+        .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] }));
+      await uploadDocumentHandler(
+        { file: { path: written, originalname: 'ctr.pdf', size: 8, mimetype: 'application/pdf' }, body: { document_type: 'CONTRACT', shipment_id: 'abc-123' } } as never,
+        res() as never,
+      );
+    }
+    expect(fs.readdirSync(path.join(root, 'documents', 'shipment', 'contract', '1006020421')).sort()).toEqual(['EOP_Ctr_1006020421(2).pdf', 'EOP_Ctr_1006020421.pdf']);
+  });
+
+  it('a shipment with no operation id is no longer refused: the name does not need one', async () => {
+    const written = path.join(root, 'b1c2_bl2.pdf');
+    fs.writeFileSync(written, '%PDF-1.4');
+    queryMock
+      .mockResolvedValueOnce({ rows: [{ operation_id: null, shipment_id: '1006020421', buyer: 'EOP', folder_subject: '1006020421' }] })
+      .mockImplementationOnce(async (_sql: string, params: unknown[]) => ({ rows: [{ id: 'doc-1', file_name: params[1], file_path: params[2] }] }));
+    const out = res();
+    await uploadDocumentHandler(
+      { file: { path: written, originalname: 'bl.pdf', size: 8, mimetype: 'application/pdf' }, body: { document_type: 'BL', shipment_id: 'abc-123' } } as never,
+      out as never,
+    );
+    expect(out.statusCode).toBe(200);
   });
 
   it('a shipment whose key cannot be read keeps its id as the folder name', async () => {

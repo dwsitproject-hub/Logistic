@@ -28,9 +28,9 @@ export const TRUCKING_OPERATION_FOLDER_SUBJECT_SQL = `COALESCE(
 /** For a contract with no trucking operation (a backlog row). Needs: contracts ct. */
 export const CONTRACT_FOLDER_SUBJECT_SQL = `COALESCE(NULLIF(TRIM(ct.po_number::text), ''), NULLIF(TRIM(ct.contract_id::text), ''))`;
 
-/** The folder of one shipment: its operation id (for the file name) and the subject of its folder. */
+/** The folder of one shipment: the subject of its folder, and what its file name is built from (buyer or supplier, then STO number, else shipment id). */
 export const SELECT_SHIPMENT_FOLDER_SQL = `
-  SELECT s.operation_id, ${SHIPMENT_FOLDER_SUBJECT_SQL} AS folder_subject
+  SELECT s.operation_id, s.shipment_id, c.buyer, c.supplier, ${SHIPMENT_FOLDER_SUBJECT_SQL} AS folder_subject
     FROM shipments s
     LEFT JOIN contracts c ON c.id = s.contract_id
     LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id

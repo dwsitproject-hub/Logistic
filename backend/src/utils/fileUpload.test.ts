@@ -2,9 +2,7 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
   buildShipmentDocumentUploadSubdir,
-  buildShipmentNasFileStem,
   buildUniqueStoredFilename,
-  formatUploadDateDdmmyy,
   resolveUploadAbsolutePath,
   shipmentNasFileToken,
   shipmentStructuredDocKindFromType,
@@ -49,35 +47,6 @@ describe('fileUpload utils', () => {
     expect(shipmentUploadFolderKind('BL')).toBe('bl');
     expect(shipmentUploadFolderKind('INVOICE')).toBeNull();
     expect(buildShipmentDocumentUploadSubdir('abc-123', 'other')).toBe('documents/shipment/other/abc-123');
-  });
-
-  it('buildShipmentNasFileStem uses operation id, document token, Jakarta date, and uploader', () => {
-    const uploadedAt = new Date('2026-10-20T17:00:00.000Z');
-    expect(formatUploadDateDdmmyy(uploadedAt)).toBe('211026');
-    expect(
-      buildShipmentNasFileStem({
-        operationId: 'OP-100',
-        token: 'ctr',
-        uploadedBy: 'ryan.pohan',
-        uploadedAt,
-      }),
-    ).toBe('OP-100-ctr-211026-ryan.pohan');
-    expect(
-      buildShipmentNasFileStem({
-        operationId: 'OP-100',
-        token: 'si',
-        uploadedBy: 'ryan.pohan',
-        uploadedAt,
-      }),
-    ).toBe('OP-100-si-211026-ryan.pohan');
-    expect(
-      buildShipmentNasFileStem({
-        operationId: 'OP-100',
-        token: 'bl',
-        uploadedBy: 'ryan.pohan',
-        uploadedAt,
-      }),
-    ).toBe('OP-100-bl-211026-ryan.pohan');
   });
 
   it('shipmentNasFileToken maps the three shipment documents', () => {
