@@ -155,6 +155,56 @@ const head = (s) => {
       )
     ).rows;
     for (const e of examples) line(`    to try: PO ${e.po_number}  operation ${e.operation_id}  (COD file ${e.file_name})`);
+    head('5. The COD Contract path for one PO (the way production will work: no Contract uploaded in KLIP)');
+    // --po=<po number> picks the PO; without it the first PO that has a Contract in COD and a live shipment is used. Nothing is sent: the mail is only built.
+    const poArg = process.argv.find((a) => a.startsWith('--po='));
+    let po = poArg ? poArg.slice('--po='.length).trim() : '';
+    if (!po) {
+      po =
+        (
+          await q(
+            `SELECT c.po_number FROM commercial_document_files f
+               JOIN contracts c ON NULLIF(TRIM(c.po_number), '') = f.po_number
+               JOIN shipments s ON s.contract_id = c.id
+              WHERE f.document_type = 'contract' AND COALESCE(s.status, '') <> 'CANCELLED'
+              ORDER BY f.created_at DESC LIMIT 1`,
+          )
+        ).rows[0]?.po_number || '';
+    }
+    if (!po) {
+      line('  no PO with a Contract in COD and a live shipment on this database');
+    } else {
+      const sh = (
+        await q(
+          `SELECT s.id::text AS id FROM shipments s JOIN contracts c ON c.id = s.contract_id
+            WHERE NULLIF(TRIM(c.po_number), '') = $1 AND COALESCE(s.status, '') <> 'CANCELLED'`,
+          [po],
+        )
+      ).rows.map((r) => r.id);
+      const klipContract = (
+        await q(`SELECT COUNT(*)::int AS n FROM documents WHERE deleted_at IS NULL AND UPPER(document_type) = 'CONTRACT' AND shipment_id::text = ANY($1::text[])`, [sh])
+      ).rows[0].n;
+      line(`  PO ${po}: ${sh.length} live shipment(s); Contracts uploaded in KLIP on them: ${klipContract}`);
+      const out = await loadNotifyAttachments({ sto_key: po, shipment_ids: sh });
+      line(`  mail would attach: ${out.attachments.map((a) => `${a.filename} (${fs.existsSync(a.path) ? 'on disk' : 'MISSING ON DISK'})`).join(', ') || '(nothing)'}`);
+      if (out.skipped.length) line(`  NOT ATTACHED: ${out.skipped.map((s) => `${s.kind} - ${s.reason}`).join('; ')}`);
+      const latest = (
+        await q(`SELECT id::text AS id, file_name, file_path, created_at FROM commercial_document_files WHERE po_number = $1 AND document_type = 'contract' ORDER BY created_at DESC LIMIT 1`, [po])
+      ).rows[0];
+      if (latest) {
+        let exists = false;
+        try {
+          exists = fs.existsSync(resolveUploadAbsolutePath(latest.file_path));
+        } catch {
+          exists = false;
+        }
+        line(`  newest COD Contract: ${latest.file_name}  id ${latest.id}  file on disk: ${exists ? 'yes' : 'NO'}`);
+        const { jpsDocumentViewUrl } = dist('jps/config');
+        line(`  JPS would get this link: ${jpsDocumentViewUrl(latest.id) || '(none: APP_PUBLIC_ORIGIN / FRONTEND_URL is not set on this host)'}`);
+        line(`  open-route check (run on this host, expect HTTP 200 and application/pdf):`);
+        line(`    curl -sI http://127.0.0.1:5001/api/documents/${latest.id}/view | head -5`);
+      }
+    }
   } finally {
     await pool.end();
   }
