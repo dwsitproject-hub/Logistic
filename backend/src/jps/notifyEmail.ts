@@ -11,6 +11,7 @@
 import fs from 'fs';
 import { query } from '../database/connection';
 import { resolveUploadAbsolutePath } from '../utils/fileUpload';
+import { COD_FILES_SQL, groupCodFiles, latestCodContracts, type CodFileRow } from '../utils/codFiles';
 import { sendEmail } from '../services/email.service';
 import { isEmailFeatureEnabled } from '../services/emailFeatures';
 import { parseEmailList } from '../integrations/registry';
@@ -236,11 +237,52 @@ export async function loadNotifyData(sto: EligibleSto, revision: number): Promis
   };
 }
 
-/** What goes out with the mail: the documents that JPS also gets (the newest Contract, SI and BL of the STO), attached as files. */
+/**
+ * What goes out with the mail: the Contract of EACH PO of the STO (KLIP's own, else the newest uploaded in Commercial Documents), and the newest SI and BL of the STO, attached
+ * as files. (JPS gets one Contract link, the newest of all; the mail carries every PO's contract.)
+ */
 export interface NotifyDocumentRow {
   document_type: string;
   file_name: string;
   file_path: string;
+  /** What the "not attached" note calls this file, when the type alone is not enough (one Contract per PO: "Contract PO 1011003087"). */
+  label?: string;
+}
+
+/** The Contract file of one PO, from KLIP (documents) or from Commercial Documents; `poKey` is the PO number, or the contract number when SAP sent no PO. */
+export interface NotifyContractSource {
+  poKey: string;
+  fileName: string;
+  filePath: string;
+}
+
+/**
+ * One Contract row per PO of the STO, in the order of `poKeys`. A PO's own KLIP Contract wins over the one in Commercial Documents (a file someone chose for the shipment is not
+ * replaced by a newer upload elsewhere). A PO with neither is returned in `missing`. With more than one PO each file name starts with its PO number, so three contracts that
+ * happen to share a name can be told apart by the person reading the mail. Pure: tested without a database.
+ */
+export function chooseContractRowsPerPo(
+  poKeys: string[],
+  klip: NotifyContractSource[],
+  cod: NotifyContractSource[],
+): { rows: NotifyDocumentRow[]; missing: string[] } {
+  const rows: NotifyDocumentRow[] = [];
+  const missing: string[] = [];
+  const several = poKeys.length > 1;
+  for (const po of poKeys) {
+    const src = klip.find((s) => s.poKey === po) ?? cod.find((s) => s.poKey === po);
+    if (!src) {
+      missing.push(po);
+      continue;
+    }
+    rows.push({
+      document_type: 'CONTRACT',
+      file_name: several ? `${po}_${src.fileName}` : src.fileName,
+      file_path: src.filePath,
+      label: several ? `Contract PO ${po}` : undefined,
+    });
+  }
+  return { rows, missing };
 }
 
 export interface NotifyAttachments {
@@ -271,7 +313,7 @@ export function chooseNotifyAttachments(
   );
   let total = 0;
   for (const row of ordered) {
-    const kind = DOCUMENT_LABEL[String(row.document_type).toUpperCase()] ?? String(row.document_type);
+    const kind = row.label ?? DOCUMENT_LABEL[String(row.document_type).toUpperCase()] ?? String(row.document_type);
     const absolute = resolvePath(row.file_path);
     const size = fileSize(absolute);
     if (size == null) {
@@ -295,20 +337,76 @@ export function skippedAttachmentsNote(skipped: NotifyAttachments['skipped']): s
   return `<p style="font-family:Calibri,Arial,sans-serif;font-size:13px;color:#8a4b00;">Catatan: lampiran berikut tidak disertakan: ${items}.</p>`;
 }
 
-/** The newest Contract, SI and BL of the STO's shipments (the same pick JPS gets links for), as files on disk. */
+/** The PO key a shipment's contract has in Commercial Documents: the PO number, else the contract number (SAP sent no PO). Same expression everywhere the two apps meet. */
+const PO_KEY_SQL = `COALESCE(NULLIF(TRIM(c.po_number), ''), TRIM(c.contract_id))`;
+
+/**
+ * What the mail attaches, as files on disk: the Contract of EACH PO of the STO (a PO's own KLIP Contract, else the newest one uploaded in Commercial Documents) and the newest SI
+ * and BL of the STO's shipments. A PO with no Contract anywhere is named in the "not attached" note, but only when the STO has several POs: with one, a missing Contract is
+ * what the mail has always looked like.
+ */
 export async function loadNotifyAttachments(sto: EligibleSto): Promise<NotifyAttachments> {
   if (sto.shipment_ids.length === 0) return { attachments: [], skipped: [] };
-  const res = await query(
-    `SELECT DISTINCT ON (UPPER(d.document_type)) UPPER(d.document_type) AS document_type, d.file_name, d.file_path
-       FROM documents d
-      WHERE d.shipment_id::text = ANY($1::text[])
-        AND d.deleted_at IS NULL
-        AND UPPER(d.document_type) IN ('CONTRACT', 'SI', 'BL')
-      ORDER BY UPPER(d.document_type), d.upload_date DESC NULLS LAST`,
-    [sto.shipment_ids],
-  );
-  return chooseNotifyAttachments(
-    res.rows as NotifyDocumentRow[],
+  const [siBl, pos, klipContracts] = await Promise.all([
+    query(
+      `SELECT DISTINCT ON (UPPER(d.document_type)) UPPER(d.document_type) AS document_type, d.file_name, d.file_path
+         FROM documents d
+        WHERE d.shipment_id::text = ANY($1::text[])
+          AND d.deleted_at IS NULL
+          AND UPPER(d.document_type) IN ('SI', 'BL')
+        ORDER BY UPPER(d.document_type), d.upload_date DESC NULLS LAST`,
+      [sto.shipment_ids],
+    ),
+    query(
+      `SELECT DISTINCT ${PO_KEY_SQL} AS po_key
+         FROM shipments s JOIN contracts c ON c.id = s.contract_id
+        WHERE s.id::text = ANY($1::text[])
+        ORDER BY 1`,
+      [sto.shipment_ids],
+    ),
+    query(
+      `SELECT DISTINCT ON (${PO_KEY_SQL}) ${PO_KEY_SQL} AS po_key, d.file_name, d.file_path
+         FROM documents d
+         JOIN shipments s ON s.id = d.shipment_id
+         JOIN contracts c ON c.id = s.contract_id
+        WHERE s.id::text = ANY($1::text[])
+          AND d.deleted_at IS NULL
+          AND UPPER(d.document_type) = 'CONTRACT'
+        ORDER BY ${PO_KEY_SQL}, d.upload_date DESC NULLS LAST`,
+      [sto.shipment_ids],
+    ),
+  ]);
+  const poKeys = (pos.rows as Array<{ po_key: string | null }>).map((r) => String(r.po_key ?? '').trim()).filter(Boolean);
+  const klip: NotifyContractSource[] = (klipContracts.rows as Array<{ po_key: string; file_name: string; file_path: string }>).map((r) => ({
+    poKey: String(r.po_key).trim(),
+    fileName: r.file_name,
+    filePath: r.file_path,
+  }));
+
+  // The POs with no Contract of their own in KLIP: the newest one uploaded in Commercial Documents, if any.
+  const cod: NotifyContractSource[] = [];
+  const needCod = poKeys.filter((po) => !klip.some((k) => k.poKey === po));
+  if (needCod.length > 0) {
+    try {
+      const codRows = await query(COD_FILES_SQL, [needCod, ['contract']]);
+      const latest = latestCodContracts(groupCodFiles(codRows.rows as CodFileRow[]), needCod);
+      if (latest.length > 0) {
+        const paths = await query(`SELECT id::text AS id, file_path FROM commercial_document_files WHERE id = ANY($1::uuid[])`, [latest.map((l) => l.version.id)]);
+        const pathById = new Map((paths.rows as Array<{ id: string; file_path: string }>).map((p) => [p.id, p.file_path]));
+        for (const l of latest) {
+          const filePath = pathById.get(l.version.id);
+          if (filePath) cod.push({ poKey: l.poNumber, fileName: l.version.fileName, filePath });
+        }
+      }
+    } catch (err) {
+      // The mail goes out with what KLIP holds: Commercial Documents is an addition, never a reason for the mail not to be sent.
+      logger.warn('Submit to Jetty mail: Commercial Documents contracts skipped', { error: (err as Error)?.message });
+    }
+  }
+
+  const contracts = chooseContractRowsPerPo(poKeys, klip, cod);
+  const out = chooseNotifyAttachments(
+    [...contracts.rows, ...(siBl.rows as NotifyDocumentRow[])],
     (absolute) => {
       try {
         return fs.statSync(absolute).isFile() ? fs.statSync(absolute).size : null;
@@ -318,6 +416,10 @@ export async function loadNotifyAttachments(sto: EligibleSto): Promise<NotifyAtt
     },
     resolveUploadAbsolutePath,
   );
+  if (poKeys.length > 1) {
+    for (const po of contracts.missing) out.skipped.push({ kind: `Contract PO ${po}`, reason: 'belum diunggah di KLIP maupun Commercial Documents' });
+  }
+  return out;
 }
 
 /** The Submit to Jetty email's switches (Integrations > Email): the master switch and its own, which is off until someone switches it on. */

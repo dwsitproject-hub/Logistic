@@ -8,7 +8,8 @@ import api from '@/lib/api'
  * dialog. Each row asks through useDocumentPresence; the asks of one render are sent together as one GET /documents/presence, and the answers are kept for a minute.
  * While the answer is unknown (not asked yet, or the request failed) the hook returns undefined and the button stays ON: a missing answer must never lock a document away.
  */
-export type DocPresenceKind = 'shipment' | 'contract' | 'trucking'
+/** `cod` = a PO key (not a uuid): does Commercial Documents hold a DO for it? (the Trucking View DO button counts those too). */
+export type DocPresenceKind = 'shipment' | 'contract' | 'trucking' | 'cod'
 
 const TTL_MS = 60_000
 const BATCH_MS = 40
@@ -31,19 +32,27 @@ async function flush() {
     const shipmentIds = chunk.filter((k) => k.startsWith('shipment:')).map((k) => k.slice('shipment:'.length))
     const contractIds = chunk.filter((k) => k.startsWith('contract:')).map((k) => k.slice('contract:'.length))
     const truckingIds = chunk.filter((k) => k.startsWith('trucking:')).map((k) => k.slice('trucking:'.length))
+    const codPoKeys = chunk.filter((k) => k.startsWith('cod:')).map((k) => k.slice('cod:'.length))
     try {
       const res = await api.get('/documents/presence', {
-        params: { shipmentIds: shipmentIds.join(','), contractIds: contractIds.join(','), truckingOperationIds: truckingIds.join(',') },
+        params: {
+          shipmentIds: shipmentIds.join(','),
+          contractIds: contractIds.join(','),
+          truckingOperationIds: truckingIds.join(','),
+          ...(codPoKeys.length > 0 ? { codPoKeys: codPoKeys.join(',') } : {}),
+        },
       })
-      const data = res.data?.data as { shipmentIds?: string[]; contractIds?: string[]; truckingOperationIds?: string[] } | undefined
+      const data = res.data?.data as { shipmentIds?: string[]; contractIds?: string[]; truckingOperationIds?: string[]; codPoKeys?: string[] } | undefined
       if (!data) continue
       const withShipment = new Set((data.shipmentIds ?? []).map(String))
       const withContract = new Set((data.contractIds ?? []).map(String))
       const withTrucking = new Set((data.truckingOperationIds ?? []).map(String))
+      const withCod = new Set((data.codPoKeys ?? []).map(String))
       const now = Date.now()
       for (const id of shipmentIds) cache.set(keyOf('shipment', id), { has: withShipment.has(id), at: now })
       for (const id of contractIds) cache.set(keyOf('contract', id), { has: withContract.has(id), at: now })
       for (const id of truckingIds) cache.set(keyOf('trucking', id), { has: withTrucking.has(id), at: now })
+      for (const key of codPoKeys) cache.set(keyOf('cod', key), { has: withCod.has(key), at: now })
     } catch {
       // unknown stays unknown: the button stays on
     }
@@ -72,7 +81,8 @@ export function refreshDocumentPresence() {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export function useDocumentPresence(kind: DocPresenceKind, rawId: string | null | undefined): boolean | undefined {
-  const id = rawId && UUID_RE.test(rawId) ? rawId : null
+  // A COD key is a PO number (free text); every other kind is a uuid.
+  const id = kind === 'cod' ? String(rawId ?? '').trim() || null : rawId && UUID_RE.test(rawId) ? rawId : null
   const [, setTick] = useState(0)
   useEffect(() => {
     const listener = () => setTick((n) => n + 1)
@@ -96,10 +106,11 @@ export interface DocRef {
  * A row whose Documents dialog merges two sources (a trucking operation's own files and its contract's): true when either has one, false only when every source
  * asked about is known to have none, otherwise unknown (undefined).
  */
-export function useRowDocumentPresence(a: DocRef | null, b: DocRef | null): boolean | undefined {
+export function useRowDocumentPresence(a: DocRef | null, b: DocRef | null, c: DocRef | null = null): boolean | undefined {
   const first = useDocumentPresence(a?.kind ?? 'shipment', a?.id ?? null)
   const second = useDocumentPresence(b?.kind ?? 'shipment', b?.id ?? null)
-  const asked = [a ? first : null, b ? second : null].filter((v): v is boolean | undefined => v !== null)
+  const third = useDocumentPresence(c?.kind ?? 'shipment', c?.id ?? null)
+  const asked = [a ? first : null, b ? second : null, c ? third : null].filter((v): v is boolean | undefined => v !== null)
   if (asked.length === 0) return undefined
   if (asked.some((v) => v === true)) return true
   return asked.every((v) => v === false) ? false : undefined

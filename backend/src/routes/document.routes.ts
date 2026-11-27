@@ -3,6 +3,7 @@ import { authenticateToken, authorizePermission } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import multer from 'multer';
 import { downloadDocument, viewDocument, listDocuments, documentPresence, uploadDocumentHandler, deleteShipmentDocument, ensureUploadDir } from '../controllers/document.controller';
+import { listCodFiles } from '../controllers/codFiles.controller';
 import { buildUniqueStoredFilename } from '../utils/fileUpload';
 import { requireUploadsShare } from '../utils/uploadsGuard';
 
@@ -57,6 +58,9 @@ router.get('/', listDocuments);
 
 // Which of these shipments / contracts have a document (the Shipments Docs button is off for the ones that have none)
 router.get('/presence', documentPresence);
+
+// The Contract / Addendum / DO files uploaded in Commercial Documents for these POs, every version (read only; opened through COD's own file routes). COD's own page permission.
+router.get('/cod-files', authorizePermission('page.commercial_documents', 'can_view'), listCodFiles);
 
 // Upload document
 router.post('/upload', requireUploadsShare, upload.single('file'), auditLog('CREATE', 'DOCUMENT'), uploadDocumentHandler);

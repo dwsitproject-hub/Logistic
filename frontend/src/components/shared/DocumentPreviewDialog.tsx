@@ -6,7 +6,7 @@ import { Download, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { loadDocumentPreview } from '@/lib/documentView'
 
-export type PreviewableDocument = { id: string; fileName: string; mimeType?: string | null }
+export type PreviewableDocument = { id: string; fileName: string; mimeType?: string | null; /** 'cod' = a file uploaded in Commercial Documents (read through COD's route). */ source?: 'cod' }
 
 /**
  * Shows one uploaded document (PDF or image) in a dialog over the page, with Download. Nothing leaves the page: no new tab, no file saved. The file is fetched once when the
@@ -33,7 +33,7 @@ export function DocumentPreviewDialog({ doc, onClose }: { doc: PreviewableDocume
     }
     setLoading(true)
     let made = ''
-    void loadDocumentPreview(doc.id, doc.fileName, doc.mimeType).then((result) => {
+    void loadDocumentPreview(doc.id, doc.fileName, doc.mimeType, doc.source).then((result) => {
       if (mine !== seq.current) {
         if (result.url) URL.revokeObjectURL(result.url)
         return
@@ -47,7 +47,7 @@ export function DocumentPreviewDialog({ doc, onClose }: { doc: PreviewableDocume
     return () => {
       if (made) URL.revokeObjectURL(made)
     }
-  }, [doc?.id, doc?.fileName, doc?.mimeType]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [doc?.id, doc?.fileName, doc?.mimeType, doc?.source]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!doc) return

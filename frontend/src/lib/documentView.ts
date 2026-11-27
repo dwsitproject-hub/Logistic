@@ -40,11 +40,18 @@ async function messageFromErrorBlob(data: unknown): Promise<string | null> {
  * Fetches a document and makes a blob URL of it for the viewer. Never throws: a failure comes back as `error` text for the viewer to show. The caller owns the URL and
  * revokes it (URL.revokeObjectURL) when it is done with it.
  */
-export async function loadDocumentPreview(docId: string, fileName: string, mimeType?: string | null): Promise<DocumentPreviewResult> {
+export async function loadDocumentPreview(
+  docId: string,
+  fileName: string,
+  mimeType?: string | null,
+  source?: 'cod',
+): Promise<DocumentPreviewResult> {
   const type = previewMimeType(fileName, mimeType)
   if (!type) return { url: '', type: '', error: 'This file type cannot be previewed. Use Download.' }
   try {
-    const response = await api.get(`/documents/${encodeURIComponent(docId)}/download`, { responseType: 'blob' })
+    // A file uploaded in Commercial Documents (source 'cod') is read through COD's own route (its permission); every other file through KLIP's documents route.
+    const route = source === 'cod' ? `/commercial-documents/file/${encodeURIComponent(docId)}/download` : `/documents/${encodeURIComponent(docId)}/download`
+    const response = await api.get(route, { responseType: 'blob' })
     const raw = response.data instanceof Blob ? response.data : new Blob([response.data])
     if (type === 'application/pdf') {
       const invalid = await messageFromPdfBlob(raw)

@@ -374,6 +374,7 @@ export async function findEligibleStos(
       SELECT e.sto_key,
              (ARRAY_AGG(d.id::text ORDER BY d.upload_date DESC NULLS LAST)
                 FILTER (WHERE UPPER(d.document_type) = 'CONTRACT'))[1] AS contract_document_id,
+             MAX(d.upload_date) FILTER (WHERE UPPER(d.document_type) = 'CONTRACT') AS contract_at,
              (ARRAY_AGG(d.id::text ORDER BY d.upload_date DESC NULLS LAST)
                 FILTER (WHERE UPPER(d.document_type) = 'SI'))[1] AS si_document_id,
              (ARRAY_AGG(d.id::text ORDER BY d.upload_date DESC NULLS LAST)
@@ -385,6 +386,19 @@ export async function findEligibleStos(
       INNER JOIN documents d ON d.shipment_id = s.id AND d.deleted_at IS NULL
       WHERE ${STO_KEY_SQL} = e.sto_key
         AND UPPER(d.document_type) IN ('CONTRACT', 'SI', 'BL')
+      GROUP BY e.sto_key
+    ),
+    cod_contract AS (
+      -- The newest Contract uploaded in Commercial Documents (COD) for any PO of the STO. JPS gets ONE Contract link: the newest of KLIP's and COD's together (the final SELECT
+      -- picks). A COD file has no row in documents; its id is served by the same open /documents/:id/view route (document.controller.ts), for type contract only.
+      SELECT e.sto_key,
+             (ARRAY_AGG(f.id::text ORDER BY f.created_at DESC))[1] AS cod_contract_id,
+             MAX(f.created_at) AS cod_contract_at
+      FROM eligible e
+      INNER JOIN contracts cc ON cc.id::text = ANY(e.contract_ids)
+      INNER JOIN commercial_document_files f
+              ON f.document_type = 'contract'
+             AND f.po_number = COALESCE(NULLIF(TRIM(cc.po_number), ''), TRIM(cc.contract_id))
       GROUP BY e.sto_key
     )
     SELECT e.sto_key,
@@ -400,7 +414,10 @@ export async function findEligibleStos(
            co.company_codes,
            co.company_hub_code,
            co.company_deleted,
-           d.contract_document_id,
+           CASE
+             WHEN cod.cod_contract_id IS NOT NULL AND (d.contract_document_id IS NULL OR cod.cod_contract_at > d.contract_at) THEN cod.cod_contract_id
+             ELSE d.contract_document_id
+           END AS contract_document_id,
            d.si_document_id,
            d.bl_document_id,
            COALESCE(g.lines, '[]'::jsonb) AS cargo
@@ -410,6 +427,7 @@ export async function findEligibleStos(
     LEFT JOIN terms t ON t.sto_key = e.sto_key
     LEFT JOIN company co ON co.sto_key = e.sto_key
     LEFT JOIN docs d ON d.sto_key = e.sto_key
+    LEFT JOIN cod_contract cod ON cod.sto_key = e.sto_key
     LEFT JOIN cargo g ON g.sto_key = e.sto_key
     -- Filtered here rather than in the CTE's HAVING: the STO key is a grouped EXPRESSION, and a
     -- subquery referencing it inside HAVING cannot see it (42803, "ungrouped column").

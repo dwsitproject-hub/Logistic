@@ -17,7 +17,7 @@ import {
   toRelativeUploadPath,
   type ShipmentStructuredDocKind,
 } from '../utils/fileUpload';
-import { AuthRequest } from '../middleware/auth';
+import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import { AuditService } from '../services/audit.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { SELECT_CONTRACT_TRUCKING_FOLDER_SQL, SELECT_SHIPMENT_FOLDER_SQL, SELECT_TRUCKING_FOLDER_SQL } from '../utils/documentFolders';
@@ -64,17 +64,44 @@ function presenceIds(raw: unknown): string[] {
   ).slice(0, PRESENCE_MAX_IDS);
 }
 
+/** PO keys as the COD list shows them (a PO number, or the contract id when SAP sent none): free text, so only trimmed, de-duplicated and bounded. */
+function presencePoKeys(raw: unknown): string[] {
+  return Array.from(
+    new Set(
+      String(raw ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, PRESENCE_MAX_IDS);
+}
+
 /**
  * GET /documents/presence?shipmentIds=a,b&contractIds=c,d&truckingOperationIds=e - which of these shipments / contracts / trucking operations have at least one document. The Shipments page asks for the rows it shows
  * and turns the Docs button off for the ones that have none, so nobody opens an empty "No documents uploaded" dialog. A contract's documents are counted the way
  * listDocuments counts them for the Documents dialog (its own file or one filed on its trucking operations), so the button and the dialog never disagree.
  */
-export const documentPresence = async (req: Request, res: Response) => {
+export const documentPresence = async (req: AuthRequest, res: Response) => {
   try {
     const shipmentIds = presenceIds(req.query.shipmentIds);
     const contractIds = presenceIds(req.query.contractIds);
     const truckingOperationIds = presenceIds(req.query.truckingOperationIds);
-    const withDocs = { shipmentIds: [] as string[], contractIds: [] as string[], truckingOperationIds: [] as string[] };
+    const codPoKeys = presencePoKeys(req.query.codPoKeys);
+    const withDocs = { shipmentIds: [] as string[], contractIds: [] as string[], truckingOperationIds: [] as string[], codPoKeys: [] as string[] };
+    // Which of these POs have a DO uploaded in Commercial Documents (the Trucking View DO button counts it). Only for someone who may open COD: for anyone else the answer is
+    // "none", the same as a PO that has none, so the answer does not tell them what COD holds.
+    if (codPoKeys.length > 0 && req.user) {
+      const mayView = req.user.role === 'ADMIN' || (await userHasPermissionFlag(req.user.id, req.user.role, 'page.commercial_documents', 'can_view'));
+      if (mayView) {
+        const r = await query(
+          `SELECT DISTINCT f.po_number
+             FROM commercial_document_files f
+            WHERE f.po_number = ANY($1::text[]) AND f.document_type = 'delivery_order'`,
+          [codPoKeys],
+        );
+        withDocs.codPoKeys = r.rows.map((row: { po_number: string }) => row.po_number);
+      }
+    }
     if (shipmentIds.length > 0) {
       const r = await query(
         `SELECT DISTINCT d.shipment_id::text AS id
@@ -366,6 +393,20 @@ export function documentViewOrigins(env: NodeJS.ProcessEnv = process.env, jpsBas
 }
 
 /**
+ * A Contract uploaded in Commercial Documents, read like a KLIP document: JPS gets ONE Contract link, which may be the newest file of COD (jps/eligibility.ts), and the open
+ * /documents/:id/view and /download routes serve it when the id is not a KLIP document. Only type `contract`: that table also holds invoices and tax documents, which a link
+ * without a login must never reach. Null for an id that is not a uuid, or not a COD Contract.
+ */
+async function findCodContractAsDocument(id: string): Promise<{ file_name: string; file_path: string; mime_type: string | null } | null> {
+  if (!UUID_RE.test(String(id ?? ''))) return null;
+  const r = await query(
+    `SELECT file_name, file_path, mime_type FROM commercial_document_files WHERE id = $1::uuid AND document_type = 'contract'`,
+    [id],
+  );
+  return (r.rows[0] as { file_name: string; file_path: string; mime_type: string | null } | undefined) ?? null;
+}
+
+/**
  * Opens a document to be VIEWED: `Content-Disposition: inline` with its real type, where /download answers `attachment` (the browser saves the file). Open like /download, for
  * the same reason (JPS operators may have no KLIP account; ids are uuids; see document.routes.ts). JPS shows the three shipment documents (Contract, SI, BL) KLIP sends it
  * by these links, so this route also lets JPS's own origin embed the file: the response carries `frame-ancestors 'self' <JPS origins>` and no X-Frame-Options (helmet's default
@@ -376,10 +417,10 @@ export const viewDocument = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const result = await query('SELECT * FROM documents WHERE id = $1 AND deleted_at IS NULL', [id]);
-    if (result.rows.length === 0) {
+    const doc = result.rows[0] ?? (await findCodContractAsDocument(id));
+    if (!doc) {
       return res.status(404).json({ success: false, error: { message: 'Document not found' } });
     }
-    const doc = result.rows[0];
     const absPath = resolveUploadAbsolutePath(doc.file_path);
     if (!fs.existsSync(absPath)) {
       return res.status(404).json({ success: false, error: { message: 'File not found on server' } });
@@ -504,10 +545,10 @@ export const downloadDocument = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const result = await query('SELECT * FROM documents WHERE id = $1 AND deleted_at IS NULL', [id]);
-    if (result.rows.length === 0) {
+    const doc = result.rows[0] ?? (await findCodContractAsDocument(id));
+    if (!doc) {
       return res.status(404).json({ success: false, error: { message: 'Document not found' } });
     }
-    const doc = result.rows[0];
     const absPath = resolveUploadAbsolutePath(doc.file_path);
     if (!fs.existsSync(absPath)) {
       return res.status(404).json({ success: false, error: { message: 'File not found on server' } });

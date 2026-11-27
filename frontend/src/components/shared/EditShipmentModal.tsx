@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { CodFilesBlock } from '@/components/shared/CodFilesBlock'
+import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/shared/DocumentPreviewDialog'
+import { codGroupsOfType, useCodFiles } from '@/lib/codFiles'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -987,6 +990,11 @@ export function EditShipmentModal({
   const [sapQtyShared, setSapQtyShared] = useState(false)
   const [shipmentDocuments, setShipmentDocuments] = useState<ShipmentDocumentItem[]>([])
   const [docsLoading, setDocsLoading] = useState(false)
+  // The Contract uploaded in Commercial Documents for each PO of this shipment (read only, every version). A COD file opens in the shared preview dialog, through COD's own route.
+  const [codPreview, setCodPreview] = useState<PreviewableDocument | null>(null)
+  const codPoKeys = useMemo(() => detailRows.map((r) => String(r.po_number || r.contract_number || '').trim()).filter(Boolean), [detailRows])
+  const { groups: codContractFiles } = useCodFiles(codPoKeys, ['contract'], open)
+  const codContractGroups = useMemo(() => codGroupsOfType(codContractFiles, 'contract', codPoKeys), [codContractFiles, codPoKeys])
 
   const [loadingPort, setLoadingPort] = useState('')
   const [dischargePort, setDischargePort] = useState('')
@@ -3443,11 +3451,25 @@ export function EditShipmentModal({
                                 ))}
                               </ul>
                             )}
+                            {type === 'CONTRACT'
+                              ? codContractGroups.map((group) => (
+                                  <CodFilesBlock
+                                    key={`${group.poNumber}-${group.type}`}
+                                    group={group}
+                                    onPreview={setCodPreview}
+                                    // Sure to be the file that goes out only when this is the one PO and the shipment has no Contract of its own; with several POs each PO's own file decides.
+                                    inUse={detailRows.length <= 1 && docs.length === 0}
+                                    note="Sent to JPS and attached to the Jetty email when the PO has no Contract uploaded in KLIP."
+                                    onError={(message) => setNotification({ type: 'error', message })}
+                                  />
+                                ))
+                              : null}
                           </div>
                         )
                       })}
                     </div>
                   )}
+                  <DocumentPreviewDialog doc={codPreview} onClose={() => setCodPreview(null)} />
                   {pdfPreview ? (
                     <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
                       <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-1.5">
