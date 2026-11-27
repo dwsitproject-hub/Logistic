@@ -522,7 +522,7 @@ export default function DocumentsPage() {
       <section className="sumcards-wrap" aria-label="Documents uploaded per type">
         <p className="hint">
           Contracts with the document uploaded, out of all contracts in the selected date range. For Invoice + FP Down Payment and Payoff, out of the POs that
-          have a DP Date or a Payoff Date in SAP. Click a card to list them in the table below.
+          have a DP Date or a Payoff Date in SAP; for Shipment Docs, out of the POs that are shipments (sea), not trucking. Click a card to list them in the table below.
         </p>
         <div className="sumcards">
           {DOCUMENT_TYPES.map((t) => {
@@ -558,11 +558,11 @@ export default function DocumentsPage() {
                 type="button"
                 className={`sumcard${c && c.uploadedCount === 0 ? ' empty' : ''}`}
                 aria-pressed={docFilter === 'shipment_docs'}
-                title="Show the POs that have a BL or SI uploaded in KLIP (Shipments > Edit Shipment). View only: the files are in the PO's drawer."
+                title="Show the shipment POs (sea, not trucking) that have a BL or SI uploaded in KLIP (Shipments > Edit Shipment). View only: the files are in the PO's drawer."
                 onClick={() => setDocFilter(docFilter === 'shipment_docs' ? null : 'shipment_docs')}
               >
                 <span className="sc-l">Shipment Docs</span>
-                <span className="sc-k">PO with BL / SI from KLIP</span>
+                <span className="sc-k">PO in Shipments (not trucking)</span>
                 <span className="sc-n num">{c ? `${c.uploadedCount.toLocaleString('en-US')}/${c.totalCount.toLocaleString('en-US')}` : '…'}</span>
                 <span className={`sc-p num ${p >= 75 ? 'good' : p >= 40 ? 'mid' : 'low'}`}>{c ? `${p.toFixed(1)}%` : ''}</span>
                 <span className="sc-bar" aria-hidden>
@@ -582,7 +582,7 @@ export default function DocumentsPage() {
               : docFilter === 'incomplete'
                 ? 'Showing POs that miss at least one document · '
                 : docFilter === 'shipment_docs'
-                  ? 'Showing POs that have a BL or SI uploaded in KLIP (open a PO to see them per voyage) · '
+                  ? 'Showing shipment POs that have a BL or SI uploaded in KLIP (open a PO to see them per voyage) · '
                   : ''}
             Tick the boxes on the right to download one Tanda Terima for several POs
           </span>

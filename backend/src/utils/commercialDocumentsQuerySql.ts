@@ -254,7 +254,8 @@ export function buildCommercialDocumentsBaseCte(): string {
     enriched AS (
       SELECT
         cr.*,
-        (sdp.contract_id IS NOT NULL) AS doc_shipment_docs,
+        -- Only POs classified as a shipment (SEA / MIX), never trucking (LAND): the card's total counts the same POs, so N/total and the list after a click agree.
+        (sdp.contract_id IS NOT NULL AND UPPER(TRIM(COALESCE(cr.transport_mode, ''))) IN ('SEA', 'MIX')) AS doc_shipment_docs,
         COALESCE(df.doc_draft_contract, ldf.doc_draft_contract, false) AS doc_draft_contract,
         COALESCE(df.doc_contract, ldf.doc_contract, false) AS doc_contract,
         COALESCE(df.doc_addendum_contract, ldf.doc_addendum_contract, false) AS doc_addendum_contract,
@@ -549,6 +550,7 @@ export function buildCommercialDocumentsSummaryQuery(params: CommercialDocuments
       COUNT(*) FILTER (WHERE ${COMMERCIAL_DOCUMENT_SAP_DATE_BASIS.invoice_fp_payoff})::int AS total_invoice_fp_payoff,
       ${count('doc_invoice_fp_full')} AS uploaded_invoice_fp_full,
       ${count('doc_shipment_docs')} AS uploaded_shipment_docs,
+      COUNT(*) FILTER (WHERE UPPER(TRIM(COALESCE(e.transport_mode, ''))) IN ('SEA', 'MIX'))::int AS total_shipment_docs,
       COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_contract_count,
       COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = 0)::int AS empty_contract_count
     FROM enriched e

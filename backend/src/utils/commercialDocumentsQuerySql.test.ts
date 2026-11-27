@@ -285,3 +285,12 @@ describe('commercialDocuments Shipment Docs card', () => {
     expect(buildCommercialDocumentsListQuery({ completeness: 'complete' }).countSql).not.toContain('doc_shipment_docs) ');
   });
 });
+
+describe('commercialDocuments Shipment Docs card basis', () => {
+  it('counts and lists only POs classified as a shipment (SEA / MIX), never trucking (LAND)', () => {
+    const base = buildCommercialDocumentsBaseCte();
+    expect(base).toContain("UPPER(TRIM(COALESCE(cr.transport_mode, ''))) IN ('SEA', 'MIX')");
+    const summary = buildCommercialDocumentsSummaryQuery({}).sql;
+    expect(summary).toContain("COUNT(*) FILTER (WHERE UPPER(TRIM(COALESCE(e.transport_mode, ''))) IN ('SEA', 'MIX'))::int AS total_shipment_docs");
+  });
+});

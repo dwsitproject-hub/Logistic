@@ -525,8 +525,8 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
           invoice_fp_dp: card('uploaded_invoice_fp_dp', 'total_invoice_fp_dp'),
           invoice_fp_payoff: card('uploaded_invoice_fp_payoff', 'total_invoice_fp_payoff'),
           invoice_fp_full: card('uploaded_invoice_fp_full'),
-          // The BL / SI uploaded in KLIP: its own card, not one of the eleven checklist types.
-          shipment_docs: card('uploaded_shipment_docs'),
+          // The BL / SI uploaded in KLIP: its own card, not one of the eleven checklist types. Counted among the POs classified as a shipment (SEA / MIX), not trucking.
+          shipment_docs: card('uploaded_shipment_docs', 'total_shipment_docs'),
         },
         // All eleven / none / anything short of eleven - the list's completeness filter returns the same rows.
         contracts: {
