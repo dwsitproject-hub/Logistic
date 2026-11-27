@@ -53,8 +53,21 @@ const head = (s) => {
     }
 
     head('2. JPS eligibility: where the Contract link comes from');
-    const ports = jpsEnabledPortNames();
-    line(`  ports switched on for JPS: ${ports.length === 0 ? '(none: nothing is eligible here, so this part says nothing)' : ports.join(', ')}`);
+    // --ports="PORT BONTANG,PORT X" tries other Master Ports WITHOUT touching the Integrations setting (read-only either way). Without it, the ports switched on for JPS are used.
+    const portsArg = process.argv.find((a) => a.startsWith('--ports='));
+    const enabled = jpsEnabledPortNames();
+    const ports = portsArg ? portsArg.slice('--ports='.length).split(',').map((s) => s.trim()).filter(Boolean) : enabled;
+    line(`  ports switched on for JPS: ${enabled.length === 0 ? '(none)' : enabled.join(', ')}${portsArg ? `   -> trying instead: ${ports.join(', ')}` : ''}`);
+    if (ports.length === 0) {
+      const cand = (
+        await q(
+          `SELECT mp.port, COUNT(*)::int AS n FROM shipments s JOIN master_loading_ports mp ON mp.id = s.discharge_master_port_id
+            WHERE COALESCE(s.status, '') NOT IN ('COMPLETED', 'CANCELLED') GROUP BY 1 ORDER BY 2 DESC LIMIT 6`,
+        )
+      ).rows;
+      line('  no port to ask for, so nothing is eligible. Open shipments by discharge Master Port (pass one with --ports="<name>"):');
+      for (const c of cand) line(`    ${String(c.n).padStart(4)}  ${c.port}`);
+    }
     const stos = await findEligibleStos(ports, 500, {});
     line(`  eligible STOs found: ${stos.length}`);
     const ids = stos.map((s) => s.contract_document_url ?? null);
@@ -111,6 +124,17 @@ const head = (s) => {
       )
     ).rows[0];
     line(`  POs with a COD DO and a trucking operation (they gain a file in View DO): ${overlap.n}`);
+    const examples = (
+      await q(
+        `SELECT DISTINCT c.po_number, o.operation_id, f.file_name
+           FROM commercial_document_files f
+           JOIN contracts c ON NULLIF(TRIM(c.po_number), '') = f.po_number
+           JOIN trucking_operations o ON o.contract_id = c.id
+          WHERE f.document_type = 'delivery_order'
+          ORDER BY c.po_number, o.operation_id LIMIT 8`,
+      )
+    ).rows;
+    for (const e of examples) line(`    to try: PO ${e.po_number}  operation ${e.operation_id}  (COD file ${e.file_name})`);
   } finally {
     await pool.end();
   }
