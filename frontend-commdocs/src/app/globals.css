@@ -258,6 +258,16 @@ tbody tr.picked td { background: #f2f8f8; }
 .viewer-bar { display: flex; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .viewer-bar .file { display: flex; gap: 0.5rem; align-items: center; min-width: 0; }
 .viewer-bar .file > svg { color: var(--accent); flex: none; }
+/* Shipment Docs card (drawer): the BL / SI uploaded in KLIP, one group per voyage. */
+.sd-card { padding: 12px; display: grid; gap: 10px; }
+.sd-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.sd-head b { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9375rem; }
+.sd-head b svg { width: 1rem; height: 1rem; color: var(--accent); }
+.sd-group { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.sd-gh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.sd-doc { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; align-items: start; padding: 6px 0; border-top: 1px dashed var(--line); }
+.sd-actions { grid-column: 2; display: flex; gap: 4px; flex-wrap: wrap; }
+.sd-name { display: block; font-size: 0.8125rem; font-weight: 600; overflow-wrap: anywhere; }
 .timeline { display: grid; gap: 0; }
 .tl { display: grid; grid-template-columns: 1.25rem minmax(0, 1fr); gap: 0.625rem; padding-bottom: 0.875rem; position: relative; }
 .tl::before { content: ''; position: absolute; left: 0.5625rem; top: 1.125rem; bottom: 0; width: 0.125rem; background: var(--line); }

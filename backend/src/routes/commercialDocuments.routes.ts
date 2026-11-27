@@ -12,6 +12,7 @@ import {
   getCommercialDocumentHistory,
   getCommercialDocumentCreators,
   getCommercialDocuments,
+  getCommercialShipmentDocs,
   getCommercialDocumentsCompletenessByCreator,
   getCommercialDocumentsCompletenessByPlant,
   getCommercialDocumentsSummary,
@@ -69,6 +70,8 @@ router.get('/po-creators/status', authenticateToken, authorize('ADMIN'), getComm
 router.post('/po-creators/sync', authenticateToken, authorize('ADMIN'), syncCommercialPoCreators);
 router.get('/history/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentHistory);
 router.get('/files/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentFiles);
+// The BL / SI uploaded in KLIP for a PO, grouped by voyage (read-only).
+router.get('/shipment-docs/:poNumber', authenticateToken, canViewDocuments, getCommercialShipmentDocs);
 router.post('/upload', authenticateToken, canViewDocuments, requireUploadsShare, stampRequestStart, commercialDocumentUpload.single('file'), uploadCommercialDocument);
 router.post(
   '/ocr/settlement-invoice',

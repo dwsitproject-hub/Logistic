@@ -178,3 +178,14 @@ export type AuditEntry = {
   after_data: Record<string, unknown> | null
   timestamp: string
 }
+
+/** The BL / SI files uploaded in KLIP for a PO, one group per voyage (GET /commercial-documents/shipment-docs/:po). */
+export type ShipmentDocGroup = {
+  shipmentId: string
+  reference: string | null
+  vesselName: string | null
+  voyageNo: string | null
+  date: string | null
+  sharedWithPos: string[]
+  documents: Array<{ id: string; type: 'SI' | 'BL'; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null }>
+}

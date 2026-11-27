@@ -20,6 +20,7 @@ import { dateTime, longDate, num } from '@/lib/format'
 import { saveBlob } from '@/lib/files'
 import type { B2bParty, DocumentFile, DocumentRow, HistoryEntry } from '@/lib/types'
 import { ErrorNote, Modal, Spinner, useToast } from '../ui'
+import { ShipmentDocsCard } from './ShipmentDocsCard'
 
 type Preview = { fileId: string; url: string; isImage: boolean } | { fileId: string; error: string }
 
@@ -352,6 +353,7 @@ export function DocumentDrawer({
                     </button>
                   )
                 })}
+                <ShipmentDocsCard poKey={key} />
               </div>
             ) : (
               <div className="timeline">

@@ -6,6 +6,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { uploadsRootProblem } from '../utils/uploadsGuard';
 import { createStepTimer } from '../utils/stepTimer';
+import { COMMERCIAL_SHIPMENT_DOCS_SQL, groupShipmentDocs, type ShipmentDocRow } from '../utils/commercialShipmentDocs';
 import { copyToFirstFreeName, incomingUploadDir } from '../utils/incomingUpload';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import {
@@ -661,6 +662,22 @@ export const getCommercialDocumentFiles = async (req: AuthRequest, res: Response
   } catch (err) {
     logger.error('getCommercialDocumentFiles error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch files' } });
+  }
+};
+
+/**
+ * The BL and SI files uploaded in KLIP (Shipments > Edit Shipment) for a PO, grouped by voyage (GET /api/commercial-documents/shipment-docs/:poNumber).
+ * Read-only; the rule that links a PO to its voyages is in utils/commercialShipmentDocs.ts. The files themselves are opened through /api/documents/:id/view.
+ */
+export const getCommercialShipmentDocs = async (req: AuthRequest, res: Response) => {
+  try {
+    const key = String(req.params.poNumber || '').trim();
+    if (!key) return res.status(400).json({ success: false, error: { message: 'PO number is required' } });
+    const result = await query(COMMERCIAL_SHIPMENT_DOCS_SQL, [key]);
+    return res.json({ success: true, data: { groups: groupShipmentDocs(result.rows as ShipmentDocRow[]) } });
+  } catch (err) {
+    logger.error('getCommercialShipmentDocs error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch the shipment documents' } });
   }
 };
 
