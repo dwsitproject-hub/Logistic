@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { CodFilesBlock } from '@/components/shared/CodFilesBlock'
 import { DocumentPreviewDialog, type PreviewableDocument } from '@/components/shared/DocumentPreviewDialog'
 import { codGroupsOfType, useCodFiles } from '@/lib/codFiles'
+import { shipmentDocumentsSummary } from '@/lib/shipmentDocumentsSummary'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -995,6 +996,7 @@ export function EditShipmentModal({
   const codPoKeys = useMemo(() => detailRows.map((r) => String(r.po_number || r.contract_number || '').trim()).filter(Boolean), [detailRows])
   const { groups: codContractFiles } = useCodFiles(codPoKeys, ['contract'], open)
   const codContractGroups = useMemo(() => codGroupsOfType(codContractFiles, 'contract', codPoKeys), [codContractFiles, codPoKeys])
+  const documentsSummary = useMemo(() => shipmentDocumentsSummary(shipmentDocuments, codContractGroups.length), [shipmentDocuments, codContractGroups])
 
   const [loadingPort, setLoadingPort] = useState('')
   const [dischargePort, setDischargePort] = useState('')
@@ -3246,242 +3248,6 @@ export function EditShipmentModal({
                     onChangeKg={setSfbdQty}
                   />
                 </div>
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-gray-600" />
-                    <h5 className="text-sm font-semibold text-gray-800">Documents</h5>
-                  </div>
-                  {deleteDocTarget ? (
-                    <div
-                      role="alertdialog"
-                      aria-label="Delete document"
-                      className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900"
-                    >
-                      <p>
-                        Delete {deleteDocTarget.label} document <span className="font-medium">{deleteDocTarget.fileName}</span>? It disappears from this shipment but the
-                        file is kept, and the deletion is recorded in Activity History.
-                      </p>
-                      {deleteDocJpsWarning ? (
-                        <p className="font-medium">
-                          This shipment was already sent to JPS and its instruction links to this file. After the delete that link no longer opens. Delete anyway?
-                        </p>
-                      ) : null}
-                      <div>
-                        <label htmlFor="delete-document-reason" className="mb-1 block text-xs font-semibold">
-                          Reason <span className="text-red-600">*</span>
-                        </label>
-                        <textarea
-                          id="delete-document-reason"
-                          rows={2}
-                          maxLength={500}
-                          value={deleteDocReason}
-                          onChange={(e) => setDeleteDocReason(e.target.value)}
-                          disabled={deletingDoc}
-                          placeholder="Why is this file deleted?"
-                          className="w-full rounded-md border border-red-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-400 focus:outline-none"
-                        />
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="h-8 bg-red-600 px-3 text-white hover:bg-red-700"
-                          disabled={deletingDoc || !deleteDocReason.trim()}
-                          onClick={() => void handleDeleteDocument(deleteDocJpsWarning)}
-                        >
-                          {deletingDoc ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />}
-                          {deleteDocJpsWarning ? 'Delete anyway' : 'Delete document'}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="h-8 px-3"
-                          disabled={deletingDoc}
-                          onClick={() => {
-                            setDeleteDocTarget(null)
-                            setDeleteDocReason('')
-                            setDeleteDocJpsWarning(false)
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  ) : null}
-                  {docsLoading ? (
-                    <div className="flex items-center gap-2 text-sm text-gray-500">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading documents…
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                      {SHIPMENT_DOC_TYPES.map(({ type, label }) => {
-                        const busy = uploadingDocType === type
-                        const inputId = `edit-shipment-doc-${type.toLowerCase()}`
-                        const docs = shipmentDocuments.filter(
-                          (doc) => String(doc.document_type ?? '').toUpperCase() === type,
-                        )
-                        const dropping = dragOverDocType === type
-                        return (
-                          <div
-                            key={type}
-                            className={`rounded-lg border bg-gray-50/60 p-3 ${
-                              dropping ? 'border-blue-400 bg-blue-50' : 'border-gray-200'
-                            }`}
-                            onDragOver={(event) => {
-                              event.preventDefault()
-                              if (!canModifyCoreSections) return
-                              setDragOverDocType(type)
-                            }}
-                            onDragLeave={(event) => {
-                              const next = event.relatedTarget as Node | null
-                              if (next && event.currentTarget.contains(next)) return
-                              setDragOverDocType((current) => (current === type ? null : current))
-                            }}
-                            onDrop={(event) => {
-                              event.preventDefault()
-                              setDragOverDocType(null)
-                              if (!canModifyCoreSections) return
-                              void uploadShipmentPdfs(type, Array.from(event.dataTransfer.files ?? []))
-                            }}
-                          >
-                            <p className="text-xs font-medium text-gray-800">{label}</p>
-                            <p className="mt-0.5 text-[0.6875rem] text-gray-500">
-                              {canModifyCoreSections
-                                ? 'PDF. Drop one or more files here, or use Upload.'
-                                : 'PDF.'}
-                            </p>
-                            {canModifyCoreSections ? (
-                              <>
-                                <input
-                                  id={inputId}
-                                  type="file"
-                                  accept=".pdf,application/pdf"
-                                  multiple
-                                  className="hidden"
-                                  onChange={(event) => {
-                                    const picked = Array.from(event.target.files ?? [])
-                                    event.target.value = ''
-                                    void uploadShipmentPdfs(type, picked)
-                                  }}
-                                  disabled={busy}
-                                />
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="mt-2 h-8 text-xs"
-                                  disabled={busy}
-                                  onClick={() => document.getElementById(inputId)?.click()}
-                                >
-                                  {busy ? (
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  ) : (
-                                    <>
-                                      <Upload className="mr-1 h-3.5 w-3.5" /> Upload
-                                    </>
-                                  )}
-                                </Button>
-                              </>
-                            ) : null}
-                            {docs.length === 0 ? (
-                              <p className="mt-2 text-[0.6875rem] text-gray-400">No file yet.</p>
-                            ) : (
-                              <ul className="mt-2 space-y-1.5">
-                                {docs.map((doc) => (
-                                  <li
-                                    key={doc.id}
-                                    className="rounded-md border border-gray-100 bg-white px-2 py-1.5"
-                                  >
-                                    <p className="truncate text-xs font-medium text-gray-800" title={doc.file_name}>
-                                      {doc.file_name}
-                                    </p>
-                                    {doc.created_at ? (
-                                      <p className="text-[0.625rem] tabular-nums text-gray-500">
-                                        {formatDateTimeDMY(doc.created_at)}
-                                      </p>
-                                    ) : null}
-                                    <div className="mt-1 flex gap-1">
-                                      <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-7 px-2 text-[0.6875rem]"
-                                        disabled={viewingDocId === doc.id}
-                                        onClick={() => void handleViewDocument(doc.id, doc.file_name)}
-                                      >
-                                        {viewingDocId === doc.id ? (
-                                          <Loader2 className="h-3 w-3 animate-spin" />
-                                        ) : (
-                                          <Eye className="mr-1 h-3 w-3" />
-                                        )}
-                                        {pdfPreview?.id === doc.id ? 'Hide' : 'View'}
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-7 px-2 text-[0.6875rem]"
-                                        onClick={() => void handleDownloadDocument(doc.id, doc.file_name)}
-                                      >
-                                        <Download className="mr-1 h-3 w-3" />
-                                        Download
-                                      </Button>
-                                      {canModifyCoreSections ? (
-                                        <Button
-                                          type="button"
-                                          variant="outline"
-                                          size="sm"
-                                          className="h-7 px-2 text-[0.6875rem] text-red-700 hover:bg-red-50 hover:text-red-800"
-                                          title="Delete this file (it is kept, and the deletion is recorded)"
-                                          disabled={deletingDoc}
-                                          onClick={() => {
-                                            setDeleteDocJpsWarning(false)
-                                            setDeleteDocReason('')
-                                            setDeleteDocTarget({ id: doc.id, fileName: doc.file_name, label })
-                                          }}
-                                        >
-                                          <Trash2 className="mr-1 h-3 w-3" />
-                                          Delete
-                                        </Button>
-                                      ) : null}
-                                    </div>
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                            {type === 'CONTRACT'
-                              ? codContractGroups.map((group) => (
-                                  <CodFilesBlock
-                                    key={`${group.poNumber}-${group.type}`}
-                                    group={group}
-                                    onPreview={setCodPreview}
-                                    // Sure to be the file that goes out only when this is the one PO and the shipment has no Contract of its own; with several POs each PO's own file decides.
-                                    inUse={detailRows.length <= 1 && docs.length === 0}
-                                    note="Sent to JPS and attached to the Jetty email when the PO has no Contract uploaded in KLIP."
-                                    onError={(message) => setNotification({ type: 'error', message })}
-                                  />
-                                ))
-                              : null}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                  <DocumentPreviewDialog doc={codPreview} onClose={() => setCodPreview(null)} />
-                  {pdfPreview ? (
-                    <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                      <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-1.5">
-                        <p className="truncate text-xs font-medium text-gray-700">{pdfPreview.fileName}</p>
-                        <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={closePdfPreview}>
-                          Close
-                        </Button>
-                      </div>
-                      <iframe title={pdfPreview.fileName} src={pdfPreview.url} className="h-80 w-full" />
-                    </div>
-                  ) : null}
-                </div>
               </div>
             </div>
 
@@ -4020,13 +3786,260 @@ export function EditShipmentModal({
               </div>
             </div>
 
-            {/* Section 6: Remarks */}
+            {/* Section 6: Documents */}
+            <div className={VESSEL_MODAL_SECTION_CLASS}>
+              <div className={vesselModalSectionHeaderClass('violet', 'justify-between gap-2')}>
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100">
+                    <FileText className="h-3.5 w-3.5 text-violet-600" />
+                  </div>
+                  <h4 className="text-sm font-semibold text-gray-800">6. Documents</h4>
+                </div>
+                <p className="ml-auto text-[0.6875rem] text-gray-500" data-testid="documents-summary">{documentsSummary}</p>
+              </div>
+              <div className="p-4">
+                <div className="space-y-3">
+                  {deleteDocTarget ? (
+                    <div
+                      role="alertdialog"
+                      aria-label="Delete document"
+                      className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900"
+                    >
+                      <p>
+                        Delete {deleteDocTarget.label} document <span className="font-medium">{deleteDocTarget.fileName}</span>? It disappears from this shipment but the
+                        file is kept, and the deletion is recorded in Activity History.
+                      </p>
+                      {deleteDocJpsWarning ? (
+                        <p className="font-medium">
+                          This shipment was already sent to JPS and its instruction links to this file. After the delete that link no longer opens. Delete anyway?
+                        </p>
+                      ) : null}
+                      <div>
+                        <label htmlFor="delete-document-reason" className="mb-1 block text-xs font-semibold">
+                          Reason <span className="text-red-600">*</span>
+                        </label>
+                        <textarea
+                          id="delete-document-reason"
+                          rows={2}
+                          maxLength={500}
+                          value={deleteDocReason}
+                          onChange={(e) => setDeleteDocReason(e.target.value)}
+                          disabled={deletingDoc}
+                          placeholder="Why is this file deleted?"
+                          className="w-full rounded-md border border-red-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-red-400 focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 bg-red-600 px-3 text-white hover:bg-red-700"
+                          disabled={deletingDoc || !deleteDocReason.trim()}
+                          onClick={() => void handleDeleteDocument(deleteDocJpsWarning)}
+                        >
+                          {deletingDoc ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1 h-3.5 w-3.5" />}
+                          {deleteDocJpsWarning ? 'Delete anyway' : 'Delete document'}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-3"
+                          disabled={deletingDoc}
+                          onClick={() => {
+                            setDeleteDocTarget(null)
+                            setDeleteDocReason('')
+                            setDeleteDocJpsWarning(false)
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {docsLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-gray-500">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading documents…
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      {SHIPMENT_DOC_TYPES.map(({ type, label }) => {
+                        const busy = uploadingDocType === type
+                        const inputId = `edit-shipment-doc-${type.toLowerCase()}`
+                        const docs = shipmentDocuments.filter(
+                          (doc) => String(doc.document_type ?? '').toUpperCase() === type,
+                        )
+                        const dropping = dragOverDocType === type
+                        return (
+                          <div
+                            key={type}
+                            className={`rounded-lg border bg-gray-50/60 p-3 ${
+                              dropping ? 'border-blue-400 bg-blue-50' : 'border-gray-200'
+                            }`}
+                            onDragOver={(event) => {
+                              event.preventDefault()
+                              if (!canModifyCoreSections) return
+                              setDragOverDocType(type)
+                            }}
+                            onDragLeave={(event) => {
+                              const next = event.relatedTarget as Node | null
+                              if (next && event.currentTarget.contains(next)) return
+                              setDragOverDocType((current) => (current === type ? null : current))
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault()
+                              setDragOverDocType(null)
+                              if (!canModifyCoreSections) return
+                              void uploadShipmentPdfs(type, Array.from(event.dataTransfer.files ?? []))
+                            }}
+                          >
+                            <p className="text-xs font-medium text-gray-800">{label}</p>
+                            <p className="mt-0.5 text-[0.6875rem] text-gray-500">
+                              {canModifyCoreSections
+                                ? 'PDF. Drop one or more files here, or use Upload.'
+                                : 'PDF.'}
+                            </p>
+                            {canModifyCoreSections ? (
+                              <>
+                                <input
+                                  id={inputId}
+                                  type="file"
+                                  accept=".pdf,application/pdf"
+                                  multiple
+                                  className="hidden"
+                                  onChange={(event) => {
+                                    const picked = Array.from(event.target.files ?? [])
+                                    event.target.value = ''
+                                    void uploadShipmentPdfs(type, picked)
+                                  }}
+                                  disabled={busy}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="mt-2 h-8 text-xs"
+                                  disabled={busy}
+                                  onClick={() => document.getElementById(inputId)?.click()}
+                                >
+                                  {busy ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <>
+                                      <Upload className="mr-1 h-3.5 w-3.5" /> Upload
+                                    </>
+                                  )}
+                                </Button>
+                              </>
+                            ) : null}
+                            {docs.length === 0 ? (
+                              <p className="mt-2 text-[0.6875rem] text-gray-400">No file yet.</p>
+                            ) : (
+                              <ul className="mt-2 space-y-1.5">
+                                {docs.map((doc) => (
+                                  <li
+                                    key={doc.id}
+                                    className="rounded-md border border-gray-100 bg-white px-2 py-1.5"
+                                  >
+                                    <p className="truncate text-xs font-medium text-gray-800" title={doc.file_name}>
+                                      {doc.file_name}
+                                    </p>
+                                    {doc.created_at ? (
+                                      <p className="text-[0.625rem] tabular-nums text-gray-500">
+                                        {formatDateTimeDMY(doc.created_at)}
+                                      </p>
+                                    ) : null}
+                                    <div className="mt-1 flex gap-1">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 px-2 text-[0.6875rem]"
+                                        disabled={viewingDocId === doc.id}
+                                        onClick={() => void handleViewDocument(doc.id, doc.file_name)}
+                                      >
+                                        {viewingDocId === doc.id ? (
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                        ) : (
+                                          <Eye className="mr-1 h-3 w-3" />
+                                        )}
+                                        {pdfPreview?.id === doc.id ? 'Hide' : 'View'}
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 px-2 text-[0.6875rem]"
+                                        onClick={() => void handleDownloadDocument(doc.id, doc.file_name)}
+                                      >
+                                        <Download className="mr-1 h-3 w-3" />
+                                        Download
+                                      </Button>
+                                      {canModifyCoreSections ? (
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          className="h-7 px-2 text-[0.6875rem] text-red-700 hover:bg-red-50 hover:text-red-800"
+                                          title="Delete this file (it is kept, and the deletion is recorded)"
+                                          disabled={deletingDoc}
+                                          onClick={() => {
+                                            setDeleteDocJpsWarning(false)
+                                            setDeleteDocReason('')
+                                            setDeleteDocTarget({ id: doc.id, fileName: doc.file_name, label })
+                                          }}
+                                        >
+                                          <Trash2 className="mr-1 h-3 w-3" />
+                                          Delete
+                                        </Button>
+                                      ) : null}
+                                    </div>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            {type === 'CONTRACT'
+                              ? codContractGroups.map((group) => (
+                                  <CodFilesBlock
+                                    key={`${group.poNumber}-${group.type}`}
+                                    group={group}
+                                    onPreview={setCodPreview}
+                                    // Sure to be the file that goes out only when this is the one PO and the shipment has no Contract of its own; with several POs each PO's own file decides.
+                                    inUse={detailRows.length <= 1 && docs.length === 0}
+                                    note="Sent to JPS and attached to the Jetty email when the PO has no Contract uploaded in KLIP."
+                                    onError={(message) => setNotification({ type: 'error', message })}
+                                  />
+                                ))
+                              : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <DocumentPreviewDialog doc={codPreview} onClose={() => setCodPreview(null)} />
+                  {pdfPreview ? (
+                    <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                      <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-1.5">
+                        <p className="truncate text-xs font-medium text-gray-700">{pdfPreview.fileName}</p>
+                        <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={closePdfPreview}>
+                          Close
+                        </Button>
+                      </div>
+                      <iframe title={pdfPreview.fileName} src={pdfPreview.url} className="h-80 w-full" />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            {/* Section 7: Remarks */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
               <div className={vesselModalSectionHeaderClass('orange')}>
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-orange-100">
                   <MessageSquare className="h-3.5 w-3.5 text-orange-700" />
                 </div>
-                <h4 className="text-sm font-semibold text-gray-800">6. Remarks</h4>
+                <h4 className="text-sm font-semibold text-gray-800">7. Remarks</h4>
               </div>
               <div className="p-4">
                 {shipmentRemarksLoading ? (
@@ -4072,13 +4085,13 @@ export function EditShipmentModal({
               </div>
             </div>
 
-            {/* Section 7: Activity History */}
+            {/* Section 8: Activity History */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
               <div className={vesselModalSectionHeaderClass('slate')}>
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100">
                   <History className="h-3.5 w-3.5 text-slate-600" />
                 </div>
-                <h4 className="text-sm font-semibold text-gray-800">7. Activity History</h4>
+                <h4 className="text-sm font-semibold text-gray-800">8. Activity History</h4>
               </div>
               <div className="p-4">
                 {activityLoading ? (
