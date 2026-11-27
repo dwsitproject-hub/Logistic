@@ -6,6 +6,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { uploadsRootProblem } from '../utils/uploadsGuard';
 import { createStepTimer } from '../utils/stepTimer';
+import { COMMERCIAL_KLIP_DO_FILES_SQL, klipDoAsHistory, klipDoFiles, type KlipDoRow } from '../utils/commercialKlipDo';
 import { COMMERCIAL_SHIPMENT_DOCS_SQL, groupShipmentDocs, shipmentDocsAsHistory, type ShipmentDocRow } from '../utils/commercialShipmentDocs';
 import { copyToFirstFreeName, incomingUploadDir } from '../utils/incomingUpload';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
@@ -643,7 +644,15 @@ export const getCommercialDocumentHistory = async (req: AuthRequest, res: Respon
     } catch (klipErr) {
       logger.error('getCommercialDocumentHistory: KLIP uploads skipped', klipErr);
     }
-    const merged = [...own, ...fromKlip].sort((a, b) => new Date(String(b.created_at)).getTime() - new Date(String(a.created_at)).getTime());
+    // The DO uploaded in KLIP (Trucking > Upload DO), under the DO type. Same rule: a failure here does not take the COD history down.
+    let fromKlipDo: ReturnType<typeof klipDoAsHistory> = [];
+    try {
+      const klipDo = await query(COMMERCIAL_KLIP_DO_FILES_SQL, [poNumber]);
+      fromKlipDo = klipDoAsHistory(klipDoFiles(klipDo.rows as KlipDoRow[]), commercialDocumentTypeLabel('delivery_order'));
+    } catch (klipErr) {
+      logger.error('getCommercialDocumentHistory: KLIP DO uploads skipped', klipErr);
+    }
+    const merged = [...own, ...fromKlip, ...fromKlipDo].sort((a, b) => new Date(String(b.created_at)).getTime() - new Date(String(a.created_at)).getTime());
     return res.json({ success: true, data: merged.slice(0, 200) });
   } catch (err) {
     logger.error('getCommercialDocumentHistory error:', err);
@@ -696,6 +705,22 @@ export const getCommercialShipmentDocs = async (req: AuthRequest, res: Response)
   } catch (err) {
     logger.error('getCommercialShipmentDocs error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch the shipment documents' } });
+  }
+};
+
+/**
+ * The Delivery Order files uploaded in KLIP (Trucking > Upload DO) for a PO, newest first (GET /api/commercial-documents/klip-do/:poNumber). Read-only; the files
+ * are opened through /api/documents/:id/view. The rule that links a PO to them is in utils/commercialKlipDo.ts.
+ */
+export const getCommercialKlipDo = async (req: AuthRequest, res: Response) => {
+  try {
+    const key = String(req.params.poNumber || '').trim();
+    if (!key) return res.status(400).json({ success: false, error: { message: 'PO number is required' } });
+    const result = await query(COMMERCIAL_KLIP_DO_FILES_SQL, [key]);
+    return res.json({ success: true, data: { files: klipDoFiles(result.rows as KlipDoRow[]) } });
+  } catch (err) {
+    logger.error('getCommercialKlipDo error:', err);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch the delivery orders from KLIP' } });
   }
 };
 

@@ -5,7 +5,9 @@ import { chooseNotifyRule, cleanNotifyRuleInput, validateNotifyRule, type Notify
 import {
   buildNotifyEmail,
   buildRuleTestEmail,
+  chooseContractRowsPerPo,
   chooseNotifyAttachments,
+  notifyShipmentScope,
   notifyRowsFromCargo,
   skippedAttachmentsNote,
   stripPortPrefix,
@@ -260,6 +262,81 @@ describe('Submit to Jetty email: attachments and the loading port', () => {
   it('with no document there is nothing to attach and nothing to say', () => {
     expect(chooseNotifyAttachments([], () => MB, resolve)).toEqual({ attachments: [], skipped: [] });
     expect(skippedAttachmentsNote([])).toBe('');
+  });
+
+  describe('which shipments the mail reads its documents from', () => {
+    it('every shipment of the voyage counts for the documents (a COMPLETED sibling of the same operation included), and the POs come back sorted and unique', () => {
+      const out = notifyShipmentScope(
+        [
+          { id: 's1', po_key: 'PO-B', status: 'IN_PROGRESS' },
+          { id: 's2', po_key: 'PO-A', status: 'COMPLETED' },
+          { id: 's3', po_key: 'PO-B', status: 'PLANNED' },
+        ],
+        ['s1'],
+      );
+      expect(out.shipmentIds).toEqual(['s1', 's2', 's3']);
+      expect(out.poKeys).toEqual(['PO-A', 'PO-B']);
+    });
+
+    it('a CANCELLED shipment keeps its documents in reach but does not add its PO (it would be reported as a missing Contract)', () => {
+      const out = notifyShipmentScope(
+        [
+          { id: 's1', po_key: 'PO-A', status: 'IN_PROGRESS' },
+          { id: 's2', po_key: 'PO-X', status: 'CANCELLED' },
+        ],
+        ['s1'],
+      );
+      expect(out.shipmentIds).toEqual(['s1', 's2']);
+      expect(out.poKeys).toEqual(['PO-A']);
+    });
+
+    it('with no row at all the shipments the sweep found are used, and the POs are asked for separately', () => {
+      expect(notifyShipmentScope([], ['s9'])).toEqual({ shipmentIds: ['s9'], poKeys: [] });
+    });
+
+    it('a shipment with no PO key adds none', () => {
+      expect(notifyShipmentScope([{ id: 's1', po_key: null, status: 'PLANNED' }], ['s1']).poKeys).toEqual([]);
+    });
+  });
+
+  describe('one Contract per PO of the STO (KLIP first, else Commercial Documents)', () => {
+    const src = (poKey: string, fileName = 'contract.pdf') => ({ poKey, fileName, filePath: `p/${poKey}/${fileName}` });
+
+    it('a PO keeps its own KLIP Contract even when Commercial Documents has one', () => {
+      const out = chooseContractRowsPerPo(['PO-A'], [src('PO-A', 'klip.pdf')], [src('PO-A', 'cod.pdf')]);
+      expect(out.rows.map((r) => r.file_path)).toEqual(['p/PO-A/klip.pdf']);
+      expect(out.missing).toEqual([]);
+    });
+
+    it('a PO with none in KLIP takes the one from Commercial Documents', () => {
+      const out = chooseContractRowsPerPo(['PO-A'], [], [src('PO-A', 'cod.pdf')]);
+      expect(out.rows.map((r) => r.file_path)).toEqual(['p/PO-A/cod.pdf']);
+    });
+
+    it('three POs give three Contracts in the order of the POs, named with their PO so equal file names stay apart', () => {
+      const out = chooseContractRowsPerPo(['PO-A', 'PO-B', 'PO-C'], [src('PO-B')], [src('PO-C'), src('PO-A')]);
+      expect(out.rows.map((r) => r.file_name)).toEqual(['PO-A_contract.pdf', 'PO-B_contract.pdf', 'PO-C_contract.pdf']);
+      expect(out.rows.map((r) => r.label)).toEqual(['Contract PO PO-A', 'Contract PO PO-B', 'Contract PO PO-C']);
+    });
+
+    it('one PO keeps the plain file name and the plain label', () => {
+      const [row] = chooseContractRowsPerPo(['PO-A'], [src('PO-A')], []).rows;
+      expect(row.file_name).toBe('contract.pdf');
+      expect(row.label).toBeUndefined();
+    });
+
+    it('a PO with a Contract nowhere is reported as missing, the others still go', () => {
+      const out = chooseContractRowsPerPo(['PO-A', 'PO-B'], [src('PO-A')], []);
+      expect(out.rows).toHaveLength(1);
+      expect(out.missing).toEqual(['PO-B']);
+    });
+
+    it('a Contract that is not on disk is named by its PO in the note, not just "Contract"', () => {
+      const rows = chooseContractRowsPerPo(['PO-A', 'PO-B'], [src('PO-A'), src('PO-B')], []).rows;
+      const out = chooseNotifyAttachments(rows, (p) => (p.includes('PO-B') ? null : MB), resolve);
+      expect(out.attachments.map((a) => a.filename)).toEqual(['PO-A_contract.pdf']);
+      expect(out.skipped).toEqual([{ kind: 'Contract PO PO-B', reason: 'file tidak ditemukan di server' }]);
+    });
   });
 
   it('names what was left out in a line under the mail', () => {

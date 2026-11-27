@@ -13,6 +13,7 @@ import {
   getCommercialDocumentCreators,
   getCommercialDocuments,
   getCommercialShipmentDocs,
+  getCommercialKlipDo,
   getCommercialDocumentsCompletenessByCreator,
   getCommercialDocumentsCompletenessByPlant,
   getCommercialDocumentsSummary,
@@ -72,6 +73,7 @@ router.get('/history/:poNumber', authenticateToken, canViewDocuments, getCommerc
 router.get('/files/:poNumber', authenticateToken, canViewDocuments, getCommercialDocumentFiles);
 // The BL / SI uploaded in KLIP for a PO, grouped by voyage (read-only).
 router.get('/shipment-docs/:poNumber', authenticateToken, canViewDocuments, getCommercialShipmentDocs);
+router.get('/klip-do/:poNumber', authenticateToken, canViewDocuments, getCommercialKlipDo);
 router.post('/upload', authenticateToken, canViewDocuments, requireUploadsShare, stampRequestStart, commercialDocumentUpload.single('file'), uploadCommercialDocument);
 router.post(
   '/ocr/settlement-invoice',

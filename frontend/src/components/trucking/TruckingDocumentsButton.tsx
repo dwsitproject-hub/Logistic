@@ -7,20 +7,23 @@ import { useRowDocumentPresence } from '@/lib/documentPresence'
 interface Props {
   /** The trucking operation's id; ignored for a contract backlog row (it has no operation yet). */
   operationId: string
-  /** The row's contract, whose own documents the Documents dialog also lists. */
+  /** The row's contract, whose own documents the DO dialog also lists. */
   contractId: string
+  /** The row's PO key as Commercial Documents knows it (the PO number, else the contract number): the DO uploaded there is listed in the dialog as well. */
+  poKey?: string
   backlog: boolean
   onClick: () => void
 }
 
 /**
- * The violet Documents button of a Trucking row. It is off while the row has nothing to show: no document on its operation and none on its contract (the two the
- * Documents dialog merges). While the answer is not known yet the button stays on.
+ * The violet View DO button of a Trucking row. It is off while the row has nothing to show: no document on its operation, none on its contract and no DO in Commercial Documents
+ * for its PO (the three the dialog merges). While the answer is not known yet the button stays on.
  */
-export function TruckingDocumentsButton({ operationId, contractId, backlog, onClick }: Props) {
+export function TruckingDocumentsButton({ operationId, contractId, poKey = '', backlog, onClick }: Props) {
   const hasDocs = useRowDocumentPresence(
     backlog ? null : { kind: 'trucking', id: operationId },
     contractId ? { kind: 'contract', id: contractId } : null,
+    poKey ? { kind: 'cod', id: poKey } : null,
   )
   const disabled = hasDocs === false
   return (
@@ -29,8 +32,8 @@ export function TruckingDocumentsButton({ operationId, contractId, backlog, onCl
       size="icon"
       onClick={onClick}
       disabled={disabled}
-      title={disabled ? 'No documents uploaded yet' : backlog ? 'Contract documents' : 'Documents'}
-      aria-label={backlog ? 'View contract documents' : 'View documents'}
+      title={disabled ? 'No DO uploaded yet' : 'View DO'}
+      aria-label="View DO"
       className="h-8 w-8 border-transparent bg-transparent text-violet-600 hover:bg-violet-50 disabled:opacity-40"
     >
       <FileText className="h-4 w-4" />

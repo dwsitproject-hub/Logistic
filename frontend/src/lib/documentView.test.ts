@@ -53,6 +53,14 @@ describe('loadDocumentPreview: the file for the viewer inside the page', () => {
     expect(created[0].type).toBe('application/pdf')
   })
 
+  it('a file uploaded in Commercial Documents is read through COD route, a KLIP file through the documents route', async () => {
+    getMock.mockResolvedValue({ data: new Blob(['%PDF-1.4 body']) })
+    await loadDocumentPreview('cod 1', 'DO.pdf', 'application/pdf', 'cod')
+    expect(getMock).toHaveBeenLastCalledWith('/commercial-documents/file/cod%201/download', { responseType: 'blob' })
+    await loadDocumentPreview('doc 1', 'DO.pdf', 'application/pdf')
+    expect(getMock).toHaveBeenLastCalledWith('/documents/doc%201/download', { responseType: 'blob' })
+  })
+
   it('an image needs no PDF signature', async () => {
     getMock.mockResolvedValue({ data: new Blob(['\x89PNG...']) })
     const out = await loadDocumentPreview('d', 'photo.png', 'image/png')

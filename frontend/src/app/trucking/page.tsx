@@ -73,6 +73,8 @@ import { MultiValueField, SingleValueField } from '@/components/shared/ListFilte
 import { listRangeText } from '@/lib/listRangeText'
 import { iconButtonClass } from '@/lib/iconButton'
 import { TruckingDocumentsButton } from '@/components/trucking/TruckingDocumentsButton'
+import { CodFilesBlock } from '@/components/shared/CodFilesBlock'
+import { codGroupsOfType, useCodFiles } from '@/lib/codFiles'
 import { refreshDocumentPresence } from '@/lib/documentPresence'
 import {
   clickSortStack,
@@ -298,6 +300,11 @@ function resolveTruckingDocumentContractId(
   operation: Pick<TruckingOperation, 'contract_id'>,
 ): string {
   return String(operation.contract_id ?? '').trim()
+}
+
+/** The PO as Commercial Documents keys it: the PO number, else the contract number when SAP sent no PO. The DO uploaded there for this PO is listed in the View DO dialog. */
+function truckingCodPoKey(operation: Pick<TruckingOperation, 'po_number' | 'contract_number'>): string {
+  return String(operation.po_number ?? '').trim() || String(operation.contract_number ?? '').trim()
 }
 
 function truckingDocumentScopeLabel(operation: TruckingOperation): string {
@@ -1744,6 +1751,10 @@ function TruckingPageContent() {
   const [operationDocs, setOperationDocs] = useState<DocumentItem[]>([])
   const [docsLoading, setDocsLoading] = useState(false)
   const [showDocs, setShowDocs] = useState(false)
+  // The DO uploaded in Commercial Documents for the PO of the open dialog (read only; every version, newest first).
+  const codPoKeys = useMemo(() => (selectedOperation ? [truckingCodPoKey(selectedOperation)].filter(Boolean) : []), [selectedOperation])
+  const { groups: codDoFiles } = useCodFiles(codPoKeys, ['delivery_order'], showDocs)
+  const codDoGroups = useMemo(() => codGroupsOfType(codDoFiles, 'delivery_order', codPoKeys), [codDoFiles, codPoKeys])
 
   // Create new trucking operation modal
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -2680,7 +2691,8 @@ function TruckingPageContent() {
     try {
       const form = new FormData()
       form.append('file', file)
-      form.append('document_type', 'OTHER')
+      // The Upload DO button: the file is a DO (delivery order), which Commercial Documents shows in its DO slot for the same PO.
+      form.append('document_type', 'DO')
       // Filed under documents/trucking on the upload root (the Synology share), whichever of the two ids below is sent.
       form.append('upload_context', 'trucking')
       if (backlogRow) {
@@ -2693,17 +2705,17 @@ function TruckingPageContent() {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
       if (res.data?.success) {
-        alert('Document uploaded successfully!')
+        alert('DO uploaded successfully!')
         refreshDocumentPresence()
         if (selectedOperation && selectedOperation.id === operation.id) {
           await fetchOperationDocuments(operation)
         }
       } else {
-        alert(res.data?.error?.message || 'Failed to upload document')
+        alert(res.data?.error?.message || 'Failed to upload the DO')
       }
     } catch (err) {
       console.error('Upload document error:', err)
-      alert('Failed to upload document. Please try again.')
+      alert('Failed to upload the DO. Please try again.')
     } finally {
       setUploadingId('')
       e.target.value = ''
@@ -4982,6 +4994,7 @@ function TruckingPageContent() {
                                         <TruckingDocumentsButton
                                           operationId={operation.id}
                                           contractId={resolveTruckingDocumentContractId(operation)}
+                                          poKey={truckingCodPoKey(operation)}
                                           backlog={isTruckingContractBacklogRow(operation)}
                                           onClick={() => handleViewDocuments(operation)}
                                         />
@@ -4997,11 +5010,8 @@ function TruckingPageContent() {
                                           size="icon"
                                           onClick={() => document.getElementById(`trucking-file-${operation.id}`)?.click()}
                                           disabled={uploadingId === operation.id}
-                                          title={
-                                            isTruckingContractBacklogRow(operation)
-                                              ? 'Upload contract document'
-                                              : 'Upload'
-                                          }
+                                          title="Upload DO"
+                                          aria-label="Upload DO"
                                           className="h-8 w-8 border-transparent bg-transparent text-red-600 hover:bg-red-50"
                                         >
                                           {uploadingId === operation.id ? (
@@ -5115,6 +5125,7 @@ function TruckingPageContent() {
                                 <TruckingDocumentsButton
                                   operationId={operation.id}
                                   contractId={resolveTruckingDocumentContractId(operation)}
+                                  poKey={truckingCodPoKey(operation)}
                                   backlog={isTruckingContractBacklogRow(operation)}
                                   onClick={() => handleViewDocuments(operation)}
                                 />
@@ -5130,11 +5141,8 @@ function TruckingPageContent() {
                                   size="icon"
                                   onClick={() => document.getElementById(`trucking-file-mobile-${operation.id}`)?.click()}
                                   disabled={uploadingId === operation.id}
-                                  title={
-                                    isTruckingContractBacklogRow(operation)
-                                      ? 'Upload contract document'
-                                      : 'Upload'
-                                  }
+                                  title="Upload DO"
+                                  aria-label="Upload DO"
                                   className="h-8 w-8 border-transparent bg-transparent text-red-600 hover:bg-red-50"
                                 >
                                   {uploadingId === operation.id ? (
@@ -5348,7 +5356,7 @@ function TruckingPageContent() {
           <div className="bg-white w-full max-w-3xl rounded-lg shadow-lg max-h-[80vh] flex flex-col overflow-hidden">
             <div className="flex shrink-0 items-center justify-between border-b px-6 py-4">
               <h3 className="text-xl font-semibold">
-                Documents — {truckingDocumentScopeLabel(selectedOperation)}
+                DO — {truckingDocumentScopeLabel(selectedOperation)}
               </h3>
               <Button variant="ghost" size="icon" className="shrink-0" aria-label="Close" onClick={() => setShowDocs(false)}>
                 <X className="h-5 w-5" />
@@ -5358,11 +5366,11 @@ function TruckingPageContent() {
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             {docsLoading ? (
               <div className="text-sm text-gray-500 py-8 text-center">Loading documents...</div>
-            ) : operationDocs.length === 0 ? (
+            ) : operationDocs.length === 0 && codDoGroups.length === 0 ? (
               <div className="text-sm text-gray-500 py-8 text-center">
                 {isTruckingContractBacklogRow(selectedOperation)
-                  ? 'No documents uploaded for this contract yet.'
-                  : 'No documents uploaded for this operation.'}
+                  ? 'No DO uploaded for this contract yet.'
+                  : 'No DO uploaded for this operation yet.'}
               </div>
             ) : (
               <div className="space-y-2">
@@ -5395,6 +5403,15 @@ function TruckingPageContent() {
                       </Button>
                     </div>
                   </div>
+                ))}
+                {codDoGroups.map((group) => (
+                  <CodFilesBlock
+                    key={`${group.poNumber}-${group.type}`}
+                    group={group}
+                    onPreview={setPreviewDoc}
+                    footnote="Uploaded in Commercial Documents for this PO. Upload a DO here to add one from KLIP."
+                    onError={(message) => alert(message)}
+                  />
                 ))}
               </div>
             )}
