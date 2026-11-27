@@ -37,9 +37,9 @@ export const SELECT_SHIPMENT_FOLDER_SQL = `
    WHERE s.id = $1`;
 
 export const SELECT_TRUCKING_FOLDER_SQL = `
-  SELECT ${TRUCKING_OPERATION_FOLDER_SUBJECT_SQL} AS subject
+  SELECT ${TRUCKING_OPERATION_FOLDER_SUBJECT_SQL} AS subject, ct.buyer, ct.supplier
     FROM trucking_operations t
     LEFT JOIN contracts ct ON ct.id = t.contract_id
    WHERE t.id = $1`;
 
-export const SELECT_CONTRACT_TRUCKING_FOLDER_SQL = `SELECT ${CONTRACT_FOLDER_SUBJECT_SQL} AS subject FROM contracts ct WHERE ct.id = $1`;
+export const SELECT_CONTRACT_TRUCKING_FOLDER_SQL = `SELECT ${CONTRACT_FOLDER_SUBJECT_SQL} AS subject, ct.buyer, ct.supplier FROM contracts ct WHERE ct.id = $1`;

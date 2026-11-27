@@ -11,16 +11,14 @@ import {
   ensureUploadDir,
   resolveUploadAbsolutePath,
   shipmentNasFileToken,
-  sanitizeNasNamePart,
   shipmentUploadFolderKind,
   toRelativeUploadPath,
-  type ShipmentStructuredDocKind,
 } from '../utils/fileUpload';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import { AuditService } from '../services/audit.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { SELECT_CONTRACT_TRUCKING_FOLDER_SQL, SELECT_SHIPMENT_FOLDER_SQL, SELECT_TRUCKING_FOLDER_SQL } from '../utils/documentFolders';
-import { buildShipmentDocumentStem, shipmentDocumentReference } from '../utils/shipmentDocumentName';
+import { buildShipmentDocumentStem, shipmentDocumentReference, SHIPMENT_DOC_FILE_CODES, TRUCKING_DO_FILE_CODE } from '../utils/shipmentDocumentName';
 
 export { ensureUploadDir };
 
@@ -183,10 +181,16 @@ export const uploadDocumentHandler = async (req: AuthRequest, res: Response) => 
     }
     // From the Trucking page: documents/trucking/<operation id or contract number> on the upload root (the Synology share in production).
     if (!shipment_id && (trucking_operation_id || String(req.body?.upload_context ?? '').trim() === 'trucking')) {
-      const moved = await moveToTruckingFolder(file.path, { truckingOperationId: trucking_operation_id, contractId: contract_id });
-      if (moved) stored = { fileName: stored.fileName as string, filePath: toRelativeUploadPath(moved) };
+      const moved = await moveToTruckingFolder(file.path, { truckingOperationId: trucking_operation_id, contractId: contract_id }, document_type);
+      if (moved) {
+        // A Delivery Order is renamed on the way (BUY_Do_<PO>.pdf); any other file keeps the name it had.
+        const isDo = isTruckingDo(document_type);
+        stored = { fileName: isDo ? path.basename(moved) : (stored.fileName as string), filePath: toRelativeUploadPath(moved) };
+      }
     }
-
+    // A renamed file loses the name the user gave it; keep that in the description (it is not shown anywhere, but the row still says what was uploaded).
+    const renamed = stored.fileName !== file.originalname;
+    const storedDescription = renamed ? [description, `original name: ${file.originalname}`].filter(Boolean).join(' | ') : description;
     const insert = await query(
       `INSERT INTO documents (document_type, file_name, file_path, file_size, mime_type, contract_id, shipment_id, payment_id, trucking_operation_id, description, uploaded_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
@@ -200,7 +204,7 @@ export const uploadDocumentHandler = async (req: AuthRequest, res: Response) => 
         shipment_id || null,
         payment_id || null,
         trucking_operation_id || null,
-        description || null,
+        storedDescription || null,
         // Who uploaded. The column existed since migration 001 but was never written; COD and KLIP both read it, with the audit entry only as the fallback for older rows.
         req.user?.id || null,
       ]
@@ -224,6 +228,11 @@ export const uploadDocumentHandler = async (req: AuthRequest, res: Response) => 
   }
 };
 
+/** A Delivery Order uploaded on the Trucking page (document_type DO). */
+function isTruckingDo(documentType: unknown): boolean {
+  return String(documentType ?? '').trim().toUpperCase() === 'DO';
+}
+
 /**
  * Moves an uploaded file into `documents/trucking/<subject>` under the upload root: the PO number of the trucking operation's contract (its operation id when that has
  * no PO, then the contract number), or, for a contract row with no operation, the contract's PO number (then its number). Returns the new absolute path, or null when the file stays where multer wrote it (no subject found, or the move failed): an upload
@@ -232,22 +241,36 @@ export const uploadDocumentHandler = async (req: AuthRequest, res: Response) => 
 export async function moveToTruckingFolder(
   currentAbsPath: string,
   ref: { truckingOperationId?: unknown; contractId?: unknown },
+  documentType?: unknown,
 ): Promise<string | null> {
   try {
     const operationUuid = String(ref.truckingOperationId ?? '').trim();
     const contractUuid = String(ref.contractId ?? '').trim();
     let subject = '';
+    let buyer: unknown;
+    let supplier: unknown;
     if (operationUuid) {
       const r = await query(SELECT_TRUCKING_FOLDER_SQL, [operationUuid]);
       subject = String(r.rows[0]?.subject ?? '').trim();
+      ({ buyer, supplier } = r.rows[0] ?? {});
     }
     if (!subject && contractUuid) {
       const r = await query(SELECT_CONTRACT_TRUCKING_FOLDER_SQL, [contractUuid]);
       subject = String(r.rows[0]?.subject ?? '').trim();
+      ({ buyer, supplier } = r.rows[0] ?? {});
     }
     if (!subject) return null;
     const dir = ensureUploadDir(buildTruckingDocumentUploadSubdir(subject));
-    const target = path.join(dir, path.basename(currentAbsPath));
+    // A Delivery Order is named like the one Commercial Documents keeps: BUY_Do_<PO number>.pdf (the subject is the PO number, else the operation id, else the contract number).
+    const fileName = isTruckingDo(documentType)
+      ? allocateShipmentNasFilename(
+          dir,
+          buildShipmentDocumentStem({ buyer, supplier, code: TRUCKING_DO_FILE_CODE, reference: subject }),
+          path.extname(currentAbsPath),
+          'version',
+        )
+      : path.basename(currentAbsPath);
+    const target = path.join(dir, fileName);
     if (path.resolve(target) === path.resolve(currentAbsPath)) return target;
     try {
       fs.renameSync(currentAbsPath, target);
@@ -273,38 +296,11 @@ function discardUploadedFile(filePath: string): void {
 }
 
 /**
- * Moves a Loading / Discharge / Others file into documents/shipment/<sld|sdd|other>/<STO number, else operation id>/ and keeps its own (sanitised) name; a second file of the
- * same name becomes `-2`. A shipment that cannot be found does not stop the upload (the file stays where multer wrote it and the INSERT decides): the Shipments page Docs
- * dialog has always uploaded OTHER files and this must not turn one of them into an error.
- */
-async function fileUnderShipmentFolder(
-  file: Express.Multer.File,
-  kind: ShipmentStructuredDocKind,
-  shipment: string,
-): Promise<{ fileName: string; filePath: string }> {
-  const unchanged = { fileName: file.originalname, filePath: toRelativeUploadPath(file.path) };
-  try {
-    const found = await query(SELECT_SHIPMENT_FOLDER_SQL, [shipment]);
-    if (found.rows.length === 0) return unchanged;
-    const folderSubject = String(found.rows[0]?.folder_subject ?? '').trim() || shipment;
-    const dir = ensureUploadDir(buildShipmentDocumentUploadSubdir(folderSubject, kind));
-    const rawExt = path.extname(file.originalname);
-    const ext = rawExt || '.pdf';
-    const stem = sanitizeNasNamePart(path.basename(file.originalname, rawExt), 'document');
-    const filename = allocateShipmentNasFilename(dir, stem, ext);
-    const nextPath = path.join(dir, filename);
-    fs.renameSync(file.path, nextPath);
-    return { fileName: filename, filePath: toRelativeUploadPath(nextPath) };
-  } catch (err) {
-    logger.warn('Shipment document stays where it was written (could not file it under documents/shipment)', { error: (err as Error)?.message });
-    return unchanged;
-  }
-}
-
-/**
- * Contract, SI, and BL are renamed on disk to the Commercial Documents format,
- * BUY_Ctr|Si|Bl_<STO number, else shipment id>.pdf, before the row is stored.
- * Loading, Discharge and Others are filed in their folder under their own name (fileUnderShipmentFolder).
+ * A file uploaded ON A SHIPMENT (Contract, SI, BL, Loading, Discharge, Others) is moved into documents/shipment/<kind>/<STO number, else operation id>/ and named like a
+ * Commercial Documents file, BUY_<Code>_<STO number, else shipment id>.pdf (utils/shipmentDocumentName.ts); a second file of the same name becomes (2). The uploader and the date are in
+ * the row (documents.uploaded_by, created_at), the name the user gave is kept in the description (uploadDocumentHandler).
+ * A Contract, SI or BL for a shipment that does not exist is refused (404). A Loading, Discharge or Others file is not: the Shipments page Docs dialog has always uploaded OTHER
+ * files, so that file stays where multer wrote it and the INSERT decides.
  * Other document types keep the name multer already wrote.
  */
 async function applyShipmentNasFilename(
@@ -313,41 +309,41 @@ async function applyShipmentNasFilename(
   shipmentId: string | undefined,
 ): Promise<{ fileName: string; filePath: string; error?: undefined; status?: undefined } | { error: string; status: number; fileName?: undefined; filePath?: undefined }> {
   const kind = shipmentUploadFolderKind(String(documentType ?? ''));
-  const token = kind ? shipmentNasFileToken(kind) : null;
   const shipment = String(shipmentId ?? '').trim();
-  if (kind && !token && shipment) {
-    // Loading (SLD), Discharge (SDD) and Others (OTHER): filed under the STO like the other three, but the name the user gave is kept (these are not one-per-shipment
-    // documents with a fixed meaning, so the file name is what tells them apart).
-    return fileUnderShipmentFolder(file, kind, shipment);
-  }
-  if (!token || !shipment) {
-    return { fileName: file.originalname, filePath: toRelativeUploadPath(file.path) };
-  }
+  const unchanged = { fileName: file.originalname, filePath: toRelativeUploadPath(file.path) };
+  if (!kind || !shipment) return unchanged;
+  const strict = shipmentNasFileToken(kind) !== null; // Contract, SI, BL
 
-  const found = await query(SELECT_SHIPMENT_FOLDER_SQL, [shipment]);
-  if (found.rows.length === 0) {
-    discardUploadedFile(file.path);
-    return { error: 'Shipment not found', status: 404 };
+  try {
+    const found = await query(SELECT_SHIPMENT_FOLDER_SQL, [shipment]);
+    if (found.rows.length === 0) {
+      if (!strict) return unchanged;
+      discardUploadedFile(file.path);
+      return { error: 'Shipment not found', status: 404 };
+    }
+    const row = found.rows[0] ?? {};
+    const ext = path.extname(file.originalname).toLowerCase() || '.pdf';
+    const stem = buildShipmentDocumentStem({
+      buyer: row.buyer,
+      supplier: row.supplier,
+      code: SHIPMENT_DOC_FILE_CODES[kind],
+      reference: shipmentDocumentReference(row),
+    });
+    // The folder is chosen HERE, from the parsed body, and not left to multer's destination callback: every client appends `file` BEFORE document_type / shipment_id,
+    // so at destination time the body was still empty and the file landed in the upload root (found 2026-10-29: six renamed Contract/SI/BL files sitting loose in the
+    // root of the Synology share). The rename below moves it into documents/shipment/<kind>/<STO number, else operation id>/ whichever folder multer wrote it to
+    // (utils/documentFolders.ts); a shipment whose key cannot be read keeps its id as the folder name.
+    const folderSubject = String(row.folder_subject ?? '').trim() || shipment;
+    const dir = ensureUploadDir(buildShipmentDocumentUploadSubdir(folderSubject, kind));
+    const filename = allocateShipmentNasFilename(dir, stem, ext, 'version');
+    const nextPath = path.join(dir, filename);
+    fs.renameSync(file.path, nextPath);
+    return { fileName: filename, filePath: toRelativeUploadPath(nextPath) };
+  } catch (err) {
+    if (strict) throw err;
+    logger.warn('Shipment document stays where it was written (could not file it under documents/shipment)', { error: (err as Error)?.message });
+    return unchanged;
   }
-  const ext = path.extname(file.originalname).toLowerCase() || '.pdf';
-  // Named like a Commercial Documents file: BUY_Ctr_<STO number, else shipment id>.pdf (utils/shipmentDocumentName.ts). The uploader and the date are in the row
-  // (documents.uploaded_by, created_at), no longer in the name.
-  const stem = buildShipmentDocumentStem({
-    buyer: found.rows[0]?.buyer,
-    supplier: found.rows[0]?.supplier,
-    token,
-    reference: shipmentDocumentReference(found.rows[0] ?? {}),
-  });
-  // The folder is chosen HERE, from the parsed body, and not left to multer's destination callback: every client appends `file` BEFORE document_type / shipment_id,
-  // so at destination time the body was still empty and the file landed in the upload root (found 2026-10-29: six renamed Contract/SI/BL files sitting loose in the
-  // root of the Synology share). The rename below moves it into documents/shipment/<kind>/<STO number, else operation id>/ whichever folder multer wrote it to
-  // (utils/documentFolders.ts); a shipment whose key cannot be read keeps its id as the folder name.
-  const folderSubject = String(found.rows[0]?.folder_subject ?? '').trim() || shipment;
-  const dir = ensureUploadDir(buildShipmentDocumentUploadSubdir(folderSubject, kind as ShipmentStructuredDocKind));
-  const filename = allocateShipmentNasFilename(dir, stem, ext, 'version');
-  const nextPath = path.join(dir, filename);
-  fs.renameSync(file.path, nextPath);
-  return { fileName: filename, filePath: toRelativeUploadPath(nextPath) };
 }
 
 /** The type a browser can show inline (PDF, PNG, JPEG): the stored mime type first, then the extension. Anything else is null and is downloaded instead. */
