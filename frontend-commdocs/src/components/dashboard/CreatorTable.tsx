@@ -107,6 +107,7 @@ export function CreatorTable({
               uploadedSlots: c.uploadedSlots,
               totalSlots: c.totalSlots,
               byType: c.byType,
+              shipmentPoCount: c.shipmentPoCount,
             }))}
           />
           {!total ? <p className="hint" style={{ padding: '0 16px' }}>No POs in this period.</p> : null}
@@ -116,7 +117,7 @@ export function CreatorTable({
         <div className="legend">
           <span>
             <i style={{ background: 'var(--accent)' }} />
-            All 11 documents
+            All documents
           </span>
           <span>
             <i style={{ background: '#8FC1C6' }} />

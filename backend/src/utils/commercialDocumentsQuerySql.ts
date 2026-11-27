@@ -301,7 +301,7 @@ function docTypeCheckedColumn(documentType: string): string | null {
     invoice_fp_dp: 'doc_invoice_fp_dp',
     invoice_fp_payoff: 'doc_invoice_fp_payoff',
     invoice_fp_full: 'doc_invoice_fp_full',
-    // Not one of the eleven COD types: the BL / SI uploaded in KLIP. A card of its own, outside the checklist and its percentages.
+    // Not one of the eleven COD types: the BL / SI uploaded in KLIP is the twelfth slot of a shipment PO.
     shipment_docs: 'doc_shipment_docs',
   };
   return map[documentType] ?? null;
@@ -321,9 +321,23 @@ function valueList(value: string | string[] | null | undefined): string[] {
   return (Array.isArray(value) ? value : value ? [value] : []).map((v) => String(v).trim()).filter(Boolean);
 }
 
-/** How many of the eleven checklist types a contract has (0-11). */
+/**
+ * A PO classified as a shipment (SEA / MIX), never trucking (LAND): the POs the Shipment Docs type applies to. One place, so the card total, the slots and the
+ * completeness all mean the same POs.
+ */
+export const COMMERCIAL_SHIPMENT_PO_SQL = `UPPER(TRIM(COALESCE(e.transport_mode, ''))) IN ('SEA', 'MIX')`;
+
+/**
+ * How many checklist slots a PO has: the eleven COD types, plus Shipment Docs (the BL / SI uploaded in KLIP) when the PO is a shipment. A trucking PO has no
+ * BL / SI, so it stays at eleven and can still be complete (Ryan, 2026-11-27).
+ */
+function slotsExpr(): string {
+  return `(CASE WHEN ${COMMERCIAL_SHIPMENT_PO_SQL} THEN ${COMMERCIAL_DOCUMENT_SLOT_COUNT + 1} ELSE ${COMMERCIAL_DOCUMENT_SLOT_COUNT} END)`;
+}
+
+/** How many of a PO's slots have a file (0-12): the eleven checklist types and, for a shipment PO, Shipment Docs (doc_shipment_docs is false for any other PO). */
 function uploadedTypesExpr(): string {
-  return COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.map((flag) => `(CASE WHEN e.${flag} THEN 1 ELSE 0 END)`).join(' + ');
+  return [...COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS, 'doc_shipment_docs'].map((flag) => `(CASE WHEN e.${flag} THEN 1 ELSE 0 END)`).join(' + ');
 }
 
 function buildScopeWhere(params: CommercialDocumentsScopeParams): { where: string[]; values: unknown[]; nextIndex: number } {
@@ -402,8 +416,8 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
       if (basis) where.push(basis);
     }
   }
-  if (params.completeness === 'complete') where.push(`(${uploadedTypesExpr()}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT}`);
-  if (params.completeness === 'incomplete') where.push(`(${uploadedTypesExpr()}) < ${COMMERCIAL_DOCUMENT_SLOT_COUNT}`);
+  if (params.completeness === 'complete') where.push(`(${uploadedTypesExpr()}) = ${slotsExpr()}`);
+  if (params.completeness === 'incomplete') where.push(`(${uploadedTypesExpr()}) < ${slotsExpr()}`);
   if (params.completeness === 'empty') where.push(`(${uploadedTypesExpr()}) = 0`);
 
   const whereSql = where.join(' AND ');
@@ -458,7 +472,12 @@ export function commercialCompletenessPct(uploaded: number, total: number): numb
 function perTypeUploadedCounts(): string {
   return COMMERCIAL_DOCUMENT_CHECKLIST_FLAGS.map(
     (flag) => `COUNT(*) FILTER (WHERE e.${flag})::int AS uploaded_${flag.replace(/^doc_/, '')}`,
-  ).join(',\n      ');
+  )
+    .concat([
+      'COUNT(*) FILTER (WHERE e.doc_shipment_docs)::int AS uploaded_shipment_docs',
+      `COUNT(*) FILTER (WHERE ${COMMERCIAL_SHIPMENT_PO_SQL})::int AS shipment_po_count`,
+    ])
+    .join(',\n      ');
 }
 
 export function buildCommercialDocumentsCompletenessByPlantQuery(
@@ -478,8 +497,8 @@ export function buildCommercialDocumentsCompletenessByPlantQuery(
       ${plantExpr} AS plant_site,
       COUNT(*)::int AS contract_count,
       COALESCE(SUM(${uploadedExpr}), 0)::int AS uploaded_slots,
-      (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS total_slots,
-      COUNT(*) FILTER (WHERE (${uploadedExpr}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_count,
+      COALESCE(SUM(${slotsExpr()}), 0)::int AS total_slots,
+      COUNT(*) FILTER (WHERE (${uploadedExpr}) = ${slotsExpr()})::int AS complete_count,
       COUNT(*) FILTER (WHERE (${uploadedExpr}) = 0)::int AS empty_count,
       ${perTypeUploadedCounts()}
     FROM enriched e
@@ -488,7 +507,7 @@ export function buildCommercialDocumentsCompletenessByPlantQuery(
     ORDER BY
       CASE
         WHEN COUNT(*) = 0 THEN 0
-        ELSE COALESCE(SUM(${uploadedExpr}), 0)::numeric / (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})
+        ELSE COALESCE(SUM(${uploadedExpr}), 0)::numeric / NULLIF(SUM(${slotsExpr()}), 0)
       END ASC,
       1 ASC
   `;
@@ -513,8 +532,8 @@ export function buildCommercialDocumentsCompletenessByCreatorQuery(
       NULLIF(MAX(su.display_name), '') AS display_name,
       COUNT(*)::int AS contract_count,
       COALESCE(SUM(${uploadedExpr}), 0)::int AS uploaded_slots,
-      (COUNT(*) * ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS total_slots,
-      COUNT(*) FILTER (WHERE (${uploadedExpr}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_count,
+      COALESCE(SUM(${slotsExpr()}), 0)::int AS total_slots,
+      COUNT(*) FILTER (WHERE (${uploadedExpr}) = ${slotsExpr()})::int AS complete_count,
       COUNT(*) FILTER (WHERE (${uploadedExpr}) = 0)::int AS empty_count,
       ${perType}
     FROM enriched e
@@ -550,8 +569,8 @@ export function buildCommercialDocumentsSummaryQuery(params: CommercialDocuments
       COUNT(*) FILTER (WHERE ${COMMERCIAL_DOCUMENT_SAP_DATE_BASIS.invoice_fp_payoff})::int AS total_invoice_fp_payoff,
       ${count('doc_invoice_fp_full')} AS uploaded_invoice_fp_full,
       ${count('doc_shipment_docs')} AS uploaded_shipment_docs,
-      COUNT(*) FILTER (WHERE UPPER(TRIM(COALESCE(e.transport_mode, ''))) IN ('SEA', 'MIX'))::int AS total_shipment_docs,
-      COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_contract_count,
+      COUNT(*) FILTER (WHERE ${COMMERCIAL_SHIPMENT_PO_SQL})::int AS total_shipment_docs,
+      COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = ${slotsExpr()})::int AS complete_contract_count,
       COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = 0)::int AS empty_contract_count
     FROM enriched e
     WHERE ${scope.where.join(' AND ')}

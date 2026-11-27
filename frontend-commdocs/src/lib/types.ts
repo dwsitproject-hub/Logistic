@@ -58,6 +58,8 @@ export type DocumentRow = {
   doc_invoice_fp_dp: boolean
   doc_invoice_fp_payoff: boolean
   doc_invoice_fp_full: boolean
+  /** A BL / SI uploaded in KLIP reaches this PO (only ever true for a shipment PO). */
+  doc_shipment_docs?: boolean
 }
 
 export type Pagination = { total: number; page: number; limit: number; totalPages: number }
@@ -112,6 +114,8 @@ export type PlantCompleteness = {
   emptyCount: number
   /** POs with each document type uploaded (not on the totals row). */
   byType?: Record<string, number>
+  /** POs classified as a shipment (SEA / MIX): the total of Shipment Docs, which trucking POs do not have. */
+  shipmentPoCount?: number
 }
 
 /** One row of the Dashboard's "Documents by SAP creator" (an empty createdBy = POs the ME2N report does not know). */
@@ -127,6 +131,7 @@ export type CreatorCompleteness = {
   emptyCount: number
   /** POs with each document type uploaded, by type key. */
   byType: Record<string, number>
+  shipmentPoCount?: number
 }
 
 export type ManagedUser = {

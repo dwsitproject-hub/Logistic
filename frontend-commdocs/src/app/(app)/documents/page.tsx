@@ -14,8 +14,8 @@ import { isoDate, pct, plantLabel, plural, presetRange, type DatePreset } from '
 import { useSession } from '@/lib/session'
 import type { ContractCounts, DocumentRow, Pagination, SummaryCard } from '@/lib/types'
 
-/** null = all POs; 'incomplete' = short of all eleven; a type = POs that have that type uploaded (a summary card). */
-/** 'shipment_docs' is the card of the BL / SI uploaded in KLIP: not one of the eleven COD types, so it is outside the checklist and its percentages. */
+/** null = all POs; 'incomplete' = short of a slot (11, or 12 for a shipment PO); a type = POs that have that type uploaded (a summary card). */
+/** 'shipment_docs' is the card of the BL / SI uploaded in KLIP: not one of the eleven COD types but the twelfth slot of a shipment PO, so it counts in the 12 of a shipment PO and not in a trucking PO's 11. */
 type DocFilter = null | 'incomplete' | 'shipment_docs' | DocumentType
 
 type Filters = {

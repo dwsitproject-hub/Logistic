@@ -9,6 +9,9 @@ import {
 } from './commercialDocumentsQuerySql';
 import { buildCommercialDocumentsCompletenessByCreatorQuery } from './commercialDocumentsQuerySql';
 
+/** The slots of a PO: 12 for a shipment PO (the BL / SI uploaded in KLIP is the twelfth), 11 for any other. */
+const SLOTS = "(CASE WHEN UPPER(TRIM(COALESCE(e.transport_mode, ''))) IN ('SEA', 'MIX') THEN 12 ELSE 11 END)";
+
 describe('commercialDocumentsQuerySql Region/Site', () => {
   it('plant_site uses Discharge Destination with B2B overlay, not master_plants.group_plant', () => {
     const cte = buildCommercialDocumentsBaseCte();
@@ -151,13 +154,16 @@ describe('commercialDocumentsQuerySql summary cards', () => {
 });
 
 describe('commercialDocuments completeness by plant', () => {
-  it('counts uploaded checklist slots against contracts times eleven document types', () => {
+  it('counts uploaded checklist slots against the slots of each PO: 12 for a shipment PO, 11 for any other', () => {
     expect(COMMERCIAL_DOCUMENT_SLOT_COUNT).toBe(11);
     const { sql, values } = buildCommercialDocumentsCompletenessByPlantQuery({
       dateFrom: '2026-01-01',
       dateTo: '2026-10-20',
     });
-    expect(sql).toContain("(COUNT(*) * 11)::int AS total_slots");
+    expect(sql).toContain(`COALESCE(SUM(${SLOTS}), 0)::int AS total_slots`);
+    expect(sql).toContain('CASE WHEN e.doc_shipment_docs THEN 1 ELSE 0 END');
+    expect(sql).toContain('AS shipment_po_count');
+    expect(sql).toContain('AS uploaded_shipment_docs');
     expect(sql).toContain('AS uploaded_slots');
     expect(sql).toContain("THEN 'Unassigned'");
     expect(sql).toContain('CASE WHEN e.doc_draft_contract THEN 1 ELSE 0 END');
@@ -197,10 +203,10 @@ describe('commercialDocumentsQuerySql filters for the Commercial Documents app',
     expect(one.values).toContainEqual(['CPO']);
   });
 
-  it('completeness narrows to all eleven, none, or anything short of eleven', () => {
-    const n = COMMERCIAL_DOCUMENT_SLOT_COUNT;
-    expect(buildCommercialDocumentsListQuery({ completeness: 'complete' }).countSql).toContain(`) = ${n}`);
-    expect(buildCommercialDocumentsListQuery({ completeness: 'incomplete' }).countSql).toContain(`) < ${n}`);
+  it('completeness narrows to every slot filled (12 for a shipment PO, 11 for trucking), none, or anything short', () => {
+    const slots = SLOTS;
+    expect(buildCommercialDocumentsListQuery({ completeness: 'complete' }).countSql).toContain(`) = ${slots}`);
+    expect(buildCommercialDocumentsListQuery({ completeness: 'incomplete' }).countSql).toContain(`) < ${slots}`);
     expect(buildCommercialDocumentsListQuery({ completeness: 'empty' }).countSql).toContain(') = 0');
     expect(buildCommercialDocumentsListQuery({}).countSql).not.toContain(') = 0');
   });
@@ -217,13 +223,13 @@ describe('commercialDocumentsQuerySql filters for the Commercial Documents app',
     }
   });
 
-  it('by creator: joins the ME2N creators by PO, counts 11 slots per PO and every document type, and keeps the date scope', () => {
+  it('by creator: joins the ME2N creators by PO, counts 12 slots for a shipment PO and 11 for the rest, every document type, and keeps the date scope', () => {
     const { sql, values } = buildCommercialDocumentsCompletenessByCreatorQuery({ dateFrom: '2026-01-01', dateTo: '2026-11-11' });
     expect(sql).toContain('LEFT JOIN commercial_po_creators pc ON pc.po_number = NULLIF(TRIM(e.po_number)');
     expect(sql).toContain('LEFT JOIN sap_users su ON su.user_id = pc.created_by');
     expect(sql).not.toContain('commercial_creator_names');
     expect(sql).toContain("COALESCE(NULLIF(TRIM(pc.created_by), ''), '') AS created_by");
-    expect(sql).toContain('(COUNT(*) * 11)::int AS total_slots');
+    expect(sql).toContain(`COALESCE(SUM(${SLOTS}), 0)::int AS total_slots`);
     expect(sql).toMatch(/GROUP BY 1\s*$/);
     for (const key of ['draft_contract', 'berita_acara', 'bea_cukai', 'sppb', 'sppd', 'invoice_fp_full']) {
       expect(sql).toContain(`COUNT(*) FILTER (WHERE e.doc_${key})::int AS uploaded_${key}`);
@@ -280,9 +286,12 @@ describe('commercialDocuments Shipment Docs card', () => {
     expect(q.sql).toContain('e.doc_shipment_docs = true');
     expect(q.countSql).toContain('e.doc_shipment_docs = true');
   });
-  it('is not one of the eleven checklist flags: the 5/11 count and the completeness percentages do not move', () => {
+  it('is the twelfth slot of a shipment PO only: the eleven COD types stay eleven, a trucking PO keeps 11 and can still be complete', () => {
     expect(COMMERCIAL_DOCUMENT_SLOT_COUNT).toBe(11);
-    expect(buildCommercialDocumentsListQuery({ completeness: 'complete' }).countSql).not.toContain('doc_shipment_docs) ');
+    const complete = buildCommercialDocumentsListQuery({ completeness: 'complete' }).countSql;
+    expect(complete).toContain('CASE WHEN e.doc_shipment_docs THEN 1 ELSE 0 END');
+    expect(complete).toContain(SLOTS);
+    expect(buildCommercialDocumentsSummaryQuery({}).sql).toContain('THEN 12 ELSE 11 END))::int AS complete_contract_count');
   });
 });
 

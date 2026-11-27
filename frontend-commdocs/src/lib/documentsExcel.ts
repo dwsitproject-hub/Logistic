@@ -1,4 +1,4 @@
-import { DOCUMENT_LABELS, DOCUMENT_TYPES, hasType, typesDone } from './documentTypes'
+import { DOCUMENT_LABELS, DOCUMENT_TYPES, SHIPMENT_DOCS_LABEL, hasType, isShipmentPo, slotsFor, typesDone } from './documentTypes'
 import { saveBlob } from './files'
 import { plantLabel } from './format'
 import type { DocumentRow } from './types'
@@ -30,7 +30,7 @@ function numberCell(value: number | string | null | undefined): number | null {
 
 function statusLabel(r: DocumentRow): string {
   const done = typesDone(r)
-  if (done === DOCUMENT_TYPES.length) return 'Complete'
+  if (done === slotsFor(r)) return 'Complete'
   return done === 0 ? 'Nothing yet' : 'In progress'
 }
 
@@ -58,7 +58,10 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
     kind: 'int',
     value: (r) => (hasType(r, t) ? 1 : 0),
   })),
+  // Shipment Docs applies to shipment POs only: blank for a trucking PO, which has no BL / SI.
+  { header: SHIPMENT_DOCS_LABEL, width: 14, kind: 'int', value: (r) => (isShipmentPo(r) ? (r.doc_shipment_docs ? 1 : 0) : null) },
   { header: 'Documents Uploaded', width: 18, kind: 'int', value: (r) => typesDone(r) },
+  { header: 'Documents Total', width: 16, kind: 'int', value: (r) => slotsFor(r) },
   { header: 'Status', width: 13, value: (r) => statusLabel(r) },
 ]
 

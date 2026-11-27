@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { accessFor, homePath, navKeyForPath } from './access'
 import { fileNameFromDisposition, toQuery } from './api'
 import { auditGroupFilter, describeAudit } from './audit'
-import { canonicalType, documentKey, isB2bOrigin, typesDone, uploadProblem, versionsOf } from './documentTypes'
+import { canonicalType, documentKey, isB2bOrigin, slotsFor, typesDone, uploadProblem, versionsOf } from './documentTypes'
 import { ddmmyy, ddmmyyyy, pageList, parseDdMmYyyy, pct, presetRange, priceCell } from './format'
 import { toCsv } from './files'
 import { ssoErrorMessage } from './sso'
@@ -100,6 +100,16 @@ describe('documents', () => {
   it('counts the nine flags', () => {
     expect(typesDone(row())).toBe(2)
   })
+
+  it('gives a shipment PO twelve slots (Shipment Docs is the twelfth) and a trucking PO eleven', () => {
+    expect(slotsFor(row({ transport_mode: 'SEA' }))).toBe(12);
+    expect(slotsFor(row({ transport_mode: 'mix' }))).toBe(12);
+    expect(slotsFor(row({ transport_mode: 'LAND' }))).toBe(11);
+    expect(slotsFor(row({ transport_mode: null }))).toBe(11);
+    expect(typesDone(row({ transport_mode: 'SEA', doc_shipment_docs: true }))).toBe(3);
+    // a trucking PO never counts Shipment Docs, even if a flag were set
+    expect(typesDone(row({ transport_mode: 'LAND', doc_shipment_docs: true }))).toBe(2);
+  });
 
   it('maps legacy stored types onto the checklist', () => {
     expect(canonicalType('ep_pelunasan')).toBe('invoice_fp_payoff')

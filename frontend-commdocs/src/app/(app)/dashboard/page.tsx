@@ -6,7 +6,7 @@ import { CompletenessRows } from '@/components/dashboard/CompletenessRows'
 import { CreatorTable, type CreatorPayload } from '@/components/dashboard/CreatorTable'
 import { ErrorNote, Spinner } from '@/components/ui'
 import { apiData, errorMessage, isAbort, toQuery } from '@/lib/api'
-import { DOCUMENT_LABELS, DOCUMENT_TYPES } from '@/lib/documentTypes'
+import { DOCUMENT_LABELS, DOCUMENT_TYPES, SHIPMENT_DOCS_LABEL } from '@/lib/documentTypes'
 import { pct, plantLabel, plural, poUploaded, presetRange, type DatePreset } from '@/lib/format'
 import { useSession } from '@/lib/session'
 import type { PlantCompleteness, SummaryCard } from '@/lib/types'
@@ -23,7 +23,7 @@ const PERIODS: Array<[DatePreset, string]> = [
 
 /**
  * Completeness by plant (GET /api/commercial-documents/completeness-by-plant). "Completeness" is KLIP's measure: uploaded
- * checklist slots out of POs x 11. The bars split each plant's POs into all eleven / some / none.
+ * checklist slots out of the slots of each PO (12 for a shipment PO, 11 for trucking). The bars split each plant's POs into all slots filled / some / none.
  */
 export default function DashboardPage() {
   const { access, user } = useSession()
@@ -87,10 +87,12 @@ export default function DashboardPage() {
   }, [range, access.documents])
 
   const docRows = useMemo(() => {
-    const rows = DOCUMENT_TYPES.map((type) => {
+    // The eleven COD types and Shipment Docs (the BL / SI uploaded in KLIP), whose total is the shipment POs only.
+    const rows = [...DOCUMENT_TYPES, 'shipment_docs' as const].map((type) => {
       const total = summary?.[type]?.totalCount ?? 0
       const uploaded = summary?.[type]?.uploadedCount ?? 0
-      return { type, label: DOCUMENT_LABELS[type].toUpperCase(), total, uploaded, missing: Math.max(0, total - uploaded), pct: pct(uploaded, total) }
+      const label = type === 'shipment_docs' ? SHIPMENT_DOCS_LABEL : DOCUMENT_LABELS[type]
+      return { type, label: label.toUpperCase(), total, uploaded, missing: Math.max(0, total - uploaded), pct: pct(uploaded, total) }
     })
     return order === 'complete' ? rows.sort((x, y) => y.pct - x.pct || x.missing - y.missing) : rows.sort((x, y) => y.missing - x.missing || x.pct - y.pct)
   }, [summary, order])
@@ -133,7 +135,7 @@ export default function DashboardPage() {
           <small>from the SAP import</small>
         </div>
         <div className="panel kpi">
-          <span>With all 11 documents</span>
+          <span>With all documents</span>
           <b>{t ? t.completeCount.toLocaleString('en-US') : '…'}</b>
           <small>{t ? `${pct(t.completeCount, t.contractCount)}% of POs` : ''}</small>
         </div>
@@ -253,6 +255,7 @@ export default function DashboardPage() {
                   uploadedSlots: p.uploadedSlots,
                   totalSlots: p.totalSlots,
                   byType: p.byType,
+                  shipmentPoCount: p.shipmentPoCount,
                 }))}
               />
               {!plants.length ? <p className="hint" style={{ padding: '0 16px' }}>No POs in this period.</p> : null}
@@ -261,7 +264,7 @@ export default function DashboardPage() {
           <div className="legend">
             <span>
               <i style={{ background: 'var(--accent)' }} />
-              All 11 documents
+              All documents
             </span>
             <span>
               <i style={{ background: '#8FC1C6' }} />

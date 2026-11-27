@@ -268,7 +268,11 @@ tbody tr.picked td { background: #f2f8f8; }
 .sd-doc { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; align-items: start; padding: 6px 0; border-top: 1px dashed var(--line); }
 .sd-latest { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--ink-2); }
 .sd-latest .badge, .sd-doc .badge, .tl .badge { margin-left: 6px; }
-.sd-sub { display: grid; gap: 2px; }
+.sd-sub { display: grid; gap: 4px; }
+.sd-file { display: grid; gap: 2px; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 0.5rem 0.625rem; cursor: pointer; }
+.sd-file[aria-pressed='true'] { border-color: var(--accent); box-shadow: 0 0 0 0.1875rem var(--accent-2); }
+.sd-file small { color: var(--ink-3); }
+.sd-file .badge { margin-left: 6px; }
 .sd-sh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.8125rem; }
 .sd-actions { grid-column: 2; display: flex; gap: 4px; flex-wrap: wrap; }
 .sd-name { display: block; font-size: 0.8125rem; font-weight: 600; overflow-wrap: anywhere; }

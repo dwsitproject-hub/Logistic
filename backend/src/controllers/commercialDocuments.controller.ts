@@ -243,6 +243,8 @@ export const getCommercialDocumentsCompletenessByCreator = async (req: AuthReque
       const totalSlots = Number(row.total_slots) || 0;
       const byType: Record<string, number> = {};
       for (const type of COMMERCIAL_DOCUMENT_TYPES) byType[type] = Number(row[`uploaded_${type}`]) || 0;
+      // The twelfth slot of a shipment PO (the BL / SI uploaded in KLIP); its own total is the number of shipment POs.
+      byType.shipment_docs = Number(row.uploaded_shipment_docs) || 0;
       return {
         createdBy: String(row.created_by || ''),
         displayName: row.display_name ? String(row.display_name) : null,
@@ -253,6 +255,7 @@ export const getCommercialDocumentsCompletenessByCreator = async (req: AuthReque
         completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
         completeCount: Number(row.complete_count) || 0,
         emptyCount: Number(row.empty_count) || 0,
+        shipmentPoCount: Number(row.shipment_po_count) || 0,
         byType,
       };
     });
@@ -525,10 +528,10 @@ export const getCommercialDocumentsSummary = async (req: AuthRequest, res: Respo
           invoice_fp_dp: card('uploaded_invoice_fp_dp', 'total_invoice_fp_dp'),
           invoice_fp_payoff: card('uploaded_invoice_fp_payoff', 'total_invoice_fp_payoff'),
           invoice_fp_full: card('uploaded_invoice_fp_full'),
-          // The BL / SI uploaded in KLIP: its own card, not one of the eleven checklist types. Counted among the POs classified as a shipment (SEA / MIX), not trucking.
+          // The BL / SI uploaded in KLIP: the twelfth slot of a shipment PO (SEA / MIX), not trucking; its card counts among those POs.
           shipment_docs: card('uploaded_shipment_docs', 'total_shipment_docs'),
         },
-        // All eleven / none / anything short of eleven - the list's completeness filter returns the same rows.
+        // Every slot filled (11, or 12 for a shipment PO) / none / anything short - the list's completeness filter returns the same rows.
         contracts: {
           totalCount,
           completeCount: Number(row.complete_contract_count ?? 0),
@@ -562,6 +565,8 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
       const totalSlots = Number(row.total_slots) || 0;
       const byType: Record<string, number> = {};
       for (const type of COMMERCIAL_DOCUMENT_TYPES) byType[type] = Number(row[`uploaded_${type}`]) || 0;
+      // The twelfth slot of a shipment PO (the BL / SI uploaded in KLIP); its own total is the number of shipment POs.
+      byType.shipment_docs = Number(row.uploaded_shipment_docs) || 0;
       return {
         plant: String(row.plant_site || 'Unassigned'),
         contractCount,
@@ -571,6 +576,7 @@ export const getCommercialDocumentsCompletenessByPlant = async (req: AuthRequest
         completenessPct: commercialCompletenessPct(uploadedSlots, totalSlots),
         completeCount: Number(row.complete_count) || 0,
         emptyCount: Number(row.empty_count) || 0,
+        shipmentPoCount: Number(row.shipment_po_count) || 0,
         byType,
       };
     });
