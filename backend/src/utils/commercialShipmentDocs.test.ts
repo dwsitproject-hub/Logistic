@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COMMERCIAL_SHIPMENT_DOCS_SQL, groupShipmentDocs, type ShipmentDocRow } from './commercialShipmentDocs';
+import { COMMERCIAL_SHIPMENT_DOCS_SQL, groupShipmentDocs, shipmentDocsAsHistory, type ShipmentDocRow } from './commercialShipmentDocs';
 
 const row = (o: Partial<ShipmentDocRow>): ShipmentDocRow => ({
   id: 'd1',
@@ -62,5 +62,24 @@ describe('groupShipmentDocs', () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].reference).toBe('OP-123');
     expect(groups[0].documents).toHaveLength(1);
+  });
+});
+
+describe('uploader and History of KLIP uploads', () => {
+  it("reads the uploader from documents.uploaded_by, else from the upload's audit entry bounded by time (audit_logs has no entity_id index)", () => {
+    expect(COMMERCIAL_SHIPMENT_DOCS_SQL).toContain('uu.username');
+    expect(COMMERCIAL_SHIPMENT_DOCS_SQL).toContain("al.entity_type = 'DOCUMENT'");
+    expect(COMMERCIAL_SHIPMENT_DOCS_SQL).toContain('al."timestamp" >= d.upload_date');
+  });
+  it('carries the uploader into the group and turns each file into an ADD entry badged as KLIP, newest first', () => {
+    const groups = groupShipmentDocs([
+      row({ id: 'bl1', document_type: 'BL', upload_date: '2026-11-12T12:10:00.000Z', uploaded_by_name: 'ryan.pohan' }),
+      row({ id: 'si1', document_type: 'SI', upload_date: '2026-11-13T09:00:00.000Z', uploaded_by_name: null }),
+    ]);
+    expect(groups[0].documents.find((d) => d.id === 'bl1')?.uploadedBy).toBe('ryan.pohan');
+    const history = shipmentDocsAsHistory(groups);
+    expect(history.map((h) => h.id)).toEqual(['klip-si1', 'klip-bl1']);
+    expect(history[1]).toMatchObject({ action_type: 'ADD', source: 'KLIP', user_name: 'ryan.pohan', document_type_label: 'Shipment Docs · BL' });
+    expect(history[0].user_name).toBeNull();
   });
 });

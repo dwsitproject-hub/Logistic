@@ -46,6 +46,7 @@ export const COMMERCIAL_SHIPMENT_DOCS_SQL = `
     d.file_size,
     d.mime_type,
     d.upload_date,
+    COALESCE(NULLIF(TRIM(uu.username), ''), NULLIF(TRIM(au.username), '')) AS uploaded_by_name,
     s.id::text AS shipment_uuid,
     s.shipment_id AS shipment_no,
     s.operation_id,
@@ -56,6 +57,21 @@ export const COMMERCIAL_SHIPMENT_DOCS_SQL = `
   FROM linked l
   JOIN shipments s ON s.id = l.shipment_uuid
   JOIN documents d ON d.shipment_id = s.id
+  LEFT JOIN users uu ON uu.id = d.uploaded_by
+  -- KLIP's upload does not fill documents.uploaded_by; the audit entry of the upload (middleware auditLog CREATE DOCUMENT) holds the user. audit_logs has no index on
+  -- entity_id, so the lookup is bounded by the upload time (indexed column) around the document's upload_date.
+  LEFT JOIN LATERAL (
+    SELECT u3.username
+      FROM audit_logs al
+      JOIN users u3 ON u3.id = al.user_id
+     WHERE al.entity_id = d.id
+       AND al.entity_type = 'DOCUMENT'
+       AND al.action = 'CREATE'
+       AND al."timestamp" >= d.upload_date - INTERVAL '2 minutes'
+       AND al."timestamp" <= d.upload_date + INTERVAL '10 minutes'
+     ORDER BY al."timestamp"
+     LIMIT 1
+  ) au ON d.uploaded_by IS NULL
   LEFT JOIN LATERAL (
     SELECT ARRAY_AGG(DISTINCT c2.po_number ORDER BY c2.po_number) AS other_pos
       FROM (
@@ -88,6 +104,7 @@ export type ShipmentDocRow = {
   file_size: string | number | null;
   mime_type: string | null;
   upload_date: Date | string | null;
+  uploaded_by_name?: string | null;
   shipment_uuid: string;
   shipment_no: string | null;
   operation_id: string | null;
@@ -107,7 +124,7 @@ export type ShipmentDocGroup = {
   date: string | null;
   /** The other POs of this voyage (their own PO numbers): the files are the voyage's, so they show under each of them. */
   sharedWithPos: string[];
-  documents: Array<{ id: string; type: 'SI' | 'BL'; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null }>;
+  documents: Array<{ id: string; type: 'SI' | 'BL'; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null; uploadedBy: string | null }>;
 };
 
 const iso = (v: Date | string | null | undefined): string | null => {
@@ -144,10 +161,44 @@ export function groupShipmentDocs(rows: ShipmentDocRow[]): ShipmentDocGroup[] {
       sizeBytes: size != null && Number.isFinite(size) ? size : null,
       mimeType: r.mime_type,
       uploadedAt: iso(r.upload_date),
+      uploadedBy: String(r.uploaded_by_name || '').trim() || null,
     });
   }
   for (const g of groups.values()) {
     g.documents.sort((a, b) => (a.type === b.type ? String(b.uploadedAt).localeCompare(String(a.uploadedAt)) : a.type === 'BL' ? -1 : 1));
   }
   return [...groups.values()];
+}
+
+/** One History entry of the PO drawer for a file uploaded in KLIP: always ADD (from the document's own row), badged "via KLIP" by the frontend. */
+export type ShipmentDocHistoryEntry = {
+  id: string;
+  document_type: 'shipment_docs';
+  document_type_label: string;
+  action_type: 'ADD';
+  file_name: string;
+  user_name: string | null;
+  created_at: string;
+  source: 'KLIP';
+};
+
+/** KLIP uploads as History entries (BL / SI), so the tab shows them next to the COD uploads; newest first. */
+export function shipmentDocsAsHistory(groups: ShipmentDocGroup[]): ShipmentDocHistoryEntry[] {
+  const out: ShipmentDocHistoryEntry[] = [];
+  for (const g of groups) {
+    for (const d of g.documents) {
+      if (!d.uploadedAt) continue;
+      out.push({
+        id: `klip-${d.id}`,
+        document_type: 'shipment_docs',
+        document_type_label: `Shipment Docs · ${d.type}`,
+        action_type: 'ADD',
+        file_name: d.fileName,
+        user_name: d.uploadedBy,
+        created_at: d.uploadedAt,
+        source: 'KLIP',
+      });
+    }
+  }
+  return out.sort((a, b) => b.created_at.localeCompare(a.created_at));
 }

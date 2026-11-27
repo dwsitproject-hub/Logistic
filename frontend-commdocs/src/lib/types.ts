@@ -84,6 +84,8 @@ export type HistoryEntry = {
   file_name: string | null
   user_name: string | null
   created_at: string
+  /** 'KLIP' for a BL / SI uploaded in KLIP (Edit Shipment); the History tab badges it. */
+  source?: 'KLIP' | 'COD'
 }
 
 export type B2bParty = {
@@ -187,5 +189,5 @@ export type ShipmentDocGroup = {
   voyageNo: string | null
   date: string | null
   sharedWithPos: string[]
-  documents: Array<{ id: string; type: 'SI' | 'BL'; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null }>
+  documents: Array<{ id: string; type: 'SI' | 'BL'; fileName: string; sizeBytes: number | null; mimeType: string | null; uploadedAt: string | null; uploadedBy: string | null }>
 }

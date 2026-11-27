@@ -368,6 +368,7 @@ export function DocumentDrawer({
                         <small style={{ display: 'block', wordBreak: 'break-all' }}>{h.file_name || ''}</small>
                         <small>
                           {h.user_name || 'Unknown user'} · {dateTime(h.created_at)}
+                          {h.source === 'KLIP' ? <span className="badge" title="Uploaded in KLIP (Shipments > Edit Shipment)">via KLIP</span> : null}
                         </small>
                       </div>
                     </div>

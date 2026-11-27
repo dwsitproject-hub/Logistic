@@ -266,6 +266,10 @@ tbody tr.picked td { background: #f2f8f8; }
 .sd-group { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
 .sd-gh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .sd-doc { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; align-items: start; padding: 6px 0; border-top: 1px dashed var(--line); }
+.sd-latest { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--ink-2); }
+.sd-latest .badge, .sd-doc .badge, .tl .badge { margin-left: 6px; }
+.sd-sub { display: grid; gap: 2px; }
+.sd-sh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.8125rem; }
 .sd-actions { grid-column: 2; display: flex; gap: 4px; flex-wrap: wrap; }
 .sd-name { display: block; font-size: 0.8125rem; font-weight: 600; overflow-wrap: anywhere; }
 .timeline { display: grid; gap: 0; }

@@ -6,7 +6,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { uploadsRootProblem } from '../utils/uploadsGuard';
 import { createStepTimer } from '../utils/stepTimer';
-import { COMMERCIAL_SHIPMENT_DOCS_SQL, groupShipmentDocs, type ShipmentDocRow } from '../utils/commercialShipmentDocs';
+import { COMMERCIAL_SHIPMENT_DOCS_SQL, groupShipmentDocs, shipmentDocsAsHistory, type ShipmentDocRow } from '../utils/commercialShipmentDocs';
 import { copyToFirstFreeName, incomingUploadDir } from '../utils/incomingUpload';
 import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import {
@@ -622,13 +622,21 @@ export const getCommercialDocumentHistory = async (req: AuthRequest, res: Respon
        LIMIT 200`,
       [poNumber, contractExtNo],
     );
-    return res.json({
-      success: true,
-      data: result.rows.map((row) => ({
-        ...row,
-        document_type_label: commercialDocumentTypeLabel(String(row.document_type || '')),
-      })),
-    });
+    const own = result.rows.map((row) => ({
+      ...row,
+      document_type_label: commercialDocumentTypeLabel(String(row.document_type || '')),
+      source: 'COD' as const,
+    }));
+    // The BL / SI uploaded in KLIP join the timeline (badged "via KLIP"). A failure here must not take the COD history down with it.
+    let fromKlip: ReturnType<typeof shipmentDocsAsHistory> = [];
+    try {
+      const klip = await query(COMMERCIAL_SHIPMENT_DOCS_SQL, [poNumber]);
+      fromKlip = shipmentDocsAsHistory(groupShipmentDocs(klip.rows as ShipmentDocRow[]));
+    } catch (klipErr) {
+      logger.error('getCommercialDocumentHistory: KLIP uploads skipped', klipErr);
+    }
+    const merged = [...own, ...fromKlip].sort((a, b) => new Date(String(b.created_at)).getTime() - new Date(String(a.created_at)).getTime());
+    return res.json({ success: true, data: merged.slice(0, 200) });
   } catch (err) {
     logger.error('getCommercialDocumentHistory error:', err);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch history' } });
