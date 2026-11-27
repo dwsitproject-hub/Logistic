@@ -22,6 +22,7 @@ import { dateTime, longDate, num } from '@/lib/format'
 import { saveBlob } from '@/lib/files'
 import type { B2bParty, DocumentFile, DocumentRow, HistoryEntry } from '@/lib/types'
 import { ErrorNote, Modal, Spinner, useToast } from '../ui'
+import { KlipDoList, useKlipDo } from './KlipDoFiles'
 import { SHIPMENT_DOCS_NOTE, ShipmentDocsPicker, useShipmentDocs } from './ShipmentDocsCard'
 
 type Preview = { fileId: string; url: string; isImage: boolean } | { fileId: string; error: string }
@@ -57,6 +58,10 @@ export function DocumentDrawer({
   const [shipmentView, setShipmentView] = useState(false)
   const [shipmentFileId, setShipmentFileId] = useState<string | null>(null)
   const shipment = useShipmentDocs(key)
+  // The DO uploaded in KLIP (Trucking > Upload DO) fills the DO slot and is listed in the DO row, read only, beside the COD versions.
+  const klipDo = useKlipDo(key)
+  const klipDoFiles = klipDo.files ?? []
+  const [klipDoId, setKlipDoId] = useState<string | null>(null)
   const [versionId, setVersionId] = useState<string | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -120,15 +125,23 @@ export function DocumentDrawer({
   const current = versions.find((v) => v.id === versionId) ?? versions[versions.length - 1] ?? null
 
   // Show the newest version whenever the type or its versions change.
-  useEffect(() => setVersionId(null), [type, files])
+  useEffect(() => {
+    setVersionId(null)
+    setKlipDoId(null)
+  }, [type, files])
 
   const shipmentCurrent = shipment.files.find((f) => f.id === shipmentFileId) ?? shipment.slotFiles[0] ?? shipment.files[0] ?? null
   // The file the viewer shows: a COD version, or (Shipment Docs) a file KLIP holds, which the open endpoint of the KLIP documents serves.
+  // The KLIP DO on screen: the one picked, or the first when COD holds no DO of its own.
+  const klipDoCurrent =
+    type === 'delivery_order' && !shipmentView ? (klipDoFiles.find((x) => x.id === klipDoId) ?? (versions.length === 0 ? (klipDoFiles[0] ?? null) : null)) : null
   const viewed = shipmentView
     ? shipmentCurrent
       ? { id: shipmentCurrent.id, name: shipmentCurrent.fileName, viewPath: `/documents/${encodeURIComponent(shipmentCurrent.id)}/view` }
       : null
-    : current
+    : klipDoCurrent
+      ? { id: klipDoCurrent.id, name: klipDoCurrent.fileName, viewPath: `/documents/${encodeURIComponent(klipDoCurrent.id)}/view` }
+      : current
       ? { id: current.id, name: current.file_name, viewPath: `/commercial-documents/file/${current.id}/view` }
       : null
 
@@ -273,7 +286,7 @@ export function DocumentDrawer({
     history.find((h) => h.file_name === file.file_name && h.action_type !== 'DELETE')?.user_name || null
   // The twelfth slot (Shipment Docs) counts for a shipment PO only; it is read from what KLIP holds once that has loaded, before that from the list row.
   const shipmentDone = shipment.groups ? shipment.slotFiles.length > 0 : Boolean(row.doc_shipment_docs)
-  const done = loading ? typesDone(row) : typesDone({ ...row, ...flagsFrom(files), doc_shipment_docs: shipmentDone })
+  const done = loading ? typesDone(row) : typesDone({ ...row, ...flagsFrom(files), doc_delivery_order: versionsOf(files, 'delivery_order').length > 0 || (klipDo.files ? klipDo.files.length > 0 : Boolean(row.doc_delivery_order)), doc_shipment_docs: shipmentDone })
   const slots = slotsFor(row)
   const po = row.po_number || row.contract_ext_no
 
@@ -372,6 +385,10 @@ export function DocumentDrawer({
                   const v = versionsOf(files, t)
                   const latest = v[v.length - 1]
                   const by = latest ? uploaderOf(latest) : null
+                  // The DO row also counts the DO files uploaded in KLIP: with none in COD it shows the newest of them.
+                  const klipHere = t === 'delivery_order' ? klipDoFiles : []
+                  const klipLatest = klipHere[0]
+                  const filled = Boolean(latest || klipLatest)
                   return (
                     <button
                       type="button"
@@ -387,16 +404,18 @@ export function DocumentDrawer({
                       onDragLeave={() => setDragType((c) => (c === t ? null : c))}
                       onDrop={(e) => onDrop(e, t)}
                     >
-                      <span className={`st ${latest ? 'ok' : 'miss'}`}>{latest ? <Check aria-hidden /> : <Minus aria-hidden />}</span>
+                      <span className={`st ${filled ? 'ok' : 'miss'}`}>{filled ? <Check aria-hidden /> : <Minus aria-hidden />}</span>
                       <div style={{ minWidth: 0 }}>
                         <b>{DOCUMENT_LABELS[t]}</b>
                         <small>
                           {latest
-                            ? `v${v.length} · ${dateTime(latest.created_at)}${by ? ` · ${by}` : ''}`
-                            : 'Not uploaded yet'}
+                            ? `v${v.length} · ${dateTime(latest.created_at)}${by ? ` · ${by}` : ''}${klipHere.length ? ` · +${klipHere.length} via KLIP` : ''}`
+                            : klipLatest
+                              ? `${klipHere.length} ${klipHere.length === 1 ? 'file' : 'files'} · ${dateTime(klipLatest.uploadedAt)}${klipLatest.uploadedBy ? ` · ${klipLatest.uploadedBy}` : ''} · via KLIP`
+                              : 'Not uploaded yet'}
                         </small>
                       </div>
-                      {latest ? <span className="pill ok">Uploaded</span> : <span className="pill neutral">Missing</span>}
+                      {filled ? <span className="pill ok">Uploaded</span> : <span className="pill neutral">Missing</span>}
                     </button>
                   )
                 })}
@@ -518,11 +537,24 @@ export function DocumentDrawer({
                     <div style={{ minWidth: 0 }}>
                       <b style={{ display: 'block' }}>{DOCUMENT_LABELS[type]}</b>
                       <span className="hint ellipsis" style={{ display: 'block' }}>
-                        {current ? current.file_name : 'No file yet for this document type'}
+                        {klipDoCurrent ? klipDoCurrent.fileName : current ? current.file_name : 'No file yet for this document type'}
                       </span>
                     </div>
                   </div>
-                  {current ? (
+                  {klipDoCurrent ? (
+                    <div className="actions">
+                      {preview && 'url' in preview ? (
+                        <a className="btn sm" href={preview.url} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink aria-hidden />
+                          Open
+                        </a>
+                      ) : null}
+                      <a className="btn sm" href={`/api/documents/${encodeURIComponent(klipDoCurrent.id)}/download`} download>
+                        <Download aria-hidden />
+                        Download
+                      </a>
+                    </div>
+                  ) : current ? (
                     <div className="actions">
                       {versions.length > 1 ? (
                         <select
@@ -530,7 +562,10 @@ export function DocumentDrawer({
                           style={{ height: 32, width: 'auto' }}
                           aria-label="Version"
                           value={current.id}
-                          onChange={(e) => setVersionId(e.target.value)}
+                          onChange={(e) => {
+                            setKlipDoId(null)
+                            setVersionId(e.target.value)
+                          }}
                         >
                           {versions
                             .map((v, i) => (
@@ -594,6 +629,12 @@ export function DocumentDrawer({
                   </p>
                 )}
                 <ErrorNote>{actionError}</ErrorNote>
+                {type === 'delivery_order' ? (
+                  <>
+                    <ErrorNote>{klipDo.error}</ErrorNote>
+                    <KlipDoList files={klipDoFiles} selectedId={klipDoCurrent?.id ?? null} onSelect={setKlipDoId} />
+                  </>
+                ) : null}
 
                 {viewerBox}
               </>

@@ -1,4 +1,5 @@
 import { documentTypesForCategory } from './commercialDocumentsConstants';
+import { COMMERCIAL_KLIP_DO_CONTRACTS_SQL } from './commercialKlipDo';
 import { sqlB2bOriginEndingChildLateralJoin } from './b2bOriginEndingSql';
 import { appendRegionSiteFilter, sqlRegionSiteDisplayFromJsonAndB2b } from './regionSiteSql';
 import { resolveCommercialDocumentsListSort } from './commercialDocumentsListSort';
@@ -251,6 +252,8 @@ export function buildCommercialDocumentsBaseCte(): string {
          AND COALESCE(s.status, '') <> 'CANCELLED'
          AND x.contract_id IS NOT NULL
     ),
+    klip_do_contracts AS (${COMMERCIAL_KLIP_DO_CONTRACTS_SQL}
+    ),
     enriched AS (
       SELECT
         cr.*,
@@ -263,13 +266,15 @@ export function buildCommercialDocumentsBaseCte(): string {
         COALESCE(df.doc_bea_cukai, ldf.doc_bea_cukai, false) AS doc_bea_cukai,
         COALESCE(df.doc_sppb, ldf.doc_sppb, false) AS doc_sppb,
         COALESCE(df.doc_sppd, ldf.doc_sppd, false) AS doc_sppd,
-        COALESCE(df.doc_delivery_order, ldf.doc_delivery_order, false) AS doc_delivery_order,
+        -- A DO uploaded in KLIP (Trucking > Upload DO) fills the DO slot like a COD upload (Ryan, 2026-11-27).
+        (COALESCE(df.doc_delivery_order, ldf.doc_delivery_order, false) OR kdo.contract_id IS NOT NULL) AS doc_delivery_order,
         COALESCE(df.doc_invoice_fp_dp, ldf.doc_invoice_fp_dp, false) AS doc_invoice_fp_dp,
         COALESCE(df.doc_invoice_fp_payoff, ldf.doc_invoice_fp_payoff, false) AS doc_invoice_fp_payoff,
         COALESCE(df.doc_invoice_fp_full, ldf.doc_invoice_fp_full, false) AS doc_invoice_fp_full,
         COALESCE(df.uploaded_count, ldf.uploaded_count, 0) AS uploaded_count
       FROM contract_rows cr
       LEFT JOIN shipment_doc_pos sdp ON sdp.contract_id = cr.id
+      LEFT JOIN klip_do_contracts kdo ON kdo.contract_id = cr.id
       LEFT JOIN doc_flags df ON df.po_number = NULLIF(TRIM(cr.po_number), '')
       LEFT JOIN legacy_doc_flags ldf
         ON ldf.contract_ext_no = cr.contract_ext_no
