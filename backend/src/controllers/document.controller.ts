@@ -12,7 +12,8 @@ import {
   ensureUploadDir,
   resolveUploadAbsolutePath,
   shipmentNasFileToken,
-  shipmentStructuredDocKindFromType,
+  sanitizeNasNamePart,
+  shipmentUploadFolderKind,
   toRelativeUploadPath,
   type ShipmentStructuredDocKind,
 } from '../utils/fileUpload';
@@ -113,7 +114,7 @@ export const documentPresence = async (req: Request, res: Response) => {
   }
 };
 
-export const uploadDocumentHandler = async (req: Request, res: Response) => {
+export const uploadDocumentHandler = async (req: AuthRequest, res: Response) => {
   try {
     // Multer attaches file and fields
     const file = (req as any).file as Express.Multer.File;
@@ -160,8 +161,8 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
     }
 
     const insert = await query(
-      `INSERT INTO documents (document_type, file_name, file_path, file_size, mime_type, contract_id, shipment_id, payment_id, trucking_operation_id, description)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      `INSERT INTO documents (document_type, file_name, file_path, file_size, mime_type, contract_id, shipment_id, payment_id, trucking_operation_id, description, uploaded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [
         document_type || 'OTHER',
         stored.fileName,
@@ -173,6 +174,8 @@ export const uploadDocumentHandler = async (req: Request, res: Response) => {
         payment_id || null,
         trucking_operation_id || null,
         description || null,
+        // Who uploaded. The column existed since migration 001 but was never written; COD and KLIP both read it, with the audit entry only as the fallback for older rows.
+        req.user?.id || null,
       ]
     );
 
@@ -252,8 +255,38 @@ function discardUploadedFile(filePath: string): void {
 }
 
 /**
+ * Moves a Loading / Discharge / Others file into documents/shipment/<sld|sdd|other>/<STO number, else operation id>/ and keeps its own (sanitised) name; a second file of the
+ * same name becomes `-2`. A shipment that cannot be found does not stop the upload (the file stays where multer wrote it and the INSERT decides): the Shipments page Docs
+ * dialog has always uploaded OTHER files and this must not turn one of them into an error.
+ */
+async function fileUnderShipmentFolder(
+  file: Express.Multer.File,
+  kind: ShipmentStructuredDocKind,
+  shipment: string,
+): Promise<{ fileName: string; filePath: string }> {
+  const unchanged = { fileName: file.originalname, filePath: toRelativeUploadPath(file.path) };
+  try {
+    const found = await query(SELECT_SHIPMENT_FOLDER_SQL, [shipment]);
+    if (found.rows.length === 0) return unchanged;
+    const folderSubject = String(found.rows[0]?.folder_subject ?? '').trim() || shipment;
+    const dir = ensureUploadDir(buildShipmentDocumentUploadSubdir(folderSubject, kind));
+    const rawExt = path.extname(file.originalname);
+    const ext = rawExt || '.pdf';
+    const stem = sanitizeNasNamePart(path.basename(file.originalname, rawExt), 'document');
+    const filename = allocateShipmentNasFilename(dir, stem, ext);
+    const nextPath = path.join(dir, filename);
+    fs.renameSync(file.path, nextPath);
+    return { fileName: filename, filePath: toRelativeUploadPath(nextPath) };
+  } catch (err) {
+    logger.warn('Shipment document stays where it was written (could not file it under documents/shipment)', { error: (err as Error)?.message });
+    return unchanged;
+  }
+}
+
+/**
  * Contract, SI, and BL are renamed on disk to
  * operation_id-ctr|si|bl-ddmmyy-username.pdf before the row is stored.
+ * Loading, Discharge and Others are filed in their folder under their own name (fileUnderShipmentFolder).
  * Other document types keep the name multer already wrote.
  */
 async function applyShipmentNasFilename(
@@ -262,9 +295,14 @@ async function applyShipmentNasFilename(
   documentType: string | undefined,
   shipmentId: string | undefined,
 ): Promise<{ fileName: string; filePath: string; error?: undefined; status?: undefined } | { error: string; status: number; fileName?: undefined; filePath?: undefined }> {
-  const kind = shipmentStructuredDocKindFromType(String(documentType ?? ''));
+  const kind = shipmentUploadFolderKind(String(documentType ?? ''));
   const token = kind ? shipmentNasFileToken(kind) : null;
   const shipment = String(shipmentId ?? '').trim();
+  if (kind && !token && shipment) {
+    // Loading (SLD), Discharge (SDD) and Others (OTHER): filed under the STO like the other three, but the name the user gave is kept (these are not one-per-shipment
+    // documents with a fixed meaning, so the file name is what tells them apart).
+    return fileUnderShipmentFolder(file, kind, shipment);
+  }
   if (!token || !shipment) {
     return { fileName: file.originalname, filePath: toRelativeUploadPath(file.path) };
   }
@@ -375,8 +413,10 @@ export const viewDocument = async (req: Request, res: Response) => {
   }
 };
 
-/** The shipment documents a user may delete from Edit Shipment. SLD / SDD and every other kind are not part of that feature. */
-export const DELETABLE_SHIPMENT_DOC_TYPES = ['CONTRACT', 'SI', 'BL'] as const;
+/** The shipment documents a user may delete from Edit Shipment: the six cards (Contract, SI, BL, Loading = SLD, Discharge = SDD, Others = OTHER). Every other kind is not part of that feature. */
+export const DELETABLE_SHIPMENT_DOC_TYPES = ['CONTRACT', 'SI', 'BL', 'SLD', 'SDD', 'OTHER'] as const;
+/** The three kinds JPS gets a link to (and the Jetty email attaches): deleting one of these after the STO was sent to JPS breaks that link. Loading, Discharge and Others never go to JPS. */
+export const JPS_LINKED_SHIPMENT_DOC_TYPES = ['CONTRACT', 'SI', 'BL'] as const;
 export const DELETE_DOCUMENT_CODES = { SENT_TO_JPS: 'SENT_TO_JPS' } as const;
 
 /**
@@ -408,12 +448,13 @@ export const deleteShipmentDocument = async (req: AuthRequest, res: Response) =>
 
     const type = String(doc.document_type ?? '').trim().toUpperCase();
     if (!doc.shipment_id || !(DELETABLE_SHIPMENT_DOC_TYPES as readonly string[]).includes(type)) {
-      return res.status(403).json({ success: false, error: { message: 'Only the Contract, SI and BL documents of a shipment can be deleted here' } });
+      return res.status(403).json({ success: false, error: { message: 'Only the documents of the Edit Shipment cards (Contract, SI, BL, Loading, Discharge, Others) can be deleted here' } });
     }
 
-    // Sent to JPS: its instruction links to this file.
-    const context = await resolveShipmentEditContext(doc.shipment_id);
-    const shipmentRow = await query('SELECT operation_id FROM shipments WHERE id = $1::uuid', [doc.shipment_id]);
+    // Sent to JPS: its instruction links to this file (only the Contract, SI and BL are linked).
+    const linkedToJps = (JPS_LINKED_SHIPMENT_DOC_TYPES as readonly string[]).includes(type);
+    const context = linkedToJps ? await resolveShipmentEditContext(doc.shipment_id) : null;
+    const shipmentRow = linkedToJps ? await query('SELECT operation_id FROM shipments WHERE id = $1::uuid', [doc.shipment_id]) : { rows: [] as Array<{ operation_id?: string }> };
     const keys = [
       ...new Set([String(context?.lookup_key ?? '').trim(), String(shipmentRow.rows[0]?.operation_id ?? '').trim()].filter(Boolean)),
     ];

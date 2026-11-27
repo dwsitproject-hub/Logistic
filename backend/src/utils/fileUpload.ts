@@ -57,7 +57,7 @@ export function toRelativeUploadPath(absolutePath: string): string {
  * `sld` and `sdd` stay in the same tree so files uploaded before 2026-09-25 stay reachable;
  * nothing writes to them any more.
  */
-export type ShipmentStructuredDocKind = 'contract' | 'si' | 'bl' | 'sld' | 'sdd';
+export type ShipmentStructuredDocKind = 'contract' | 'si' | 'bl' | 'sld' | 'sdd' | 'other';
 
 const SHIPMENT_STRUCTURED_DOC_KINDS = new Set<ShipmentStructuredDocKind>([
   'contract',
@@ -65,6 +65,7 @@ const SHIPMENT_STRUCTURED_DOC_KINDS = new Set<ShipmentStructuredDocKind>([
   'bl',
   'sld',
   'sdd',
+  'other',
 ]);
 
 /** Relative subdir under upload root: `documents/shipment/<kind>/<shipment id>`. */
@@ -170,6 +171,16 @@ export function shipmentStructuredDocKindFromType(
   if (normalized === 'SLD') return 'sld';
   if (normalized === 'SDD') return 'sdd';
   return null;
+}
+
+/**
+ * The folder kind a file uploaded ON A SHIPMENT is filed under: the structured kinds above, plus `other` for the Others card of Edit Shipment (document_type OTHER). Kept apart from
+ * shipmentStructuredDocKindFromType on purpose: the folder migration classifies existing rows with that one, and an OTHER row (a contract's, a payment's) must stay out of it.
+ */
+export function shipmentUploadFolderKind(documentType: string): ShipmentStructuredDocKind | null {
+  const structured = shipmentStructuredDocKindFromType(documentType);
+  if (structured) return structured;
+  return String(documentType ?? '').trim().toUpperCase() === 'OTHER' ? 'other' : null;
 }
 
 /** Resolve stored path for filesystem reads (supports legacy absolute rows). */
