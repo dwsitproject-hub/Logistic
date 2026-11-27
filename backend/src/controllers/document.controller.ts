@@ -7,7 +7,6 @@ import { scanFileWithClamdIfConfigured } from '../services/clamScan.service';
 import {
   allocateShipmentNasFilename,
   buildShipmentDocumentUploadSubdir,
-  buildShipmentNasFileStem,
   buildTruckingDocumentUploadSubdir,
   ensureUploadDir,
   resolveUploadAbsolutePath,
@@ -21,6 +20,7 @@ import { AuthRequest, userHasPermissionFlag } from '../middleware/auth';
 import { AuditService } from '../services/audit.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
 import { SELECT_CONTRACT_TRUCKING_FOLDER_SQL, SELECT_SHIPMENT_FOLDER_SQL, SELECT_TRUCKING_FOLDER_SQL } from '../utils/documentFolders';
+import { buildShipmentDocumentStem, shipmentDocumentReference } from '../utils/shipmentDocumentName';
 
 export { ensureUploadDir };
 
@@ -177,7 +177,7 @@ export const uploadDocumentHandler = async (req: AuthRequest, res: Response) => 
       });
     }
 
-    let stored = await applyShipmentNasFilename(req, file, document_type, shipment_id);
+    let stored = await applyShipmentNasFilename(file, document_type, shipment_id);
     if (stored.error) {
       return res.status(stored.status).json({ success: false, error: { message: stored.error } });
     }
@@ -264,15 +264,6 @@ export async function moveToTruckingFolder(
   }
 }
 
-function uploaderLabel(req: Request): string {
-  const user = (req as AuthRequest).user;
-  const username = String(user?.username ?? '').trim();
-  if (username) return username.split('@')[0];
-  const email = String(user?.email ?? '').trim();
-  if (email) return email.split('@')[0];
-  return 'user';
-}
-
 function discardUploadedFile(filePath: string): void {
   try {
     fs.unlinkSync(filePath);
@@ -311,13 +302,12 @@ async function fileUnderShipmentFolder(
 }
 
 /**
- * Contract, SI, and BL are renamed on disk to
- * operation_id-ctr|si|bl-ddmmyy-username.pdf before the row is stored.
+ * Contract, SI, and BL are renamed on disk to the Commercial Documents format,
+ * BUY_Ctr|Si|Bl_<STO number, else shipment id>.pdf, before the row is stored.
  * Loading, Discharge and Others are filed in their folder under their own name (fileUnderShipmentFolder).
  * Other document types keep the name multer already wrote.
  */
 async function applyShipmentNasFilename(
-  req: Request,
   file: Express.Multer.File,
   documentType: string | undefined,
   shipmentId: string | undefined,
@@ -339,17 +329,14 @@ async function applyShipmentNasFilename(
     discardUploadedFile(file.path);
     return { error: 'Shipment not found', status: 404 };
   }
-  const operationId = String(found.rows[0]?.operation_id ?? '').trim();
-  if (!operationId) {
-    discardUploadedFile(file.path);
-    return { error: 'This shipment has no operation id, so the file cannot be named', status: 400 };
-  }
-
   const ext = path.extname(file.originalname).toLowerCase() || '.pdf';
-  const stem = buildShipmentNasFileStem({
-    operationId,
+  // Named like a Commercial Documents file: BUY_Ctr_<STO number, else shipment id>.pdf (utils/shipmentDocumentName.ts). The uploader and the date are in the row
+  // (documents.uploaded_by, created_at), no longer in the name.
+  const stem = buildShipmentDocumentStem({
+    buyer: found.rows[0]?.buyer,
+    supplier: found.rows[0]?.supplier,
     token,
-    uploadedBy: uploaderLabel(req),
+    reference: shipmentDocumentReference(found.rows[0] ?? {}),
   });
   // The folder is chosen HERE, from the parsed body, and not left to multer's destination callback: every client appends `file` BEFORE document_type / shipment_id,
   // so at destination time the body was still empty and the file landed in the upload root (found 2026-10-29: six renamed Contract/SI/BL files sitting loose in the
@@ -357,7 +344,7 @@ async function applyShipmentNasFilename(
   // (utils/documentFolders.ts); a shipment whose key cannot be read keeps its id as the folder name.
   const folderSubject = String(found.rows[0]?.folder_subject ?? '').trim() || shipment;
   const dir = ensureUploadDir(buildShipmentDocumentUploadSubdir(folderSubject, kind as ShipmentStructuredDocKind));
-  const filename = allocateShipmentNasFilename(dir, stem, ext);
+  const filename = allocateShipmentNasFilename(dir, stem, ext, 'version');
   const nextPath = path.join(dir, filename);
   fs.renameSync(file.path, nextPath);
   return { fileName: filename, filePath: toRelativeUploadPath(nextPath) };
