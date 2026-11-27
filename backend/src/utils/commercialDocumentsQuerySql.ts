@@ -227,9 +227,34 @@ export function buildCommercialDocumentsBaseCte(): string {
       WHERE NULLIF(TRIM(po_number), '') IS NULL
       GROUP BY contract_ext_no
     ),
+    shipment_doc_pos AS (
+      -- POs that have at least one BL / SI uploaded in KLIP (Edit Shipment). Starts from the documents (a few dozen) and reaches the POs the same three ways the
+      -- Shipment Docs card does (utils/commercialShipmentDocs.ts): the shipment's own contract, the contracts of its STO, the contracts of its operation.
+      SELECT DISTINCT x.contract_id
+        FROM documents d
+        JOIN shipments s ON s.id = d.shipment_id
+        CROSS JOIN LATERAL (
+          SELECT s.contract_id AS contract_id
+          UNION
+          SELECT cs.contract_id
+            FROM contract_stos cs
+           WHERE TRIM(cs.sto_number::text) = TRIM(COALESCE(s.shipment_id::text, ''))
+             AND TRIM(COALESCE(s.shipment_id::text, '')) ~ '^[0-9]+$'
+          UNION
+          SELECT s3.contract_id
+            FROM shipments s3
+           WHERE NULLIF(TRIM(s3.operation_id::text), '') = NULLIF(TRIM(s.operation_id::text), '')
+             AND NULLIF(TRIM(s.operation_id::text), '') IS NOT NULL
+        ) x
+       WHERE d.deleted_at IS NULL
+         AND d.document_type IN ('SI', 'BL')
+         AND COALESCE(s.status, '') <> 'CANCELLED'
+         AND x.contract_id IS NOT NULL
+    ),
     enriched AS (
       SELECT
         cr.*,
+        (sdp.contract_id IS NOT NULL) AS doc_shipment_docs,
         COALESCE(df.doc_draft_contract, ldf.doc_draft_contract, false) AS doc_draft_contract,
         COALESCE(df.doc_contract, ldf.doc_contract, false) AS doc_contract,
         COALESCE(df.doc_addendum_contract, ldf.doc_addendum_contract, false) AS doc_addendum_contract,
@@ -243,6 +268,7 @@ export function buildCommercialDocumentsBaseCte(): string {
         COALESCE(df.doc_invoice_fp_full, ldf.doc_invoice_fp_full, false) AS doc_invoice_fp_full,
         COALESCE(df.uploaded_count, ldf.uploaded_count, 0) AS uploaded_count
       FROM contract_rows cr
+      LEFT JOIN shipment_doc_pos sdp ON sdp.contract_id = cr.id
       LEFT JOIN doc_flags df ON df.po_number = NULLIF(TRIM(cr.po_number), '')
       LEFT JOIN legacy_doc_flags ldf
         ON ldf.contract_ext_no = cr.contract_ext_no
@@ -274,6 +300,8 @@ function docTypeCheckedColumn(documentType: string): string | null {
     invoice_fp_dp: 'doc_invoice_fp_dp',
     invoice_fp_payoff: 'doc_invoice_fp_payoff',
     invoice_fp_full: 'doc_invoice_fp_full',
+    // Not one of the eleven COD types: the BL / SI uploaded in KLIP. A card of its own, outside the checklist and its percentages.
+    shipment_docs: 'doc_shipment_docs',
   };
   return map[documentType] ?? null;
 }
@@ -520,6 +548,7 @@ export function buildCommercialDocumentsSummaryQuery(params: CommercialDocuments
       COUNT(*) FILTER (WHERE e.doc_invoice_fp_payoff AND ${COMMERCIAL_DOCUMENT_SAP_DATE_BASIS.invoice_fp_payoff})::int AS uploaded_invoice_fp_payoff,
       COUNT(*) FILTER (WHERE ${COMMERCIAL_DOCUMENT_SAP_DATE_BASIS.invoice_fp_payoff})::int AS total_invoice_fp_payoff,
       ${count('doc_invoice_fp_full')} AS uploaded_invoice_fp_full,
+      ${count('doc_shipment_docs')} AS uploaded_shipment_docs,
       COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = ${COMMERCIAL_DOCUMENT_SLOT_COUNT})::int AS complete_contract_count,
       COUNT(*) FILTER (WHERE (${uploadedTypesExpr()}) = 0)::int AS empty_contract_count
     FROM enriched e

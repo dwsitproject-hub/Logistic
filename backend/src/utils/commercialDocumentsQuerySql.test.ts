@@ -262,3 +262,26 @@ describe('commercialDocuments cancelled POs', () => {
     expect(buildCommercialDocumentsListQuery({}).sql).not.toMatch(/CANCEL%'[^]*uploaded_count = 0/);
   });
 });
+
+describe('commercialDocuments Shipment Docs card', () => {
+  it('flags the POs that have a BL or SI uploaded in KLIP, starting from the documents and never counting a deleted file or a cancelled shipment', () => {
+    const sql = buildCommercialDocumentsBaseCte();
+    expect(sql).toContain('shipment_doc_pos AS');
+    expect(sql).toContain("d.document_type IN ('SI', 'BL')");
+    expect(sql).toContain('d.deleted_at IS NULL');
+    expect(sql).toContain("<> 'CANCELLED'");
+    expect(sql).toContain('doc_shipment_docs');
+    expect(sql).toContain('FROM contract_stos cs'); // by STO
+    expect(sql).toContain('s3.operation_id'); // by operation
+  });
+  it('the summary counts them, and the card filter lists exactly those POs', () => {
+    expect(buildCommercialDocumentsSummaryQuery({}).sql).toContain("COUNT(*) FILTER (WHERE e.doc_shipment_docs)::int AS uploaded_shipment_docs");
+    const q = buildCommercialDocumentsListQuery({ documentType: 'shipment_docs', documentStatus: 'checked', page: 1, limit: 20 });
+    expect(q.sql).toContain('e.doc_shipment_docs = true');
+    expect(q.countSql).toContain('e.doc_shipment_docs = true');
+  });
+  it('is not one of the eleven checklist flags: the 5/11 count and the completeness percentages do not move', () => {
+    expect(COMMERCIAL_DOCUMENT_SLOT_COUNT).toBe(11);
+    expect(buildCommercialDocumentsListQuery({ completeness: 'complete' }).countSql).not.toContain('doc_shipment_docs) ');
+  });
+});
