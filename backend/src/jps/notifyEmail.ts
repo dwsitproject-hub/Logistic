@@ -340,6 +340,31 @@ export function skippedAttachmentsNote(skipped: NotifyAttachments['skipped']): s
 /** The PO key a shipment's contract has in Commercial Documents: the PO number, else the contract number (SAP sent no PO). Same expression everywhere the two apps meet. */
 const PO_KEY_SQL = `COALESCE(NULLIF(TRIM(c.po_number), ''), TRIM(c.contract_id))`;
 
+export interface NotifyShipmentRow {
+  id: string;
+  po_key: string | null;
+  status: string;
+}
+
+/**
+ * The shipments whose documents the mail reads, and the POs the mail attaches a Contract for. `rows` are the shipments of the voyage (the ones the sweep found and their siblings in
+ * the same operation); every one counts for the documents, a COMPLETED sibling included. Only a CANCELLED one does not add a PO, so a cancelled shipment's PO is not reported as
+ * "Contract missing". With no row at all the shipments the sweep found are used. Pure: tested without a database.
+ */
+export function notifyShipmentScope(rows: NotifyShipmentRow[], fallbackShipmentIds: string[]): { shipmentIds: string[]; poKeys: string[] } {
+  if (rows.length === 0) return { shipmentIds: [...fallbackShipmentIds], poKeys: [] };
+  const shipmentIds = Array.from(new Set(rows.map((r) => r.id)));
+  const poKeys = Array.from(
+    new Set(
+      rows
+        .filter((r) => !/^CANCEL/i.test(String(r.status ?? '')))
+        .map((r) => String(r.po_key ?? '').trim())
+        .filter(Boolean),
+    ),
+  ).sort();
+  return { shipmentIds, poKeys };
+}
+
 /**
  * What the mail attaches, as files on disk: the Contract of EACH PO of the STO (a PO's own KLIP Contract, else the newest one uploaded in Commercial Documents) and the newest SI
  * and BL of the STO's shipments. A PO with no Contract anywhere is named in the "not attached" note, but only when the STO has several POs: with one, a missing Contract is
@@ -347,7 +372,31 @@ const PO_KEY_SQL = `COALESCE(NULLIF(TRIM(c.po_number), ''), TRIM(c.contract_id))
  */
 export async function loadNotifyAttachments(sto: EligibleSto): Promise<NotifyAttachments> {
   if (sto.shipment_ids.length === 0) return { attachments: [], skipped: [] };
-  const [siBl, pos, klipContracts] = await Promise.all([
+  // The shipments the documents are read from: the ones the sweep found (sto.shipment_ids) plus every other shipment of the SAME OPERATION. A voyage that carries several POs is one
+  // shipments row per PO sharing the operation id, and its files hang on one of them (a sibling may already be COMPLETED). NOT every shipment with the same STO key: a PO can have
+  // several active vessels, and a plan with no STO of its own takes the key of the contract's STO, so reading by key would attach another voyage's BL / SI (prod, STO 1006020654).
+  const stoShipments = await query(
+    `SELECT s.id::text AS id, ${PO_KEY_SQL} AS po_key, COALESCE(s.status, '') AS status
+       FROM shipments s
+       INNER JOIN contracts c ON c.id = s.contract_id
+      WHERE s.id::text = ANY($1::text[])
+         OR NULLIF(TRIM(s.operation_id::text), '') IN (
+              SELECT NULLIF(TRIM(s2.operation_id::text), '') FROM shipments s2 WHERE s2.id::text = ANY($1::text[])
+            )`,
+    [sto.shipment_ids],
+  );
+  const scope = notifyShipmentScope(stoShipments.rows as NotifyShipmentRow[], sto.shipment_ids);
+  const shipmentIds = scope.shipmentIds;
+  let poKeys = scope.poKeys;
+  if (poKeys.length === 0) {
+    // The STO key matched nothing (it should not happen): the shipments the sweep itself found.
+    const pos = await query(
+      `SELECT DISTINCT ${PO_KEY_SQL} AS po_key FROM shipments s JOIN contracts c ON c.id = s.contract_id WHERE s.id::text = ANY($1::text[]) ORDER BY 1`,
+      [sto.shipment_ids],
+    );
+    poKeys = (pos.rows as Array<{ po_key: string | null }>).map((r) => String(r.po_key ?? '').trim()).filter(Boolean);
+  }
+  const [siBl, klipContracts] = await Promise.all([
     query(
       `SELECT DISTINCT ON (UPPER(d.document_type)) UPPER(d.document_type) AS document_type, d.file_name, d.file_path
          FROM documents d
@@ -355,14 +404,7 @@ export async function loadNotifyAttachments(sto: EligibleSto): Promise<NotifyAtt
           AND d.deleted_at IS NULL
           AND UPPER(d.document_type) IN ('SI', 'BL')
         ORDER BY UPPER(d.document_type), d.upload_date DESC NULLS LAST`,
-      [sto.shipment_ids],
-    ),
-    query(
-      `SELECT DISTINCT ${PO_KEY_SQL} AS po_key
-         FROM shipments s JOIN contracts c ON c.id = s.contract_id
-        WHERE s.id::text = ANY($1::text[])
-        ORDER BY 1`,
-      [sto.shipment_ids],
+      [shipmentIds],
     ),
     query(
       `SELECT DISTINCT ON (${PO_KEY_SQL}) ${PO_KEY_SQL} AS po_key, d.file_name, d.file_path
@@ -373,10 +415,9 @@ export async function loadNotifyAttachments(sto: EligibleSto): Promise<NotifyAtt
           AND d.deleted_at IS NULL
           AND UPPER(d.document_type) = 'CONTRACT'
         ORDER BY ${PO_KEY_SQL}, d.upload_date DESC NULLS LAST`,
-      [sto.shipment_ids],
+      [shipmentIds],
     ),
   ]);
-  const poKeys = (pos.rows as Array<{ po_key: string | null }>).map((r) => String(r.po_key ?? '').trim()).filter(Boolean);
   const klip: NotifyContractSource[] = (klipContracts.rows as Array<{ po_key: string; file_name: string; file_path: string }>).map((r) => ({
     poKey: String(r.po_key).trim(),
     fileName: r.file_name,

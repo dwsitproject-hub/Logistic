@@ -223,6 +223,9 @@ const SHIPMENT_DOC_TYPES = [
   { type: 'OTHER', label: 'Other Documents' },
 ] as const
 
+/** In production the Contract is uploaded only in Commercial Documents (Ryan, 2026-11-27); KLIP lists the COD Contract per PO and no longer offers an upload for it. */
+const isContractUploadedInCod = (type: string): boolean => type === 'CONTRACT'
+
 interface ShipmentDocumentItem {
   id: string
   document_type?: string
@@ -2038,7 +2041,7 @@ export function EditShipmentModal({
     kind: (typeof SHIPMENT_DOC_TYPES)[number]['type'],
     files: File[],
   ) => {
-    if (!shipmentId || !canModifyCoreSections || uploadingDocType) return
+    if (!shipmentId || !canModifyCoreSections || uploadingDocType || isContractUploadedInCod(kind)) return
     const pdfs = files.filter(
       (file) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'),
     )
@@ -3871,6 +3874,8 @@ export function EditShipmentModal({
                           (doc) => String(doc.document_type ?? '').toUpperCase() === type,
                         )
                         const dropping = dragOverDocType === type
+                        // The Contract is uploaded in Commercial Documents only: no Upload button and no drop zone here (a Contract already in KLIP stays listed and can still be deleted).
+                        const uploadAllowed = canModifyCoreSections && !isContractUploadedInCod(type)
                         return (
                           <div
                             key={type}
@@ -3879,7 +3884,7 @@ export function EditShipmentModal({
                             }`}
                             onDragOver={(event) => {
                               event.preventDefault()
-                              if (!canModifyCoreSections) return
+                              if (!uploadAllowed) return
                               setDragOverDocType(type)
                             }}
                             onDragLeave={(event) => {
@@ -3890,17 +3895,19 @@ export function EditShipmentModal({
                             onDrop={(event) => {
                               event.preventDefault()
                               setDragOverDocType(null)
-                              if (!canModifyCoreSections) return
+                              if (!uploadAllowed) return
                               void uploadShipmentPdfs(type, Array.from(event.dataTransfer.files ?? []))
                             }}
                           >
                             <p className="text-xs font-medium text-gray-800">{label}</p>
                             <p className="mt-0.5 text-[0.6875rem] text-gray-500">
-                              {canModifyCoreSections
-                                ? 'PDF. Drop one or more files here, or use Upload.'
-                                : 'PDF.'}
+                              {isContractUploadedInCod(type)
+                                ? 'PDF. Uploaded in Commercial Documents.'
+                                : canModifyCoreSections
+                                  ? 'PDF. Drop one or more files here, or use Upload.'
+                                  : 'PDF.'}
                             </p>
-                            {canModifyCoreSections ? (
+                            {uploadAllowed ? (
                               <>
                                 <input
                                   id={inputId}

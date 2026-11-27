@@ -7,6 +7,7 @@ import {
   buildRuleTestEmail,
   chooseContractRowsPerPo,
   chooseNotifyAttachments,
+  notifyShipmentScope,
   notifyRowsFromCargo,
   skippedAttachmentsNote,
   stripPortPrefix,
@@ -261,6 +262,41 @@ describe('Submit to Jetty email: attachments and the loading port', () => {
   it('with no document there is nothing to attach and nothing to say', () => {
     expect(chooseNotifyAttachments([], () => MB, resolve)).toEqual({ attachments: [], skipped: [] });
     expect(skippedAttachmentsNote([])).toBe('');
+  });
+
+  describe('which shipments the mail reads its documents from', () => {
+    it('every shipment of the voyage counts for the documents (a COMPLETED sibling of the same operation included), and the POs come back sorted and unique', () => {
+      const out = notifyShipmentScope(
+        [
+          { id: 's1', po_key: 'PO-B', status: 'IN_PROGRESS' },
+          { id: 's2', po_key: 'PO-A', status: 'COMPLETED' },
+          { id: 's3', po_key: 'PO-B', status: 'PLANNED' },
+        ],
+        ['s1'],
+      );
+      expect(out.shipmentIds).toEqual(['s1', 's2', 's3']);
+      expect(out.poKeys).toEqual(['PO-A', 'PO-B']);
+    });
+
+    it('a CANCELLED shipment keeps its documents in reach but does not add its PO (it would be reported as a missing Contract)', () => {
+      const out = notifyShipmentScope(
+        [
+          { id: 's1', po_key: 'PO-A', status: 'IN_PROGRESS' },
+          { id: 's2', po_key: 'PO-X', status: 'CANCELLED' },
+        ],
+        ['s1'],
+      );
+      expect(out.shipmentIds).toEqual(['s1', 's2']);
+      expect(out.poKeys).toEqual(['PO-A']);
+    });
+
+    it('with no row at all the shipments the sweep found are used, and the POs are asked for separately', () => {
+      expect(notifyShipmentScope([], ['s9'])).toEqual({ shipmentIds: ['s9'], poKeys: [] });
+    });
+
+    it('a shipment with no PO key adds none', () => {
+      expect(notifyShipmentScope([{ id: 's1', po_key: null, status: 'PLANNED' }], ['s1']).poKeys).toEqual([]);
+    });
   });
 
   describe('one Contract per PO of the STO (KLIP first, else Commercial Documents)', () => {
